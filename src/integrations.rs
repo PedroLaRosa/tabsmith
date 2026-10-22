@@ -213,11 +213,57 @@ pub fn parent_exe() -> Option<String> {
         let n = unsafe { libc::proc_pidpath(ppid, buf.as_mut_ptr().cast(), buf.len() as u32) };
         (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
     }
-    // ponytail: Windows needs Toolhelp32 (windows-sys feature `Win32_System_Diagnostics_ToolHelp`) to read the
-    // parent; pwsh passes its own path, so only doctor's "parent is cmd.exe" check is lost.
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        windows_parent_exe()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         None
+    }
+}
+
+/// Parent PID from a Toolhelp32 process snapshot, then its full image path.
+/// ponytail: Windows never re-parents, so a parent that already exited may have had its PID reused.
+#[cfg(windows)]
+fn windows_parent_exe() -> Option<String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: plain Win32 calls; `entry.dwSize` is set as Process32FirstW requires, `buf`/`len` describe a valid
+    // buffer, and every handle opened here is closed before returning.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let me = GetCurrentProcessId();
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = None;
+        let mut ok = Process32FirstW(snap, &mut entry) != 0;
+        while ok {
+            if entry.th32ProcessID == me {
+                found = Some(entry.th32ParentProcessID);
+                break;
+            }
+            ok = Process32NextW(snap, &mut entry) != 0;
+        }
+        CloseHandle(snap);
+        let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, found?);
+        if proc.is_null() {
+            return None;
+        }
+        let mut buf = vec![0u16; 32768];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(proc, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0;
+        CloseHandle(proc);
+        ok.then(|| String::from_utf16_lossy(&buf[..len as usize]))
     }
 }
 
@@ -557,10 +603,15 @@ pub fn integrations(ctx: &Ctx, shell: Shell) -> Result<Vec<Integration>> {
     })
 }
 
-/// `$PROFILE` (CurrentUserCurrentHost) from `pwsh -NoLogo -NoProfile -Command '$PROFILE'` (5 s timeout).
+/// Prints `$PROFILE` as raw UTF-8 bytes: pwsh's Console.Out would encode it with the (shared, OEM on Windows) console
+/// code page, and changing that code page would outlive the child.
+const PWSH_PROFILE_CMD: &str =
+    "$b = [Text.Encoding]::UTF8.GetBytes($PROFILE); $s = [Console]::OpenStandardOutput(); $s.Write($b, 0, $b.Length); $s.Flush()";
+
+/// `$PROFILE` (CurrentUserCurrentHost) from `pwsh -NoLogo -NoProfile -Command …` (5 s timeout).
 fn pwsh_profile() -> Result<PathBuf> {
     let out = output_with_timeout(
-        Command::new("pwsh").args(["-NoLogo", "-NoProfile", "-Command", "$PROFILE"]),
+        Command::new("pwsh").args(["-NoLogo", "-NoProfile", "-Command", PWSH_PROFILE_CMD]),
         Duration::from_secs(5),
     )
     .context("could not ask pwsh for $PROFILE")?;
@@ -605,9 +656,13 @@ impl Integration {
                 format!("[ -n \"$BASH_VERSION\" ] && [ -x {b} ] && eval \"$({b} init bash {w} --rcfile {rc})\"\n")
             }
             Shell::Zsh => format!("[ -x {b} ] && eval \"$({b} init zsh {w} --rcfile {rc})\"\n"),
-            Shell::Fish => format!("test -x {b}; and {b} init fish {w} --rcfile {rc} | source\n"),
+            // `eval (… | string split0)`, not `| source`: `source` hands the pipe to the script as stdin, so the pre
+            // script's `test -t 0` fails and the wrapper never starts.
+            Shell::Fish => format!("test -x {b}; and eval ({b} init fish {w} --rcfile {rc} | string split0)\n"),
+            // pwsh decodes native output with [Console]::OutputEncoding (the OEM code page on Windows): read the
+            // UTF-8 init output as UTF-8, then put the user's encoding back before running it.
             Shell::Pwsh => format!(
-                "if (Test-Path -LiteralPath {b}) {{ Invoke-Expression ((& {b} init pwsh {w} --rcfile profile) -join \"`n\") }}\n"
+                "if (Test-Path -LiteralPath {b}) {{ $__tsEnc = [Console]::OutputEncoding; try {{ [Console]::OutputEncoding = [Text.UTF8Encoding]::new(); $__tsInit = (& {b} init pwsh {w} --rcfile profile) -join \"`n\" }} finally {{ [Console]::OutputEncoding = $__tsEnc }}; Invoke-Expression $__tsInit }}\n"
             ),
         }
     }
@@ -1194,7 +1249,7 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(c.fish_dir.join("conf.d/00_tabsmith_pre.fish")).unwrap(),
-            "test -x '/opt/tab smith/it\\'s/tabsmith'; and '/opt/tab smith/it\\'s/tabsmith' init fish pre --rcfile 00_tabsmith_pre | source\n"
+            "test -x '/opt/tab smith/it\\'s/tabsmith'; and eval ('/opt/tab smith/it\\'s/tabsmith' init fish pre --rcfile 00_tabsmith_pre | string split0)\n"
         );
         for i in &fish {
             i.uninstall(&c).unwrap();
@@ -1269,6 +1324,243 @@ mod tests {
         assert_eq!((back.env["A"].as_str(), back.alias.as_deref(), back.ts), ("1", Some("ll='ls -l'"), 7));
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(dir.join("run")).unwrap().permissions().mode() & 0o777, 0o700);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn integrations_parent_exe() {
+        // The test runner always has a parent (cargo); on Windows this needs the Toolhelp32 lookup.
+        assert!(parent_exe().is_some_and(|p| !p.is_empty()));
+    }
+
+    /// Run `argv` in a PTY with only PATH, TERM and `env`; type `input` once `ready` appears in the output (at once
+    /// when `ready` is empty). Answers cursor-position and device-attribute queries. Returns (output, exit code).
+    #[cfg(unix)]
+    fn pty_run(argv: &[&str], env: &[(&str, &Path)], ready: &str, input: &str) -> (String, u32) {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut cb = CommandBuilder::from_argv(argv.iter().map(Into::into).collect());
+        cb.env_clear();
+        cb.env("PATH", std::env::var_os("PATH").unwrap_or_default());
+        cb.env("TERM", "xterm-256color");
+        for (k, v) in env {
+            cb.env(k, v);
+        }
+        let mut child = pair.slave.spawn_command(cb).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut b = [0u8; 4096];
+            while let Ok(n @ 1..) = reader.read(&mut b) {
+                if tx.send(b[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let (mut out, mut sent, deadline) = (Vec::new(), false, Instant::now() + Duration::from_secs(40));
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                std::thread::sleep(Duration::from_millis(100));
+                out.extend(rx.try_iter().flatten());
+                return (String::from_utf8_lossy(&out).into_owned(), status.exit_code());
+            }
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("{argv:?} did not exit: {:?}", String::from_utf8_lossy(&out));
+            }
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(50)) {
+                let has = |p: &[u8]| chunk.windows(p.len()).any(|w| w == p);
+                if has(b"\x1b[6n") {
+                    let _ = writer.write_all(b"\x1b[1;1R");
+                }
+                if has(b"\x1b[c") || has(b"\x1b[0c") {
+                    let _ = writer.write_all(b"\x1b[?62;22c");
+                }
+                out.extend(chunk);
+            }
+            if !sent && String::from_utf8_lossy(&out).contains(ready) {
+                let _ = writer.write_all(input.as_bytes());
+                sent = true;
+            }
+        }
+    }
+
+    /// A fake tabsmith: `init <shell> <when>` prints `<fake>.<when>`; `_ pty` records whether stdin is a tty in
+    /// `<fake>.launched`, then exits 7.
+    #[cfg(unix)]
+    fn fake_bin(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let fake = dir.join("tabsmith");
+        let script = "#!/bin/sh\ncase \"$1 $2\" in\ninit*) cat \"$0.$3\" ;;\n\"_ pty\") if [ -t 0 ]; then echo tty; else echo notty; fi > \"$0.launched\"; exit 7 ;;\nesac\n";
+        std::fs::write(&fake, script).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        fake
+    }
+
+    /// `init` output for `fake` (the snapshot with its binary swapped).
+    fn init_for(shell: Shell, when: When, bin: &str) -> String {
+        snapshot(shell, when).replace(&quote(shell, "tabsmith"), &quote(shell, bin))
+    }
+
+    /// The installed fish conf.d files really start the wrapper (stdin a tty) and see the tty in the post block.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_fish_confd_launches_in_a_pty() {
+        if which("fish").is_none() {
+            return;
+        }
+        let dir = tmp("fishpty");
+        let home = dir.join("home");
+        let fake = fake_bin(&dir.join("bin dir"));
+        let bin = fake.display().to_string();
+        let c = Ctx { bin: bin.clone(), fish_dir: home.join(".config/fish"), ..ctx(&dir) };
+        for i in integrations(&c, Shell::Fish).unwrap() {
+            i.install(&c).unwrap();
+        }
+        std::fs::write(format!("{bin}.pre"), init_for(Shell::Fish, When::Pre, &bin)).unwrap();
+        std::fs::write(format!("{bin}.post"), init_for(Shell::Fish, When::Post, &bin)).unwrap();
+        let env: &[(&str, &Path)] = &[("HOME", &home), ("XDG_CONFIG_HOME", &home.join(".config"))];
+
+        let (out, code) = pty_run(&["fish", "-i"], env, "", "exit\r");
+        let launched = std::fs::read_to_string(format!("{bin}.launched")).unwrap_or_default();
+        assert_eq!((launched.trim(), code), ("tty", 7), "the pre block must exec the wrapper on the tty: {out:?}");
+
+        // Inside the wrapper (launch decision 1, a session id): the post block reads the real tty.
+        let pre = init_for(Shell::Fish, When::Pre, &bin).replace("SHOULD_TABSMITH_LAUNCH 0", "SHOULD_TABSMITH_LAUNCH 1");
+        std::fs::write(format!("{bin}.pre"), pre).unwrap();
+        let env = [env, &[("TABSMITH_SESSION_ID", Path::new("abc"))]].concat();
+        let (out, code) = pty_run(&["fish", "-i"], &env, "NewCmd=abc", "exit\r");
+        assert_eq!(code, 0, "{out:?}");
+        assert!(out.contains("\x1b]697;TTY=/dev/"), "post block TTY: {out:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// PROMPT_COMMAND edited after install (`; true` appended, bash-preexec's newline-separated layout) is put back
+    /// to `_ts_first;…;_ts_last`, and PS1 is wrapped exactly once at every prompt.
+    #[test]
+    fn integrations_bash_prompt_command_rewrap() {
+        if which("bash").is_none() {
+            return;
+        }
+        let dir = tmp("bashpc");
+        let f = dir.join("post.bash");
+        std::fs::write(&f, snapshot(Shell::Bash, When::Post)).unwrap();
+        let script = r#"PS1='$ '; source "$F"; __bp_a() { :; }; __bp_b() { :; }
+            prompts() { for _ in 1 2 3 4; do eval "$PROMPT_COMMAND"; printf '\nLEN=%s\n' "${#PS1}"; done; printf 'PC=%q\n' "$PROMPT_COMMAND"; }
+            eval "$PROMPT_COMMAND"; PROMPT_COMMAND="$PROMPT_COMMAND; true"; prompts
+            PROMPT_COMMAND=$'__bp_a\n'"$PROMPT_COMMAND"$'\n__bp_b'; prompts"#;
+        let out = Command::new("bash")
+            .args(["--norc", "--noprofile", "-c", script])
+            .env("F", &f)
+            .env("TABSMITH_SESSION_ID", "abc")
+            .env_remove("_TS_POST_LOADED")
+            .output()
+            .unwrap();
+        let s = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{s}{}", String::from_utf8_lossy(&out.stderr));
+        let lens: Vec<&str> = s.lines().filter(|l| l.starts_with("LEN=")).collect();
+        assert!(lens.len() == 8 && lens.iter().all(|l| *l == lens[0]), "PS1 grows: {s}");
+        assert!(s.contains("PC=_ts_first\\;true\\;_ts_last\n"), "{s}");
+        assert!(s.contains("PC=$'_ts_first;__bp_a\\ntrue;__bp_b;_ts_last'\n"), "{s}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// pwsh (when installed): PreExec comes from the PSConsoleHostReadLine wrapper for every line, including a
+    /// repeated one (not for an empty / Ctrl-C line), without touching PSReadLine's history handler or $Error.
+    #[test]
+    fn integrations_pwsh_post_preexec() {
+        if which("pwsh").is_none() {
+            return;
+        }
+        let dir = tmp("pwshpost");
+        let f = dir.join("post.ps1");
+        std::fs::write(&f, snapshot(Shell::Pwsh, When::Post)).unwrap();
+        let script = format!(
+            "$Global:__l = 'echo hi'; function Global:PSConsoleHostReadLine {{ $Global:__l }}; . {}; $a = PSConsoleHostReadLine; $b = PSConsoleHostReadLine; $Global:__l = ''; $null = PSConsoleHostReadLine; \"`nGOT=$a|$b ERR=$($Error.Count)\"; prompt",
+            quote(Shell::Pwsh, &f.display().to_string())
+        );
+        let out = Command::new("pwsh").args(["-NoProfile", "-Command", &script]).env("TABSMITH_SESSION_ID", "abc").output().unwrap();
+        let s = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{s}{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(s.matches("\x1b]697;OSCLock=abc\x07\x1b]697;PreExec\x07").count(), 2, "{s:?}");
+        assert!(s.contains("GOT=echo hi|echo hi ERR=0"), "{s:?}");
+        assert!(s.contains("\x1b]697;StartPrompt\x07") && s.contains("\x1b]697;NewCmd=abc\x07"), "{s:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// pwsh (when installed) under an OEM console code page: the profile script reads the UTF-8 init output (a
+    /// non-ASCII binary path) intact and restores the code page; `$PROFILE` is read back as UTF-8.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_pwsh_utf8_under_oem_code_page() {
+        if which("pwsh").is_none() {
+            return;
+        }
+        let dir = tmp("pwshoem");
+        let bin = fake_bin(&dir.join("Jos\u{e9}")).display().to_string();
+        std::fs::write(format!("{bin}.pre"), "$Global:__tsGot = 'Jos\u{e9}'\n").unwrap();
+        let c = Ctx { bin, ..ctx(&dir) };
+        let pwsh = &integrations(&c, Shell::Pwsh).unwrap()[0];
+        let pre = dir.join("profile.pre.ps1");
+        std::fs::write(&pre, pwsh.script_contents(&c, When::Pre)).unwrap();
+        let oem = "[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(850)";
+        let script = format!(
+            "{oem}; . {}; $cp = [Console]::OutputEncoding.CodePage; [Console]::OutputEncoding = [Text.UTF8Encoding]::new(); \"$cp $($Global:__tsGot -eq ('Jos' + [char]0xE9))\"",
+            quote(Shell::Pwsh, &pre.display().to_string())
+        );
+        let out = Command::new("pwsh").args(["-NoProfile", "-Command", &script]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "850 True", "{}", String::from_utf8_lossy(&out.stderr));
+
+        let script = format!("{oem}; $PROFILE = '/Users/Jos' + [char]0xE9 + '/p.ps1'; {PWSH_PROFILE_CMD}");
+        let out = Command::new("pwsh").args(["-NoProfile", "-Command", &script]).output().unwrap();
+        assert_eq!(String::from_utf8(out.stdout).ok().as_deref(), Some("/Users/Jos\u{e9}/p.ps1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// pwsh (when installed) with the profile integration, in a PTY: a plain interactive start runs the wrapper and
+    /// exits with its code; a missing wrapper leaves the shell usable; scripts and commands are never hijacked.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_pwsh_pre_launch_rules() {
+        if which("pwsh").is_none() {
+            return;
+        }
+        let dir = tmp("pwshpre");
+        let home = dir.join("home");
+        let bin = fake_bin(&dir.join("bin")).display().to_string();
+        let c = Ctx { bin: bin.clone(), ..ctx(&dir) };
+        let pwsh = &integrations(&c, Shell::Pwsh).unwrap()[0];
+        pwsh.install(&c).unwrap();
+        std::fs::write(format!("{bin}.post"), "# post\n").unwrap();
+        let script = dir.join("hello.ps1");
+        std::fs::write(&script, "'SCRIPT RAN'; exit 3\n").unwrap();
+        let env: &[(&str, &Path)] = &[("HOME", &home), ("XDG_CONFIG_HOME", &home.join(".config"))];
+        let launched = || std::fs::remove_file(format!("{bin}.launched")).is_ok();
+
+        let set_wrapper = |w: &str| std::fs::write(format!("{bin}.pre"), init_for(Shell::Pwsh, When::Pre, w)).unwrap();
+        set_wrapper(&bin);
+        let d = dir.display().to_string();
+        for argv in [&["pwsh", "-NoLogo"][..], &["pwsh", "-nol", "-wd", &d, "-noe"]] {
+            let (out, code) = pty_run(argv, env, "", "");
+            assert!(launched() && code == 7, "{argv:?}: interactive start → wrapper, its exit code ({code}): {out:?}");
+        }
+
+        let enc = "JwBFAEMAIABSAEEATgAnADsAIABlAHgAaQB0ACAANAA="; // 'EC RAN'; exit 4 (UTF-16LE base64)
+        let s = script.display().to_string();
+        let cases: [(&[&str], &str, u32); 3] =
+            [(&["-NoLogo", &s], "SCRIPT RAN", 3), (&["-NoLogo", "-ec", enc], "EC RAN", 4), (&["-NoLogo", "-Com", "'COM RAN'; exit 5"], "COM RAN", 5)];
+        for (args, want, rc) in cases {
+            let argv = [&["pwsh"][..], args].concat();
+            let (out, code) = pty_run(&argv, env, "", "");
+            assert!(!launched() && out.contains(want) && code == rc, "{args:?} ({code}): {out:?}");
+        }
+
+        set_wrapper("/nonexistent/tabsmith");
+        let (out, code) = pty_run(&["pwsh", "-NoLogo"], env, "PS ", "exit 6\r");
+        assert_eq!(code, 6, "a wrapper that cannot start must not end the shell: {out:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

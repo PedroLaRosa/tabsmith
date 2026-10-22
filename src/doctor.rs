@@ -386,7 +386,7 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
             };
             err(reason)
         }),
-        check("Session check", if sid.is_some() { Kind::Normal } else { Kind::Skip }, move || {
+        check("Session check", session_kind(sid.as_deref(), parent, var("TABSMITH_SHELL").as_deref()), move || {
             let sid = sid.clone().unwrap_or_default();
             if ctx.data.join("run").join(format!("{sid}.json")).is_file() {
                 Outcome::Ok
@@ -413,6 +413,17 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
         }),
         check("Inline", inline_kind, move || inline_outcome(&s3, |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))),
     ]
+}
+
+/// The Session check runs inside a wrapped session, except pwsh, which never runs `_ pre-cmd` (SPEC §5.4.5).
+/// The session shell is the parent process, else `TABSMITH_SHELL` (exported by the pre scripts).
+fn session_kind(sid: Option<&str>, parent: Option<&str>, tabsmith_shell: Option<&str>) -> Kind {
+    let shell = parent.and_then(Shell::from_name).or_else(|| tabsmith_shell.and_then(Shell::from_name));
+    if sid.is_some() && shell != Some(Shell::Pwsh) {
+        Kind::Normal
+    } else {
+        Kind::Skip
+    }
 }
 
 /// The `Inline` check; `env_set(name)` = the variable is set and non-empty.
@@ -609,6 +620,16 @@ mod tests {
         assert!(r.group("h", list));
         assert!(!fixed.get());
         assert_eq!((r.errors, r.warnings), (2, 1));
+    }
+
+    #[test]
+    fn doctor_session_check_skips_pwsh() {
+        let pwsh = Some(r"C:\Program Files\PowerShell\7\pwsh.exe");
+        assert_eq!(session_kind(Some("s1"), pwsh, None), Kind::Skip);
+        assert_eq!(session_kind(Some("s1"), None, pwsh), Kind::Skip); // parent unknown: TABSMITH_SHELL decides
+        assert_eq!(session_kind(Some("s1"), Some("/bin/zsh"), pwsh), Kind::Normal); // zsh nested in pwsh runs pre-cmd
+        assert_eq!(session_kind(Some("s1"), Some("/bin/zsh"), None), Kind::Normal);
+        assert_eq!(session_kind(None, Some("/bin/zsh"), None), Kind::Skip);
     }
 
     #[test]

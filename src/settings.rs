@@ -67,12 +67,14 @@ impl Store {
         Store::load(&state_path()?)
     }
 
-    /// Pretty JSON (keys sorted), written to a temp file then renamed; Unix mode 0600.
+    /// Pretty JSON (keys sorted), written to a temp file then renamed over the symlink target (a symlinked
+    /// settings file stays a symlink); Unix mode 0600.
     pub fn save(&self) -> Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = self.path.with_extension(format!("tmp-{}", std::process::id()));
+        let target = std::fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone());
+        let tmp = target.with_extension(format!("tmp-{}", std::process::id()));
         let mut body = serde_json::to_string_pretty(&Value::Object(self.map.clone()))?;
         body.push('\n');
         std::fs::write(&tmp, body)?;
@@ -81,7 +83,7 @@ impl Store {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
         }
-        std::fs::rename(&tmp, &self.path).with_context(|| format!("writing {}", self.path.display()))?;
+        std::fs::rename(&tmp, &target).with_context(|| format!("writing {}", self.path.display()))?;
         Ok(())
     }
 }
@@ -282,6 +284,27 @@ mod tests {
         assert!(wildcard_match("*.width", "autocomplete.width"));
         assert!(wildcard_match("a*b*c", "a-x-b-y-b-c"));
         assert!(!wildcard_match("a*b*c", "a-x-b-y-c-d"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_keeps_a_symlinked_file() {
+        let dir = std::env::temp_dir().join(format!("tabsmith-settings-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dots")).unwrap();
+        std::fs::write(dir.join("dots/settings.json"), "{\"a\":1}").unwrap();
+        let link = dir.join("settings.json");
+        std::os::unix::fs::symlink("dots/settings.json", &link).unwrap();
+        let mut s = Store::load(&link).unwrap();
+        s.map.insert("b".into(), 2.into());
+        s.save().unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(Store::load(&dir.join("dots/settings.json")).unwrap().map.len(), 2);
+        // A plain (or missing) file is still written in place.
+        let plain = Store { path: dir.join("state.json"), map: Map::new() };
+        plain.save().unwrap();
+        assert!(dir.join("state.json").is_file());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

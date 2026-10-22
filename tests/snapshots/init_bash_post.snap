@@ -19,6 +19,7 @@ if [ -n "${BASH_VERSION:-}" ] && [ -n "${TABSMITH_SESSION_ID:-}" ] && [ -z "${_T
   }
   _ts_last() {
     local st=$?
+    [ "${_ts_wrapped:-0}" = 1 ] && [ "$PS1" = "$_ts_last1" ] && return $st   # already wrapped this prompt
     _ts_u1=$PS1; _ts_u2=$PS2
     PS1="\[\e]697;StartPrompt\a\]$PS1\[\e]697;EndPrompt\a\e]697;NewCmd=$TABSMITH_SESSION_ID\a\]"
     PS2="\[\e]697;StartPrompt\a\]$PS2\[\e]697;EndPrompt\a\]"
@@ -32,11 +33,15 @@ if [ -n "${BASH_VERSION:-}" ] && [ -n "${TABSMITH_SESSION_ID:-}" ] && [ -z "${_T
       [[ ${PROMPT_COMMAND[0]} == _ts_first && ${PROMPT_COMMAND[-1]} == _ts_last ]] && return
       local pc=() c; for c in "${PROMPT_COMMAND[@]}"; do [[ $c == _ts_first || $c == _ts_last ]] || pc+=("$c"); done
       PROMPT_COMMAND=(_ts_first "${pc[@]}" _ts_last)
-    else
-      [[ $PROMPT_COMMAND == _ts_first\;*_ts_last ]] && return
-      local s=${PROMPT_COMMAND:-}; s=${s//_ts_first;/}; s=${s//;_ts_last/}
-      s=${s%"${s##*[![:space:];]}"}                      # drop trailing ';' / whitespace (';;' is a syntax error)
-      PROMPT_COMMAND="_ts_first;${s:+$s;}_ts_last"
+    else   # drop every `_ts_first`/`_ts_last` command, whatever separates it (';' or newline, e.g. bash-preexec)
+      local s=${PROMPT_COMMAND:-} kept='' cmd sep
+      while [ -n "$s" ]; do
+        cmd=${s%%[;$'\n']*}; s=${s:${#cmd}}; sep=${s:0:1}; s=${s:1}
+        [[ ${cmd//[[:space:]]/} == _ts_first || ${cmd//[[:space:]]/} == _ts_last ]] || kept+=$cmd$sep
+      done
+      kept=${kept#"${kept%%[![:space:];]*}"}; kept=${kept%"${kept##*[![:space:];]}"}   # ';;' is a syntax error
+      kept="_ts_first;${kept:+$kept;}_ts_last"
+      [[ $PROMPT_COMMAND == "$kept" ]] || PROMPT_COMMAND=$kept
     fi
   }
   PS0="\e]697;OSCLock=$TABSMITH_SESSION_ID\a\e]697;PreExec\a${PS0:-}"   # bash 4.4+ prints PS0 before running a command

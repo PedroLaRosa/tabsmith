@@ -1,4 +1,4 @@
-# tabsmith post (pwsh): OSC 697 markers from a wrapped prompt function + PSReadLine history hook (SPEC §5.4.5).
+# tabsmith post (pwsh): OSC 697 markers from wrapped prompt and PSConsoleHostReadLine functions (SPEC §5.4.5).
 if ($env:TABSMITH_SESSION_ID -and -not $Global:__TsLoaded) {
   $Global:__TsLoaded = $true
   $Global:__TsUserPrompt = $function:prompt
@@ -14,12 +14,16 @@ if ($env:TABSMITH_SESSION_ID -and -not $Global:__TsLoaded) {
     $global:LASTEXITCODE = $code
     return $o
   }
-  if (Get-Module PSReadLine) {   # PreExec: PSReadLine calls this when a line is accepted (inferred; verify ordering)
-    $Global:__TsPrevHist = (Get-PSReadLineOption).AddToHistoryHandler
-    Set-PSReadLineOption -AddToHistoryHandler {
-      param([string]$line)
-      [Console]::Write((__TsOsc "OSCLock=$env:TABSMITH_SESSION_ID") + (__TsOsc 'PreExec'))
-      if ($Global:__TsPrevHist) { return & $Global:__TsPrevHist $line } else { return $true }
+  # PreExec once per accepted line (duplicates and history-filtered lines included): wrap PSReadLine's ReadLine.
+  # Ctrl-C and blank lines run nothing and get no PreExec, as in the other shells.
+  if (Test-Path Function:\PSConsoleHostReadLine) {
+    $Global:__TsReadLine = $function:PSConsoleHostReadLine
+    function Global:PSConsoleHostReadLine {
+      $line = & $Global:__TsReadLine
+      if (-not [string]::IsNullOrWhiteSpace($line)) {
+        [Console]::Write((__TsOsc "OSCLock=$env:TABSMITH_SESSION_ID") + (__TsOsc 'PreExec'))
+      }
+      $line
     }
   }
 }
