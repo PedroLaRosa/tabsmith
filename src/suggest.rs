@@ -302,6 +302,11 @@ pub fn history_rows(prefix: &str, entries: &[HistoryEntry]) -> Vec<Sugg> {
         if name.is_empty() {
             continue; // ponytail: Kiro keeps an empty-name row; it can only render blank
         }
+        if name.chars().any(char::is_control) {
+            // ponytail: multi-line entry: typing its "\n" runs part of it, stripping it changes the command;
+            // bracketed paste (DECSET 2004) could insert it whole if it is ever wanted
+            continue;
+        }
         let w = first_word(name);
         if !w.is_empty() {
             *freq.entry(w).or_default() += 1;
@@ -632,65 +637,97 @@ fn name_match(s: &Sugg, q: &str, fuzzy: bool, verbose: bool) -> Option<String> {
     }
 }
 
-/// POSIX escaping (Kiro `escapeInsertion`). `quote`: the user started the token with a quote → keep quoting.
-fn escape_posix(s: &str, folder: bool, quote: bool) -> String {
-    const SPECIAL: &str = "\\?*'\"#|<>()[]!&";
-    if !quote && !s.chars().any(|c| SPECIAL.contains(c)) {
-        if !s.contains(' ') {
+/// A bare variable reference (`$HOME`, pwsh `$env:PATH`): shell syntax the row means to insert.
+fn is_var_ref(s: &str) -> bool {
+    s.strip_prefix('$').is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+}
+
+/// POSIX/fish escaping of a name. `quote`: the user started the token with a quote → keep quoting; `path`: a
+/// file/folder row (its `$` is never a variable). An allow-list, unlike Kiro's `escapeInsertion` deny-list, which
+/// misses `$ ` ; { }` and a leading `~`/`=` (SPEC §6.8 D-note).
+fn escape_posix(s: &str, folder: bool, quote: bool, path: bool, shell: Shell) -> String {
+    let safe = |c: char| c.is_alphanumeric() || "-_./+,:@%=~".contains(c);
+    // `~` expands at the start and after `=`/`:` (assignments, zsh MAGIC_EQUAL_SUBST); `=cmd` in zsh
+    if !quote && !s.starts_with(['~', '=', '%']) && !s.contains("=~") && !s.contains(":~") {
+        if s.chars().all(safe) || (!path && is_var_ref(s)) {
             return s.to_string();
         }
-        return s.chars().map(|c| if c.is_whitespace() { "\\ ".to_string() } else { c.to_string() }).collect();
-    }
-    let q = |t: &str| t.replace('\'', "'\"'\"'");
-    if folder {
-        format!("'{}'/", q(s.strip_suffix('/').unwrap_or(s)))
-    } else {
-        format!("'{}'", q(s))
-    }
-}
-
-/// PowerShell escaping: single quotes when needed; folders keep the cursor inside the quotes.
-fn escape_pwsh(s: &str, folder: bool, quote: bool) -> String {
-    const SPECIAL: &str = "$`'\"(){};,&|@#<>";
-    let plain = s.replace("{cursor}", "");
-    if !quote && !plain.chars().any(|c| c.is_whitespace() || SPECIAL.contains(c)) {
-        return s.to_string();
-    }
-    let body = s.replace('\'', "''");
-    if folder {
-        format!("'{body}{{cursor}}'")
-    } else {
-        format!("'{body}'")
-    }
-}
-
-/// The quote `raw` leaves open (`'` or `"`) and its char index.
-fn open_quote(raw: &str, shell: Shell) -> Option<(char, usize)> {
-    let esc = if shell == Shell::Pwsh { '`' } else { '\\' };
-    let mut open: Option<(char, usize)> = None;
-    let mut chars = raw.chars().enumerate();
-    while let Some((i, ch)) = chars.next() {
-        match open {
-            Some(('\'', _)) => open = open.filter(|_| ch != '\''), // no escapes inside single quotes
-            _ if ch == esc => {
-                chars.next();
-            }
-            Some((q, _)) => open = open.filter(|_| ch != q),
-            None if ch == '\'' || ch == '"' => open = Some((ch, i)),
-            None => {}
+        if s.chars().all(|c| safe(c) || c == ' ') {
+            return s.replace(' ', "\\ ");
         }
     }
-    open
+    match s.strip_suffix('/').filter(|_| folder) {
+        Some(stem) => format!("{}/", crate::integrations::quote(shell, stem)),
+        None => crate::integrations::quote(shell, s),
+    }
+}
+
+/// PowerShell escaping: single quotes when needed. Folders become backtick-escaped bare words instead, so the
+/// cursor never sits inside a quote (the mid-word guard would block the next segment).
+fn escape_pwsh(s: &str, folder: bool, quote: bool, path: bool) -> String {
+    const SPECIAL: &str = "$`'\"(){};,&|@#<>";
+    let special = |c: char| c.is_whitespace() || SPECIAL.contains(c);
+    if !quote && (!s.chars().any(special) || (!path && is_var_ref(s))) {
+        return s.to_string();
+    }
+    if folder {
+        return s.chars().flat_map(|c| ['`', c].into_iter().skip(usize::from(!special(c)))).collect();
+    }
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// `(char index, char)`.
+type At = (usize, char);
+
+/// Each logical char of `raw` (quotes removed, escapes resolved) with the char index it starts at, and the quote
+/// `raw` leaves open (`'` or `"`) with its index.
+fn unquote(raw: &[char], shell: Shell) -> (Vec<At>, Option<(char, usize)>) {
+    let pwsh = shell == Shell::Pwsh;
+    let esc = if pwsh { '`' } else { '\\' };
+    let (mut out, mut open, mut i) = (Vec::new(), None, 0);
+    while i < raw.len() {
+        let ch = raw[i];
+        match open {
+            // no escapes inside single quotes, except pwsh `''`
+            Some(('\'', _)) if ch == '\'' && pwsh && raw.get(i + 1) == Some(&'\'') => {
+                out.push((i, ch));
+                i += 1;
+            }
+            Some(('\'', _)) if ch == '\'' => open = None,
+            Some(('\'', _)) => out.push((i, ch)),
+            _ if ch == esc && i + 1 < raw.len() => {
+                out.push((i, raw[i + 1]));
+                i += 1;
+            }
+            Some((q, _)) if ch == q => open = None,
+            None if ch == '\'' || ch == '"' => open = Some((ch, i)),
+            _ => out.push((i, ch)),
+        }
+        i += 1;
+    }
+    (out, open)
 }
 
 /// Escaping inside a quote the user opened before the replaced text (no quotes added around it).
 fn escape_in_quote(s: &str, q: char, shell: Shell) -> String {
     match (q, shell) {
         ('\'', Shell::Pwsh) => s.replace('\'', "''"),
+        ('\'', Shell::Fish) => s.replace('\\', "\\\\").replace('\'', "\\'"),
         ('\'', _) => s.replace('\'', "'\\''"),
         _ => {
-            let (special, esc) = if shell == Shell::Pwsh { ("`\"$", '`') } else { ("\\\"$`", '\\') };
-            s.chars().flat_map(|ch| [esc, ch].into_iter().skip(usize::from(!special.contains(ch)))).collect()
+            let (special, esc) = match shell {
+                Shell::Pwsh => ("`\"$", '`'),
+                Shell::Fish => ("\\\"$", '\\'), // fish double quotes know only \\ \" \$
+                _ => ("\\\"$`", '\\'),
+            };
+            s.chars()
+                .map(|c| match c {
+                    // interactive bash/zsh history-expand `!` even inside double quotes: single-quote it in between
+                    '!' if matches!(shell, Shell::Bash | Shell::Zsh) => "\"'!'\"".to_string(),
+                    c if special.contains(c) => format!("{esc}{c}"),
+                    c => c.to_string(),
+                })
+                .collect()
         }
     }
 }
@@ -699,6 +736,7 @@ fn escape_in_quote(s: &str, q: char, shell: Shell) -> String {
 pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
     let q = s.query.of(c.search_term);
     let raw: Vec<char> = c.raw.chars().collect();
+    let (logical, open) = unquote(&raw, c.shell);
     // special (`help` template) rows replace the typed prefix like any other row (Kiro deletes 0 and doubles it)
     let delete = if s.kind == ItemType::AutoExecute {
         0
@@ -709,32 +747,39 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
     } else if let Query::Path { backslash } = s.query {
         c.raw[after_sep(c.raw, backslash)..].chars().count()
     } else {
-        // function getQueryTerm: Kiro approximation (escaped whitespace), never past the token
-        q.chars().map(|ch| if ch.is_whitespace() { 2 } else { 1 }).sum::<usize>().min(raw.len())
+        // function getQueryTerm: delete the raw chars that spell q's logical chars (quotes/escapes included);
+        // otherwise Kiro's approximation (escaped whitespace), never past the token
+        let n = q.chars().count();
+        let tail = logical.get(logical.len().saturating_sub(n)..).filter(|t| t.len() == n && t.iter().map(|x| x.1).eq(q.chars()));
+        match tail {
+            Some(t) => raw.len() - t.first().map_or(raw.len(), |x| x.0),
+            None => q.chars().map(|ch| if ch.is_whitespace() { 2 } else { 1 }).sum::<usize>().min(raw.len()),
+        }
     };
     let deleted: String = raw[raw.len() - delete..].iter().collect();
     let quote = deleted.starts_with(['\'', '"']);
     // a quote opened before the replaced part (`cat "my dir/x`): escape for inside it
-    let inside = open_quote(c.raw, c.shell).filter(|&(_, i)| i < raw.len() - delete).map(|(q, _)| q);
-    let folder = s.kind == ItemType::Folder;
+    let inside = open.filter(|&(_, i)| i < raw.len() - delete).map(|(q, _)| q);
+    let (folder, path) = (s.kind == ItemType::Folder, matches!(s.kind, ItemType::File | ItemType::Folder));
     let mut text = match &s.insert_value {
-        Some(v) if !matches!(s.kind, ItemType::File | ItemType::Folder) => v.clone(),
+        Some(v) if !path => v.clone(),
         _ => match name_match(s, &q, c.fuzzy, c.prefer_verbose).filter(|m| !m.is_empty()) {
             None => String::new(),
             Some(m) => {
-                let body = match &s.separator {
-                    Some(sep) => format!("{m}{sep}{{cursor}}"),
-                    None => m,
-                };
-                match (inside, c.shell) {
+                let name = match (inside, c.shell) {
                     // a file closes the quote; a folder leaves it open for the next segment
                     (Some(qc), sh) => {
-                        let mut t = escape_in_quote(&body, qc, sh);
+                        let mut t = escape_in_quote(&m, qc, sh);
                         t.extend((s.kind == ItemType::File).then_some(qc));
                         t
                     }
-                    (None, Shell::Pwsh) => escape_pwsh(&body, folder, quote),
-                    (None, _) => escape_posix(&body, folder, quote),
+                    (None, Shell::Pwsh) => escape_pwsh(&m, folder, quote, path),
+                    (None, sh) => escape_posix(&m, folder, quote, path, sh),
+                };
+                // only the name is escaped: `--out=` keeps its separator and the cursor outside any quote
+                match &s.separator {
+                    Some(sep) => format!("{name}{sep}{{cursor}}"),
+                    None => name,
                 }
             }
         },
@@ -1452,7 +1497,7 @@ mod tests {
         assert_eq!((i.delete, i.text.as_str()), (0, "in.rs"));
         // POSIX special chars → single quotes, embedded quote escaped
         let i = insertion(&Sugg::new("it's", ItemType::File), &ctx("", "", Shell::Bash));
-        assert_eq!(i.text, "'it'\"'\"'s'");
+        assert_eq!(i.text, "'it'\\''s'");
         let i = insertion(&Sugg::new("a(b)/", ItemType::Folder), &ctx("", "", Shell::Bash));
         assert_eq!(i.text, "'a(b)'/");
         // pwsh
@@ -1461,7 +1506,7 @@ mod tests {
         let i = insertion(&Sugg::new("it's", ItemType::File), &ctx("", "", Shell::Pwsh));
         assert_eq!(i.text, "'it''s'");
         let i = insertion(&Sugg::new("my dir/", ItemType::Folder), &ctx("", "", Shell::Pwsh));
-        assert_eq!((i.text.as_str(), i.cursor_back), ("'my dir/'", 1));
+        assert_eq!((i.text.as_str(), i.cursor_back), ("my` dir/", 0));
         let i = insertion(&out, &ctx("", "", Shell::Pwsh));
         assert_eq!((i.text.as_str(), i.cursor_back), ("--out= ", 1));
         // insertValue verbatim with {cursor}; "\n" → execute; auto-execute deletes nothing
@@ -1518,6 +1563,68 @@ mod tests {
         assert_eq!(insertion(&file, &ctx("my dir/x", "\"my dir\"/x", Shell::Bash)).text, "\\ y.txt");
         assert_eq!(insertion(&file, &ctx("\"d/x", "\\\"d/x", Shell::Bash)).text, "\\ y.txt");
         assert_eq!(insertion(&file, &ctx("d/x", "d/\"x", Shell::Bash)).text, "'x y.txt'");
+    }
+
+    #[test]
+    fn insertion_round2_regressions() {
+        let text = |s: Sugg, sh| insertion(&s, &ctx("", "", sh)).text;
+        // posix-escape-misses-shell-metachars / path-metachar-injection: names never become live shell syntax
+        for sh in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            for (name, kind) in [("zz;id", ItemType::Arg), ("a$b.txt", ItemType::File), ("a`id`b", ItemType::File), ("x{1,2}.txt", ItemType::File), ("notes;touch${IFS}PWNED.txt", ItemType::File), ("semi;colon dir.txt", ItemType::File), ("~x", ItemType::File), ("=cmd", ItemType::File), ("a=~b", ItemType::File)] {
+                assert_eq!(text(Sugg::new(name, kind), sh), format!("'{name}'"), "{sh:?} {name}");
+            }
+            assert_eq!(text(Sugg::new("$b;x/", ItemType::Folder), sh), "'$b;x'/");
+            assert_eq!(text(Sugg::new("a b-c_d.e+f,g:h@i%j=k~", ItemType::File), sh), "a\\ b-c_d.e+f,g:h@i%j=k~");
+        }
+        assert_eq!(text(Sugg::new("it's\\", ItemType::File), Shell::Fish), "'it\\'s\\\\'");
+        // a separator stays outside the escaping (`--out=` + cursor), even when the name needs quotes
+        let sep = Sugg { separator: Some("=".into()), ..Sugg::new("--a;b", ItemType::Option) };
+        assert_eq!(insertion(&sep, &ctx("", "", Shell::Bash)), Insertion { delete: 0, text: "'--a;b'=".into(), cursor_back: 0, execute: false });
+        // pwsh-quotes-variable-refs: a `$NAME` row stays a variable reference; a file named so is still quoted
+        for sh in [Shell::Bash, Shell::Fish, Shell::Pwsh] {
+            let i = insertion(&Sugg::new("$HOME", ItemType::Arg), &ctx("$HO", "$HO", sh));
+            assert_eq!((i.delete, i.text.as_str()), (0, "ME"), "{sh:?}");
+            assert_eq!(text(Sugg::new("$foo", ItemType::File), sh), "'$foo'");
+        }
+        assert_eq!(text(Sugg::new("$env:PATH", ItemType::Arg), Shell::Pwsh), "$env:PATH");
+        assert_eq!(text(Sugg::new("a$b.txt", ItemType::File), Shell::Pwsh), "'a$b.txt'");
+        // pwsh-quoted-folder-midword-guard: folders are backtick-escaped bare words (cursor at the end), and a
+        // quoted file can follow in the same word
+        let i = insertion(&Sugg::new("dir with space/", ItemType::Folder), &ctx("di", "'di", Shell::Pwsh));
+        assert_eq!((i.delete, i.text.as_str(), i.cursor_back), (3, "dir` with` space/", 0));
+        assert_eq!(text(Sugg::new("a$b'(c)/", ItemType::Folder), Shell::Pwsh), "a`$b`'`(c`)/");
+        let file = Sugg { query: Query::Path { backslash: true }, ..Sugg::new("a b.txt", ItemType::File) };
+        let i = insertion(&file, &ctx("dir with space/", "dir` with` space/", Shell::Pwsh));
+        assert_eq!((i.delete, i.text.as_str()), (0, "'a b.txt'"));
+        // fn-queryterm-quoted-delete: a function getQueryTerm deletes the raw chars spelling the query
+        let fq = |name: &str, kind, q: &str| Sugg { query: Query::Value(q.into()), ..Sugg::new(name, kind) };
+        for (raw, sh) in [("\"dir with space/sub d", Shell::Zsh), ("'dir with space/sub d", Shell::Bash), ("\"dir with space/sub d", Shell::Fish), ("'dir with space/sub d", Shell::Pwsh)] {
+            let i = insertion(&fq("sub dir/", ItemType::Folder, "sub d"), &ctx("dir with space/sub d", raw, sh));
+            assert_eq!((i.delete, i.text.as_str()), (0, "ir/"), "{raw} {sh:?}");
+        }
+        let i = insertion(&fq("my file.py", ItemType::File, "my fi"), &ctx("dir with space/my fi", "\"dir with space/my fi", Shell::Bash));
+        assert_eq!((i.delete, i.text.as_str()), (0, "le.py\""));
+        let i = insertion(&fq("my file.py", ItemType::File, "my fi"), &ctx("dir with space/my fi", "dir\\ with\\ space/my\\ fi", Shell::Bash));
+        assert_eq!((i.delete, i.text.as_str()), (6, "my\\ file.py"));
+        let i = insertion(&fq("my file.py", ItemType::File, "my fi"), &ctx("dir with space/my fi", "dir` with` space/my` fi", Shell::Pwsh));
+        assert_eq!((i.delete, i.text.as_str()), (6, "'my file.py'"));
+        let i = insertion(&fq("it's.txt", ItemType::File, "it's"), &ctx("d/it's", "'d/it''s", Shell::Pwsh));
+        assert_eq!((i.delete, i.text.as_str()), (5, "it''s.txt'"));
+        // dq-bang-history-expansion: `!` inside bash/zsh double quotes; fish has no backtick escape there
+        let path = |name: &str| Sugg { query: Query::Path { backslash: false }, ..Sugg::new(name, ItemType::File) };
+        for sh in [Shell::Bash, Shell::Zsh] {
+            assert_eq!(insertion(&path("wow!x"), &ctx("d/", "\"d/", sh)).text, "wow\"'!'\"x\"");
+        }
+        assert_eq!(insertion(&path("a`b!$"), &ctx("d/", "\"d/", Shell::Fish)).text, "a`b!\\$\"");
+        assert_eq!(insertion(&path("a\\b'"), &ctx("d/", "'d/", Shell::Fish)).text, "a\\\\b\\''");
+    }
+
+    #[test]
+    fn history_rows_skip_multiline_entries() {
+        // history-multiline-mangled: inserting them would run (or, stripped, change) the command
+        let e = |c: &str| HistoryEntry { command: c.into(), ..Default::default() };
+        let rows = history_rows("git commit ", &[e("git commit -m \"Fix login\nCloses #12\""), e("git commit -m wip")]);
+        assert_eq!(rows.iter().map(|s| s.first()).collect::<Vec<_>>(), ["-m wip"]);
     }
 
     #[test]
