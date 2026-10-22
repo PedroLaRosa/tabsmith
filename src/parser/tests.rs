@@ -635,6 +635,32 @@ fn cli_version_detection_survives_an_aborted_parse() {
 }
 
 #[test]
+fn spec_identity_survives_dev_reload_and_cache_clear() {
+    // arg-key-pointer-identity-devmode: an unchanged spec keeps its Rc (the engine's arg/generator keys)
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut js = Js::new(rx, tx, Settings::default()).unwrap();
+    let dir = crate::specs::testutil::TmpDir::new("devid");
+    let build = dir.path().join(".fig").join("autocomplete").join("build");
+    std::fs::create_dir_all(&build).unwrap();
+    std::fs::write(build.join("mk.js"), r#"var s={name:"mk",args:{name:"t"}};export{s as default};"#).unwrap();
+    let settings = Settings::from_map(json!({"autocomplete.developerMode": true}).as_object().unwrap().clone());
+    let (env, index) = (HashMap::new(), SpecIndex::default());
+    let ctx = ParseCtx { cwd: dir.path(), settings: &settings, env: &env, shell: Shell::Zsh, index: &index };
+    let loc = SpecLocation::Local { dir: dir.path().to_path_buf(), name: "mk".into() };
+    let mut p = Parser::new();
+    let a = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
+    let b = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
+    let first = p.caches.first.clone();
+    p.clear_caches(); // settings save
+    let c = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
+    assert!(Rc::ptr_eq(&a, &b) && Rc::ptr_eq(&a, &c) && Rc::ptr_eq(&first, &p.caches.first));
+    // an edited spec still reloads in developer mode
+    std::fs::write(build.join("mk.js"), r#"var s={name:"mk",args:{name:"target"}};export{s as default};"#).unwrap();
+    let d = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
+    assert_eq!(d.args[0].name.as_deref(), Some("target"));
+}
+
+#[test]
 fn aborts_propagate() {
     let g = spec(json!({"name": "g", "generateSpec": {"$fn": 1}}));
     let mut m = Mock::with(&[("g", &g)]);

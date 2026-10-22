@@ -230,8 +230,10 @@ pub fn history_ghost(history: &[HistoryEntry], buffer: &str) -> Option<String> {
 pub fn spec_ghost(items: &[Item]) -> Option<String> {
     items.iter().find_map(|i| {
         let text = i.insert.text.strip_suffix(' ').unwrap_or(&i.insert.text);
+        // accepting a ghost types its text and leaves the cursor at the end: rows that move it back are skipped
         let ok = !matches!(i.kind, ItemType::AutoExecute | ItemType::History)
             && i.insert.delete == 0
+            && i.insert.cursor_back <= i.insert.text.len() - text.len()
             && i.prefix_match
             && !text.is_empty();
         ok.then(|| text.to_string())
@@ -777,6 +779,16 @@ mod tests {
         assert_eq!(spec_ghost(&items).as_deref(), Some("eckout"));
         assert_eq!(spec_ghost(&items[..5]), None);
         assert_eq!(spec_ghost(&[item(ItemType::Arg, 0, "a  ", true)]).as_deref(), Some("a "));
+        // spec-ghost-ignores-cursor: `commit -m '{cursor}'` would leave the cursor outside the quotes; `--out=`
+        // (cursor right after `=`, before the auto-space) is fine
+        let with_back = |text: &str, back| {
+            let mut i = item(ItemType::Arg, 0, text, true);
+            i.insert.cursor_back = back;
+            i
+        };
+        assert_eq!(spec_ghost(&[with_back("commit -m ''", 1)]), None);
+        assert_eq!(spec_ghost(&[with_back("author= ", 1)]).as_deref(), Some("author="));
+        assert_eq!(spec_ghost(&[with_back("author= ", 2)]), None);
     }
 
     #[test]

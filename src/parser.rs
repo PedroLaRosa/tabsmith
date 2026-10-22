@@ -111,10 +111,11 @@ impl Parser {
         Parser { loader: Loader::default(), caches: ParseCaches::default() }
     }
 
-    /// Drop caches (dev mode toggles, settings reload). The CLI-version memo survives (qac keeps it too).
+    /// Drop caches (dev mode toggles, settings reload). The CLI-version memo survives (qac keeps it too), and so
+    /// do spec identities (`by_json`, the first-token spec): unchanged specs are not a "new argument".
     pub fn clear_caches(&mut self) {
         self.loader.specs.clear();
-        self.caches = ParseCaches::default();
+        self.caches = ParseCaches { first: self.caches.first.clone(), ..ParseCaches::default() };
     }
 
     /// Parse the command under the cursor against its spec (SPEC §6.4).
@@ -186,6 +187,9 @@ struct Loader {
     versions: HashMap<String, String>,
     /// Version detections still running after an aborted parse, reused by the next one (no respawn per keystroke).
     inflight: HashMap<String, TaskId>,
+    /// Last normalised spec per `loc_key` with the JSON it came from: an unchanged spec keeps its `Rc` through
+    /// developer-mode reloads and `clear_caches` (the engine keys arg/generator identity on the address).
+    by_json: HashMap<String, (Value, Rc<Subcommand>)>,
 }
 
 impl Loader {
@@ -210,7 +214,14 @@ impl Loader {
             _ => None,
         };
         let spec = match json {
-            Some(j) => Some(Rc::new(normalise(&j).map_err(|e| no(format!("{name}: {e}")))?)),
+            Some(j) => match self.by_json.get(&key).filter(|(old, _)| *old == j) {
+                Some((_, rc)) => Some(rc.clone()),
+                None => {
+                    let rc = Rc::new(normalise(&j).map_err(|e| no(format!("{name}: {e}")))?);
+                    self.by_json.insert(key.clone(), (j, rc.clone()));
+                    Some(rc)
+                }
+            },
             None => None,
         };
         self.specs.insert(key, spec.clone());
