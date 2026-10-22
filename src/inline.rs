@@ -757,7 +757,7 @@ mod tests {
             highlight: Vec::new(),
             query: String::new(),
             insert: Insertion { delete, text: text.into(), cursor_back: 0, execute: false },
-            gen: None,
+            generator: None,
             prefix_match: prefix,
             template_type: None,
         }

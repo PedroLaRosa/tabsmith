@@ -335,7 +335,7 @@ impl Menu {
             Some(c) if !name.contains('↪') => c.tokens.get(c.command_index).map(|cmd| (cmd.clone(), name.to_string())),
             _ => None,
         };
-        self.last_inserted_gen = item.gen;
+        self.last_inserted_gen = item.generator;
         self.vis = Vis::HiddenByInsertion;
         self.just_inserted = true;
         vec![Effect::Insert { ins, full: true, record }]
@@ -421,7 +421,7 @@ pub(crate) mod tests {
                 cursor_back: 0,
                 execute: false,
             },
-            gen: None,
+            generator: None,
             prefix_match: true,
             template_type: None,
         }
@@ -522,7 +522,7 @@ pub(crate) mod tests {
 
         // Folder `src/` re-triggers its generator → visible.
         let mut m = typed(&s);
-        m.on_completion(comp("git c ", 5, vec![Item { gen: Some(7), ..item("src/", ItemType::Folder, "") }]), &s);
+        m.on_completion(comp("git c ", 5, vec![Item { generator: Some(7), ..item("src/", ItemType::Folder, "") }]), &s);
         m.handle(Action::InsertSelected, &s);
         let mut c = comp("git c src/", 5, vec![item("main.rs", ItemType::File, "")]);
         c.triggered_generators = vec![7];

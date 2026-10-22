@@ -120,7 +120,7 @@ impl Parser {
     /// Parse the command under the cursor against its spec (SPEC §6.4).
     pub fn parse(&mut self, cmd: &CommandInfo, ctx: &ParseCtx, js: &mut Js) -> Result<ParseResult, ParseError> {
         let dev = dev_mode(ctx.settings);
-        let mut host = JsHost { loader: &mut self.loader, js, ctx, gen: gen_ctx(ctx) };
+        let mut host = JsHost { loader: &mut self.loader, js, ctx, generator: gen_ctx(ctx) };
         self.caches.parse(cmd, ctx.cwd, dev, &mut host)
     }
 
@@ -189,7 +189,7 @@ struct Loader {
 }
 
 impl Loader {
-    fn load(&mut self, loc: &SpecLocation, ctx: &ParseCtx, js: &mut Js, gen: &GenCtx) -> Result<Option<Rc<Subcommand>>, ParseError> {
+    fn load(&mut self, loc: &SpecLocation, ctx: &ParseCtx, js: &mut Js, generator: &GenCtx) -> Result<Option<Rc<Subcommand>>, ParseError> {
         let (SpecLocation::Global { name } | SpecLocation::Local { name, .. }) = loc;
         if ctx.settings.str_list("autocomplete.disableForCommands").contains(name) {
             return Ok(None);
@@ -205,7 +205,7 @@ impl Loader {
         };
         let exports = js.load_module(&path)?;
         let json = match exports.get("default") {
-            Some(v) if crate::spec::fn_id(v).is_some() => self.versioned(&exports, name, &path, dev, js, gen)?,
+            Some(v) if crate::spec::fn_id(v).is_some() => self.versioned(&exports, name, &path, dev, js, generator)?,
             Some(v) if v.is_object() => Some(v.clone()),
             _ => None,
         };
@@ -218,18 +218,18 @@ impl Loader {
     }
 
     /// `default` is `async (version) => Subcommand | {versionedSpecPath, version}` (SPEC §6.3).
-    fn versioned(&mut self, exports: &Map<String, Value>, name: &str, path: &Path, dev: bool, js: &mut Js, gen: &GenCtx) -> Result<Option<Value>, ParseError> {
+    fn versioned(&mut self, exports: &Map<String, Value>, name: &str, path: &Path, dev: bool, js: &mut Js, generator: &GenCtx) -> Result<Option<Value>, ParseError> {
         let memo = format!("cliVersion-{name}");
         let version = match self.versions.get(&memo).filter(|_| !dev) {
             Some(v) => Some(v.clone()),
-            None => cli_version(exports, name, js, gen, &mut self.inflight)?,
+            None => cli_version(exports, name, js, generator, &mut self.inflight)?,
         };
         if let Some(v) = &version {
             self.versions.insert(memo, v.clone());
         }
         let default = exports.get("default").and_then(crate::spec::fn_id).ok_or_else(|| no("default is not a function"))?;
         let arg = version.map_or(Value::Null, Value::String);
-        let r = js.call(default, vec![JsArg::Json(arg)], Some(gen), TIMEOUT)?;
+        let r = js.call(default, vec![JsArg::Json(arg)], Some(generator), TIMEOUT)?;
         let Some(vsp) = r.get("versionedSpecPath").and_then(Value::as_str) else {
             return Ok(Some(r).filter(Value::is_object));
         };
@@ -262,14 +262,14 @@ fn spec_file(loc: &SpecLocation, ctx: &ParseCtx) -> Option<PathBuf> {
 
 /// `getVersionCommand(exec)` if exported, else `semver_clean(<name> --version)`; failures → None. An aborted
 /// wait leaves the detection running in `inflight`, and the next parse waits on that same task.
-fn cli_version(exports: &Map<String, Value>, name: &str, js: &mut Js, gen: &GenCtx, inflight: &mut HashMap<String, TaskId>) -> Result<Option<String>, ParseError> {
+fn cli_version(exports: &Map<String, Value>, name: &str, js: &mut Js, generator: &GenCtx, inflight: &mut HashMap<String, TaskId>) -> Result<Option<String>, ParseError> {
     if name == "@usermn/sdc" {
         return Ok(None); // its version command runs `npx`, which may download a package
     }
     let f = exports.get("getVersionCommand").and_then(crate::spec::fn_id);
     let id = *inflight.entry(name.to_string()).or_insert_with(|| match f {
-        Some(f) => js.start_call(f, vec![JsArg::Exec], Some(gen)),
-        None => js.start_exec(ExecInput { command: name.into(), args: vec!["--version".into()], ..Default::default() }, gen),
+        Some(f) => js.start_call(f, vec![JsArg::Exec], Some(generator)),
+        None => js.start_exec(ExecInput { command: name.into(), args: vec!["--version".into()], ..Default::default() }, generator),
     });
     let r = js.wait(&[id], Instant::now() + TIMEOUT);
     if matches!(r, Err(JsError::Aborted)) {
@@ -437,16 +437,16 @@ struct JsHost<'a, 'c> {
     loader: &'a mut Loader,
     js: &'a mut Js,
     ctx: &'a ParseCtx<'c>,
-    gen: GenCtx,
+    generator: GenCtx,
 }
 
 impl Host for JsHost<'_, '_> {
     fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, ParseError> {
-        self.loader.load(loc, self.ctx, self.js, &self.gen)
+        self.loader.load(loc, self.ctx, self.js, &self.generator)
     }
 
     fn call(&mut self, f: FnId, args: Vec<JsArg>) -> Result<Value, ParseError> {
-        Ok(self.js.call(f, args, Some(&self.gen), TIMEOUT)?)
+        Ok(self.js.call(f, args, Some(&self.generator), TIMEOUT)?)
     }
 
     fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo> {
@@ -939,7 +939,7 @@ impl ParseCaches {
         }
         .filter(|_| !dev)
         .map(|k| format!("{}:{k}", tokens[0]));
-        let gen = match cache_key.as_ref().and_then(|k| self.generated.get(k)) {
+        let generator = match cache_key.as_ref().and_then(|k| self.generated.get(k)) {
             Some(g) => g.clone(),
             None => {
                 let generated = host
@@ -958,7 +958,7 @@ impl ParseCaches {
                     }
                     Err(ParseError::Aborted) => return Err(ParseError::Aborted),
                     Err(e) => {
-                        crate::logger::warn(&format!("generateSpec ({}): {e:?}", tokens.join(" ")));
+                        crate::logger::warn(&format!("generateSpec ({}): {e:?}", tokens[0])); // spec name only: logs never hold typed text
                         return Ok(st);
                     }
                 }
@@ -966,20 +966,20 @@ impl ParseCaches {
         };
         let mut c = (*st.completion).clone();
         // Object-merge by name, generated wins (later entries win in `reindex`; fully shadowed ones are dropped).
-        fn merge<T>(base: &[Rc<T>], gen: &[Rc<T>], names: fn(&T) -> &[String]) -> Vec<Rc<T>> {
-            let shadowed: HashSet<&String> = gen.iter().flat_map(|g| names(g)).collect();
+        fn merge<T>(base: &[Rc<T>], generator: &[Rc<T>], names: fn(&T) -> &[String]) -> Vec<Rc<T>> {
+            let shadowed: HashSet<&String> = generator.iter().flat_map(|g| names(g)).collect();
             let kept = base.iter().filter(|b| !names(b).iter().all(|n| shadowed.contains(n)));
-            kept.chain(gen).cloned().collect()
+            kept.chain(generator).cloned().collect()
         }
-        c.subcommands = merge(&c.subcommands, &gen.subcommands, |s| &s.names);
-        c.options = merge(&c.options, &gen.options, |o| &o.names);
-        c.persistent = merge(&c.persistent, &gen.persistent, |o| &o.names);
+        c.subcommands = merge(&c.subcommands, &generator.subcommands, |s| &s.names);
+        c.options = merge(&c.options, &generator.options, |o| &o.names);
+        c.persistent = merge(&c.persistent, &generator.persistent, |o| &o.names);
         if c.args.is_empty() {
-            c.args = gen.args.clone();
+            c.args = generator.args.clone();
             st.sub_args = ArgState::new(&c.args);
         }
         c.reindex();
-        st.persistent = gen.persistent.iter().chain(&st.persistent).cloned().collect();
+        st.persistent = generator.persistent.iter().chain(&st.persistent).cloned().collect();
         st.set_completion(Rc::new(c));
         Ok(st)
     }

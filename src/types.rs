@@ -107,7 +107,7 @@ pub struct Item {
     pub query: String,
     pub insert: Insertion,
     /// Generator that produced it, if any.
-    pub gen: Option<GenKey>,
+    pub generator: Option<GenKey>,
     /// Matched by prefix (not only fuzzy) — used by the spec ghost source (SPEC §6.11).
     pub prefix_match: bool,
     /// `context.templateType` of the generator result (`filepaths`/`folders`/`help`), if any.

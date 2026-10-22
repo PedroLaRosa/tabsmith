@@ -243,9 +243,9 @@ impl Js {
                 g.set("__ts_exec", Function::new(ctx.clone(), move |ctx_id: f64, input: String| -> f64 {
                     let mut h = h1.borrow_mut();
                     let id = h.id();
-                    let gen = h.ctxs.get(&(ctx_id as u64)).cloned().unwrap_or_default();
+                    let generator = h.ctxs.get(&(ctx_id as u64)).cloned().unwrap_or_default();
                     match serde_json::from_str::<ExecInput>(&input) {
-                        Ok(input) => h.spawn_exec(id, input, gen),
+                        Ok(input) => h.spawn_exec(id, input, generator),
                         Err(e) => {
                             let _ = h.tx.send(EngineMsg::ExecDone { id, out: Err(format!("bad exec input: {e}")) });
                         }
@@ -344,12 +344,12 @@ impl Js {
 
     /// Start a JS callback `fns[f](...args)`; the result is the serialized return value (Promises awaited).
     pub fn start_call(&mut self, f: FnId, args: Vec<JsArg>, ctx: Option<&GenCtx>) -> TaskId {
-        let gen = ctx.cloned().unwrap_or_default();
+        let generator = ctx.cloned().unwrap_or_default();
         let id = {
             let mut h = self.host.borrow_mut();
             let id = h.id();
             h.live.insert(id);
-            h.ctxs.insert(id, gen.clone());
+            h.ctxs.insert(id, generator.clone());
             id
         };
         let mut exec_at = Vec::new();
@@ -365,8 +365,8 @@ impl Js {
             })
             .collect();
         let mut c = json!({ "id": id, "exec": exec_at });
-        if !gen.cwd.is_empty() {
-            c["cwd"] = gen.cwd.into();
+        if !generator.cwd.is_empty() {
+            c["cwd"] = generator.cwd.into();
         }
         let (args, c) = (Value::Array(args).to_string(), c.to_string());
         self.arm(Instant::now() + SLICE);
@@ -649,11 +649,6 @@ pub fn exec(input: &ExecInput, ctx: &GenCtx, default_timeout_ms: u64) -> Result<
     wait_output(child, timeout, &input.command)
 }
 
-/// The input `executeShellCommand("<script>")` runs (also for legacy string `script`s): `sh -c <script>`, which
-/// `exec` runs through Git Bash, else `cmd /C`, on Windows without `sh` on PATH.
-pub fn shell_string_input(script: &str, cwd: Option<String>) -> ExecInput {
-    ExecInput { command: "sh".into(), args: vec!["-c".into(), script.into()], cwd, ..Default::default() }
-}
 
 fn key_eq(a: &str, b: &str) -> bool {
     if cfg!(windows) {
@@ -1151,17 +1146,6 @@ mod tests {
         assert_eq!(exec(&input, &ctx, 5000).unwrap().stdout, "1");
     }
 
-    /// `shell_string_input` is the legacy string form of `executeShellCommand` (`sh -c`, in the given cwd).
-    #[cfg(unix)]
-    #[test]
-    fn shell_string_input_runs_like_execute_shell_command() {
-        let cwd = TmpDir::new("ssi");
-        let input = shell_string_input("pwd -P; echo $X", Some(cwd.path().display().to_string()));
-        assert_eq!((input.command.as_str(), &input.args[..]), ("sh", &["-c".to_string(), "pwd -P; echo $X".to_string()][..]));
-        let ctx = GenCtx { env: [("X".to_string(), "y".to_string()), ("PATH".to_string(), "/bin:/usr/bin".to_string())].into(), ..Default::default() };
-        let real = cwd.path().canonicalize().unwrap().display().to_string();
-        assert_eq!(exec(&input, &ctx, 5000).unwrap().stdout, format!("{real}\ny"));
-    }
 
     /// A timeout kills the whole tree: the grandchild (inner cmd) never writes its marker.
     #[cfg(windows)]

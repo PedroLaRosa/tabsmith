@@ -624,13 +624,13 @@ fn cli_version_detection_survives_an_aborted_parse() {
     let src = "var v=async()=>{await new Promise(r=>setTimeout(r,200));globalThis.n=(globalThis.n||0)+1;return `${globalThis.n}.0.0`};export{v as getVersionCommand};";
     std::fs::write(&p, src).unwrap();
     let exports = js.load_module(&p).unwrap();
-    let (gen, mut inflight) = (GenCtx::default(), HashMap::new());
+    let (generator, mut inflight) = (GenCtx::default(), HashMap::new());
     let req = Request { id: 1, buffer: "az ".into(), cursor: 3, cwd: "/".into(), shell: Shell::Zsh, history_mode: false };
     tx.send(EngineMsg::Complete(req)).unwrap();
-    assert!(matches!(cli_version(&exports, "az", &mut js, &gen, &mut inflight), Err(ParseError::Aborted)));
+    assert!(matches!(cli_version(&exports, "az", &mut js, &generator, &mut inflight), Err(ParseError::Aborted)));
     assert_eq!(inflight.len(), 1);
     assert!(matches!(js.next_msg(), Some(EngineMsg::Complete(_))));
-    assert_eq!(cli_version(&exports, "az", &mut js, &gen, &mut inflight).unwrap().as_deref(), Some("1.0.0"));
+    assert_eq!(cli_version(&exports, "az", &mut js, &generator, &mut inflight).unwrap().as_deref(), Some("1.0.0"));
     assert!(inflight.is_empty());
 }
 

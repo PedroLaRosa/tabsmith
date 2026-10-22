@@ -59,7 +59,7 @@ pub struct Sugg {
     pub should_add_space: bool,
     pub separator: Option<String>,
     pub query: Query,
-    pub gen: Option<GenKey>,
+    pub generator: Option<GenKey>,
     pub template_type: Option<String>,
 }
 
@@ -79,7 +79,7 @@ impl Sugg {
             should_add_space: false,
             separator: None,
             query: Query::Term,
-            gen: None,
+            generator: None,
             template_type: None,
         }
     }
@@ -131,7 +131,7 @@ impl Sugg {
     }
 
     /// Static/additional/generator suggestion (`type` defaults to `arg`).
-    pub fn from_suggestion(s: &Suggestion, dangerous: bool, gen: Option<GenKey>, query: Query) -> Sugg {
+    pub fn from_suggestion(s: &Suggestion, dangerous: bool, generator: Option<GenKey>, query: Query) -> Sugg {
         Sugg {
             names: s.names.clone(),
             display_name: s.display_name.clone(),
@@ -141,7 +141,7 @@ impl Sugg {
             hidden: s.hidden,
             is_dangerous: s.is_dangerous || dangerous,
             query,
-            gen,
+            generator,
             template_type: s.template_type.clone(),
             ..Sugg::new("", s.kind.unwrap_or(ItemType::Arg))
         }
@@ -822,7 +822,7 @@ pub fn to_item(s: Sugg, prefix_match: bool, c: &InsCtx) -> Item {
         original_kind: s.original_kind,
         priority: s.priority,
         is_dangerous: s.is_dangerous,
-        gen: s.gen,
+        generator: s.generator,
         prefix_match,
         template_type: s.template_type,
     }
@@ -1493,9 +1493,9 @@ mod tests {
             let i = insertion(&Sugg::new(name, kind), &ctx("", "", Shell::Bash));
             assert!(!i.text.chars().any(char::is_control) && !i.execute, "{name:?} → {i:?}");
         }
-        let mut gen = Sugg::new("x", ItemType::Arg);
-        gen.insert_value = Some("dev\rrm -rf ~\n".into());
-        assert_eq!(insertion(&gen, &ctx("", "", Shell::Bash)), Insertion { delete: 0, text: "devrm -rf ~".into(), cursor_back: 0, execute: true });
+        let mut generator = Sugg::new("x", ItemType::Arg);
+        generator.insert_value = Some("dev\rrm -rf ~\n".into());
+        assert_eq!(insertion(&generator, &ctx("", "", Shell::Bash)), Insertion { delete: 0, text: "devrm -rf ~".into(), cursor_back: 0, execute: true });
         // special-rows-no-delete: `help` rows replace the typed prefix instead of doubling it
         let build = Sugg::new("build", ItemType::Special);
         assert_eq!(insertion(&build, &ctx("bu", "bu", Shell::Bash)).text, "ild");
