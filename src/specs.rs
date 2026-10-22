@@ -3,7 +3,8 @@
 use crate::settings::Settings;
 use anyhow::Context;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 /// The solid `tar | zstd -19` of `@withfig/autocomplete/build` (SPEC D11).
 #[cfg(feature = "embed-specs")]
@@ -14,12 +15,21 @@ pub fn version() -> &'static str {
     include_str!("../assets/SPECS_VERSION").trim()
 }
 
-/// `~/.tabsmith/specs/<ver>/`, extracting the embedded archive first if `index.json` is missing (atomic rename;
-/// removes other versions afterwards). Without the `embed-specs` feature the directory must already exist.
+/// Touched in `<ver>/` by every engine start, so other binaries' cleanup sees the version is in use.
+const LAST_USED: &str = ".last-used";
+/// A version dir unused this long is removed (sessions of an older binary may still read theirs).
+const VERSION_STALE: Duration = Duration::from_secs(7 * 86400);
+/// A `.tmp-<pid>` dir untouched this long is an extraction that died (one takes seconds).
+const TMP_STALE: Duration = Duration::from_secs(600);
+
+/// `~/.tabsmith/specs/<ver>/`, extracting the embedded archive first if `index.json` is missing (atomic rename).
+/// Marks the version used and removes stale versions/temp dirs. Without `embed-specs` the dir must already exist.
 pub fn ensure_extracted() -> anyhow::Result<PathBuf> {
     let root = crate::settings::home()?.join("specs");
     let dir = root.join(version());
     if dir.join("index.json").is_file() {
+        touch(&dir);
+        cleanup(&root, version());
         return Ok(dir);
     }
     #[cfg(feature = "embed-specs")]
@@ -28,8 +38,8 @@ pub fn ensure_extracted() -> anyhow::Result<PathBuf> {
     anyhow::bail!("no specs in {} (built without the `embed-specs` feature)", dir.display())
 }
 
-/// Unpack `archive` (tar.zst) into `<root>/<ver>.tmp-<pid>/`, rename it to `<root>/<ver>/` and remove other
-/// versions (SPEC §9.1). A concurrent extractor that loses the rename deletes its temp dir and uses the winner's.
+/// Unpack `archive` (tar.zst) into `<root>/<ver>.tmp-<pid>/`, rename it to `<root>/<ver>/` and [`cleanup`]
+/// (SPEC §9.1). A concurrent extractor that loses the rename deletes its temp dir and uses the winner's.
 pub(crate) fn extract_to(archive: &[u8], root: &Path, ver: &str) -> anyhow::Result<PathBuf> {
     let dir = root.join(ver);
     let tmp = root.join(format!("{ver}.tmp-{}", std::process::id()));
@@ -48,14 +58,27 @@ pub(crate) fn extract_to(archive: &[u8], root: &Path, ver: &str) -> anyhow::Resu
             return Err(e).with_context(|| format!("renaming specs into {}", dir.display()));
         }
     }
+    touch(&dir);
+    cleanup(root, ver);
+    Ok(dir)
+}
+
+fn touch(dir: &Path) {
+    let _ = std::fs::File::create(dir.join(LAST_USED)).and_then(|f| f.set_modified(SystemTime::now()));
+}
+
+/// Remove other version dirs unused for [`VERSION_STALE`] (age of `.last-used`, else of the dir; a version a
+/// running session uses was touched at its start) and `.tmp-` dirs older than [`TMP_STALE`].
+/// ponytail: a session running longer than a week without a restart may lose its version to a newer binary.
+fn cleanup(root: &Path, ver: &str) {
     for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        // ponytail: other extractors' `.tmp-<pid>` dirs are kept (may be live); a crash mid-extraction leaks one.
-        if name != ver && name != "user" && !name.contains(".tmp-") && entry.path().is_dir() {
-            let _ = std::fs::remove_dir_all(entry.path());
+        let (name, p) = (entry.file_name().to_string_lossy().into_owned(), entry.path());
+        let max = if name.contains(".tmp-") { TMP_STALE } else { VERSION_STALE };
+        let age = std::fs::metadata(p.join(LAST_USED)).or_else(|_| std::fs::metadata(&p)).and_then(|m| m.modified());
+        if name != ver && name != "user" && p.is_dir() && age.is_ok_and(|t| t.elapsed().unwrap_or_default() > max) {
+            let _ = std::fs::remove_dir_all(&p);
         }
     }
-    Ok(dir)
 }
 
 /// Unpack the regular files of a tar.zst into `dst` (parents created on demand). Skips macOS AppleDouble
@@ -121,19 +144,29 @@ impl SpecIndex {
 /// Resolve a global spec name to a file: dev folder (when `autocomplete.developerMode`), then the user dir, then
 /// the extracted bundle; `<name>.js`, else `<name>/index.js`; diff-versioned names go to `<name>/index.js`.
 pub fn resolve(name: &str, settings: &Settings, index: &SpecIndex) -> Option<PathBuf> {
-    let mut roots = Vec::new();
-    if settings.bool("autocomplete.developerMode", false) {
-        roots.extend(settings.string("autocomplete.devCompletionsFolder").filter(|d| !d.is_empty()).map(PathBuf::from));
-    }
+    let mut roots: Vec<PathBuf> = dev_folder(settings).into_iter().collect();
     let home = crate::settings::home().ok()?;
     roots.push(home.join("specs").join("user"));
     roots.push(home.join("specs").join(version()));
     resolve_in(name, &roots, index)
 }
 
-/// [`resolve`] over explicit roots (first wins). Absolute names and `..` components are rejected.
+/// `autocomplete.devCompletionsFolder` (leading `~` = the user's home) when `autocomplete.developerMode` is on.
+fn dev_folder(settings: &Settings) -> Option<PathBuf> {
+    let d = settings.string("autocomplete.devCompletionsFolder").filter(|d| !d.is_empty())?;
+    if !settings.bool("autocomplete.developerMode", false) {
+        return None;
+    }
+    Some(match Path::new(d).strip_prefix("~") {
+        Ok(rest) => crate::settings::user_home().map_or_else(|_| PathBuf::from(d), |h| h.join(rest)),
+        Err(_) => PathBuf::from(d),
+    })
+}
+
+/// [`resolve`] over explicit roots (first wins). Only plain relative names: absolute, drive-relative (`C:foo`),
+/// `.` and `..` components are rejected.
 pub(crate) fn resolve_in(name: &str, roots: &[PathBuf], index: &SpecIndex) -> Option<PathBuf> {
-    if name.is_empty() || Path::new(name).has_root() || name.split(['/', '\\']).any(|c| c == "..") {
+    if name.is_empty() || !Path::new(name).components().all(|c| matches!(c, Component::Normal(_))) {
         return None;
     }
     let diff = index.diff_versioned.contains(name);
@@ -225,14 +258,17 @@ mod tests {
     fn extract_renames_and_removes_other_versions() {
         let root = TmpDir::new("extract");
         std::fs::create_dir_all(root.path().join("0.9.0")).unwrap();
+        last_used(&root.path().join("0.9.0"), Duration::from_secs(8 * 86400));
         std::fs::create_dir_all(root.path().join("user")).unwrap();
+        last_used(&root.path().join("user"), Duration::from_secs(8 * 86400));
         let archive =
             tar_zst(&[("./index.json", r#"{"completions":["git"]}"#), ("./aws/s3.js", "x"), ("./aws/._s3.js", "\u{0}")]);
         let dir = extract_to(&archive, root.path(), "1.0.0").unwrap();
         assert_eq!(dir, root.path().join("1.0.0"));
         assert!(dir.join("index.json").is_file() && dir.join("aws/s3.js").is_file());
         assert!(!dir.join("aws/._s3.js").exists(), "AppleDouble entries skipped");
-        assert!(!root.path().join("0.9.0").exists(), "old version removed");
+        assert!(!root.path().join("0.9.0").exists(), "version unused for a week removed");
+        assert!(dir.join(".last-used").is_file(), "new version marked used");
         assert!(root.path().join("user").is_dir(), "user dir kept");
         // Loser of a concurrent extraction: the winner's dir stays, the temp dir is gone.
         std::fs::write(dir.join("marker"), "winner").unwrap();
@@ -240,6 +276,44 @@ mod tests {
         assert!(dir.join("marker").is_file());
         let names: Vec<_> = std::fs::read_dir(root.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names.len(), 2, "{names:?}");
+    }
+
+    /// Make `dir` look last used `ago`.
+    fn last_used(dir: &Path, ago: Duration) {
+        let f = std::fs::File::create(dir.join(LAST_USED)).unwrap();
+        f.set_modified(SystemTime::now() - ago).unwrap();
+    }
+
+    fn names(root: &Path) -> Vec<String> {
+        let mut n: Vec<String> =
+            std::fs::read_dir(root).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        n.sort();
+        n
+    }
+
+    /// A version an older, still-running binary uses is kept; one unused for a week goes.
+    #[test]
+    fn extract_keeps_versions_in_use() {
+        let root = TmpDir::new("extract-live");
+        for d in ["0.8.0", "0.9.0"] {
+            std::fs::create_dir_all(root.path().join(d)).unwrap();
+        }
+        last_used(&root.path().join("0.8.0"), Duration::from_secs(8 * 86400));
+        last_used(&root.path().join("0.9.0"), Duration::from_secs(3600));
+        extract_to(&tar_zst(&[("./index.json", "{}")]), root.path(), "1.0.0").unwrap();
+        assert_eq!(names(root.path()), ["0.9.0", "1.0.0"]);
+    }
+
+    /// The temp dir of an extraction that died is removed; a live extractor's (recent) one is kept.
+    #[test]
+    fn extract_removes_abandoned_temp_dirs() {
+        let root = TmpDir::new("extract-tmp");
+        for d in ["1.0.0.tmp-99999", "1.0.0.tmp-11111"] {
+            std::fs::create_dir_all(root.path().join(d)).unwrap();
+        }
+        last_used(&root.path().join("1.0.0.tmp-99999"), Duration::from_secs(3600));
+        extract_to(&tar_zst(&[("./index.json", "{}")]), root.path(), "1.0.0").unwrap();
+        assert_eq!(names(root.path()), ["1.0.0", "1.0.0.tmp-11111"]);
     }
 
     #[test]
@@ -295,6 +369,36 @@ mod tests {
         assert_eq!(resolve_in("gcloud/alpha", &roots, &idx), None);
         assert_eq!(resolve_in("../bundle/git", &roots, &idx), None);
         assert_eq!(resolve_in("/etc/passwd", &roots, &idx), None);
+    }
+
+    /// `C:name` joined to a root replaces it with a path relative to drive C's cwd (here: the process cwd).
+    #[cfg(windows)]
+    #[test]
+    fn resolve_rejects_drive_relative_names() {
+        let cwd = std::env::current_dir().unwrap();
+        let drive = cwd.to_string_lossy().chars().next().unwrap();
+        let stem = format!("tabsmith-drive-rel-{}", std::process::id());
+        let planted = cwd.join(format!("{stem}.js"));
+        std::fs::write(&planted, "").unwrap();
+        let root = TmpDir::new("drive");
+        let r = resolve_in(&format!("{drive}:{stem}"), &[root.path().to_path_buf()], &SpecIndex::default());
+        let _ = std::fs::remove_file(&planted);
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn dev_folder_expands_tilde() {
+        let s = |dev: bool, d: &str| {
+            let m = [("autocomplete.developerMode", dev.into()), ("autocomplete.devCompletionsFolder", d.into())];
+            Settings::from_map(m.into_iter().map(|(k, v): (&str, serde_json::Value)| (k.to_string(), v)).collect())
+        };
+        let home = crate::settings::user_home().unwrap();
+        assert_eq!(dev_folder(&s(true, "~/code/build")), Some(home.join("code").join("build")));
+        assert_eq!(dev_folder(&s(true, "~")), Some(home));
+        assert_eq!(dev_folder(&s(true, "~user/x")), Some(PathBuf::from("~user/x")), "only a whole `~` component");
+        assert_eq!(dev_folder(&s(true, "/abs/dev")), Some(PathBuf::from("/abs/dev")));
+        assert_eq!(dev_folder(&s(false, "/abs/dev")), None);
+        assert_eq!(dev_folder(&s(true, "")), None);
     }
 
     #[cfg(feature = "embed-specs")]
