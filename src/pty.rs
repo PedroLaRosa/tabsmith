@@ -16,7 +16,7 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use std::io::{IsTerminal, Read, Write};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -25,6 +25,12 @@ const INSERT_LOCK: Duration = Duration::from_millis(100);
 const SPINNER_TICK: Duration = Duration::from_millis(80);
 const FILE_POLL: Duration = Duration::from_secs(2);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+/// Startup probe: background colour (`system` theme, also when chosen later) and cursor position (SPEC §4.4 step 5).
+const PROBE: &[u8] = b"\x1b]11;?\x1b\\\x1b[6n";
+/// After a probe timeout, a late reply arriving within this window is dropped instead of typed into the shell.
+const LATE_PROBE: Duration = Duration::from_secs(3);
+/// PTY chunks in flight between the reader thread and the main loop (backpressure for a flooding child).
+const PTY_CREDITS: usize = 4;
 /// After the child exits, wait this long for the rest of its output (PTY EOF) before leaving.
 const EXIT_GRACE: Duration = Duration::from_millis(200);
 
@@ -145,6 +151,44 @@ fn next_word(g: &str) -> &str {
     &g[..end]
 }
 
+/// What is left of ghost `g` (computed for buffer `base`) once `buffer` is typed. Never with control characters:
+/// accepting writes the text to the shell, where a CR (e.g. from an LLM reply) would run commands.
+fn ghost_rest(buffer: &str, base: &str, g: &str) -> Option<String> {
+    let rest = g.strip_prefix(buffer.strip_prefix(base)?)?;
+    (!rest.is_empty() && !rest.chars().any(char::is_control)).then(|| rest.to_string())
+}
+
+/// Keys typed ahead that the extracted buffer `new` does not show yet. `base` = the buffer they were typed after
+/// (the pending insertion's result while locked); `in_flight` = that insertion is not echoed yet.
+fn unechoed_after(unechoed: &str, base: Option<&str>, new: Option<&str>, in_flight: bool) -> String {
+    match (base, new) {
+        (Some(b), Some(n)) => match n.strip_prefix(b) {
+            Some(added) => unechoed.strip_prefix(added).unwrap_or("").to_string(),
+            None if in_flight => unechoed.to_string(),
+            None => String::new(),
+        },
+        _ => String::new(),
+    }
+}
+
+/// PTY reader (SPEC §4.3). Every read takes a credit, returned once the main loop handled the chunk, so at most
+/// `PTY_CREDITS` chunks are queued: a flooding child feels backpressure and Ctrl-C is never stuck behind its output.
+fn pump(mut reader: impl Read, credits: Receiver<()>, tx: Sender<Msg>) {
+    let mut buf = vec![0u8; 16 * 1024];
+    while credits.recv().is_ok() {
+        let n = loop {
+            match reader.read(&mut buf) {
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                r => break r.unwrap_or(0), // Linux: EIO once the slave side is gone
+            }
+        };
+        if n == 0 || tx.send(Msg::Pty(buf[..n].to_vec())).is_err() {
+            break;
+        }
+    }
+    let _ = tx.send(Msg::PtyEof);
+}
+
 fn is_ctrl(k: &Key, c: char) -> bool {
     k.mods.ctrl && matches!(k.code, KeyCode::Char(x) if x.eq_ignore_ascii_case(&c))
 }
@@ -218,6 +262,8 @@ struct Session {
     rx: Receiver<Msg>,
     engine: Sender<EngineMsg>,
     writer: Sender<Vec<u8>>,
+    /// Returns PTY read credits to the reader thread (see `pump`).
+    credits: SyncSender<()>,
     /// Dropped after the child exits on Windows to unblock the ConPTY reader.
     master: Option<Box<dyn MasterPty + Send>>,
     modes: sys::Modes,
@@ -226,6 +272,8 @@ struct Session {
     menu: Menu,
     renderer: Renderer,
     keymap: Keymap,
+    /// Kept across stdin reads: a bracketed paste split over several reads stays one opaque unit (SPEC §7.2.1).
+    decoder: keys::Decoder,
     settings: Settings,
     settings_path: Option<PathBuf>,
     settings_mtime: Option<SystemTime>,
@@ -242,11 +290,15 @@ struct Session {
     cur: Option<Extracted>,
     /// Insertion lock: (deadline, expected buffer) (SPEC §7.3).
     lock: Option<(Instant, String)>,
+    /// Printable keys forwarded but not yet echoed (reconciliation basis, SPEC §7.3).
+    unechoed: String,
     /// Ghost candidates as (buffer they were computed for, text): local (engine) and LLM.
     ghost: Option<(String, String)>,
     llm: Option<(String, String)>,
     llm_req: u64,
     llm_at: Option<Instant>,
+    /// The startup probe timed out: drop its late reply from stdin until then.
+    probe_until: Option<Instant>,
     resize_at: Option<Instant>,
     repaint: bool,
     spinner: usize,
@@ -255,6 +307,10 @@ struct Session {
     exit_code: Option<i32>,
     eof: bool,
     exit_at: Option<Instant>,
+    /// After a panic in a handler: plain pass-through until the child exits (see `guard`).
+    passthrough: bool,
+    /// Test builds: stdout bytes are captured here instead of written.
+    sink: Vec<u8>,
 }
 
 impl Session {
@@ -279,9 +335,8 @@ impl Session {
         let mut tracker = Tracker::new(sid.clone(), Shell::from_name(program), rows as usize);
         tracker.filter.lf_to_ind = lf_to_ind;
 
-        // Sync the model with the real cursor (and ask for the background for the `system` theme).
-        let system_theme = settings.string("autocomplete.theme") == Some("system");
-        write_stdout(if system_theme { b"\x1b]11;?\x1b\\\x1b[6n" } else { b"\x1b[6n" });
+        // Sync the model with the real cursor; always ask for the background, the theme may become `system` later.
+        write_stdout(PROBE);
         let deadline = Instant::now() + PROBE_TIMEOUT;
         let mut replies = Vec::new();
         let (cpr, terminal_bg, typeahead) = loop {
@@ -292,6 +347,8 @@ impl Session {
             }
             replies.extend(sys::read_timeout(deadline - now));
         };
+        // ponytail: a reply cut by the timeout is forwarded as typeahead; only a whole late reply is dropped.
+        let probe_until = cpr.is_none().then(|| Instant::now() + LATE_PROBE);
         match cpr {
             Some((r, c)) => tracker.advance(&mut term, format!("\x1b[{r};{c}H").as_bytes()),
             None => write_stdout(b"\x1b[H\x1b[2J"),
@@ -322,7 +379,7 @@ impl Session {
         cb.env_remove("TABSMITH_IS_LOGIN_SHELL");
         let mut child = pair.slave.spawn_command(cb)?;
         drop(pair.slave);
-        let mut reader = pair.master.try_clone_reader()?;
+        let reader = pair.master.try_clone_reader()?;
         let mut pty_writer = pair.master.take_writer()?;
         logger::info(&format!("pty: {argv:?} {cols}x{rows} sid {sid} cpr {cpr:?}"));
 
@@ -331,22 +388,11 @@ impl Session {
 
         // Threads (SPEC §4.3).
         let t = tx.clone();
-        thread::spawn(move || {
-            let mut buf = vec![0u8; 16 * 1024];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if t.send(Msg::Pty(buf[..n].to_vec())).is_err() {
-                            return;
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                    Err(_) => break, // Linux: EIO once the slave side is gone
-                }
-            }
-            let _ = t.send(Msg::PtyEof);
-        });
+        let (credits, credit_rx) = mpsc::sync_channel(PTY_CREDITS);
+        for _ in 0..PTY_CREDITS {
+            let _ = credits.send(());
+        }
+        thread::spawn(move || pump(reader, credit_rx, t));
         let (writer, wrx) = mpsc::channel::<Vec<u8>>();
         thread::spawn(move || {
             for b in wrx {
@@ -357,8 +403,7 @@ impl Session {
         });
         let t = tx.clone();
         thread::spawn(move || {
-            let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(1);
-            let _ = t.send(Msg::ChildExit(code));
+            let _ = t.send(Msg::ChildExit(sys::wait(&mut *child)));
         });
         sys::spawn_input(tx);
         if !typeahead.is_empty() {
@@ -371,6 +416,7 @@ impl Session {
             rx,
             engine,
             writer,
+            credits,
             master: Some(pair.master),
             modes: m,
             term,
@@ -378,6 +424,7 @@ impl Session {
             menu,
             renderer,
             keymap,
+            decoder: keys::Decoder::default(),
             settings_mtime: mtime(&settings_path),
             settings_path,
             settings,
@@ -390,10 +437,12 @@ impl Session {
             changed_at: Instant::now(),
             cur: None,
             lock: None,
+            unechoed: String::new(),
             ghost: None,
             llm: None,
             llm_req: 0,
             llm_at: None,
+            probe_until,
             resize_at: None,
             repaint: false,
             spinner: 0,
@@ -402,6 +451,8 @@ impl Session {
             exit_code: None,
             eof: false,
             exit_at: None,
+            passthrough: false,
+            sink: Vec::new(),
         })
     }
 
@@ -416,63 +467,126 @@ impl Session {
                     None => self.rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 },
             };
-            match msg {
-                Ok(Msg::Stdin(b)) => self.on_input(&b),
-                Ok(Msg::Pty(mut b)) => {
-                    // One batch = everything already queued (one model pass, one stdout write).
-                    loop {
-                        match self.rx.try_recv() {
-                            Ok(Msg::Pty(more)) => b.extend(more),
-                            Ok(other) => {
-                                stash = Some(other);
-                                break;
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    self.on_output(&b);
-                }
-                Ok(Msg::PtyEof) => {
-                    self.eof = true;
-                    if self.exit_code.is_some() {
-                        break;
-                    }
-                }
-                Ok(Msg::Resize(c, r)) => self.on_resize(c, r),
-                Ok(Msg::ChildExit(c)) => {
-                    self.exit_code = Some(c);
-                    if cfg!(windows) {
-                        self.master = None; // ConPTY does not EOF on child exit
-                    }
-                    if self.eof {
-                        break;
-                    }
-                    self.exit_at = Some(Instant::now() + EXIT_GRACE);
-                }
-                Ok(Msg::Term) => {
-                    self.exit_code = Some(129);
-                    break;
-                }
-                Ok(Msg::Completion(c)) => self.on_completion(*c),
-                Ok(Msg::Ghost { req, text }) => {
-                    if req == self.req && req == self.llm_req {
-                        self.llm = text.zip(self.sent.as_ref().map(|s| s.0.clone())).map(|(t, b)| (b, t));
-                        self.redraw();
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break,
+            let go = match msg {
+                Ok(m) => self.step(m, &mut stash),
+                Err(RecvTimeoutError::Timeout) => true,
+                Err(RecvTimeoutError::Disconnected) => false,
+            };
+            if !go {
+                break;
             }
             if self.exit_at.is_some_and(|d| d <= Instant::now()) {
                 break;
             }
-            self.on_timers();
+            if !self.passthrough {
+                self.guard(Session::on_timers);
+            }
         }
         self.cleanup();
         self.exit_code.unwrap_or(0)
     }
 
+    /// One main-loop message; false = leave the loop.
+    fn step(&mut self, msg: Msg, stash: &mut Option<Msg>) -> bool {
+        match msg {
+            Msg::Stdin(b) if self.passthrough => {
+                let _ = self.writer.send(b);
+            }
+            Msg::Stdin(b) => {
+                self.guard(|s| s.on_input(&b));
+            }
+            Msg::Pty(mut b) => {
+                // One batch = everything already queued (one model pass, one stdout write).
+                let mut chunks = 1;
+                loop {
+                    match self.rx.try_recv() {
+                        Ok(Msg::Pty(more)) => {
+                            b.extend(more);
+                            chunks += 1;
+                        }
+                        Ok(other) => {
+                            *stash = Some(other);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                // on_output writes nothing before its last step: after a panic the batch goes out raw.
+                if self.passthrough || !self.guard(|s| s.on_output(&b)) {
+                    self.emit(&b);
+                }
+                for _ in 0..chunks {
+                    let _ = self.credits.try_send(());
+                }
+            }
+            Msg::PtyEof => {
+                self.eof = true;
+                return self.exit_code.is_none();
+            }
+            Msg::Resize(cols, rows) if self.passthrough => {
+                if let Some(m) = &self.master {
+                    let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                }
+            }
+            Msg::Resize(c, r) => {
+                self.guard(|s| s.on_resize(c, r));
+            }
+            Msg::ChildExit(c) => {
+                self.exit_code = Some(c);
+                if cfg!(windows) {
+                    self.master = None; // ConPTY does not EOF on child exit
+                }
+                if self.eof {
+                    return false;
+                }
+                self.exit_at = Some(Instant::now() + EXIT_GRACE);
+            }
+            Msg::Term => {
+                self.exit_code = Some(129);
+                return false;
+            }
+            Msg::Completion(_) | Msg::Ghost { .. } if self.passthrough => {}
+            Msg::Completion(c) => {
+                self.guard(|s| s.on_completion(*c));
+            }
+            Msg::Ghost { req, text } => {
+                self.guard(|s| {
+                    if req == s.req && req == s.llm_req {
+                        s.llm = text.zip(s.sent.as_ref().map(|x| x.0.clone())).map(|(t, b)| (b, t));
+                        s.redraw();
+                    }
+                });
+            }
+        }
+        true
+    }
+
+    /// Run one handler. A panic (logged by the hook) clears the overlay and turns the session into a plain
+    /// pass-through until the child exits: the running shell and its jobs are never killed for it.
+    /// ponytail: a panic in `on_output`'s final frame loses the clear it already took (overlay left until redrawn).
+    fn guard(&mut self, f: impl FnOnce(&mut Session)) -> bool {
+        if std::panic::catch_unwind(AssertUnwindSafe(|| f(self))).is_ok() {
+            return true;
+        }
+        logger::error("pty: internal error; passing the session through until the shell exits");
+        self.passthrough = true;
+        let clear = self.renderer.take_clear();
+        self.emit(&clear);
+        false
+    }
+
+    fn emit(&mut self, b: &[u8]) {
+        if cfg!(test) {
+            self.sink.extend_from_slice(b);
+        } else {
+            write_stdout(b);
+        }
+    }
+
     fn next_deadline(&self) -> Option<Instant> {
+        if self.passthrough {
+            return self.exit_at;
+        }
         [self.resize_at, self.lock.as_ref().map(|l| l.0), self.llm_at, self.spinner_at, Some(self.poll_at), self.exit_at]
             .into_iter()
             .flatten()
@@ -497,8 +611,8 @@ impl Session {
             self.resize_at = Some(Instant::now() + RESIZE_DEBOUNCE); // the shell / ConPTY is still redrawing
         }
         let was_alt = self.alt();
-        let mut out = self.renderer.take_clear();
-        self.tracker.feed(&mut self.term, batch, &mut out);
+        let mut body = Vec::new();
+        self.tracker.feed(&mut self.term, batch, &mut body);
         for ev in std::mem::take(&mut self.tracker.events) {
             self.on_event(ev);
         }
@@ -506,23 +620,29 @@ impl Session {
             self.menu.error_reset();
         }
         self.refresh();
+        // Taken late: a panic above leaves the clear cached for `guard`.
+        let mut out = self.renderer.take_clear();
+        out.extend(body);
         out.extend(self.take_repaint());
         out.extend(self.frame());
-        write_stdout(&out);
+        self.emit(&out);
     }
 
     fn on_event(&mut self, ev: Event) {
         match ev {
             Event::NewCmd(done) => {
+                // A prompt redraw (SIGWINCH, `zle reset-prompt`) re-emits NewCmd: only a finished command resets
+                // the menu; a cleared line resets through the empty-buffer path in `refresh`.
                 if let Some(h) = done {
                     let _ = self.engine.send(EngineMsg::CommandFinished(h));
+                    self.menu.error_reset();
                 }
                 self.sent = None;
                 self.poll_files();
             }
-            Event::PreExec => {}
+            Event::PreExec => self.menu.error_reset(),
         }
-        self.menu.error_reset();
+        self.unechoed.clear();
         self.ghost = None;
         self.llm = None;
         self.llm_at = None;
@@ -531,7 +651,13 @@ impl Session {
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
     fn refresh(&mut self) {
-        self.cur = if self.alt() { None } else { self.tracker.extract(&self.term) };
+        let new = if self.alt() { None } else { self.tracker.extract(&self.term) };
+        if !self.unechoed.is_empty() {
+            let base = self.lock.as_ref().map(|l| l.1.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()));
+            let n = new.as_ref().map(|e| e.buffer.as_str());
+            self.unechoed = unechoed_after(&self.unechoed, base, n, self.lock.is_some());
+        }
+        self.cur = new;
         if let Some((until, expected)) = &self.lock {
             let applied = self.cur.as_ref().is_some_and(|e| &e.buffer == expected);
             if !applied && Instant::now() < *until {
@@ -563,8 +689,9 @@ impl Session {
         if c.phase == Phase::Parse || c.ghost.is_some() {
             self.ghost = c.ghost.clone().map(|g| (c.buffer.clone(), g));
         }
-        // LLM ghost: only when the local reply has no history match (SPEC §8.4).
-        if c.phase == Phase::Parse && c.ghost.is_none() && !c.error && c.cursor == c.buffer.len() && self.llm_enabled() {
+        // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
+        // command) too: the inline source depends on the buffer only. A mid-word cursor fails the length check.
+        if c.phase == Phase::Parse && c.ghost.is_none() && c.cursor == c.buffer.len() && self.llm_enabled() {
             let debounce = self.settings.i64("inline.debounceMs", 300).max(0) as u64;
             self.llm_at = Some(self.changed_at + Duration::from_millis(debounce));
         }
@@ -580,8 +707,9 @@ impl Session {
             && matches!(crate::inline::source(&self.settings), Ok(crate::inline::Source::Profile(_)))
     }
 
-    /// Ghost text to draw (SPEC §8.1): survives typing that matches its start.
-    fn ghost_text(&self) -> Option<String> {
+    /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
+    /// their echo (what accepting it must add), else after the buffer on screen (what is drawn).
+    fn ghost_text(&self, typed: bool) -> Option<String> {
         if !self.settings.bool("inline.enabled", true) || self.tracker.preexec || self.alt() {
             return None;
         }
@@ -589,18 +717,45 @@ impl Session {
         if e.buffer.is_empty() || e.cursor != e.buffer.len() || e.shell_ghost {
             return None;
         }
-        [&self.ghost, &self.llm].into_iter().flatten().find_map(|(b, g)| {
-            let rest = g.strip_prefix(e.buffer.strip_prefix(b.as_str())?)?;
-            (!rest.is_empty() && !rest.contains('\n')).then(|| rest.to_string())
-        })
+        let buffer = if typed { self.basis()? } else { e.buffer.clone() };
+        [&self.ghost, &self.llm].into_iter().flatten().find_map(|(b, g)| ghost_rest(&buffer, b, g))
+    }
+
+    /// The buffer once the shell echoed everything already sent: the pending insertion's result (else the extracted
+    /// buffer) plus the printable keys typed ahead of their echo (SPEC §7.3 reconciliation).
+    fn basis(&self) -> Option<String> {
+        let b = self.lock.as_ref().map(|l| l.1.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()))?;
+        Some(format!("{b}{}", self.unechoed))
+    }
+
+    /// Track a forwarded key: a printable char at the end of the line comes back as echo; anything else
+    /// (backspace, arrows, control keys, paste) cannot be modelled and drops the prediction.
+    fn note_forwarded(&mut self, key: &Key) {
+        let at_end = self.cur.as_ref().is_some_and(|e| e.cursor == e.buffer.len());
+        match key.code {
+            KeyCode::Char(c) if key.mods == Mods::default() && at_end => self.unechoed.push(c),
+            _ => self.unechoed.clear(),
+        }
     }
 
     fn suppressed(&self) -> bool {
-        !self.tracker.at_prompt() || self.resize_at.is_some() || self.repaint
+        !self.tracker.at_prompt() || self.resize_at.is_some() || self.repaint || self.tracker.filter.in_string()
+    }
+
+    /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
+    /// ponytail: mirrors render.rs `compose`'s guards; its no-room-for-the-menu case (3-row terminal) is not covered.
+    fn drawable(&self) -> bool {
+        let g = self.term.grid();
+        !self.suppressed()
+            && !self.tracker.filter.scroll_region()
+            && !self.term.mode().intersects(TermMode::ALT_SCREEN | TermMode::ORIGIN | TermMode::INSERT)
+            && !g.cursor.input_needs_wrap
+            && g.columns() >= 10
+            && g.screen_lines() >= 3
     }
 
     fn frame(&mut self) -> Vec<u8> {
-        let ghost = self.ghost_text();
+        let ghost = self.ghost_text(false);
         let input = FrameInput {
             settings: &self.settings,
             ghost: ghost.as_deref(),
@@ -611,23 +766,43 @@ impl Session {
         self.renderer.frame(&self.term, &self.menu, &input)
     }
 
-    /// State-only change: clear + frame in one write (SPEC §7.5.3).
+    /// State-only change: the renderer clears a changed frame in the same write and skips an identical one
+    /// (SPEC §7.5.3).
     fn redraw(&mut self) {
-        let mut out = self.renderer.take_clear();
-        out.extend(self.frame());
-        write_stdout(&out);
+        let out = self.frame();
+        self.emit(&out);
     }
 
     /// Stdin chunk (SPEC §7.2.4): intercept bound keys while the menu is shown, accept ghost text, else forward.
     fn on_input(&mut self, chunk: &[u8]) {
+        // A probe reply arriving after the startup timeout is dropped, not typed into the shell.
+        let late;
+        let chunk = match self.probe_until {
+            Some(t) if Instant::now() < t => {
+                let (cpr, bg, rest) = parse_probe(chunk);
+                if bg.is_some() {
+                    self.terminal_bg = bg;
+                    self.renderer.set_theme(Theme::from_settings(&self.settings, bg));
+                }
+                if cpr.is_some() {
+                    self.probe_until = None;
+                }
+                late = rest;
+                &late[..]
+            }
+            _ => chunk,
+        };
         let mut fwd = Vec::new();
         let (mut redraw, mut rerequest) = (false, false);
         let only_tab = self.settings.bool("autocomplete.onlyShowOnTab", false);
-        for ev in keys::decode(chunk) {
+        let disabled = self.settings.bool("autocomplete.disable", false);
+        for ev in self.decoder.decode(chunk) {
             let key = ev.key;
             let prompt = !self.tracker.preexec && !self.alt();
-            let intercepting = prompt && self.menu.intercepting(&self.settings);
-            let global = prompt && !intercepting && self.menu.has_items();
+            // A logically shown menu acts on keys only while the render guards let it be seen.
+            let shown = prompt && self.menu.intercepting(&self.settings);
+            let intercepting = shown && self.drawable();
+            let global = prompt && !shown && !disabled && self.menu.has_items();
             let binding = if prompt { self.keymap.lookup(&key) } else { None };
             let effects = match binding {
                 Some(Binding::Action(a)) if intercepting => self.menu.handle(a, &self.settings),
@@ -639,21 +814,21 @@ impl Session {
                     self.menu.handle(a, &self.settings)
                 }
                 _ => {
-                    match ghost_key(&key).zip(self.ghost_text()) {
+                    match ghost_key(&key).filter(|_| self.drawable()).zip(self.ghost_text(true)) {
                         Some((full, g)) => {
-                            fwd.extend_from_slice(if full { g.as_str() } else { next_word(&g) }.as_bytes());
+                            let g = if full { g.as_str() } else { next_word(&g) };
+                            fwd.extend_from_slice(g.as_bytes());
+                            self.unechoed.push_str(g);
                             self.ghost = None;
                             self.llm = None;
                             redraw = true;
                         }
                         None => {
                             fwd.extend_from_slice(&chunk[ev.bytes.clone()]);
+                            self.note_forwarded(&key);
                             if is_ctrl(&key, 'c') || is_ctrl(&key, 'd') {
                                 self.menu.error_reset();
                                 redraw = true;
-                            }
-                            if key.code == KeyCode::Backspace {
-                                self.menu.note_backspace();
                             }
                         }
                     }
@@ -664,8 +839,11 @@ impl Session {
             for e in effects {
                 match e {
                     Effect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
-                    Effect::Write(b) => fwd.extend(b),
-                    Effect::Bell => write_stdout(b"\x07"),
+                    Effect::Write(b) => {
+                        fwd.extend(b);
+                        self.unechoed.clear();
+                    }
+                    Effect::Bell => self.emit(b"\x07"),
                     Effect::Rerequest => rerequest = true,
                     Effect::ToggleFuzzy => {
                         let _ = self.engine.send(EngineMsg::ToggleFuzzy);
@@ -693,8 +871,10 @@ impl Session {
         }
         let from = self.menu.last().map(|c| (c.buffer.clone(), c.cursor));
         let Some((ib, at)) = from.or_else(|| self.cur.as_ref().map(|e| (e.buffer.clone(), e.cursor))) else { return };
-        let cur = self.cur.as_ref().map_or(ib.as_str(), |e| e.buffer.as_str());
-        fwd.extend(insertion_bytes(ins, &ib, cur));
+        // Against what the shell will show, not the last batch: keys sent ahead of their echo are reconciled too.
+        let cur = self.basis().unwrap_or_else(|| ib.clone());
+        fwd.extend(insertion_bytes(ins, &ib, &cur));
+        self.unechoed.clear();
         self.lock = Some((Instant::now() + INSERT_LOCK, expected_buffer(ins, &ib, at)));
         if let Some((cmd, name)) = record {
             let _ = self.engine.send(EngineMsg::RecordInsert { cmd, name });
@@ -760,7 +940,7 @@ impl Session {
         if !repaint.is_empty() {
             let mut out = repaint;
             out.extend(self.frame());
-            write_stdout(&out);
+            self.emit(&out);
         } else if redraw {
             self.redraw();
         }
@@ -791,7 +971,7 @@ impl Session {
     fn cleanup(&mut self) {
         let mut out = self.renderer.take_clear();
         out.extend_from_slice(b"\x1b[0m\x1b[?25h");
-        write_stdout(&out);
+        self.emit(&out);
         let _ = self.engine.send(EngineMsg::Shutdown);
         self.modes.restore();
         if let Some(p) = &self.session_path {
@@ -808,7 +988,7 @@ mod sys {
     use std::sync::mpsc::Sender;
     use std::time::Duration;
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Default)]
     pub struct Modes;
 
     impl Modes {
@@ -864,6 +1044,29 @@ mod sys {
         });
     }
 
+    /// The child's exit code as a shell reports it: 128 + signal when killed (portable-pty maps that to 1).
+    pub fn wait(child: &mut dyn portable_pty::Child) -> i32 {
+        match child.process_id() {
+            Some(pid) => wait_pid(pid as libc::pid_t),
+            None => child.wait().map_or(1, |s| s.exit_code() as i32),
+        }
+    }
+
+    pub fn wait_pid(pid: libc::pid_t) -> i32 {
+        let mut st = 0;
+        // SAFETY: waitpid on our own child with a stack-owned status.
+        while unsafe { libc::waitpid(pid, &mut st, 0) } != pid {
+            if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                return 1;
+            }
+        }
+        if libc::WIFSIGNALED(st) {
+            128 + libc::WTERMSIG(st)
+        } else {
+            libc::WEXITSTATUS(st)
+        }
+    }
+
     /// SIGWINCH → Resize, SIGTERM/SIGHUP → Term.
     pub fn spawn_resize(tx: Sender<Msg>) -> Result<()> {
         use signal_hook::consts::signal::{SIGHUP, SIGTERM, SIGWINCH};
@@ -904,7 +1107,7 @@ mod sys {
     const CP_UTF8: u32 = 65001;
 
     /// Saved console state, restored on exit.
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Default)]
     pub struct Modes {
         input: u32,
         output: u32,
@@ -1016,6 +1219,10 @@ mod sys {
         });
     }
 
+    pub fn wait(child: &mut dyn portable_pty::Child) -> i32 {
+        child.wait().map_or(1, |s| s.exit_code() as i32)
+    }
+
     /// No SIGWINCH on Windows: also poll the size every 250 ms (legacy conhost may not send the event).
     pub fn spawn_resize(tx: Sender<Msg>) -> Result<()> {
         std::thread::spawn(move || {
@@ -1078,6 +1285,8 @@ mod tests {
         // Keys typed meanwhile (arrows, partial replies) are kept for the shell.
         let (cpr, _, rest) = parse_probe(b"\x1b[A\x1b[12;");
         assert_eq!((cpr, rest.as_slice()), (None, b"\x1b[A\x1b[12;".as_slice()));
+        // The background is always asked for (a later switch to `system` needs it), before the CPR that ends it.
+        assert!(PROBE.starts_with(b"\x1b]11;?") && PROBE.ends_with(b"\x1b[6n"));
     }
 
     #[test]
@@ -1103,5 +1312,305 @@ mod tests {
         assert_eq!(next_word(" -la /tmp"), " -la");
         assert_eq!(next_word("ho hi"), "ho");
         assert_eq!(next_word("x"), "x");
+    }
+
+    #[test]
+    fn ghost_with_control_chars_is_never_shown_or_accepted() {
+        // An LLM reply with bare CRs would run `touch /x` when accepted.
+        assert_eq!(ghost_rest("git sta", "git sta", "tus\rtouch /x\recho"), None);
+        assert_eq!(ghost_rest("git sta", "git st", "atus\x1b[2J"), None);
+        assert_eq!(ghost_rest("git sta", "git st", "atus\u{9b}31m"), None);
+        assert_eq!(ghost_rest("git sta", "git st", "atus\x7f"), None);
+        assert_eq!(ghost_rest("echo", "echo", " a\nb"), None);
+        assert_eq!(ghost_rest("git sta", "git st", "atus -s"), Some("tus -s".into()));
+        assert_eq!(ghost_rest("ls", "git", "x"), None);
+    }
+
+    #[test]
+    fn unechoed_keys_are_consumed_by_their_echo() {
+        assert_eq!(unechoed_after("lo", Some("hel"), Some("hel"), false), "lo");
+        assert_eq!(unechoed_after("lo", Some("hel"), Some("hell"), false), "o");
+        assert_eq!(unechoed_after("lo", Some("hel"), Some("hello"), false), "");
+        assert_eq!(unechoed_after("lo", Some("hel"), Some("he"), false), "", "the shell did something else");
+        // Locked: typed after a pending insertion (base = its expected buffer).
+        assert_eq!(unechoed_after("y", Some("cat abcd"), Some("cat ab"), true), "y");
+        assert_eq!(unechoed_after("y", Some("cat abcd"), Some("cat abcdy"), true), "");
+        assert_eq!(unechoed_after("y", None, Some("x"), false), "");
+    }
+
+    #[test]
+    fn pty_reader_waits_for_credits() {
+        let (credits, credit_rx) = mpsc::sync_channel(PTY_CREDITS);
+        let (tx, rx) = mpsc::channel();
+        credits.send(()).unwrap();
+        credits.send(()).unwrap();
+        std::thread::spawn(move || pump(std::io::repeat(b'y'), credit_rx, tx));
+        let pty = |r: Result<Msg, RecvTimeoutError>| matches!(r, Ok(Msg::Pty(b)) if b.len() == 16 * 1024);
+        assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
+        assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err(), "an endless child is not read ahead");
+        credits.send(()).unwrap();
+        assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
+        drop(credits);
+        assert!(matches!(rx.recv_timeout(Duration::from_secs(5)), Ok(Msg::PtyEof)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_death_exit_code() {
+        let sh = |s: &str| std::process::Command::new("/bin/sh").args(["-c", s]).spawn().unwrap().id() as libc::pid_t;
+        assert_eq!(sys::wait_pid(sh("kill -9 $$")), 137);
+        assert_eq!(sys::wait_pid(sh("exit 3")), 3);
+    }
+
+    // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
+
+    use crate::menu::tests::{comp, item, settings};
+    use crate::types::{Item, ItemType};
+    use alacritty_terminal::event::VoidListener;
+
+    const SID: &str = "0123456789abcdef0123456789abcdef";
+
+    fn session(json: &str) -> (Session, Receiver<Vec<u8>>) {
+        let settings = settings(json);
+        let (writer, wrx) = mpsc::channel();
+        let mut tracker = Tracker::new(SID.into(), Some(Shell::Bash), 24);
+        tracker.defer = false;
+        let s = Session {
+            rx: mpsc::channel().1,
+            engine: mpsc::channel().0,
+            writer,
+            credits: mpsc::sync_channel(PTY_CREDITS).0,
+            master: None,
+            modes: sys::Modes::default(),
+            term: Term::new(Config::default(), &TermSize::new(80, 24), VoidListener),
+            tracker,
+            menu: Menu::new(),
+            renderer: Renderer::new(Theme::dark(), false),
+            keymap: Keymap::from_settings(&settings),
+            decoder: keys::Decoder::default(),
+            settings,
+            settings_path: None,
+            settings_mtime: None,
+            session_path: None,
+            session_mtime: None,
+            terminal_bg: None,
+            shell: Shell::Bash,
+            req: 0,
+            sent: None,
+            changed_at: Instant::now(),
+            cur: None,
+            lock: None,
+            unechoed: String::new(),
+            ghost: None,
+            llm: None,
+            llm_req: 0,
+            llm_at: None,
+            probe_until: None,
+            resize_at: None,
+            repaint: false,
+            spinner: 0,
+            spinner_at: None,
+            poll_at: Instant::now() + FILE_POLL,
+            exit_code: None,
+            eof: false,
+            exit_at: None,
+            passthrough: false,
+            sink: Vec::new(),
+        };
+        (s, wrx)
+    }
+
+    /// A bash prompt `$ ` with the integration markers, then `text` echoed.
+    fn prompt(s: &mut Session, text: &str) {
+        let p = format!("\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}");
+        s.on_output(p.as_bytes());
+    }
+
+    /// Engine reply for the latest request (twice: the first one after a reset only arms the menu).
+    fn reply(s: &mut Session, items: Vec<Item>, ghost: Option<&str>) {
+        let (buffer, _) = s.sent.clone().expect("a request was sent");
+        let mut c = comp(&buffer, 1, items);
+        c.req = s.req;
+        c.ghost = ghost.map(String::from);
+        s.on_completion(c.clone());
+        s.on_completion(c);
+    }
+
+    fn subs(q: &str) -> Vec<Item> {
+        ["cherry-pick", "checkout"].iter().map(|n| item(n, ItemType::Subcommand, q)).collect()
+    }
+
+    fn sent(pty: &Receiver<Vec<u8>>) -> Vec<u8> {
+        pty.try_iter().flatten().collect()
+    }
+
+    /// The shell line after `line` receives what pty wrote (DEL erases, printable bytes append).
+    fn shell_line(line: &str, bytes: &[u8]) -> String {
+        let mut l = line.to_string();
+        for &b in bytes {
+            match b {
+                0x7f => drop(l.pop()),
+                0x20..=0x7e => l.push(b as char),
+                _ => {}
+            }
+        }
+        l
+    }
+
+    #[test]
+    fn split_paste_is_never_intercepted() {
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        assert!(s.menu.intercepting(&s.settings));
+        s.on_input(b"\x1b[200~ONE");
+        s.on_input(b"\rTWO\tx\x1b[A\x1b[201~");
+        assert_eq!(sent(&pty), b"\x1b[200~ONE\rTWO\tx\x1b[A\x1b[201~");
+    }
+
+    #[test]
+    fn menu_hidden_by_render_guards_does_not_intercept() {
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), Some("erry-pick"));
+        s.on_input(b"\t");
+        assert!(!sent(&pty).contains(&b'\t'), "drawn: Tab is intercepted");
+        // A crashed TUI left a scroll region: nothing is drawn, so Enter and End reach the shell.
+        s.on_output(b"\x1b7\x1b[2;20r\x1b8");
+        assert!(s.menu.intercepting(&s.settings) && !s.drawable());
+        s.on_input(b"\r\x1b[F");
+        assert_eq!(sent(&pty), b"\r\x1b[F");
+    }
+
+    #[test]
+    fn disabled_menu_lets_tab_through() {
+        let (mut s, pty) = session(r#"{"autocomplete.disable": true, "autocomplete.onlyShowOnTab": true}"#);
+        prompt(&mut s, "cat ");
+        let mut c = comp("cat ", 1, vec![item("a.txt", ItemType::File, ""), item("b.txt", ItemType::File, "")]);
+        c.req = s.req;
+        s.on_completion(c.clone());
+        c.arg_key = 2; // a new argument: hidden until Tab, with items
+        s.on_completion(c);
+        assert!(s.menu.has_items());
+        s.on_input(b"\t\t");
+        assert_eq!(sent(&pty), b"\t\t");
+    }
+
+    #[test]
+    fn insertions_build_on_keys_not_yet_echoed() {
+        // Tab + Enter (and Tab + Tab) in one read: the second insertion builds on the first one's result.
+        let files = || vec![item("abcd1.txt", ItemType::File, "ab"), item("abcd2.txt", ItemType::File, "ab")];
+        for (keys, want) in [(&b"\t\r"[..], "cat abcd1.txt"), (b"\t\t", "cat abcd")] {
+            let (mut s, pty) = session("{}");
+            prompt(&mut s, "cat ab");
+            reply(&mut s, files(), None);
+            s.on_input(keys);
+            assert_eq!(shell_line("cat ab", &sent(&pty)), want, "{keys:?}");
+        }
+        // `e` + Enter in one read: the typed-ahead `e` is erased before the selection is inserted.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.on_input(b"e\r");
+        assert_eq!(shell_line("git ch", &sent(&pty)), "git cherry-pick");
+        // Same, with the echo arriving in between (consumed, not counted twice).
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.on_input(b"e");
+        s.on_output(b"e");
+        assert!(s.unechoed.is_empty());
+        s.on_input(b"\r");
+        assert_eq!(shell_line("git ch", &sent(&pty)), "git cherry-pick");
+        // `l` + Right in one read: only the rest of the ghost is accepted.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "echo hel");
+        reply(&mut s, vec![], Some("lo"));
+        s.on_input(b"l\x1b[C");
+        assert_eq!(shell_line("echo hel", &sent(&pty)), "echo hello");
+    }
+
+    #[test]
+    fn llm_ghost_requested_for_commands_without_spec() {
+        let (mut s, _) = session(
+            r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
+        );
+        prompt(&mut s, "zzzcmd foo");
+        s.on_completion(Completion::error(s.req, "zzzcmd foo".into(), 10));
+        assert!(s.llm_at.is_some());
+        // Mid-word cursor: still none.
+        s.llm_at = None;
+        s.on_completion(Completion::error(s.req, "zzzcmd foo".into(), 3));
+        assert!(s.llm_at.is_none());
+    }
+
+    #[test]
+    fn late_probe_reply_is_not_typed() {
+        let (mut s, pty) = session("{}");
+        s.probe_until = Some(Instant::now() + LATE_PROBE);
+        prompt(&mut s, "");
+        s.on_input(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\\x1b[5;1Rx");
+        assert_eq!(sent(&pty), b"x");
+        assert_eq!((s.terminal_bg, s.probe_until), (Some((255, 255, 255)), None));
+    }
+
+    #[test]
+    fn identical_redraw_writes_nothing() {
+        let (mut s, _) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        assert!(s.sink.windows(8).any(|w| w == b"\x1b[?2026h"), "a frame was drawn");
+        s.sink.clear();
+        s.redraw();
+        assert!(s.sink.is_empty(), "{:?}", String::from_utf8_lossy(&s.sink));
+    }
+
+    #[test]
+    fn prompt_redraw_keeps_the_menu() {
+        let (mut s, _) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        // SIGWINCH: the shell redraws PS1 (with NewCmd=<sid>) and the line, in one write.
+        let redraw = format!("\r\x1b[K\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch");
+        s.on_output(redraw.as_bytes());
+        assert!(s.menu.intercepting(&s.settings));
+        // A command that ran does reset it.
+        s.on_output(b"\r\n\x1b]697;PreExec\x07");
+        prompt(&mut s, "");
+        assert!(!s.menu.has_items());
+    }
+
+    #[test]
+    fn no_frame_inside_an_open_dcs() {
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.sink.clear();
+        s.on_output(b"\x1bP+q");
+        assert!(s.sink.ends_with(b"\x1bP+q"), "{:?}", String::from_utf8_lossy(&s.sink));
+        s.on_input(b"\r");
+        assert_eq!(sent(&pty), b"\r");
+        s.on_output(b"696e\x1b\\");
+        assert!(s.sink.ends_with(b"\x1b[?2026l"), "frame back after ST");
+    }
+
+    #[test]
+    fn panic_turns_the_session_into_a_pass_through() {
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.sink.clear();
+        assert!(!s.guard(|_| panic!("injected")));
+        assert!(s.passthrough && s.sink.starts_with(b"\x1b[?2026h"), "overlay cleared");
+        s.sink.clear();
+        let mut stash = None;
+        assert!(s.step(Msg::Pty(b"out\x1b]697;NewCmd\x07".to_vec()), &mut stash));
+        assert_eq!(s.sink, b"out\x1b]697;NewCmd\x07");
+        assert!(s.step(Msg::Stdin(b"\r".to_vec()), &mut stash));
+        assert_eq!(sent(&pty), b"\r", "keys reach the shell unintercepted");
+        assert!(s.step(Msg::ChildExit(3), &mut stash));
+        assert!(!s.step(Msg::PtyEof, &mut stash));
+        assert_eq!((s.exit_code, s.next_deadline().is_some()), (Some(3), true));
     }
 }
