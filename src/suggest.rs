@@ -504,7 +504,8 @@ fn auto_exec(name: &str, description: &str, original: Option<ItemType>) -> Sugg 
 /// priority-sorted. Returns `(row, prefix_match)`.
 pub fn filter(list: Vec<Sugg>, search_term: &str, o: &FilterOpts) -> Vec<(Sugg, bool)> {
     if search_term.is_empty() {
-        let mut out: Vec<(Sugg, bool)> = list.into_iter().filter(|s| !s.hidden).map(|s| (s, true)).collect();
+        // nothing typed: nothing prefix-matched, so no spec ghost (SPEC §6.11)
+        let mut out: Vec<(Sugg, bool)> = list.into_iter().filter(|s| !s.hidden).map(|s| (s, false)).collect();
         if o.exec_after_space && !out.is_empty() && !o.auto_exec_hidden {
             out.insert(0, (auto_exec("↪", "Immediately execute", None), false));
         }
@@ -647,8 +648,10 @@ fn is_var_ref(s: &str) -> bool {
 /// misses `$ ` ; { }` and a leading `~`/`=` (SPEC §6.8 D-note).
 fn escape_posix(s: &str, folder: bool, quote: bool, path: bool, shell: Shell) -> String {
     let safe = |c: char| c.is_alphanumeric() || "-_./+,:@%=~".contains(c);
-    // `~` expands at the start and after `=`/`:` (assignments, zsh MAGIC_EQUAL_SUBST); `=cmd` in zsh
-    if !quote && !s.starts_with(['~', '=', '%']) && !s.contains("=~") && !s.contains(":~") {
+    // A file name's `~` expands at the start and after `=`/`:` (assignments, zsh MAGIC_EQUAL_SUBST); `=cmd` in
+    // zsh. A spec row (`cd ~`) means that expansion.
+    let tilde = path && (s.starts_with(['~', '=', '%']) || s.contains("=~") || s.contains(":~"));
+    if !quote && !tilde {
         if s.chars().all(safe) || (!path && is_var_ref(s)) {
             return s.to_string();
         }
@@ -665,7 +668,8 @@ fn escape_posix(s: &str, folder: bool, quote: bool, path: bool, shell: Shell) ->
 /// PowerShell escaping: single quotes when needed. Folders become backtick-escaped bare words instead, so the
 /// cursor never sits inside a quote (the mid-word guard would block the next segment).
 fn escape_pwsh(s: &str, folder: bool, quote: bool, path: bool) -> String {
-    const SPECIAL: &str = "$`'\"(){};,&|@#<>";
+    // PowerShell also delimits strings with the Unicode single (‘ ’ ‚ ‛) and double (“ ” „) quotes
+    const SPECIAL: &str = "$`'\"(){};,&|@#<>\u{2018}\u{2019}\u{201A}\u{201B}\u{201C}\u{201D}\u{201E}";
     let special = |c: char| c.is_whitespace() || SPECIAL.contains(c);
     if !quote && (!s.chars().any(special) || (!path && is_var_ref(s))) {
         return s.to_string();
@@ -673,7 +677,7 @@ fn escape_pwsh(s: &str, folder: bool, quote: bool, path: bool) -> String {
     if folder {
         return s.chars().flat_map(|c| ['`', c].into_iter().skip(usize::from(!special(c)))).collect();
     }
-    format!("'{}'", s.replace('\'', "''"))
+    crate::integrations::quote(Shell::Pwsh, s)
 }
 
 /// `(char index, char)`.
@@ -711,12 +715,15 @@ fn unquote(raw: &[char], shell: Shell) -> (Vec<At>, Option<(char, usize)>) {
 /// Escaping inside a quote the user opened before the replaced text (no quotes added around it).
 fn escape_in_quote(s: &str, q: char, shell: Shell) -> String {
     match (q, shell) {
-        ('\'', Shell::Pwsh) => s.replace('\'', "''"),
+        ('\'', Shell::Pwsh) => {
+            let q = crate::integrations::quote(Shell::Pwsh, s);
+            q[1..q.len() - 1].to_string() // the escaping without the `'…'` around it
+        }
         ('\'', Shell::Fish) => s.replace('\\', "\\\\").replace('\'', "\\'"),
         ('\'', _) => s.replace('\'', "'\\''"),
         _ => {
             let (special, esc) = match shell {
-                Shell::Pwsh => ("`\"$", '`'),
+                Shell::Pwsh => ("`\"$\u{201C}\u{201D}\u{201E}", '`'),
                 Shell::Fish => ("\\\"$", '\\'), // fish double quotes know only \\ \" \$
                 _ => ("\\\"$`", '\\'),
             };
@@ -1306,6 +1313,18 @@ mod tests {
     }
 
     #[test]
+    fn empty_search_term_is_no_prefix_match() {
+        // spec-ghost-on-empty-token: `git ` must not ghost the alphabetically first subcommand
+        let subs = || vec![Sugg::new("abort", ItemType::Subcommand), Sugg::new("add", ItemType::Subcommand)];
+        let ghost = |search: &str| {
+            let items: Vec<Item> = filter(subs(), search, &opts()).into_iter().map(|(s, p)| to_item(s, p, &ctx(search, search, Shell::Zsh))).collect();
+            crate::inline::spec_ghost(&items)
+        };
+        assert_eq!(ghost(""), None);
+        assert_eq!(ghost("ab").as_deref(), Some("ort"));
+    }
+
+    #[test]
     fn directory_and_current_token_rows() {
         let row = |s: &str| {
             let mut x = Sugg::new(s, ItemType::Folder);
@@ -1617,6 +1636,22 @@ mod tests {
         }
         assert_eq!(insertion(&path("a`b!$"), &ctx("d/", "\"d/", Shell::Fish)).text, "a`b!\\$\"");
         assert_eq!(insertion(&path("a\\b'"), &ctx("d/", "'d/", Shell::Fish)).text, "a\\\\b\\''");
+        // r3-escape-quotes-spec-tilde: a spec row's leading `~`/`%` is shell syntax (`cd ~`, `kill %1`)
+        for sh in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            assert_eq!(text(Sugg::new("~", ItemType::Arg), sh), "~", "{sh:?}");
+            assert_eq!(text(Sugg::new("%1", ItemType::Arg), sh), "%1", "{sh:?}");
+        }
+        // pwsh-unicode-smart-quote-injection: PowerShell also ends strings at ‘ ’ ‚ ‛ (single) and “ ” „ (double):
+        // they force quoting (integrations::quote escapes them), are backtick-escaped in folders and open `"`
+        let sq = |s: &str| crate::integrations::quote(Shell::Pwsh, s);
+        for name in ["plain’name.txt", "report’;New-Item -Name TS -ItemType File;’.txt", "a‘b‚c‛d“e”f„g"] {
+            for kind in [ItemType::File, ItemType::Arg] {
+                assert_eq!(text(Sugg::new(name, kind), Shell::Pwsh), sq(name), "{name} {kind:?}");
+            }
+            assert_eq!(insertion(&path(name), &ctx("d/", "'d/", Shell::Pwsh)).text, sq(name)[1..], "{name} in '");
+        }
+        assert_eq!(text(Sugg::new("x’;calc;‘/", ItemType::Folder), Shell::Pwsh), "x`’`;calc`;`‘/");
+        assert_eq!(insertion(&path("a”;calc;“„"), &ctx("d/", "\"d/", Shell::Pwsh)).text, "a`”;calc;`“`„\"");
     }
 
     #[test]

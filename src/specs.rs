@@ -68,14 +68,20 @@ fn touch(dir: &Path) {
 }
 
 /// Remove other version dirs unused for [`VERSION_STALE`] (age of `.last-used`, else of the dir; a version a
-/// running session uses was touched at its start) and `.tmp-` dirs older than [`TMP_STALE`].
+/// running session uses was touched at its start) and `<ver>.tmp-` dirs older than [`TMP_STALE`]. Only those:
+/// `user/` or any other dir there belongs to the user.
 /// ponytail: a session running longer than a week without a restart may lose its version to a newer binary.
 fn cleanup(root: &Path, ver: &str) {
     for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
         let (name, p) = (entry.file_name().to_string_lossy().into_owned(), entry.path());
-        let max = if name.contains(".tmp-") { TMP_STALE } else { VERSION_STALE };
+        let (stem, max) = match name.split_once(".tmp-") {
+            Some((stem, _)) => (stem, TMP_STALE),
+            None => (name.as_str(), VERSION_STALE),
+        };
+        // ponytail: npm versions are `1.2.3`; a pre-release suffix would make its dirs look like the user's (kept)
+        let ours = stem.split('.').all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
         let age = std::fs::metadata(p.join(LAST_USED)).or_else(|_| std::fs::metadata(&p)).and_then(|m| m.modified());
-        if name != ver && name != "user" && p.is_dir() && age.is_ok_and(|t| t.elapsed().unwrap_or_default() > max) {
+        if ours && name != ver && p.is_dir() && age.is_ok_and(|t| t.elapsed().unwrap_or_default() > max) {
             let _ = std::fs::remove_dir_all(&p);
         }
     }
@@ -295,13 +301,17 @@ mod tests {
     #[test]
     fn extract_keeps_versions_in_use() {
         let root = TmpDir::new("extract-live");
-        for d in ["0.8.0", "0.9.0"] {
+        for d in ["0.8.0", "0.9.0", "dev", "notes.tmp-1"] {
             std::fs::create_dir_all(root.path().join(d)).unwrap();
         }
         last_used(&root.path().join("0.8.0"), Duration::from_secs(8 * 86400));
         last_used(&root.path().join("0.9.0"), Duration::from_secs(3600));
+        // specs-cleanup-deletes-user-dirs: a stale dir tabsmith did not create (dev specs, notes) is the user's
+        for d in ["dev", "notes.tmp-1"] {
+            last_used(&root.path().join(d), Duration::from_secs(8 * 86400));
+        }
         extract_to(&tar_zst(&[("./index.json", "{}")]), root.path(), "1.0.0").unwrap();
-        assert_eq!(names(root.path()), ["0.9.0", "1.0.0"]);
+        assert_eq!(names(root.path()), ["0.9.0", "1.0.0", "dev", "notes.tmp-1"]);
     }
 
     /// The temp dir of an extraction that died is removed; a live extractor's (recent) one is kept.
