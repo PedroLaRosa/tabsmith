@@ -16,7 +16,10 @@ if ($TABSMITH_SHOULD_LAUNCH -eq 0 -and $__tsInteractive -and [Environment]::User
     -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
   $env:TABSMITH_SHELL = (Get-Process -Id $PID).Path
   $global:LASTEXITCODE = $null
-  & 'tabsmith' _ pty --shell $env:TABSMITH_SHELL
+  # The inner pwsh gets this shell's switches (-ExecutionPolicy, -wd, ...) and no second banner. A leading `-`
+  # makes `_ pty` treat them as shell arguments. ponytail: AllHosts profiles (profile.ps1) already ran in this
+  # shell and run again in the inner one; the pre block would have to live in $PROFILE.CurrentUserAllHosts.
+  & 'tabsmith' _ pty --shell $env:TABSMITH_SHELL -- -NoLogo @__tsArgs
   # The outer shell ends with the wrapped one; if the wrapper could not start at all, this shell carries on.
   if ($null -ne $global:LASTEXITCODE) { [Environment]::Exit($global:LASTEXITCODE) }
 }

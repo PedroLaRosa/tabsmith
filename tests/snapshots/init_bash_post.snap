@@ -19,6 +19,10 @@ if [ -n "${BASH_VERSION:-}" ] && [ -n "${TABSMITH_SESSION_ID:-}" ] && [ -z "${_T
   }
   _ts_last() {
     local st=$?
+    # PS0 sends NoHistory when the next line does not reach bash's history (its number stays below this one).
+    # Taken last, after a user `history -n`. ponytail: PS0 cannot see the line, so under ignoreboth a repeat of
+    # the previous command is skipped too.
+    case :${HISTCONTROL:-}: in *:ignorespace:* | *:ignoreboth:*) _ts_hn=$HISTCMD ;; *) _ts_hn=0 ;; esac
     [ "${_ts_wrapped:-0}" = 1 ] && [ "$PS1" = "$_ts_last1" ] && return $st   # already wrapped this prompt
     _ts_u1=$PS1; _ts_u2=$PS2
     PS1="\[\e]697;StartPrompt\a\]$PS1\[\e]697;EndPrompt\a\e]697;NewCmd=$TABSMITH_SESSION_ID\a\]"
@@ -27,23 +31,35 @@ if [ -n "${BASH_VERSION:-}" ] && [ -n "${TABSMITH_SESSION_ID:-}" ] && [ -z "${_T
     _ts_install
     return $st
   }
+  # $1 without its `_ts_first`/`_ts_last` commands, whatever separates them (';' or newline, e.g. bash-preexec),
+  # into _ts_kept.
+  _ts_strip() {
+    local s=$1 kept='' cmd sep
+    while [ -n "$s" ]; do
+      cmd=${s%%[;$'\n']*}; s=${s:${#cmd}}; sep=${s:0:1}; s=${s:1}
+      [[ ${cmd//[[:space:]]/} == _ts_first || ${cmd//[[:space:]]/} == _ts_last ]] || kept+=$cmd$sep
+    done
+    kept=${kept#"${kept%%[![:space:];]*}"}; _ts_kept=${kept%"${kept##*[![:space:];]}"}   # ';;' is a syntax error
+  }
   # shellcheck disable=SC2128,SC2178  # PROMPT_COMMAND is either a string or an array
   _ts_install() {   # PROMPT_COMMAND = _ts_first ; <user commands> ; _ts_last   (string or bash 5.1 array)
     if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
-      [[ ${PROMPT_COMMAND[0]} == _ts_first && ${PROMPT_COMMAND[-1]} == _ts_last ]] && return
-      local pc=() c; for c in "${PROMPT_COMMAND[@]}"; do [[ $c == _ts_first || $c == _ts_last ]] || pc+=("$c"); done
-      PROMPT_COMMAND=(_ts_first "${pc[@]}" _ts_last)
-    else   # drop every `_ts_first`/`_ts_last` command, whatever separates it (';' or newline, e.g. bash-preexec)
-      local s=${PROMPT_COMMAND:-} kept='' cmd sep
-      while [ -n "$s" ]; do
-        cmd=${s%%[;$'\n']*}; s=${s:${#cmd}}; sep=${s:0:1}; s=${s:1}
-        [[ ${cmd//[[:space:]]/} == _ts_first || ${cmd//[[:space:]]/} == _ts_last ]] || kept+=$cmd$sep
-      done
-      kept=${kept#"${kept%%[![:space:];]*}"}; kept=${kept%"${kept##*[![:space:];]}"}   # ';;' is a syntax error
-      kept="_ts_first;${kept:+$kept;}_ts_last"
+      local pc=(_ts_first) c
+      for c in "${PROMPT_COMMAND[@]}"; do _ts_strip "$c"; [ -n "$_ts_kept" ] && pc+=("$_ts_kept"); done
+      pc+=(_ts_last)
+      [[ ${#pc[@]} == "${#PROMPT_COMMAND[@]}" && "${pc[*]}" == "${PROMPT_COMMAND[*]}" ]] || PROMPT_COMMAND=("${pc[@]}")
+    else
+      _ts_strip "${PROMPT_COMMAND:-}"
+      local kept="_ts_first;${_ts_kept:+$_ts_kept;}_ts_last"
       [[ $PROMPT_COMMAND == "$kept" ]] || PROMPT_COMMAND=$kept
     fi
   }
-  PS0="\e]697;OSCLock=$TABSMITH_SESSION_ID\a\e]697;PreExec\a${PS0:-}"   # bash 4.4+ prints PS0 before running a command
+  # bash 4.4+ prints PS0 before running a command. In PS0 `\!` is the newest history number: below _ts_hn when
+  # the line was not added. The expansion needs promptvars (the default).
+  _ts_nh=('' $'\e]697;NoHistory\a') _ts_hn=0 _ts_ps0=''
+  # shellcheck disable=SC2016  # expanded by PS0 at each command, not here
+  shopt -q promptvars && _ts_ps0='${_ts_nh[\! < _ts_hn]}'
+  PS0="\e]697;OSCLock=$TABSMITH_SESSION_ID\a$_ts_ps0\e]697;PreExec\a${PS0:-}"
+  unset _ts_ps0
   _ts_install
 fi

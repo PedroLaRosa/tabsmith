@@ -15,22 +15,28 @@ if set -q TABSMITH_SESSION_ID; and not set -q _TS_POST_LOADED
     function _ts_wrap_prompt
         set -l st $status
         _ts_osc StartPrompt
-        builtin printf '%b' (string join "\n" $argv)
+        builtin printf '%s' (string join \n -- $argv | string collect) # %s: the prompt's backslashes stay literal
         _ts_osc EndPrompt
         return $st
     end
 
-    # Put the user's prompt functions back (before running a command, or before re-wrapping).
+    # Put the user's prompt functions back (before running a command, or before re-wrapping). The copies go too,
+    # so a prompt the user erases meanwhile stays erased.
     function _ts_restore
         test "$_ts_wrapped" = 1; or return
         functions -q _ts_user_mode_prompt; and _ts_copy_fn _ts_user_mode_prompt fish_mode_prompt
         functions -q _ts_user_right_prompt; and _ts_copy_fn _ts_user_right_prompt fish_right_prompt
         _ts_copy_fn _ts_user_prompt fish_prompt
+        functions -e _ts_user_mode_prompt _ts_user_right_prompt
         set -g _ts_wrapped 0
     end
 
     function _ts_preexec --on-event fish_preexec
         _ts_osc "OSCLock=$TABSMITH_SESSION_ID"
+        # Kept out of fish's history (leading space, private mode): keep it out of ours.
+        if string match -q -- ' *' $argv[1]; or test -n "$fish_private_mode"
+            _ts_osc NoHistory
+        end
         _ts_osc PreExec
         _ts_restore
     end
@@ -52,28 +58,27 @@ if set -q TABSMITH_SESSION_ID; and not set -q _TS_POST_LOADED
         end
         _ts_osc "FishSuggestionColor=$fish_color_autosuggestion"
 
+        # $argv reaches the user's functions: fish 4's transient prompt passes --final-rendering.
         if functions -q fish_mode_prompt
             _ts_copy_fn fish_mode_prompt _ts_user_mode_prompt
             function fish_mode_prompt
-                _ts_wrap_prompt (_ts_user_mode_prompt)
+                _ts_wrap_prompt (_ts_user_mode_prompt $argv)
             end
         end
         if functions -q fish_right_prompt
             _ts_copy_fn fish_right_prompt _ts_user_right_prompt
             function fish_right_prompt
-                _ts_wrap_prompt (_ts_user_right_prompt)
+                _ts_wrap_prompt (_ts_user_right_prompt $argv)
             end
         end
         _ts_copy_fn fish_prompt _ts_user_prompt
         function fish_prompt
-            _ts_wrap_prompt (_ts_user_prompt)
+            _ts_wrap_prompt (_ts_user_prompt $argv)
             _ts_osc "NewCmd=$TABSMITH_SESSION_ID"
         end
         set -g _ts_wrapped 1
 
-        set -l al (alias | string collect)
-        begin
-            'tabsmith' _ pre-cmd --alias "$al" &>/dev/null &
-        end
+        # Backgrounded inside a throwaway sh: a fish `&` job would overwrite the user's $last_pid.
+        command sh -c '"$0" _ pre-cmd --alias "$1" >/dev/null 2>&1 &' 'tabsmith' (alias | string collect)
     end
 end
