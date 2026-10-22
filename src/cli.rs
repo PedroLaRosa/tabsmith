@@ -694,22 +694,10 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
     };
     // The user's own binary when $SHELL is that shell, else the name (resolved on PATH by the wrapper).
     let exe = env_shell.filter(|s| Shell::from_name(s) == Some(shell)).unwrap_or_else(|| shell.name().to_string());
-    let dir = std::env::temp_dir().join(format!("tabsmith-debug-shell-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
-    let rc = dir.join(match shell {
-        Shell::Bash => "bashrc",
-        Shell::Zsh => ".zshrc",
-        Shell::Fish => "post.fish",
-        Shell::Pwsh => "post.ps1",
-    });
-    std::fs::write(&rc, crate::integrations::init_script(shell, When::Post)? + "\n")?;
-    let rc = rc.display().to_string();
-    let mut cmd = vec![exe.clone()];
-    match shell {
-        Shell::Bash => cmd.extend(["--noprofile".into(), "--rcfile".into(), rc]),
-        Shell::Zsh => std::env::set_var("ZDOTDIR", &dir),
-        Shell::Fish => cmd.extend(["--no-config".into(), "-C".into(), format!("source '{rc}'")]),
-        Shell::Pwsh => cmd.extend(["-NoProfile".into(), "-NoExit".into(), "-Command".into(), format!(". '{rc}'")]),
+    let post = crate::integrations::init_script(shell, When::Post)? + "\n";
+    let (dir, cmd) = debug_shell_files(&settings::home()?, shell, &exe, &post)?;
+    if shell == Shell::Zsh {
+        std::env::set_var("ZDOTDIR", &dir);
     }
     // The wrapper passes the current env to the child.
     std::env::set_var("TABSMITH_DEBUG_SHELL", "1");
@@ -718,6 +706,35 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
     println!("\nEnding tabsmith debug shell\n");
     let _ = std::fs::remove_dir_all(&dir);
     Ok(code)
+}
+
+/// Write the rc file `post` into a fresh private dir under `home` (the data dir, never a shared temp dir whose name
+/// another user could claim first); returns the dir (zsh's ZDOTDIR) and the shell argv that loads the rc file.
+fn debug_shell_files(home: &Path, shell: Shell, exe: &str, post: &str) -> Result<(std::path::PathBuf, Vec<String>)> {
+    let dir = home.join("run").join(format!("debug-shell-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir); // a stale dir of ours from a crashed run with the same pid
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&dir)?;
+    let rc = dir.join(match shell {
+        Shell::Bash => "bashrc",
+        Shell::Zsh => ".zshrc",
+        Shell::Fish => "post.fish",
+        Shell::Pwsh => "post.ps1",
+    });
+    std::fs::write(&rc, post)?;
+    let rc = rc.display().to_string();
+    let q = |s: &str| crate::integrations::quote(shell, s);
+    let mut cmd = vec![exe.to_string()];
+    match shell {
+        Shell::Bash => cmd.extend(["--noprofile".into(), "--rcfile".into(), rc]),
+        Shell::Zsh => {}
+        Shell::Fish => cmd.extend(["--no-config".into(), "-C".into(), format!("source {}", q(&rc))]),
+        Shell::Pwsh => cmd.extend(["-NoProfile".into(), "-NoExit".into(), "-Command".into(), format!(". {}", q(&rc))]),
+    }
+    Ok((dir, cmd))
 }
 
 fn debug_logs() -> Result<i32> {
@@ -888,5 +905,37 @@ mod tests {
             to_toml(&sections),
             "[tabsmith]\nversion = \"0.1.0\"\n\n[env-vars]\nPATH = \"/a:\\\"b\\\"\"\nin-ci = false"
         );
+    }
+
+    /// The rc dir is private and fresh, and fish/pwsh load an rc path containing `'` (run when installed).
+    #[test]
+    fn debug_shell_rc_dir_and_quoting() {
+        let home = tmp_dir("o'brien");
+        let stale = home.join("run").join(format!("debug-shell-{}", std::process::id()));
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("planted"), "").unwrap();
+        let cases = [(Shell::Fish, "set -g __ts_m loaded\n", "; echo $__ts_m"), (Shell::Pwsh, "$__ts_m = 'loaded'\n", "; $__ts_m")];
+        for (shell, post, show) in cases {
+            let (dir, argv) = debug_shell_files(&home, shell, shell.name(), post).unwrap();
+            assert_eq!(dir, stale);
+            assert!(!dir.join("planted").exists(), "the dir is recreated, not reused");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+            }
+            if crate::integrations::which(shell.name()).is_none() {
+                continue;
+            }
+            let load = format!("{}{show}", argv.last().unwrap());
+            let args: Vec<&str> = match shell {
+                Shell::Fish => vec!["--no-config", "-c", &load],
+                _ => vec!["-NoProfile", "-Command", &load],
+            };
+            let out = std::process::Command::new(shell.name()).args(args).output().unwrap();
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(text.trim() == "loaded", "{shell:?}: {text}{}", String::from_utf8_lossy(&out.stderr));
+        }
+        let _ = std::fs::remove_dir_all(home);
     }
 }

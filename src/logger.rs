@@ -40,13 +40,30 @@ pub fn init(name: &str, verbose: u8, stderr: bool) {
         3 => Level::Debug,
         _ => Level::Trace,
     };
-    let file = crate::settings::home().ok().and_then(|home| {
-        let dir = home.join("logs");
-        std::fs::create_dir_all(&dir).ok()?;
-        std::fs::OpenOptions::new().create(true).append(true).open(dir.join(format!("{name}.log"))).ok()
-    });
+    let file = crate::settings::home().ok().and_then(|home| open_log(&home.join("logs"), name));
     let session = std::env::var("TABSMITH_SESSION_ID").unwrap_or_else(|_| "-".into());
     let _ = LOGGER.set(Logger { file: file.map(Mutex::new), level, stderr: stderr && verbose > 0, session });
+}
+
+/// `<dir>/<name>.log` for appending. Logs hold command text, so on Unix the dir is 0700 and the file 0600
+/// (like history and run files, SPEC §3.1), also when they already existed.
+fn open_log(dir: &std::path::Path, name: &str) -> Option<std::fs::File> {
+    std::fs::create_dir_all(dir).ok()?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        opts.mode(0o600);
+    }
+    let file = opts.open(dir.join(format!("{name}.log"))).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    Some(file)
 }
 
 pub fn enabled(level: Level) -> bool {
@@ -87,4 +104,26 @@ pub fn debug(msg: &str) {
 }
 pub fn trace(msg: &str) {
     log(Level::Trace, msg)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn log_files_are_private() {
+        let dir = std::env::temp_dir().join(format!("tabsmith-logger-{}", std::process::id())).join("logs");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("old.log"), "x\n").unwrap();
+        std::fs::set_permissions(dir.join("old.log"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        for name in ["new", "old"] {
+            assert!(super::open_log(&dir, name).is_some());
+            assert_eq!(mode(&dir.join(format!("{name}.log"))), 0o600, "{name}.log");
+        }
+        assert_eq!(mode(&dir), 0o700);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
 }

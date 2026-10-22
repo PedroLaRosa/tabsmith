@@ -431,7 +431,8 @@ fn clean(text: &str, buffer: &str) -> Option<String> {
         s = s.strip_prefix(buffer).unwrap_or(s);
     }
     let s = s.trim_end();
-    (!s.is_empty()).then(|| s.to_string())
+    // Ghost text is typed into the shell as-is: an embedded CR/ESC/C1 byte would run or rewrite commands.
+    (!s.is_empty() && !s.chars().any(char::is_control)).then(|| s.to_string())
 }
 
 /// `cd` validation (SPEC §8.5): `full` = buffer + completion.
@@ -644,6 +645,13 @@ mod tests {
         assert_eq!(clean("\n  \n", "ls"), None);
         assert_eq!(clean("git st", "git st"), None);
         assert_eq!(clean("", "ls"), None);
+        // Control characters (C0, DEL, C1) are never offered as ghost text.
+        assert_eq!(clean("tus\rtouch x", "git sta"), None);
+        assert_eq!(clean(" status\rtouch PWNED #", "git"), None);
+        assert_eq!(clean(" -la\x1b[2J", "ls"), None);
+        assert_eq!(clean(" -l\ta", "ls"), None);
+        assert_eq!(clean(" -l\u{9b}2J", "ls"), None);
+        assert_eq!(clean(" -l\x7f", "ls"), None);
     }
 
     #[test]
