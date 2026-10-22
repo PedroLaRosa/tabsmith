@@ -2,12 +2,20 @@
 if [[ -n "${ZSH_NAME:-}" && -n "${TABSMITH_SESSION_ID:-}" && -z "${_TS_POST_LOADED:-}" ]]; then
   _TS_POST_LOADED=1
   _ts_osc() { builtin printf '\e]697;%s\a' "$1"; }
+  # zsh keeps RPROMPT and RPS1 apart until both are set (`RPROMPT=x` leaves RPS1 unset, and `RPS1=""` then clears
+  # RPROMPT): wrap and restore whichever name is set, RPROMPT first (Kiro).
   _ts_restore() {
     if [[ ${_ts_wrapped:-0} == 1 ]]; then
-      PS1=$_ts_u1; PS2=$_ts_u2; RPS1=$_ts_ur1; RPS2=$_ts_ur2; _ts_wrapped=0
+      PS1=$_ts_u1; PS2=$_ts_u2; _ts_wrapped=0
+      if (( ${+RPROMPT} )); then RPROMPT=$_ts_ur1; else RPS1=$_ts_ur1; fi
+      if (( ${+RPROMPT2} )); then RPROMPT2=$_ts_ur2; else RPS2=$_ts_ur2; fi
     fi
   }
-  _ts_preexec() { _ts_restore; _ts_osc "OSCLock=$TABSMITH_SESSION_ID"; _ts_osc PreExec; }
+  _ts_preexec() {
+    _ts_restore; _ts_osc "OSCLock=$TABSMITH_SESSION_ID"
+    [[ -o histignorespace && $1 == ' '* ]] && _ts_osc NoHistory   # kept out of zsh's history: keep it out of ours
+    _ts_osc PreExec
+  }
   _ts_precmd() {
     local st=$?
     _ts_restore                                   # Ctrl-C at the prompt: preexec never ran
@@ -15,11 +23,12 @@ if [[ -n "${ZSH_NAME:-}" && -n "${TABSMITH_SESSION_ID:-}" && -z "${_TS_POST_LOAD
     _ts_osc "ShellPath=${TABSMITH_SHELL:-$SHELL}"; _ts_osc "PID=$$"; _ts_osc "ExitCode=$st"
     _ts_osc "TTY=$TTY"; _ts_osc "User=${USER:-root}"
     (( ${+functions[_zsh_autosuggest_accept]} )) && _ts_osc "ZshAutosuggestionColor=${ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE:-fg=8}"
-    _ts_u1=$PS1 _ts_u2=$PS2 _ts_ur1=$RPS1 _ts_ur2=$RPS2
+    _ts_u1=$PS1 _ts_u2=$PS2 _ts_ur1=${RPROMPT-$RPS1} _ts_ur2=${RPROMPT2-$RPS2}
     local sp=$'%{\e]697;StartPrompt\a%}' ep=$'%{\e]697;EndPrompt\a%}'
     local nc=$'%{\e]697;NewCmd='"$TABSMITH_SESSION_ID"$'\a%}'
     PS1="$sp$PS1$ep$nc"; PS2="$sp$PS2$ep"
-    [[ -n $RPS1 ]] && RPS1="$sp$RPS1$ep"; [[ -n $RPS2 ]] && RPS2="$sp$RPS2$ep"
+    if (( ${+RPROMPT} )); then [[ -n $RPROMPT ]] && RPROMPT="$sp$RPROMPT$ep"; else [[ -n $RPS1 ]] && RPS1="$sp$RPS1$ep"; fi
+    if (( ${+RPROMPT2} )); then [[ -n $RPROMPT2 ]] && RPROMPT2="$sp$RPROMPT2$ep"; else [[ -n $RPS2 ]] && RPS2="$sp$RPS2$ep"; fi
     _ts_wrapped=1
     _ts_reset_hooks
     ( 'tabsmith' _ pre-cmd --alias "$(builtin alias)" >/dev/null 2>&1 & )

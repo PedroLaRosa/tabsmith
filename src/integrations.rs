@@ -554,6 +554,11 @@ fn is_ignore_line(line: &str) -> bool {
         .is_some_and(|r| r.trim_start().to_ascii_lowercase().starts_with("tabsmith ignore"))
 }
 
+/// (UTF-8 BOM or "", the text after it): editors save pwsh profiles with a BOM, which must stay the first bytes.
+fn split_bom(s: &str) -> (&str, &str) {
+    s.strip_prefix('\u{feff}').map_or(("", s), |b| ("\u{feff}", b))
+}
+
 /// First line kept on top iff it starts with `#!`.
 fn split_shebang(s: &str) -> (String, &str) {
     if !s.starts_with("#!") {
@@ -660,9 +665,10 @@ impl Integration {
             // script's `test -t 0` fails and the wrapper never starts.
             Shell::Fish => format!("test -x {b}; and eval ({b} init fish {w} --rcfile {rc} | string split0)\n"),
             // pwsh decodes native output with [Console]::OutputEncoding (the OEM code page on Windows): read the
-            // UTF-8 init output as UTF-8, then put the user's encoding back before running it.
+            // UTF-8 init output as UTF-8, then put the user's encoding back before running it. Without a console
+            // (Windows) both setters throw: ignore that, and run nothing when init printed nothing.
             Shell::Pwsh => format!(
-                "if (Test-Path -LiteralPath {b}) {{ $__tsEnc = [Console]::OutputEncoding; try {{ [Console]::OutputEncoding = [Text.UTF8Encoding]::new(); $__tsInit = (& {b} init pwsh {w} --rcfile profile) -join \"`n\" }} finally {{ [Console]::OutputEncoding = $__tsEnc }}; Invoke-Expression $__tsInit }}\n"
+                "if (Test-Path -LiteralPath {b}) {{ $__tsEnc = [Console]::OutputEncoding; $__tsInit = $null; try {{ try {{ [Console]::OutputEncoding = [Text.UTF8Encoding]::new() }} catch {{}}; $__tsInit = (& {b} init pwsh {w} --rcfile profile) -join \"`n\" }} finally {{ try {{ [Console]::OutputEncoding = $__tsEnc }} catch {{}} }}; if ($__tsInit) {{ Invoke-Expression $__tsInit }} }}\n"
             ),
         }
     }
@@ -697,6 +703,7 @@ impl Integration {
             return check_file(&self.path, &self.script_contents(ctx, when));
         }
         let text = read(&self.path)?;
+        let text = split_bom(&text).1;
         if text.lines().any(is_ignore_line) {
             return Ok(());
         }
@@ -734,8 +741,9 @@ impl Integration {
             String::new()
         };
         self.write_scripts(ctx)?;
-        let (shebang, rest) = split_shebang(&contents);
-        let new = format!("{shebang}{PRE_MARKER}\n{}\n{rest}", self.source_line(ctx, When::Pre));
+        let (bom, body) = split_bom(&contents);
+        let (shebang, rest) = split_shebang(body);
+        let new = format!("{bom}{shebang}{PRE_MARKER}\n{}\n{rest}", self.source_line(ctx, When::Pre));
         let new = format!("{}\n{POST_MARKER}\n{}\n", new.trim_end_matches('\n'), self.source_line(ctx, When::Post));
         if new != contents {
             write(&self.path, &new)?;
@@ -756,8 +764,9 @@ impl Integration {
                 POST_MARKER.to_string(),
                 self.source_line(ctx, When::Post),
             ];
-            let kept: String = text.split_inclusive('\n').filter(|l| !ours.iter().any(|o| o == l.trim_end())).collect();
-            let new = format!("{}\n", kept.trim());
+            let (bom, body) = split_bom(&text);
+            let kept: String = body.split_inclusive('\n').filter(|l| !ours.iter().any(|o| o == l.trim_end())).collect();
+            let new = format!("{bom}{}\n", kept.trim());
             if new != text {
                 write(&self.path, &new)?;
             }
@@ -1388,13 +1397,13 @@ mod tests {
     }
 
     /// A fake tabsmith: `init <shell> <when>` prints `<fake>.<when>`; `_ pty` records whether stdin is a tty in
-    /// `<fake>.launched`, then exits 7.
+    /// `<fake>.launched` and its arguments (one per line) in `<fake>.args`, then exits 7.
     #[cfg(unix)]
     fn fake_bin(dir: &Path) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(dir).unwrap();
         let fake = dir.join("tabsmith");
-        let script = "#!/bin/sh\ncase \"$1 $2\" in\ninit*) cat \"$0.$3\" ;;\n\"_ pty\") if [ -t 0 ]; then echo tty; else echo notty; fi > \"$0.launched\"; exit 7 ;;\nesac\n";
+        let script = "#!/bin/sh\ncase \"$1 $2\" in\ninit*) cat \"$0.$3\" ;;\n\"_ pty\") printf '%s\\n' \"$@\" > \"$0.args\"; if [ -t 0 ]; then echo tty; else echo notty; fi > \"$0.launched\"; exit 7 ;;\nesac\n";
         std::fs::write(&fake, script).unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         fake
@@ -1427,6 +1436,11 @@ mod tests {
         let (out, code) = pty_run(&["fish", "-i"], env, "", "exit\r");
         let launched = std::fs::read_to_string(format!("{bin}.launched")).unwrap_or_default();
         assert_eq!((launched.trim(), code), ("tty", 7), "the pre block must exec the wrapper on the tty: {out:?}");
+        let args = || std::fs::read_to_string(format!("{bin}.args")).unwrap_or_default();
+        assert!(args().ends_with("_\npty\n--\n"), "{:?}", args());
+        // `fish --private` stays private inside the wrapper.
+        let (out, code) = pty_run(&["fish", "--private", "-i"], env, "", "exit\r");
+        assert!(code == 7 && args().ends_with("_\npty\n--\n--private\n"), "{:?} {out:?}", args());
 
         // Inside the wrapper (launch decision 1, a session id): the post block reads the real tty.
         let pre = init_for(Shell::Fish, When::Pre, &bin).replace("SHOULD_TABSMITH_LAUNCH 0", "SHOULD_TABSMITH_LAUNCH 1");
@@ -1491,6 +1505,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// pwsh (when installed): the user's prompt and PSReadLine's ReadLine see the command's `$?`; a failed cmdlet
+    /// reports exit 1 even after a native exit code; a prompt redefined later (`. $PROFILE`, oh-my-posh) is
+    /// re-wrapped at the next ReadLine, which tracks the line already drawn; re-sourcing never double-wraps.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_pwsh_post_status_and_rewrap() {
+        let dir = tmp("pwshstatus");
+        let script = r#"Set-StrictMode -Version Latest
+            function Global:prompt { "[$?|$global:LASTEXITCODE]> " }
+            function Global:PSConsoleHostReadLine { $s = $?; "line$s" }
+            . $env:F
+            sh -c 'exit 3'; $r1 = PSConsoleHostReadLine; Get-Item nope -ErrorAction SilentlyContinue; $p1 = prompt
+            $null = PSConsoleHostReadLine; sh -c 'exit 4'; $p2 = prompt
+            function Global:prompt { 'MY> ' }; "`nREWRAP"; $null = PSConsoleHostReadLine; "`nAFTER"; $p3 = prompt
+            . $env:F; $r4 = PSConsoleHostReadLine
+            $PSNativeCommandUseErrorActionPreference = $true; $null = PSConsoleHostReadLine; sh -c 'exit 5' 2>$null; $p5 = prompt
+            "`nR=$r1|$r4 P1=$p1 P2=$p2 P3=$p3 P5=$p5 ERR=$($Error.Count)""#;
+        let Some(s) = run_post("pwsh", &["-NoProfile", "-Command"], &snapshot(Shell::Pwsh, When::Post), script, &dir) else {
+            return;
+        };
+        let osc = |p: &str| format!("\x1b]697;{p}\x07");
+        let last = s.rsplit("\nR=").next().unwrap_or_default();
+        assert!(last.starts_with("lineFalse|lineTrue "), "ReadLine sees $?: {last:?}");
+        let p1 = last.split(" P1=").nth(1).unwrap_or_default();
+        assert!(p1.starts_with(&osc("OSCUnlock=abc")) && p1.contains(&osc("ExitCode=1")), "stale LASTEXITCODE: {p1:?}");
+        assert!(p1.contains(&format!("{}[False|3]> {}", osc("StartPrompt"), osc("EndPrompt"))), "prompt sees $?: {p1:?}");
+        assert!(p1.contains(&format!("{}{}", osc("NewCmd=abc"), osc("PwshListView=0"))), "{p1:?}");
+        let p2 = last.split(" P2=").nth(1).unwrap_or_default();
+        assert!(p2.contains(&osc("ExitCode=4")) && p2.contains("[False|4]> "), "{p2:?}");
+        let rewrap = s.split("\nREWRAP").nth(1).and_then(|r| r.split("\nAFTER").next()).unwrap_or_default();
+        assert!(rewrap.contains(&format!("{}{}{}", osc("OSCUnlock=abc"), osc("ExitCode=0"), osc("NewCmd=abc"))), "{rewrap:?}");
+        let p3 = last.split(" P3=").nth(1).unwrap_or_default();
+        assert!(p3.contains(&format!("{}MY> {}", osc("StartPrompt"), osc("EndPrompt"))), "{p3:?}");
+        let p5 = last.split(" P5=").nth(1).unwrap_or_default();
+        assert!(p5.contains(&osc("ExitCode=5")), "native failure with an error record: {p5:?}");
+        assert_eq!(s.matches(&osc("PreExec")).count(), 5, "one PreExec per ReadLine: {s:?}");
+        assert!(last.contains(" ERR=2"), "only Get-Item's and sh's errors: {last:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// pwsh (when installed), interactive in a PTY with PSReadLine: a line its history handler keeps out of the file
+    /// (the default sensitive-line filter) sends NoHistory; ListView predictions send PwshListView=1.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_pwsh_no_history_and_listview() {
+        if which("pwsh").is_none() {
+            return;
+        }
+        let dir = tmp("pwshnohist");
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let f = dir.join("post.ps1");
+        std::fs::write(&f, snapshot(Shell::Pwsh, When::Post)).unwrap();
+        let env: &[(&str, &Path)] = &[
+            ("HOME", &home),
+            ("F", &f),
+            ("TABSMITH_SESSION_ID", Path::new("abc")),
+            ("TABSMITH_HOME", &dir.join("data")),
+        ];
+        let lv = "Set-PSReadLineOption -PredictionSource History -PredictionViewStyle ListView";
+        for (setup, want_lv) in [("$null = 1", "PwshListView=0"), (lv, "PwshListView=1")] {
+            let argv = ["pwsh", "-NoProfile", "-NoLogo", "-NoExit", "-Command", &format!("{setup}; . $env:F")];
+            let (out, code) = pty_run(&argv, env, "NewCmd=abc", "echo hi\r$apikey = 'sk-1'\rexit\r");
+            assert_eq!(code, 0, "{out:?}");
+            let got: Vec<bool> = out.split("\x1b]697;PreExec\x07").take(3).map(|c| c.contains("NoHistory")).collect();
+            assert_eq!(got, [false, true, false], "{out:?}");
+            assert!(out.contains(&format!("\x1b]697;OSCLock=abc\x07\x1b]697;NoHistory\x07\x1b]697;PreExec")), "{out:?}");
+            assert!(out.contains(&format!("\x1b]697;NewCmd=abc\x07\x1b]697;{want_lv}\x07")), "{out:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// pwsh (when installed) under an OEM console code page: the profile script reads the UTF-8 init output (a
     /// non-ASCII binary path) intact and restores the code page; `$PROFILE` is read back as UTF-8.
     #[cfg(unix)]
@@ -1517,6 +1603,171 @@ mod tests {
         let script = format!("{oem}; $PROFILE = '/Users/Jos' + [char]0xE9 + '/p.ps1'; {PWSH_PROFILE_CMD}");
         let out = Command::new("pwsh").args(["-NoProfile", "-Command", &script]).output().unwrap();
         assert_eq!(String::from_utf8(out.stdout).ok().as_deref(), Some("/Users/Jos\u{e9}/p.ps1"));
+
+        // Both encoding setters tolerate a missing console (Windows); empty init output runs nothing, no error.
+        let line = pwsh.script_contents(&c, When::Pre);
+        assert!(line.contains("try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}"), "{line}");
+        assert!(line.contains("try { [Console]::OutputEncoding = $__tsEnc } catch {}"), "{line}");
+        std::fs::write(format!("{}.pre", c.bin), "").unwrap();
+        let script = format!(". {}; \"ERR=$($Error.Count)\"", quote(Shell::Pwsh, &pre.display().to_string()));
+        let out = Command::new("pwsh").args(["-NoProfile", "-Command", &script]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ERR=0", "{}", String::from_utf8_lossy(&out.stderr));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A UTF-8 BOM (VS Code, ISE and Windows PowerShell save .ps1 files with one) stays the first bytes: install
+    /// puts the pre block after it, is_installed sees through it, a reinstall is a no-op, uninstall keeps it.
+    #[test]
+    fn integrations_dotfile_bom_stays_first() {
+        let dir = tmp("bom");
+        let c = ctx(&dir);
+        let pwsh = &integrations(&c, Shell::Pwsh).unwrap()[0];
+        std::fs::create_dir_all(pwsh.path.parent().unwrap()).unwrap();
+        let user = "Write-Host USERLINE\r\nSet-PSReadLineOption -PredictionSource History\r\n";
+        std::fs::write(&pwsh.path, format!("\u{feff}{user}")).unwrap();
+        pwsh.install(&c).unwrap();
+        let once = std::fs::read_to_string(&pwsh.path).unwrap();
+        assert!(once.starts_with(&format!("\u{feff}{PRE_MARKER}\n")) && once.matches('\u{feff}').count() == 1, "{once:?}");
+        assert!(once.contains(&format!("\nWrite-Host USERLINE\r\n")), "{once:?}");
+        pwsh.is_installed(&c).unwrap();
+        pwsh.install(&c).unwrap();
+        assert_eq!(std::fs::read_to_string(&pwsh.path).unwrap(), once);
+        syntax_ok(Shell::Pwsh, &pwsh.path);
+
+        // An editor re-saves a plain install with a BOM: still installed; a forced reinstall keeps one block.
+        pwsh.uninstall(&c).unwrap();
+        let back = std::fs::read_to_string(&pwsh.path).unwrap();
+        assert!(back.starts_with("\u{feff}Write-Host USERLINE\r\n") && !back.contains("tabsmith"), "{back:?}");
+        std::fs::write(&pwsh.path, user).unwrap();
+        pwsh.install(&c).unwrap();
+        let plain = std::fs::read_to_string(&pwsh.path).unwrap();
+        std::fs::write(&pwsh.path, format!("\u{feff}{plain}")).unwrap();
+        pwsh.is_installed(&c).unwrap();
+        pwsh.uninstall(&c).unwrap();
+        pwsh.install(&c).unwrap();
+        let again = std::fs::read_to_string(&pwsh.path).unwrap();
+        assert_eq!(again, format!("\u{feff}{plain}"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Run `script` in `prog args… script` with `post` written to $F, session `abc`, data dir under `dir`.
+    /// None when `prog` is not installed.
+    fn run_post(prog: &str, args: &[&str], post: &str, script: &str, dir: &Path) -> Option<String> {
+        which(prog)?;
+        let f = dir.join(if prog == "pwsh" { "post.ps1".into() } else { format!("post.{prog}") }); // pwsh runs only .ps1
+        std::fs::write(&f, post).unwrap();
+        let out = Command::new(prog)
+            .args(args)
+            .arg(script)
+            .env("F", &f)
+            .env("TABSMITH_SESSION_ID", "abc")
+            .env("TABSMITH_HOME", dir.join("data"))
+            .env_remove("_TS_POST_LOADED")
+            .output()
+            .unwrap();
+        let s = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(out.status.success(), "{prog}: {s}{}", String::from_utf8_lossy(&out.stderr));
+        Some(s)
+    }
+
+    /// zsh keeps RPROMPT and RPS1 apart until both are set: a .zshrc RPROMPT survives every preexec restore and
+    /// is wrapped (once) at every prompt.
+    #[test]
+    fn integrations_zsh_rprompt_wrapped_and_kept() {
+        let dir = tmp("zshrp");
+        let script = r#"PS1='$ '; RPROMPT='[rp]'; source "$F"
+            _ts_precmd; print -r -- "W1=$RPROMPT"; _ts_preexec x; print -r -- "R1=$RPROMPT"
+            _ts_precmd; print -r -- "W2=$RPROMPT"; _ts_preexec x; print -r -- "R2=$RPROMPT""#;
+        if let Some(s) = run_post("zsh", &["-f", "-c"], &snapshot(Shell::Zsh, When::Post), script, &dir) {
+            assert!(s.contains("PreExec\x07R1=[rp]\n") && s.contains("PreExec\x07R2=[rp]\n"), "{s:?}");
+            for w in ["W1=", "W2="] {
+                let line = s.split(w).nth(1).and_then(|r| r.lines().next()).unwrap_or_default();
+                assert!(line.matches("StartPrompt").count() == 1 && line.contains("[rp]"), "{w} {line:?}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// bash ≥ 5.1 with bash-preexec: PROMPT_COMMAND is an array whose first element embeds `_ts_first;…;_ts_last`.
+    /// _ts_first still runs once per prompt.
+    #[test]
+    fn integrations_bash_prompt_command_array_runs_first_once() {
+        let dir = tmp("bashpcarr");
+        let script = r#"PS1='$ '; source "$F"; __bp_precmd_invoke_cmd() { :; }; __bp_interactive_mode() { :; }
+            PROMPT_COMMAND=($'__bp_precmd_invoke_cmd\n_ts_first;:;_ts_last' __bp_interactive_mode)
+            for _ in 1 2 3; do for c in "${PROMPT_COMMAND[@]}"; do eval "$c"; done; done
+            printf '\n'; declare -p PROMPT_COMMAND"#;
+        if let Some(s) = run_post("bash", &["--norc", "--noprofile", "-c"], &snapshot(Shell::Bash, When::Post), script, &dir) {
+            assert_eq!(s.matches("OSCUnlock=abc").count(), 3, "{s:?}");
+            assert!(s.contains(r#"([0]="_ts_first" [1]=$'__bp_precmd_invoke_cmd\n:' [2]="__bp_interactive_mode" [3]="_ts_last")"#), "{s:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// fish prompt wrappers: backslashes in the prompt stay literal, $argv (transient prompt's --final-rendering)
+    /// reaches the user's function, an erased right prompt stays erased, and $last_pid survives the prompt.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_fish_prompt_wrappers() {
+        let dir = tmp("fishprompt");
+        let bin = fake_bin(&dir.join("bin")).display().to_string();
+        let script = r#"function fish_prompt; echo -n 'a\cb \o/ args='"$argv> "; end
+            function fish_right_prompt; echo -n RP; end
+            source $F; _ts_precmd; echo; echo P=(fish_prompt --final-rendering)
+            _ts_preexec 'functions -e fish_right_prompt'; functions -e fish_right_prompt
+            _ts_precmd; _ts_preexec 'echo a'; _ts_precmd
+            functions -q fish_right_prompt; and echo RESURRECTED
+            command sleep 2 &; set -l p $last_pid; _ts_precmd; echo; test "$last_pid" = "$p"; and echo LASTPID-KEPT
+            kill $p"#;
+        if let Some(s) = run_post("fish", &["--no-config", "-c"], &init_for(Shell::Fish, When::Post, &bin), script, &dir) {
+            assert!(s.contains("\nP=\x1b]697;StartPrompt\x07a\\cb \\o/ args=--final-rendering> \x1b]697;EndPrompt"), "{s:?}");
+            assert!(!s.contains("RESURRECTED") && s.contains("\nLASTPID-KEPT"), "{s:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Lines the shell keeps out of its own history (leading space under ignorespace / HIST_IGNORE_SPACE / fish,
+    /// fish private mode) send NoHistory between OSCLock and PreExec; other lines do not. Real interactive shells.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_no_history_marker() {
+        let dir = tmp("nohist");
+        let bin = fake_bin(&dir.join("bin")).display().to_string();
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let rc = "HISTFILE=/dev/null; PS1='$ '; source \"$F\"\n";
+        let bash_rc = dir.join("bashrc");
+        std::fs::write(&bash_rc, format!("HISTCONTROL=ignorespace; {rc}")).unwrap();
+        std::fs::write(home.join(".zshrc"), format!("setopt histignorespace; {rc}")).unwrap();
+        let b = bash_rc.display().to_string();
+        // Not `fish --no-config`: fish 4 runs that in private mode.
+        let cases: [(Shell, &[&str], &[bool]); 4] = [
+            (Shell::Bash, &["bash", "--noprofile", "--rcfile", &b, "-i"], &[false, true, false]),
+            (Shell::Zsh, &["zsh", "-d", "-i"], &[false, true, false]),
+            (Shell::Fish, &["fish", "-i", "-C", "source $F"], &[false, true, false]),
+            (Shell::Fish, &["fish", "--private", "-i", "-C", "source $F"], &[true, true, true]),
+        ];
+        for (shell, argv, want) in cases {
+            if which(argv[0]).is_none() {
+                continue;
+            }
+            let f = dir.join(format!("post.{}", shell.name()));
+            std::fs::write(&f, init_for(shell, When::Post, &bin)).unwrap();
+            let env: &[(&str, &Path)] = &[
+                ("HOME", &home),
+                ("ZDOTDIR", &home),
+                ("XDG_CONFIG_HOME", &home.join(".config")),
+                ("XDG_DATA_HOME", &home.join(".local/share")),
+                ("F", &f),
+                ("TABSMITH_SESSION_ID", Path::new("abc")),
+                ("TABSMITH_HOME", &dir.join("data")),
+            ];
+            let (out, _) = pty_run(argv, env, "NewCmd=abc", "echo a\r echo secret\recho b\rexit\r");
+            let got: Vec<bool> = out.split("\x1b]697;PreExec\x07").take(3).map(|c| c.contains("NoHistory")).collect();
+            assert_eq!(got, want, "{argv:?}: {out:?}");
+            let locked = out.split("\x1b]697;OSCLock=abc\x07").skip(1).all(|c| !c.contains("NoHistory") || c.starts_with("\x1b]697;NoHistory\x07\x1b]697;PreExec"));
+            assert!(locked, "{argv:?}: NoHistory sits between OSCLock and PreExec: {out:?}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1547,6 +1798,9 @@ mod tests {
             let (out, code) = pty_run(argv, env, "", "");
             assert!(launched() && code == 7, "{argv:?}: interactive start → wrapper, its exit code ({code}): {out:?}");
         }
+        // The inner shell gets the outer switches, after a -NoLogo (no second banner).
+        let args = std::fs::read_to_string(format!("{bin}.args")).unwrap();
+        assert!(args.ends_with(&format!("--\n-NoLogo\n-nol\n-wd\n{d}\n-noe\n")), "{args:?}");
 
         let enc = "JwBFAEMAIABSAEEATgAnADsAIABlAHgAaQB0ACAANAA="; // 'EC RAN'; exit 4 (UTF-16LE base64)
         let s = script.display().to_string();
