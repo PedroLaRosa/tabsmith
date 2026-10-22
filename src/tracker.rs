@@ -221,13 +221,15 @@ pub struct OutFilter {
     rows: usize,
     alt: bool,
     partial_region: bool,
+    /// Inside a DCS/SOS/PM/APC string body (`ESC P`/`X`/`^`/`_` … ST): no frame may be appended.
+    in_string: bool,
     /// Windows console without `DISABLE_NEWLINE_AUTO_RETURN`: bare LF → `ESC D`.
     pub lf_to_ind: bool,
 }
 
 impl OutFilter {
     pub fn new(rows: usize) -> OutFilter {
-        OutFilter { carry: Vec::new(), rows, alt: false, partial_region: false, lf_to_ind: false }
+        OutFilter { carry: Vec::new(), rows, alt: false, partial_region: false, in_string: false, lf_to_ind: false }
     }
 
     /// Terminal resized: real terminals and the model reset the scroll region.
@@ -241,11 +243,31 @@ impl OutFilter {
         self.partial_region
     }
 
+    /// A DCS/APC/PM/SOS string is open on the terminal (render guard: a frame would land inside it).
+    pub fn in_string(&self) -> bool {
+        self.in_string
+    }
+
     pub fn feed(&mut self, bytes: &[u8], out: &mut Vec<u8>) {
         let mut data = std::mem::take(&mut self.carry);
         data.extend_from_slice(bytes);
         let mut i = 0;
         while i < data.len() {
+            if self.in_string {
+                // The body passes through uncarried (sixel can be megabytes). Like the VT parser, any ESC (ST is
+                // `ESC \`) or CAN/SUB ends the string; the ESC is then handled as a normal sequence.
+                let end = data[i..].iter().position(|b| matches!(b, 0x1b | 0x18 | 0x1a)).map_or(data.len(), |k| i + k);
+                out.extend_from_slice(&data[i..end]);
+                i = end;
+                if i < data.len() {
+                    self.in_string = false;
+                    if data[i] != 0x1b {
+                        out.push(data[i]);
+                        i += 1;
+                    }
+                }
+                continue;
+            }
             let b = data[i];
             if b == 0x1b {
                 // Final byte (inclusive end): CSI params/intermediates then a final; ESC intermediates then a final.
@@ -267,6 +289,7 @@ impl OutFilter {
                     self.alt = false;
                     self.partial_region = false;
                 }
+                self.in_string = matches!(seq, [0x1b, b'P' | b'X' | b'^' | b'_']);
                 if seq[1] != b'[' || self.keep_csi(&seq[2..seq.len() - 1], seq[seq.len() - 1]) {
                     out.extend_from_slice(seq);
                 }
@@ -474,7 +497,8 @@ impl Tracker {
             }
             "EndPrompt" if self.defer => self.deferred.push_back(Deferred::EndPrompt),
             "EndPrompt" => self.end_prompt(model),
-            "NewCmd" if val.is_some_and(|s| s != self.sid) => {} // nested session
+            // A nested session's, or a bare one (any program output could forge it; our scripts always send the sid).
+            "NewCmd" if val != Some(self.sid.as_str()) => {}
             "NewCmd" if self.defer => self.deferred.push_back(Deferred::NewCmd),
             "NewCmd" => self.new_cmd(model),
             "PreExec" if !self.preexec => self.pre_exec(model),
@@ -746,13 +770,25 @@ mod tests {
         // Empty values are ignored.
         feed(&mut t, &mut m, &osc("Dir="));
         assert_eq!(t.cwd, Some(PathBuf::from("/c")));
-        // NewCmd from a nested session is ignored; ours (or bare) opens a cycle.
+        // NewCmd from a nested session, or without a sid, is ignored; only ours opens a cycle.
         feed(&mut t, &mut m, &osc("NewCmd=ffff"));
         assert_eq!(t.cycle, None);
         feed(&mut t, &mut m, &osc("NewCmd"));
-        assert_eq!(t.cycle, Some(1));
+        assert_eq!(t.cycle, None);
         feed(&mut t, &mut m, &nc());
-        assert_eq!(t.cycle, Some(2));
+        assert_eq!(t.cycle, Some(1));
+    }
+
+    #[test]
+    fn bare_newcmd_cannot_fake_a_prompt_while_locked() {
+        let (mut t, mut m) = setup(40, 5, Shell::Bash);
+        feed(&mut t, &mut m, &prompt("$ "));
+        feed(&mut t, &mut m, &format!("cat x\r\n{}{}", osc(&format!("OSCLock={SID}")), osc("PreExec")));
+        assert!(t.preexec);
+        // `cat` of untrusted output prints a bare NewCmd: the command keeps running.
+        feed(&mut t, &mut m, "\x1b]697;NewCmd\x07");
+        assert!(t.preexec && !t.at_prompt());
+        assert_eq!(t.cycle, Some(1));
     }
 
     #[test]
@@ -918,6 +954,29 @@ mod tests {
         // Inside the alternate screen the app keeps its keyboard protocol.
         assert_eq!(filter(&mut f, b"\x1b[?1049h\x1b[>1u"), b"\x1b[?1049h\x1b[>1u");
         assert_eq!(filter(&mut f, b"\x1b[<u\x1b[?1049l\x1b[>1u"), b"\x1b[<u\x1b[?1049l");
+    }
+
+    #[test]
+    fn output_filter_tracks_dcs_and_apc_strings() {
+        let mut f = OutFilter::new(24);
+        // Split DCS (XTGETTCAP): open across the batch boundary, closed by ST; bytes pass through unchanged.
+        assert_eq!(filter(&mut f, b"a\x1bP+q"), b"a\x1bP+q");
+        assert!(f.in_string());
+        assert_eq!(filter(&mut f, b"696e"), b"696e");
+        assert!(f.in_string());
+        assert_eq!(filter(&mut f, b"646e\x1b\\b"), b"646e\x1b\\b");
+        assert!(!f.in_string());
+        // APC split right before its ST; a trailing ESC is held as usual.
+        assert_eq!(filter(&mut f, b"\x1b_Gi=1;x\x1b"), b"\x1b_Gi=1;x");
+        assert!(!f.in_string());
+        assert_eq!(filter(&mut f, b"\\z"), b"\x1b\\z");
+        // CAN aborts a string; a bare LF inside a body is not rewritten.
+        f.lf_to_ind = true;
+        assert_eq!(filter(&mut f, b"\x1bPq#0\n\x18c"), b"\x1bPq#0\n\x18c");
+        assert!(!f.in_string());
+        // Other ESC sequences do not open a string.
+        assert_eq!(filter(&mut f, b"\x1b7\x1b(B"), b"\x1b7\x1b(B");
+        assert!(!f.in_string());
     }
 
     #[test]
