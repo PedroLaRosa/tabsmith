@@ -134,6 +134,12 @@ fn decode_one(b: &[u8]) -> (Key, usize) {
 fn decode_esc(b: &[u8]) -> (Key, usize) {
     let none = Mods::default();
     match b.get(1) {
+        // ESC + CSI/SS3 (meta-sends-escape Alt+arrow) = alt+<key>; an ESC right before a paste stays a lone Esc.
+        Some(0x1b) if b.len() > 3 && matches!(b[2], b'[' | b'O') && !b[1..].starts_with(PASTE_START) => {
+            let (mut k, len) = decode_esc(&b[1..]);
+            k.mods.alt = true;
+            (k, len + 1)
+        }
         // ESC alone at the end of the chunk, or the first of two ESCs.
         None | Some(0x1b) => (key(KeyCode::Esc, none), 1),
         Some(b'[') if b.len() > 2 => decode_csi(b),
@@ -145,6 +151,9 @@ fn decode_esc(b: &[u8]) -> (Key, usize) {
                 b'D' => KeyCode::Left,
                 b'H' => KeyCode::Home,
                 b'F' => KeyCode::End,
+                // Keypad application mode (DECKPAM, smkx).
+                b'M' => KeyCode::Enter,
+                b'I' => KeyCode::Tab,
                 c @ b'P'..=b'S' => KeyCode::F(c - b'P' + 1),
                 _ => KeyCode::Unknown,
             };
@@ -436,6 +445,11 @@ mod tests {
             (b"\x1b[7~", k(Home, NONE)),
             (b"\x1b[F", k(End, NONE)),
             (b"\x1bOF", k(End, NONE)),
+            (b"\x1bOM", k(Enter, NONE)),
+            (b"\x1bOI", k(Tab, NONE)),
+            (b"\x1b\x1b[D", k(Left, ALT)),
+            (b"\x1b\x1bOA", k(Up, ALT)),
+            (b"\x1b\x1b[1;5C", k(Right, Mods { ctrl: true, alt: true, ..NONE })),
             (b"\x1b[4~", k(End, NONE)),
             (b"\x1b[8~", k(End, NONE)),
             (b"\x1b[3~", k(Delete, NONE)),
@@ -490,6 +504,12 @@ mod tests {
     fn esc_not_last_and_double_esc() {
         let ev = decode(b"\x1b\x1b");
         assert_eq!(ev.iter().map(|e| e.key.code).collect::<Vec<_>>(), vec![KeyCode::Esc, KeyCode::Esc]);
+        // Esc right before a bracketed paste in the same chunk: the paste stays opaque.
+        let ev = decode(b"\x1b\x1b[200~ls\x1b[201~");
+        assert_eq!(ev.iter().map(|e| (e.key.code, e.bytes.clone())).collect::<Vec<_>>(), vec![
+            (KeyCode::Esc, 0..1),
+            (KeyCode::Paste, 1..15)
+        ]);
         // Incomplete CSI at the end: one opaque unknown event.
         let ev = decode(b"x\x1b[1;");
         assert_eq!(ev[1].key.code, KeyCode::Unknown);

@@ -502,7 +502,8 @@ fn layout(
         n = room - 1;
         h = room;
     }
-    let x0 = (cx as isize - query_w as isize - 2).clamp(0, (cols - w) as isize) as usize;
+    // Rows start with `' '` + icon + `' '`: 3 columns before the title.
+    let x0 = (cx as isize - query_w as isize - 3).clamp(0, (cols - w) as isize) as usize;
     let (list_top, desc_row) = match side {
         Side::Below => (cy + 1, cy + n + 1),
         Side::Above => (cy - h, cy - 1),
@@ -819,13 +820,13 @@ mod tests {
     fn round_trip_below_wide_edges_truecolor() {
         let s = settings(r#"{"autocomplete.width": 20}"#);
         let m = menu(subs(), &s);
-        // Cursor after `$ git c` (row 2, col 7) with a green pen: x0 = 7 - 1 - 2 = 4, span 4..24.
-        let out = screen("\x1b[3;8H\x1b[32m");
+        // Cursor one past `$ git c` (row 2, col 8) with a green pen: x0 = 8 - 1 - 3 = 4, span 4..24.
+        let out = screen("\x1b[3;9H\x1b[32m");
         let frame = round_trip(40, 12, &out, &m, &input(&s, None), true);
         assert!(frame.contains("\x1b[4;4H"), "span widened left over the wide char at 3-4: {frame:?}");
         assert!(frame.contains("48;2;30;90;199"), "selected row in truecolor");
         assert!(frame.contains("<br>"), "args hint when it fits");
-        assert!(frame.contains("\x1b[3;8H\x1b[0;32m\x1b[?25h\x1b[?2026l"), "cursor + pen restore");
+        assert!(frame.contains("\x1b[3;9H\x1b[0;32m\x1b[?25h\x1b[?2026l"), "cursor + pen restore");
         // 256-colour terminals get the same geometry with downgraded theme colours.
         let frame = round_trip(40, 12, &out, &m, &input(&s, None), false);
         assert!(frame.contains("48;5;26") && !frame.contains("48;2;30;90;199"));
@@ -836,15 +837,15 @@ mod tests {
         let s = settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
         let mut m = menu(subs(), &s);
         m.handle(crate::keys::Action::NavigateDown, &s);
-        // Cursor on the bottom row 13, after `$ ec`: menu above on rows 8..=12 (wide chars, colours), x0 = 1;
-        // pop-out right of the list (1 + 20 + 30 <= 60).
+        // Cursor on the bottom row 13, after `$ ec`: menu above on rows 8..=12 (wide chars, colours), x0 = 0;
+        // pop-out right of the list (0 + 20 + 30 <= 60).
         let mut out = String::from_utf8(screen("")).unwrap();
         out += "\r\n\r\n\r\n\r\n\r\n$ ec          \x1b[36m[rprompt]\x1b[0m\x1b[14;5H";
         let frame = round_trip(60, 14, out.as_bytes(), &m, &input(&s, Some("ho hello\tworld and more")), true);
         assert!(frame.contains("\x1b[14;5H\x1b[0m\x1b[90mho hello w\x1b"), "ghost clipped at the right prompt: {frame:?}");
-        assert!(frame.contains("\x1b[9;2H") && !frame.contains("\x1b[8;"), "block bottom-aligned to the cursor");
-        assert!(frame.contains("\x1b[9;22H") && frame.contains("about cherry-pick"), "pop-out with the selection");
-        assert!(!frame.contains("\x1b[13;2H"), "no description bar under the pop-out");
+        assert!(frame.contains("\x1b[9;1H") && !frame.contains("\x1b[8;"), "block bottom-aligned to the cursor");
+        assert!(frame.contains("\x1b[9;21H") && frame.contains("about cherry-pick"), "pop-out with the selection");
+        assert!(!frame.contains("\x1b[13;1H"), "no description bar under the pop-out");
     }
 
     #[test]
@@ -910,12 +911,12 @@ mod tests {
     fn layout_decisions() {
         // (rows, cols), (cy, cx), items, n_max, width, query width
         let l = layout((24, 40), (2, 10), 5, 7, 20, 0).unwrap();
-        assert_eq!(l, Layout { side: Side::Below, n: 5, list_top: 3, desc_row: 8, x0: 8, w: 20 });
+        assert_eq!(l, Layout { side: Side::Below, n: 5, list_top: 3, desc_row: 8, x0: 7, w: 20 });
         let l = layout((24, 40), (22, 10), 9, 7, 20, 0).unwrap();
-        assert_eq!(l, Layout { side: Side::Above, n: 7, list_top: 14, desc_row: 21, x0: 8, w: 20 });
+        assert_eq!(l, Layout { side: Side::Above, n: 7, list_top: 14, desc_row: 21, x0: 7, w: 20 });
         // Neither side fits: shrink on the bigger side (above here).
         let l = layout((10, 40), (5, 10), 9, 7, 20, 0).unwrap();
-        assert_eq!(l, Layout { side: Side::Above, n: 4, list_top: 0, desc_row: 4, x0: 8, w: 20 });
+        assert_eq!(l, Layout { side: Side::Above, n: 4, list_top: 0, desc_row: 4, x0: 7, w: 20 });
         let l = layout((10, 40), (4, 10), 9, 7, 20, 0).unwrap();
         assert_eq!((l.side, l.n, l.list_top, l.desc_row), (Side::Below, 4, 5, 9));
         // No room for one row + description: hide. Argument hint needs one row.
@@ -925,7 +926,8 @@ mod tests {
         let l = layout((3, 40), (2, 10), 0, 7, 20, 0).unwrap();
         assert_eq!((l.side, l.list_top, l.desc_row), (Side::Above, 1, 1));
         // x0 clamping (aligned under the typed token, kept on screen) and width clamping.
-        assert_eq!(layout((24, 40), (2, 12), 3, 7, 20, 3).unwrap().x0, 7);
+        // Title (after `' '` + icon + `' '`) starts in the column of the typed token: 12 - 3 = 6 + 3.
+        assert_eq!(layout((24, 40), (2, 12), 3, 7, 20, 3).unwrap().x0, 6);
         assert_eq!(layout((24, 40), (2, 2), 3, 7, 20, 5).unwrap().x0, 0);
         assert_eq!(layout((24, 40), (2, 39), 3, 7, 20, 0).unwrap().x0, 20);
         let l = layout((24, 30), (2, 9), 3, 7, 40, 0).unwrap();

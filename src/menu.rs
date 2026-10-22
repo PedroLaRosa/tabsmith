@@ -44,7 +44,6 @@ pub struct Menu {
     /// Latest reply; its `items` are moved into `self.items`.
     last: Option<Completion>,
     loading_since: Option<Instant>,
-    backspace_pending: bool,
 }
 
 /// Max visible list rows (`autocomplete.height`, D14).
@@ -52,13 +51,17 @@ pub fn max_rows(settings: &Settings) -> usize {
     settings.f64("autocomplete.height", 7.0).max(1.0) as usize
 }
 
-/// Kiro `isBufferDifferenceFromTyping`: one is a prefix of the other and they differ by < 2 chars.
-fn typing(a: &str, b: &str) -> bool {
-    (a.starts_with(b) || b.starts_with(a)) && a.chars().count().abs_diff(b.chars().count()) < 2
+/// Kiro `isBufferDifferenceFromTyping` over `steps` consecutive buffers: `a` is at most `steps` one-char edits from `b`
+/// (trie distance). With `steps == 1`: one is a prefix of the other and they differ by < 2 chars.
+fn typing(a: &str, b: &str, steps: usize) -> bool {
+    let lcp = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+    a.chars().count() + b.chars().count() - 2 * lcp <= steps
 }
 
+/// Kiro compares names, type, insertValue and description; `insert.text` has the typed query stripped, so it is
+/// left out (it changes on every keystroke).
 fn same_item(a: &Item, b: &Item) -> bool {
-    a.names == b.names && a.kind == b.kind && a.insert.text == b.insert.text && a.description == b.description
+    a.names == b.names && a.kind == b.kind && a.description == b.description
 }
 
 /// Kiro `isMatchingType` (`../` only matches `../`; file and folder match each other).
@@ -84,7 +87,6 @@ impl Menu {
             popout: false,
             last: None,
             loading_since: None,
-            backspace_pending: false,
         }
     }
 
@@ -98,13 +100,18 @@ impl Menu {
         if c.phase == Phase::Parse {
             // After a reset Kiro compares against its initial state: new arg, empty command text.
             let (has_new_arg, backspaced, large) = match &self.last {
-                None => (true, false, !typing(&c.command_text, "")),
+                None => (true, false, !typing(&c.command_text, "", 1)),
                 Some(l) => {
                     let n = c.tokens.len();
+                    // The engine serves only the latest request, so replies for the buffers in between are never
+                    // seen: allow one typing edit per request since `l`.
+                    // ponytail: a large change followed by skipped typing stays hidden until the next key; exact =
+                    // compare with the previous request's command text (engine would have to send it).
+                    let steps = c.req.saturating_sub(l.req).max(1) as usize;
                     (
                         l.arg_key != c.arg_key,
                         n > 0 && n < l.tokens.len() && l.tokens[n - 1] == c.tokens[n - 1],
-                        !typing(&c.command_text, &l.command_text),
+                        !typing(&c.command_text, &l.command_text, steps),
                     )
                 }
             };
@@ -136,11 +143,9 @@ impl Menu {
         self.set_items(items, settings);
     }
 
-    /// Kiro does not recompute while HiddenUntilKeypress (stale items); keeps a sticky selection if still listed.
+    /// Keeps a sticky selection if still listed. While HiddenUntilKeypress nothing is drawn, but the list is still
+    /// replaced: Kiro recomputes when it becomes visible, and show/toggle/Tab must not act on a stale list.
     fn set_items(&mut self, items: Vec<Item>, settings: &Settings) {
-        if self.vis == Vis::HiddenUntilKeypress {
-            return;
-        }
         let keep = match self.items.get(self.selected) {
             Some(old) if self.sticky && self.vis == Vis::Visible => items.iter().position(|it| same_item(it, old)),
             _ => None,
@@ -249,18 +254,6 @@ impl Menu {
         }
         self.vis = Vis::Visible;
         Vec::new()
-    }
-
-    /// Ctrl-C / Ctrl-D / new prompt etc. handled by the wrapper via `error_reset`; this marks a backspace whose
-    /// echo is pending (keeps a visible menu up until the echo arrives).
-    pub fn note_backspace(&mut self) {
-        self.backspace_pending = true;
-    }
-
-    /// Consume the backspace mark (call once per PTY batch). While it was set, the wrapper skips the mid-word
-    /// error reset for that batch: a split `\b \b` echo briefly puts the cursor over the deleted char (ish).
-    pub fn take_backspace_pending(&mut self) -> bool {
-        std::mem::take(&mut self.backspace_pending)
     }
 
     pub fn history_mode(&self) -> bool {
@@ -572,8 +565,47 @@ pub(crate) mod tests {
         let mut m = typed(&s);
         m.on_completion(comp("git commit -m 'x' --amend", 9, vec![]), &s);
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
-        // Stale items are kept while HiddenUntilKeypress.
-        assert_eq!(m.items().len(), 4);
+        // The list is refreshed while hidden (nothing is drawn): show/toggle/Tab never act on stale items.
+        assert!(!m.has_items());
+    }
+
+    #[test]
+    fn hidden_until_keypress_refreshes_items() {
+        let s = settings(r#"{"autocomplete.onlyShowOnTab": true}"#);
+        let mut m = typed(&s);
+        for q in ["ch", "che", "chec"] {
+            m.on_completion(comp(&format!("git {q}"), 2, subs(q)), &s);
+        }
+        assert_eq!(m.items().len(), 1);
+        // Up recalls `echo hi`: a large change hides the menu; Tab must not type `kout` into it.
+        m.on_completion(comp("echo hi", 3, vec![item("hi.txt", ItemType::File, "hi")]), &s);
+        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        let fx = m.show_on_tab(&s);
+        assert!(
+            matches!(&fx[..], [Effect::Insert { record: Some((c, n)), .. }] if c == "echo" && n == "hi.txt"),
+            "{fx:?}"
+        );
+    }
+
+    #[test]
+    fn large_change_counts_skipped_requests() {
+        let s = Settings::default();
+        let at = |req, buffer: &str, arg, items| Completion { req, ..comp(buffer, arg, items) };
+        let mut m = Menu::new();
+        m.on_completion(at(1, "g", 1, vec![]), &s);
+        m.on_completion(at(2, "gi", 1, vec![]), &s);
+        m.on_completion(at(3, "git", 1, vec![]), &s);
+        // The reply for `git ` (request 4) was skipped by the engine: two edits over two requests is typing.
+        m.on_completion(at(5, "git c", 2, subs("c")), &s);
+        assert_eq!(m.vis(), Vis::Visible);
+        // A paste is still large when a request was skipped before it.
+        m.on_completion(at(7, "git commit -m x", 3, vec![]), &s);
+        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        m.on_completion(at(8, "git commit -m x ", 3, vec![]), &s);
+        assert_eq!(m.vis(), Vis::Visible, "keypress");
+        // Two requests, but `x ` → `zz` needs four edits (not prefix related): large.
+        m.on_completion(at(10, "git commit -m zz", 3, vec![]), &s);
+        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
     }
 
     #[test]
@@ -664,6 +696,11 @@ pub(crate) mod tests {
         assert_eq!(m.selected(), 0);
         m.on_completion(comp("git c", 2, subs("c")), &s);
         assert_eq!(m.selected(), 0, "not sticky after the reset");
+        // Typing keeps the selection: the query-stripped insert text changes, the item does not.
+        m.on_completion(comp("git ch", 2, subs("ch")), &s);
+        m.handle(Action::NavigateDown, &s);
+        m.on_completion(comp("git che", 2, subs("che")), &s);
+        assert_eq!(m.items()[m.selected()].names[0], "cherry-pick");
     }
 
     fn prefix_fx(m: &mut Menu) -> Vec<Effect> {
