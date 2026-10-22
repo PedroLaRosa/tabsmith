@@ -14,7 +14,7 @@ use crate::shell_parser;
 use crate::spec::{Arg, Generator, Script, StrOrFn, Strategy, Suggestion, Trigger};
 use crate::specs::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
-use crate::types::{now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, ItemType, Msg, Phase, Request, SessionCtx, Shell};
+use crate::types::{now_ms, ArgInfo, Completion, EngineMsg, GenKey, HistoryEntry, Item, ItemType, Msg, Phase, Request, SessionCtx, Shell};
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -63,10 +63,19 @@ pub fn load_recency(path: &Path) -> Recency {
         .unwrap_or_default()
 }
 
-/// Read-modify-write `autocomplete.recency` into a state file (other keys kept).
+/// Read-modify-write `autocomplete.recency` into a state file (other keys kept). Merged with what is on disk
+/// (newest timestamp wins), so concurrent sessions keep each other's entries.
 pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
     let mut store = Store::load(path)?;
-    store.map.insert(RECENCY_KEY.into(), serde_json::to_value(rec)?);
+    let mut merged: Recency = store.map.get(RECENCY_KEY).cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+    for (cmd, names) in rec {
+        let m = merged.entry(cmd.clone()).or_default();
+        for (name, &ts) in names {
+            let e = m.entry(name.clone()).or_insert(0);
+            *e = (*e).max(ts);
+        }
+    }
+    store.map.insert(RECENCY_KEY.into(), serde_json::to_value(merged)?);
     store.save()
 }
 
@@ -106,6 +115,28 @@ fn env_var(env: &HashMap<String, String>, key: &str) -> Option<String> {
 /// `autocomplete.scriptTimeout` (5000 ms; Windows 20000).
 fn script_timeout(settings: &Settings) -> u64 {
     settings.f64("autocomplete.scriptTimeout", if cfg!(windows) { 20000.0 } else { 5000.0 }).max(0.0) as u64
+}
+
+/// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
+fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
+    inline::llm_history(entries, settings.i64("inline.historyCount", 49).max(0) as usize)
+}
+
+/// Script value → exec input JSON (SPEC §6.6.3); `None` for falsy values. A legacy string runs as `sh -c`, the
+/// same form as `executeShellCommand(string)`, so the js host picks sh / Git Bash / `cmd /C` on Windows.
+fn script_exec_input(v: Value, cwd: &str) -> Option<Value> {
+    let cwd = json!(cwd);
+    Some(match v {
+        Value::Array(a) if !a.is_empty() => json!({"command": a[0], "args": a[1..], "cwd": cwd}),
+        Value::String(s) if !s.is_empty() => json!({"command": "sh", "args": ["-c", s], "cwd": cwd}), // none in 2.692.3
+        Value::Object(o) => {
+            let mut m = serde_json::Map::new();
+            m.insert("cwd".into(), cwd);
+            m.extend(o);
+            Value::Object(m)
+        }
+        _ => return None,
+    })
 }
 
 /// Script-generator string → `{type:"arg", name, insertValue, isDangerous}`.
@@ -396,7 +427,7 @@ impl Engine {
             is_dangerous: arg.as_ref().is_some_and(|a| a.is_dangerous),
         };
         let (path, pathext) = (env_var(env, "PATH"), env_var(env, "PATHEXT"));
-        let queries = self.queries(&pr, js)?;
+        let queries = self.queries(&pr, req.shell, js)?;
         let tokens = pr.tokens.get(pr.command_index..).unwrap_or_default().to_vec();
         let triggered = self.update_slots(&pr, &ctx, &tokens, js)?;
         let first = if pr.first_token && self.settings.bool("autocomplete.firstTokenCompletion", false) {
@@ -405,7 +436,7 @@ impl Engine {
             Vec::new()
         };
         let prefix = before.strip_suffix(pr.raw_last_token.as_str()).unwrap_or(before).to_string();
-        self.cur = Some(Current { req: req.clone(), cursor, pr, cmd_text: cmd.text, arg_key, fuzzy, queries, triggered, first, prefix });
+        self.cur = Some(Current { req: req.clone(), cursor, pr, cmd_text: cmd.original_text, arg_key, fuzzy, queries, triggered, first, prefix });
         Some(self.reply(Phase::Parse))
     }
 
@@ -421,12 +452,12 @@ impl Engine {
     }
 
     /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
-    fn queries(&self, pr: &ParseResult, js: &mut Js) -> Option<Vec<Query>> {
+    fn queries(&self, pr: &ParseResult, shell: Shell, js: &mut Js) -> Option<Vec<Query>> {
         let Some(arg) = &pr.current_arg else { return Some(Vec::new()) };
         let mut out = Vec::with_capacity(arg.generators.len());
         for g in &arg.generators {
             out.push(if is_path_template(g) {
-                Query::Str("/".into())
+                Query::Path { backslash: shell == Shell::Pwsh }
             } else {
                 match &g.get_query_term {
                     None => Query::Term,
@@ -456,7 +487,7 @@ impl Engine {
             fire.push(if !same || i >= self.slots.len() {
                 true
             } else if is_path_template(g) {
-                suggest::dir_changed(new, old)
+                suggest::dir_changed(new, old, ctx.shell == Shell::Pwsh.name())
             } else {
                 match &g.trigger {
                     None => arg.as_ref().is_some_and(|a| a.debounce.is_some()),
@@ -562,7 +593,7 @@ impl Engine {
             let mut items = Vec::new();
             let files = g.template.iter().any(|t| t == "filepaths");
             if is_path_template(g) && !run.ctx.cwd.is_empty() {
-                let dir = suggest::inserted_directory(&run.ctx.cwd, &run.ctx.search_term, &run.ctx.env);
+                let dir = suggest::inserted_directory(&run.ctx.cwd, &run.ctx.search_term, &run.ctx.env, run.ctx.shell == Shell::Pwsh.name());
                 items = suggest::list_dir(&dir, files, run.ctx.is_dangerous);
             }
             items.extend(run.help.iter().cloned()); // `history` template: [] (F6)
@@ -638,25 +669,7 @@ impl Engine {
 
     /// SPEC §6.6.3: script value → exec input → (cached) exec.
     fn script_input(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut Js) -> Outcome {
-        let cwd = json!(run.ctx.cwd);
-        let mut input = match v {
-            Value::Array(a) if !a.is_empty() => json!({"command": a[0], "args": a[1..], "cwd": cwd}),
-            // legacy string form (none in 2.692.3)
-            Value::String(s) if !s.is_empty() => {
-                if cfg!(windows) {
-                    json!({"command": "cmd", "args": ["/C", s], "cwd": cwd})
-                } else {
-                    json!({"command": "sh", "args": ["-c", s], "cwd": cwd})
-                }
-            }
-            Value::Object(o) => {
-                let mut m = serde_json::Map::new();
-                m.insert("cwd".into(), cwd);
-                m.extend(o);
-                Value::Object(m)
-            }
-            _ => return Outcome::Done(Vec::new()), // falsy → []
-        };
+        let Some(mut input) = script_exec_input(v, &run.ctx.cwd) else { return Outcome::Done(Vec::new()) }; // falsy → []
         let key_src = input.to_string();
         let timeout = script_timeout(&self.settings)
             .max(g.script_timeout.unwrap_or(0))
@@ -920,7 +933,7 @@ impl Engine {
             let _ = tx.send(Msg::Ghost { req, text: Some(text) });
             return;
         }
-        let history = self.history.entries().to_vec();
+        let history = llm_history(&self.settings, self.history.entries());
         let env = self.env().clone();
         let cache = self.ghost_cache.clone();
         let spawned = std::thread::Builder::new().name("llm".into()).spawn(move || {
@@ -954,6 +967,42 @@ mod tests {
         assert_eq!(store.map.get("doctor.prompt-restart-terminal"), Some(&json!(true)));
         assert!(load_recency(&dir.join("missing.json")).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn recency_save_merges_other_sessions() {
+        // recency-cross-session-overwrite: two sessions loaded the same file; neither drops the other's entry
+        let dir = crate::specs::testutil::TmpDir::new("recency");
+        let path = dir.path().join("state.json");
+        std::fs::write(&path, "{}").unwrap();
+        let one = |cmd: &str, name: &str, ts: u64| -> Recency { [(cmd.to_string(), [(name.to_string(), ts)].into())].into() };
+        save_recency(&path, &one("git", "checkout", 5)).unwrap();
+        save_recency(&path, &one("git", "status", 2)).unwrap();
+        save_recency(&path, &one("git", "checkout", 3)).unwrap(); // older than disk: newest wins
+        let got = load_recency(&path);
+        assert_eq!(got["git"], [("checkout".to_string(), 5u64), ("status".to_string(), 2)].into());
+    }
+
+    #[test]
+    fn llm_history_honours_history_count() {
+        // llm-history-count-ignored: only the last `inline.historyCount` usable entries leave the machine
+        let e = |c: &str| HistoryEntry { command: c.into(), exit_code: Some(0), ..Default::default() };
+        let entries: Vec<HistoryEntry> = (0..100).map(|i| e(&format!("echo {i}"))).collect();
+        let with = |v: Value| Settings::from_map(json!({ "inline.historyCount": v }).as_object().unwrap().clone());
+        let got: Vec<String> = llm_history(&with(json!(2)), &entries).into_iter().map(|h| h.command).collect();
+        assert_eq!(got, ["echo 98", "echo 99"]);
+        assert!(llm_history(&with(json!(0)), &entries).is_empty());
+        assert_eq!(llm_history(&Settings::default(), &entries).len(), 49);
+    }
+
+    #[test]
+    fn legacy_string_script_runs_through_sh_c() {
+        // win-legacy-script-cmd: same `sh -c` form as `executeShellCommand(string)` on every platform
+        assert_eq!(script_exec_input(json!("git log --format=\"%h %s\""), "/w"), Some(json!({"command": "sh", "args": ["-c", "git log --format=\"%h %s\""], "cwd": "/w"})));
+        assert_eq!(script_exec_input(json!(["git", "branch"]), "/w"), Some(json!({"command": "git", "args": ["branch"], "cwd": "/w"})));
+        assert_eq!(script_exec_input(json!({"command": "ls", "cwd": "/x"}), "/w"), Some(json!({"command": "ls", "cwd": "/x"})));
+        assert_eq!(script_exec_input(json!(""), "/w"), None);
+        assert_eq!(script_exec_input(json!([]), "/w"), None);
     }
 
     #[test]

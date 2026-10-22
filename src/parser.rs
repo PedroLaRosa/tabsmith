@@ -1,6 +1,6 @@
 //! Spec loading (resolution, diff-versioned merge) and the argv state machine (SPEC §6.3–6.4).
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
-use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError};
+use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId};
 use crate::settings::Settings;
 use crate::shell_parser::CommandInfo;
 use crate::spec::{normalise, Arg, Directives, FnId, LoadSpec, Opt, Repeat, SpecLocation, StrOrFn, Subcommand};
@@ -59,7 +59,8 @@ pub struct ParseResult {
     pub command_index: usize,
     /// Token texts after alias / `parserDirectives.alias` substitution.
     pub tokens: Vec<String>,
-    /// Raw text of the last token as typed.
+    /// Raw text of the last token as typed; for an option value inside the token (`--opt=val`, `-oval`) only
+    /// the value part.
     pub raw_last_token: String,
     pub directives: Directives,
     /// The composite option chain being typed (`-la`), if the last annotation is one ending in an option.
@@ -183,6 +184,8 @@ struct Loader {
     specs: HashMap<String, Option<Rc<Subcommand>>>,
     /// `cliVersion-<name>` memo (successful detections only, like qac).
     versions: HashMap<String, String>,
+    /// Version detections still running after an aborted parse, reused by the next one (no respawn per keystroke).
+    inflight: HashMap<String, TaskId>,
 }
 
 impl Loader {
@@ -219,7 +222,7 @@ impl Loader {
         let memo = format!("cliVersion-{name}");
         let version = match self.versions.get(&memo).filter(|_| !dev) {
             Some(v) => Some(v.clone()),
-            None => cli_version(exports, name, js, gen)?,
+            None => cli_version(exports, name, js, gen, &mut self.inflight)?,
         };
         if let Some(v) = &version {
             self.versions.insert(memo, v.clone());
@@ -257,28 +260,28 @@ fn spec_file(loc: &SpecLocation, ctx: &ParseCtx) -> Option<PathBuf> {
     }
 }
 
-/// `getVersionCommand(exec)` if exported, else `semver_clean(<name> --version)`; failures → None.
-fn cli_version(exports: &Map<String, Value>, name: &str, js: &mut Js, gen: &GenCtx) -> Result<Option<String>, ParseError> {
+/// `getVersionCommand(exec)` if exported, else `semver_clean(<name> --version)`; failures → None. An aborted
+/// wait leaves the detection running in `inflight`, and the next parse waits on that same task.
+fn cli_version(exports: &Map<String, Value>, name: &str, js: &mut Js, gen: &GenCtx, inflight: &mut HashMap<String, TaskId>) -> Result<Option<String>, ParseError> {
     if name == "@usermn/sdc" {
         return Ok(None); // its version command runs `npx`, which may download a package
     }
-    let out = if let Some(f) = exports.get("getVersionCommand").and_then(crate::spec::fn_id) {
-        js.call(f, vec![JsArg::Exec], Some(gen), TIMEOUT).map(|v| v.as_str().map(String::from))
-    } else {
-        let input = ExecInput { command: name.into(), args: vec!["--version".into()], ..Default::default() };
-        let id = js.start_exec(input, gen);
-        let r = js.wait(&[id], Instant::now() + TIMEOUT);
-        js.forget(&[id]);
-        r.map(|mut r| match r.pop().flatten() {
-            Some(Ok(v)) => v.get("stdout").and_then(Value::as_str).and_then(semver_clean),
-            _ => None,
-        })
-    };
-    match out {
-        Ok(v) => Ok(v),
-        Err(JsError::Aborted) => Err(ParseError::Aborted),
-        Err(_) => Ok(None),
+    let f = exports.get("getVersionCommand").and_then(crate::spec::fn_id);
+    let id = *inflight.entry(name.to_string()).or_insert_with(|| match f {
+        Some(f) => js.start_call(f, vec![JsArg::Exec], Some(gen)),
+        None => js.start_exec(ExecInput { command: name.into(), args: vec!["--version".into()], ..Default::default() }, gen),
+    });
+    let r = js.wait(&[id], Instant::now() + TIMEOUT);
+    if matches!(r, Err(JsError::Aborted)) {
+        return Err(ParseError::Aborted);
     }
+    inflight.remove(name);
+    js.forget(&[id]);
+    let Ok(Some(Ok(v))) = r.map(|mut r| r.pop().flatten()) else { return Ok(None) };
+    Ok(match f {
+        Some(_) => v.as_str().map(String::from),
+        None => v.get("stdout").and_then(Value::as_str).and_then(semver_clean),
+    })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -713,12 +716,16 @@ fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -
     let mut only_args = st.end_of_options;
     let mut arg_st = st.arg_state();
     let mut option_chain = None;
+    let mut raw = raw_last_token.to_string();
     if let Some(a) = last.filter(|a| !a.parts.is_empty()) {
         arg_st = &st.opt_args;
         match a.parts.last() {
             Some((AnnKind::OptionArg, t)) => {
                 search_term = t.clone();
                 only_args = true;
+                // `--color=al` / `-oal`: only the value is replaced, never the flag in front of it
+                let flag: String = a.parts[..a.parts.len() - 1].iter().map(|p| p.1.as_str()).collect();
+                raw = raw_last_token.strip_prefix(flag.as_str()).unwrap_or(t).to_string();
             }
             _ => option_chain = Some(a.text.clone()),
         }
@@ -739,7 +746,7 @@ fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -
         persistent: st.persistent.clone(),
         command_index: st.command_index,
         tokens,
-        raw_last_token: raw_last_token.into(),
+        raw_last_token: raw,
         directives: st.directives.clone(),
         option_chain,
         first_token,
@@ -753,6 +760,8 @@ fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -
 struct ParseCaches {
     prefix: HashMap<String, State>,
     generated: HashMap<String, Rc<Subcommand>>,
+    /// The empty first-token spec, one Rc for every parse (the engine keys arg identity on its address).
+    first: Rc<Subcommand>,
 }
 
 /// ponytail: caches are cleared wholesale past this size (qac never evicts).
@@ -766,7 +775,7 @@ impl ParseCaches {
         let texts: Vec<String> = cmd.tokens.iter().map(|t| t.text.clone()).collect();
         if cmd.tokens.len() == 1 {
             if !last.text.contains('/') {
-                let st = State::initial(Rc::new(Subcommand::default()), &last.text, "", texts);
+                let st = State::initial(self.first.clone(), &last.text, "", texts);
                 return Ok(result(st, &last.text, &last.raw, true));
             }
             let name = if last.text == "bin/console" { "php/bin-console" } else { "dotslash" };
