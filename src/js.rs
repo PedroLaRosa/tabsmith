@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsError {
@@ -108,7 +108,7 @@ pub type TaskResult = Result<Value, String>;
 
 /// Module evaluation deadline (SPEC §6.3).
 const LOAD_TIMEOUT: Duration = Duration::from_secs(5);
-/// Interrupt deadline for small host → JS calls (settle/start) and the minimum slice of a pump.
+/// Interrupt deadline for small host → JS calls (settle/start) and the minimum CPU limit of each pumped job.
 const SLICE: Duration = Duration::from_millis(1000);
 const MIN_PUMP: Duration = Duration::from_millis(50);
 const MEMORY_LIMIT: usize = 512 << 20;
@@ -205,9 +205,13 @@ pub struct Js {
     deadline: Rc<Cell<Option<Instant>>>,
     rx: Receiver<EngineMsg>,
     deferred: VecDeque<EngineMsg>,
-    /// Serialized namespaces by path (modules are evaluated once; their fn ids stay valid).
-    modules: HashMap<PathBuf, Map<String, Value>>,
+    /// Serialized namespaces by path, with the file's (mtime, len) when evaluated: an edited file (developer mode)
+    /// is evaluated again. Old fn ids stay valid (`__ts.fns` only grows).
+    modules: HashMap<PathBuf, (Stamp, Map<String, Value>)>,
 }
+
+/// A file's (mtime, len); `None` if it cannot be stat'ed.
+type Stamp = Option<(Option<SystemTime>, u64)>;
 
 impl Js {
     /// Create the runtime (memory limit, interrupt handler), evaluate the prelude.
@@ -301,11 +305,12 @@ impl Js {
         self.host.borrow_mut().timeout_ms = script_timeout(&settings);
     }
 
-    /// Evaluate a spec module once (cached by path) and return its exports, serialized
+    /// Evaluate a spec module once (cached by path until its mtime/size changes) and return its exports, serialized
     /// (functions → `{"$fn": id}`), e.g. `{"default": {...}, "versions": {...}, "getVersionCommand": {"$fn": 3}}`.
     /// Empty file → empty map. 5 s deadline.
     pub fn load_module(&mut self, path: &Path) -> Result<Map<String, Value>, JsError> {
-        if let Some(ns) = self.modules.get(path) {
+        let stamp = std::fs::metadata(path).ok().map(|m| (m.modified().ok(), m.len()));
+        if let Some((_, ns)) = self.modules.get(path).filter(|(s, _)| stamp.is_some() && *s == stamp) {
             return Ok(ns.clone()); // ponytail: clone per call; the parser caches normalised specs anyway
         }
         let src = std::fs::read_to_string(path).map_err(|e| JsError::Other(format!("{}: {e}", path.display())))?;
@@ -333,7 +338,7 @@ impl Js {
                 Err(e) => return Err(JsError::Other(format!("{}: {e}", path.display()))),
             }
         };
-        self.modules.insert(path.to_path_buf(), ns.clone());
+        self.modules.insert(path.to_path_buf(), (stamp, ns.clone()));
         Ok(ns)
     }
 
@@ -511,7 +516,8 @@ impl Js {
         }
     }
 
-    /// Fire due timers, then run queued Promise jobs (interrupted at `deadline`, at least `MIN_PUMP` from now).
+    /// Fire due timers, then run queued Promise jobs until `deadline` (at least `MIN_PUMP` from now). The slice only
+    /// stops starting jobs: each job gets its own CPU limit (>= `SLICE`), so a long postProcess is not killed.
     fn pump(&mut self, deadline: Instant) {
         let now = Instant::now();
         let due: Vec<u64> = {
@@ -524,8 +530,15 @@ impl Js {
             self.finish(id, Ok(Value::Null));
         }
         let stop = deadline.max(now + MIN_PUMP);
-        self.arm(stop);
-        self.ctx.with(|ctx| while Instant::now() < stop && ctx.execute_pending_job() {});
+        let d = self.deadline.clone();
+        self.ctx.with(|ctx| {
+            while Instant::now() < stop {
+                d.set(Some(stop.max(Instant::now() + SLICE)));
+                if !ctx.execute_pending_job() {
+                    break;
+                }
+            }
+        });
         self.arm_off();
     }
 
@@ -613,6 +626,10 @@ pub fn exec(input: &ExecInput, ctx: &GenCtx, default_timeout_ms: u64) -> Result<
             None => cmd.env_remove(k),
         };
     }
+    // cmd.exe runs bare names from its cwd before PATH (a repo's `npm.cmd`); this makes it skip the cwd.
+    if Path::new(cmd.get_program()).file_stem().is_some_and(|s| s.eq_ignore_ascii_case("cmd")) {
+        cmd.env("NoDefaultCurrentDirectoryInExePath", "1");
+    }
     cmd.current_dir(&cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
@@ -630,6 +647,12 @@ pub fn exec(input: &ExecInput, ctx: &GenCtx, default_timeout_ms: u64) -> Result<
     let timeout = default_timeout_ms.max(input.timeout.unwrap_or(0));
     let child = cmd.spawn().map_err(|e| format!("failed running executable ({}): {e}", input.command))?;
     wait_output(child, timeout, &input.command)
+}
+
+/// The input `executeShellCommand("<script>")` runs (also for legacy string `script`s): `sh -c <script>`, which
+/// `exec` runs through Git Bash, else `cmd /C`, on Windows without `sh` on PATH.
+pub fn shell_string_input(script: &str, cwd: Option<String>) -> ExecInput {
+    ExecInput { command: "sh".into(), args: vec!["-c".into(), script.into()], cwd, ..Default::default() }
 }
 
 fn key_eq(a: &str, b: &str) -> bool {
@@ -715,8 +738,10 @@ fn git_bash(cwd: &Path, var: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBu
 }
 
 /// Collect stdout/stderr (reader threads, so full pipes never block the child) while polling for exit every
-/// 5 ms; on timeout kill the child (Unix: its whole session/process group) and fail.
+/// 5 ms; on timeout kill the child (Unix: its whole session/process group; Windows: its job object) and fail.
 fn wait_output(mut child: Child, timeout_ms: u64, label: &str) -> Result<ExecOutput, String> {
+    #[cfg(windows)]
+    let job = job::Job::assign(&child);
     let (otx, orx) = mpsc::channel::<(usize, Vec<u8>)>();
     let pipes: [Option<Box<dyn Read + Send>>; 2] = [
         child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
@@ -748,12 +773,64 @@ fn wait_output(mut child: Child, timeout_ms: u64, label: &str) -> Result<ExecOut
             unsafe {
                 libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
             }
+            #[cfg(windows)]
+            if let Some(job) = &job {
+                job.kill();
+            }
             let _ = child.kill();
             let _ = child.wait();
             return Err(format!("timed out after {timeout_ms} ms running executable ({label})"));
         }
         if let Ok((i, b)) = orx.recv_timeout(Duration::from_millis(5)) {
             out[i] = Some(b);
+        }
+    }
+}
+
+/// Windows job object holding an exec child and every process it starts, so a timeout kills the whole tree (std's
+/// `Child::kill` only ends the direct child; grandchildren would keep the output pipes and reader threads alive).
+#[cfg(windows)]
+mod job {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+
+    // ponytail: declared here because windows-sys only has them behind its `Win32_System_JobObjects` feature.
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(attrs: *const c_void, name: *const u16) -> HANDLE;
+        fn AssignProcessToJobObject(job: HANDLE, process: HANDLE) -> i32;
+        fn TerminateJobObject(job: HANDLE, exit_code: u32) -> i32;
+    }
+
+    pub struct Job(HANDLE);
+
+    impl Job {
+        /// `None` if no job could be created or assigned (then a timeout kills only the child).
+        /// ponytail: assigned right after spawn, so a process the child starts in that instant escapes; closing the
+        /// gap needs CREATE_SUSPENDED + resuming the main thread, which std's `Command` does not expose.
+        pub fn assign(child: &std::process::Child) -> Option<Job> {
+            // SAFETY: plain Win32 calls; the child's process handle is valid while `child` lives.
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return None;
+                }
+                let job = Job(job);
+                (AssignProcessToJobObject(job.0, child.as_raw_handle() as HANDLE) != 0).then_some(job)
+            }
+        }
+
+        pub fn kill(&self) {
+            // SAFETY: `self.0` is a job handle owned by `self`.
+            unsafe { TerminateJobObject(self.0, 1) };
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: closed exactly once; no kill-on-close limit, so processes still running are left alone.
+            unsafe { CloseHandle(self.0) };
         }
     }
 }
@@ -1032,6 +1109,75 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_secs(3));
         // The runtime is still usable.
         assert_eq!(js.call(fn_id(&ns["g"]).unwrap(), vec![JsArg::Json(json!(21))], None, Duration::from_secs(2)), Ok(json!(42)));
+    }
+
+    /// The engine waits in 50 ms slices; a callback needing more CPU than one slice must still finish.
+    #[test]
+    fn long_callback_survives_short_pump_slices() {
+        let (mut js, _tx) = js();
+        let dir = TmpDir::new("slice");
+        let ns = module(&mut js, &dir, "b.js", "var f=ms=>{const t=Date.now();while(Date.now()-t<ms){}return ms};export{f as default};");
+        let f = fn_id(&ns["default"]).unwrap();
+        let tasks = [200, 40].map(|ms| js.start_call(f, vec![JsArg::Json(json!(ms))], None));
+        let t0 = Instant::now();
+        let mut got = vec![None, None];
+        while got.iter().any(Option::is_none) && t0.elapsed() < Duration::from_secs(3) {
+            for (g, r) in got.iter_mut().zip(js.wait(&tasks, Instant::now() + Duration::from_millis(50)).unwrap()) {
+                if g.is_none() {
+                    *g = r; // results are delivered once
+                }
+            }
+        }
+        assert_eq!(got, vec![Some(Ok(json!(200))), Some(Ok(json!(40)))]);
+    }
+
+    /// Developer mode: an edited spec file is re-evaluated, an unchanged one is not (see `serializes_…`).
+    #[test]
+    fn load_module_reloads_edited_file() {
+        let (mut js, _tx) = js();
+        let dir = TmpDir::new("reload");
+        assert_eq!(module(&mut js, &dir, "m.js", "var s={name:\"v1\"};export{s as default};")["default"]["name"], "v1");
+        let ns = module(&mut js, &dir, "m.js", "var s={name:\"v2-edited\"};export{s as default};");
+        assert_eq!(ns["default"]["name"], "v2-edited");
+    }
+
+    /// cmd.exe looks for bare names in its cwd before PATH unless `NoDefaultCurrentDirectoryInExePath` is set.
+    #[cfg(unix)]
+    #[test]
+    fn cmd_gets_no_cwd_search_env() {
+        let bin = fake_bin(&[("cmd", r#"printf %s "$NoDefaultCurrentDirectoryInExePath""#)]);
+        let ctx = GenCtx { env: [("PATH".to_string(), bin.path().display().to_string())].into(), ..Default::default() };
+        let input = ExecInput { command: "cmd".into(), args: vec!["/C".into(), "git".into()], ..Default::default() };
+        assert_eq!(exec(&input, &ctx, 5000).unwrap().stdout, "1");
+    }
+
+    /// `shell_string_input` is the legacy string form of `executeShellCommand` (`sh -c`, in the given cwd).
+    #[cfg(unix)]
+    #[test]
+    fn shell_string_input_runs_like_execute_shell_command() {
+        let cwd = TmpDir::new("ssi");
+        let input = shell_string_input("pwd -P; echo $X", Some(cwd.path().display().to_string()));
+        assert_eq!((input.command.as_str(), &input.args[..]), ("sh", &["-c".to_string(), "pwd -P; echo $X".to_string()][..]));
+        let ctx = GenCtx { env: [("X".to_string(), "y".to_string()), ("PATH".to_string(), "/bin:/usr/bin".to_string())].into(), ..Default::default() };
+        let real = cwd.path().canonicalize().unwrap().display().to_string();
+        assert_eq!(exec(&input, &ctx, 5000).unwrap().stdout, format!("{real}\ny"));
+    }
+
+    /// A timeout kills the whole tree: the grandchild (inner cmd) never writes its marker.
+    #[cfg(windows)]
+    #[test]
+    fn timeout_kills_grandchildren() {
+        let dir = TmpDir::new("tree");
+        let args = ["/C", "cmd", "/C", "ping", "-n", "3", "127.0.0.1", "^>nul", "^&", "echo", "x^>marker"];
+        let input = ExecInput {
+            command: "cmd".into(),
+            args: args.map(String::from).to_vec(),
+            cwd: Some(dir.path().display().to_string()),
+            ..Default::default()
+        };
+        assert!(exec(&input, &GenCtx::default(), 300).unwrap_err().contains("timed out"));
+        std::thread::sleep(Duration::from_secs(4));
+        assert!(!dir.path().join("marker").exists(), "grandchild survived the timeout");
     }
 
     #[test]
