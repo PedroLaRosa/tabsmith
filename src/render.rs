@@ -242,15 +242,17 @@ impl Renderer {
         out
     }
 
-    /// Full repaint of the model (after resize, SPEC §7.6).
+    /// Full repaint of the model (after resize, SPEC §7.6). Row by row with EL 2: ED 2 would push the screen into
+    /// the scrollback on many terminals (alacritty, VTE, kitty), one copy per repaint.
     pub fn full_repaint(&mut self, model: &Model) -> Vec<u8> {
         self.drop_clear();
         let grid = model.grid();
-        let mut s = format!("{HEAD}\x1b[0m\x1b[H\x1b[2J");
+        let mut s = String::from(HEAD);
         for y in 0..grid.screen_lines() {
             let row = &grid[Line(y as i32)];
+            cup(&mut s, y, 0);
+            s += "\x1b[0m\x1b[2K"; // EL erases in the current pen (BCE)
             if let Some(last) = (0..grid.columns()).rev().find(|&x| !blank(&row[Column(x)])) {
-                cup(&mut s, y, 0);
                 restore_cells(&mut s, row, 0..last + 1);
             }
         }
@@ -904,6 +906,13 @@ mod tests {
         let mut r = Renderer::new(Theme::dark(), true);
         let rep = r.full_repaint(&a);
         let b = model(40, 12, &[b"garbage\r\n\x1b[41mmore garbage everywhere\x1b[0m\r\n\x1b[5;5Hx", &rep]);
+        assert_same(&a, &b);
+        // A repaint never adds to the scrollback (ED 2 scrolls the screen into history on alacritty and others).
+        let out = b"1\r\n2\r\n3\r\n4\r\n5";
+        let a = model(40, 10, &[out]);
+        let rep = r.full_repaint(&a);
+        let b = model(40, 10, &[out, &rep, &rep, &rep]);
+        assert_eq!(b.grid().history_size(), 0);
         assert_same(&a, &b);
     }
 

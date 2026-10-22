@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 /// An unterminated OSC longer than this is flushed as plain bytes (SPEC §5.1.1).
 const OSC_MAX: usize = 64 * 1024;
+/// An unfinished CSI/ESC sequence longer than this passes through instead of being carried (no quadratic rescans).
+const SEQ_MAX: usize = 4096;
 const TAG_PROMPT: &str = "tabsmith:p";
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -223,13 +225,15 @@ pub struct OutFilter {
     partial_region: bool,
     /// Inside a DCS/SOS/PM/APC string body (`ESC P`/`X`/`^`/`_` … ST): no frame may be appended.
     in_string: bool,
+    /// Inside an over-long CSI/ESC sequence already passed through: the bytes that continue it (params/intermediates).
+    long_seq: Option<std::ops::RangeInclusive<u8>>,
     /// Windows console without `DISABLE_NEWLINE_AUTO_RETURN`: bare LF → `ESC D`.
     pub lf_to_ind: bool,
 }
 
 impl OutFilter {
     pub fn new(rows: usize) -> OutFilter {
-        OutFilter { carry: Vec::new(), rows, alt: false, partial_region: false, in_string: false, lf_to_ind: false }
+        OutFilter { carry: Vec::new(), rows, alt: false, partial_region: false, in_string: false, long_seq: None, lf_to_ind: false }
     }
 
     /// Terminal resized: real terminals and the model reset the scroll region.
@@ -243,9 +247,10 @@ impl OutFilter {
         self.partial_region
     }
 
-    /// A DCS/APC/PM/SOS string is open on the terminal (render guard: a frame would land inside it).
+    /// A DCS/APC/PM/SOS string or an over-long CSI/ESC sequence is open on the terminal (render guard: a frame
+    /// would land inside it).
     pub fn in_string(&self) -> bool {
-        self.in_string
+        self.in_string || self.long_seq.is_some()
     }
 
     pub fn feed(&mut self, bytes: &[u8], out: &mut Vec<u8>) {
@@ -268,6 +273,16 @@ impl OutFilter {
                 }
                 continue;
             }
+            if let Some(r) = &self.long_seq {
+                let end = data[i..].iter().position(|b| !r.contains(b)).map(|k| i + k + 1);
+                if end.is_some() {
+                    self.long_seq = None;
+                }
+                let end = end.unwrap_or(data.len());
+                out.extend_from_slice(&data[i..end]);
+                i = end;
+                continue;
+            }
             let b = data[i];
             if b == 0x1b {
                 // Final byte (inclusive end): CSI params/intermediates then a final; ESC intermediates then a final.
@@ -281,6 +296,12 @@ impl OutFilter {
                     Some(_) => i + 1,
                 };
                 if j >= data.len() {
+                    if data.len() - i > SEQ_MAX {
+                        // ponytail: no keyboard-protocol upgrade is this long, so it is never stripped.
+                        self.long_seq = Some(if data[i + 1] == b'[' { 0x20..=0x3f } else { 0x20..=0x2f });
+                        out.extend_from_slice(&data[i..]);
+                        return self.hold_utf8(out);
+                    }
                     self.carry = data[i..].to_vec();
                     return self.hold_utf8(out);
                 }
@@ -410,7 +431,22 @@ pub struct Tracker {
     /// Drained by the wrapper after every batch.
     pub events: Vec<Event>,
     pub filter: OutFilter,
-    pending: Option<HistoryEntry>,
+    /// Buffer the user submitted with Enter (set by the wrapper); preferred over a scrape that has shell output
+    /// (`!!` echo, zsh correction prompt) after it. Cleared on NewCmd.
+    pub submitted: Option<String>,
+    /// The shell keeps the next command out of its history (`NoHistory` marker): tabsmith does too. Reset on NewCmd.
+    pub no_history: bool,
+    /// PSReadLine ListView predictions own the rows below the prompt (`PwshListView=1`/`0`, every pwsh prompt).
+    /// Cleared when a command starts, not on NewCmd: the marker may precede NewCmd in the same prompt.
+    pub pwsh_list_view: bool,
+    /// PSReadLine `InlinePredictionColor` (colour + required DIM/ITALIC); None = PSReadLine's default dim/italic test.
+    pwsh_color: Option<(SuggestionColor, Flags)>,
+    /// PSReadLine ContinuationPrompt and PromptText(s): drawn after EndPrompt, so stripped from the buffer.
+    pwsh_cont: String,
+    pwsh_prompt_text: Vec<String>,
+    /// Running commands, innermost last: nested integrated shells share the session id (finished by PID).
+    pending: Vec<HistoryEntry>,
+    exit_code: Option<i32>,
     deferred: VecDeque<Deferred>,
     batch_markers: usize,
     splitter: Splitter,
@@ -437,7 +473,14 @@ impl Tracker {
             fish_color: None,
             events: Vec::new(),
             filter: OutFilter::new(rows),
-            pending: None,
+            submitted: None,
+            no_history: false,
+            pwsh_list_view: false,
+            pwsh_color: None,
+            pwsh_cont: ">> ".into(), // PSReadLine's default, until the prompt reports it
+            pwsh_prompt_text: Vec::new(),
+            pending: Vec::new(),
+            exit_code: None,
             deferred: VecDeque::new(),
             batch_markers: 0,
             splitter: Splitter::default(),
@@ -486,7 +529,7 @@ impl Tracker {
         if val == Some("") {
             return; // empty values are ignored (Kiro)
         }
-        if self.osc_lock && !matches!(key, "NewCmd" | "PreExec" | "OSCLock" | "OSCUnlock" | "User") {
+        if self.osc_lock && !matches!(key, "NewCmd" | "PreExec" | "NoHistory" | "OSCLock" | "OSCUnlock" | "User") {
             return;
         }
         let v = val.unwrap_or("").trim();
@@ -502,15 +545,14 @@ impl Tracker {
             "NewCmd" if self.defer => self.deferred.push_back(Deferred::NewCmd),
             "NewCmd" => self.new_cmd(model),
             "PreExec" if !self.preexec => self.pre_exec(model),
+            "NoHistory" if !self.preexec => {
+                self.flush_deferred(model); // a queued NewCmd (which resets the flag) belongs before it
+                self.no_history = true;
+            }
             "OSCLock" if v == self.sid => self.osc_lock = true,
             "OSCUnlock" if v == self.sid => self.osc_lock = false,
             "Dir" => self.cwd = Some(PathBuf::from(val.unwrap_or(""))),
-            "ExitCode" => {
-                if let Some(p) = &mut self.pending {
-                    p.exit_code = v.parse().ok();
-                    p.end_time = Some(now_secs());
-                }
-            }
+            "ExitCode" => self.exit_code = v.parse().ok(),
             "Shell" => {
                 self.shell = Shell::from_name(v);
                 self.shell_name = Some(v.to_string());
@@ -521,6 +563,14 @@ impl Tracker {
             "User" => self.user = Some(v.to_string()),
             "ZshAutosuggestionColor" => self.zsh_color = SuggestionColor::parse_zsh(v),
             "FishSuggestionColor" => self.fish_color = SuggestionColor::parse_fish(v),
+            "PwshPredictionColor" => self.pwsh_color = parse_sgr(v),
+            "PwshListView" => self.pwsh_list_view = v == "1",
+            "PwshPrompts" => {
+                // `<ContinuationPrompt>\x1f<PromptText>…` (untrimmed: the prompts end in spaces).
+                let mut it = val.unwrap_or("").split('\x1f').map(String::from);
+                self.pwsh_cont = it.next().unwrap_or_default();
+                self.pwsh_prompt_text = it.filter(|p| !p.is_empty()).collect();
+            }
             _ => {}
         }
     }
@@ -534,23 +584,45 @@ impl Tracker {
         let n = self.cycle.map_or(1, |n| n + 1);
         self.cycle = Some(n);
         self.preexec = false;
+        self.submitted = None;
+        self.no_history = false;
         tag(model, Some(format!("tabsmith:c{n}")));
-        self.events.push(Event::NewCmd(self.pending.take()));
+        // The prompt finishes this shell's command (and those of nested shells that exited under it); a nested
+        // shell's first prompt leaves the outer command running.
+        let exit = self.exit_code.take();
+        let Some(k) = self.pending.iter().rposition(|p| p.pid == self.pid) else {
+            return self.events.push(Event::NewCmd(None));
+        };
+        for mut h in self.pending.drain(k..).rev() {
+            h.exit_code = exit;
+            h.end_time = Some(now_secs());
+            self.events.push(Event::NewCmd(Some(h)));
+        }
     }
 
     fn pre_exec(&mut self, model: &mut Model) {
         self.flush_deferred(model); // a queued NewCmd belongs before this PreExec
-        let command = self.extract(model).map(|e| e.buffer.trim().to_string()).unwrap_or_default();
-        self.pending = Some(HistoryEntry {
-            command,
-            shell: self.shell_name.clone().unwrap_or_default(),
-            pid: self.pid,
-            session_id: self.sid.clone(),
-            cwd: self.cwd.as_ref().map(|p| p.display().to_string()),
-            start_time: now_secs(),
-            ..Default::default()
-        });
+        let scraped = self.extract(model).map(|e| e.buffer.trim().to_string()).unwrap_or_default();
+        // Lines the shell printed after Enter (`!!` echo, correction prompt) are not part of the command; a line the
+        // shell rewrote (abbreviation, PS2 loop) is taken from the screen.
+        let then_output = |s: &str| scraped.strip_prefix(s).is_some_and(|r| r.trim_start_matches(' ').starts_with('\n'));
+        let command = match self.submitted.take().map(|s| s.trim().to_string()) {
+            Some(s) if !s.is_empty() && then_output(&s) => s,
+            _ => scraped,
+        };
+        if !std::mem::take(&mut self.no_history) {
+            self.pending.push(HistoryEntry {
+                command,
+                shell: self.shell_name.clone().unwrap_or_default(),
+                pid: self.pid,
+                session_id: self.sid.clone(),
+                cwd: self.cwd.as_ref().map(|p| p.display().to_string()),
+                start_time: now_secs(),
+                ..Default::default()
+            });
+        }
         self.preexec = true;
+        self.pwsh_list_view = false; // a nested shell does not inherit it; the next pwsh prompt re-reports it
         tag(model, None);
         self.events.push(Event::PreExec);
     }
@@ -564,12 +636,15 @@ impl Tracker {
         }
     }
 
-    /// Suggestion-coloured cell (SPEC §5.1.3; pwsh: PSReadLine predictions are dim or italic).
+    /// Suggestion-coloured cell (SPEC §5.1.3; pwsh: the reported prediction colour, else dim or italic).
     fn suggestion(&self, cell: &Cell) -> bool {
         match self.shell {
             Some(Shell::Zsh) => self.zsh_color.as_ref().is_some_and(|c| c.matches(cell)),
             Some(Shell::Fish) => self.fish_color.as_ref().is_some_and(|c| c.matches(cell)),
-            Some(Shell::Pwsh) => cell.flags.intersects(Flags::DIM | Flags::ITALIC),
+            Some(Shell::Pwsh) => match &self.pwsh_color {
+                Some((c, f)) => c.matches(cell) && cell.flags.contains(*f),
+                None => cell.flags.intersects(Flags::DIM | Flags::ITALIC),
+            },
             _ => false,
         }
     }
@@ -592,15 +667,28 @@ impl Tracker {
         while start > grid.topmost_line().0 && cl - start < 100 && (wraps(start - 1) || tagged(start - 1)) {
             start -= 1;
         }
-        // Below the cursor only wrap continuations and PS2 rows count (not zsh completion listings).
+        // Below the cursor only wrap continuations and PS2 rows count (not zsh completion listings, not PSReadLine's
+        // ListView, whose padded rows can look like wrap continuations).
+        let pwsh = self.shell == Some(Shell::Pwsh);
         let mut end = cl;
-        while end < grid.bottommost_line().0 && (wraps(end) || (has(&row(end + 1)[0], TAG_PROMPT) && tagged(end + 1))) {
+        while !(pwsh && self.pwsh_list_view)
+            && end < grid.bottommost_line().0
+            && (wraps(end) || (has(&row(end + 1)[0], TAG_PROMPT) && tagged(end + 1)))
+        {
             end += 1;
         }
 
         let mut e = Extracted::default();
         let mut cursor = None;
         let (mut pad, mut line_has_cmd) = (0, false);
+        // Blanks between command cells and the cursor are buffer text (zsh skips them with CUF on a redraw).
+        let mut at_cursor = |e: &mut Extracted, pad: &mut usize, line_has_cmd: bool| {
+            if line_has_cmd {
+                e.buffer.extend(std::iter::repeat_n(' ', *pad));
+                *pad = 0;
+            }
+            cursor = Some(e.buffer.len());
+        };
         for r in start..=end {
             if r == start || !wraps(r - 1) {
                 // ponytail: untagged cells before the first command cell of a line (prompt) are not padding.
@@ -610,7 +698,7 @@ impl Tracker {
             let mut row_has_cmd = false;
             for (c, cell) in row(r).iter().enumerate() {
                 if (r, c) == (cl, cc) {
-                    cursor = Some(e.buffer.len()); // padding before the cursor is not flushed
+                    at_cursor(&mut e, &mut pad, line_has_cmd);
                 }
                 if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
                     continue;
@@ -632,18 +720,82 @@ impl Tracker {
                 }
             }
             if r == cl && cc >= cols {
-                cursor = Some(e.buffer.len());
+                at_cursor(&mut e, &mut pad, line_has_cmd);
             }
             if r < end && !wraps(r) && (row_has_cmd || !e.buffer.is_empty()) {
                 e.buffer.push('\n');
             }
         }
         e.cursor = cursor.unwrap_or(e.buffer.len());
+        if pwsh {
+            self.strip_pwsh_prompts(&mut e);
+        }
         // Blank command cells after the cursor are drawing leftovers (Kiro trims them too).
         let keep = e.buffer.trim_end().len().max(e.cursor);
         e.buffer.truncate(keep);
         Some(e)
     }
+
+    /// PSReadLine draws its ContinuationPrompt (each line after a real `\n`) and a re-rendered PromptText (first
+    /// line) after EndPrompt, so they carry the command tag: drop them, keeping the cursor on the same character.
+    /// ponytail: a first line the user typed starting with the PromptText loses it too.
+    fn strip_pwsh_prompts(&self, e: &mut Extracted) {
+        let (mut out, mut off, mut shift) = (String::with_capacity(e.buffer.len()), 0, 0);
+        for (i, line) in e.buffer.split('\n').enumerate() {
+            let p = if i == 0 {
+                self.pwsh_prompt_text.iter().find(|p| line.starts_with(p.as_str())).map_or(0, |p| p.len())
+            } else if !self.pwsh_cont.is_empty() && line.starts_with(&self.pwsh_cont) {
+                self.pwsh_cont.len()
+            } else {
+                0
+            };
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&line[p..]);
+            shift += p.min(e.cursor.saturating_sub(off));
+            off += line.len() + 1;
+        }
+        e.buffer = out;
+        e.cursor -= shift;
+    }
+}
+
+/// SGR parameters of a pwsh `InlinePredictionColor` (ESC stripped: `[97;2;3m`, `38;5;8`, `[38;2;r;g;bm[3m`): its
+/// colours plus the DIM/ITALIC a prediction cell must carry. None when it sets neither.
+fn parse_sgr(spec: &str) -> Option<(SuggestionColor, Flags)> {
+    let p: Vec<u16> = spec.split([';', ':', '[', 'm']).filter_map(|s| s.trim().parse().ok()).collect();
+    let byte = |k: usize| p.get(k).and_then(|&n| u8::try_from(n).ok());
+    let (mut c, mut flags, mut i) = (SuggestionColor::default(), Flags::empty(), 0);
+    while i < p.len() {
+        // 38/48;5;n and 38/48;2;r;g;b: (colour, parameters used).
+        let ext = match p.get(i + 1) {
+            Some(5) => (byte(i + 2), 3),
+            Some(2) => ((|| Some(rgb_to_256(byte(i + 2)?, byte(i + 3)?, byte(i + 4)?)))(), 5),
+            _ => (None, 1),
+        };
+        let mut step = 1;
+        match p[i] {
+            0 => (c, flags) = (SuggestionColor::default(), Flags::empty()),
+            2 => flags |= Flags::DIM,
+            3 => flags |= Flags::ITALIC,
+            n @ 30..=37 => c.fg = vec![Some(n as u8 - 30)],
+            n @ 90..=97 => c.fg = vec![Some(n as u8 - 90 + 8)],
+            39 => c.fg = vec![None],
+            n @ 40..=47 => c.bg = vec![Some(n as u8 - 40)],
+            n @ 100..=107 => c.bg = vec![Some(n as u8 - 100 + 8)],
+            49 => c.bg = vec![None],
+            n @ (38 | 48) => {
+                step = ext.1;
+                if let Some(col) = ext.0 {
+                    *(if n == 38 { &mut c.fg } else { &mut c.bg }) = vec![Some(col)];
+                }
+            }
+            _ => {}
+        }
+        i += step;
+    }
+    (!c.fg.is_empty() || !c.bg.is_empty() || !flags.is_empty()).then_some((c, flags))
 }
 
 /// Inject a cell tag into the model only (OSC 8 hyperlink on the cursor template; SPEC D3).
@@ -689,6 +841,12 @@ mod tests {
 
     fn prompt(p: &str) -> String {
         format!("{SP}{p}{EP}{}", nc())
+    }
+
+    /// A precmd's markers: unlock, then `extra` markers, then the prompt.
+    fn precmd(extra: &[&str], p: &str) -> String {
+        let markers: String = extra.iter().map(|m| osc(m)).collect();
+        format!("{}{markers}{}", osc(&format!("OSCUnlock={SID}")), prompt(p))
     }
 
     fn split_all(chunks: &[&[u8]]) -> Vec<Piece> {
@@ -880,6 +1038,143 @@ mod tests {
     }
 
     #[test]
+    fn extract_keeps_blank_skipped_before_cursor() {
+        // zsh redraw (Ctrl-L, reset-prompt) moves over the trailing blank with CUF instead of writing it.
+        let (mut t, mut m) = setup(40, 5, Shell::Zsh);
+        feed(&mut t, &mut m, &format!("{}git \r{}git\x1b[K\x1b[1C", prompt("% "), prompt("% ")));
+        assert_eq!(buf(&t, &m), ("git ".into(), 4));
+        // Blanks after the prompt alone are not buffer text; blanks after the cursor are still trimmed.
+        feed(&mut t, &mut m, &format!("\r{}\x1b[2C", prompt("% ")));
+        assert_eq!(buf(&t, &m), (String::new(), 0));
+        feed(&mut t, &mut m, &format!("\r{}ls -l\x1b[2D", prompt("% ")));
+        assert_eq!(buf(&t, &m), ("ls -l".into(), 3));
+    }
+
+    #[test]
+    fn pwsh_reported_prediction_colour() {
+        // A custom InlinePredictionColor (plain grey, neither dim nor italic) is excluded after the cursor.
+        let (mut t, mut m) = setup(40, 5, Shell::Pwsh);
+        let grey = "git ch\x1b[90meckout main\x1b[0m\x1b[11D";
+        feed(&mut t, &mut m, &format!("{}{}{grey}", osc("PwshPredictionColor=[90m"), prompt("PS> ")));
+        let e = t.extract(&m).unwrap();
+        assert_eq!((e.buffer.as_str(), e.cursor, e.shell_ghost), ("git ch", 6, true));
+        // The default colour, reported: bright white + dim + italic; a plain bright white cell is typed text.
+        feed(&mut t, &mut m, &format!("\r\x1b[K{}{}ls\x1b[97;2;3m -Force\x1b[0;97m x\x1b[0m\x1b[9D", osc("PwshPredictionColor=[97;2;3m"), prompt("PS> ")));
+        let e = t.extract(&m).unwrap();
+        assert_eq!((e.buffer.as_str(), e.cursor), ("ls        x", 2));
+        let p = |s: &str| parse_sgr(s).map(|(c, f)| (c.fg, c.bg, f));
+        assert_eq!(p("[97;2;3m"), Some((vec![Some(15)], vec![], Flags::DIM | Flags::ITALIC)));
+        assert_eq!(p("38;5;238;48;2;0;0;0"), Some((vec![Some(238)], vec![Some(16)], Flags::empty())));
+        assert_eq!(p("[38;2;170;170;170m[3m"), Some((vec![Some(rgb_to_256(170, 170, 170))], vec![], Flags::ITALIC)));
+        assert_eq!(p("[39;49m"), Some((vec![None], vec![None], Flags::empty())));
+        assert_eq!((p("[0m"), p("[1;4m"), p("x")), (None, None, None));
+    }
+
+    #[test]
+    fn no_history_marker_drops_the_command() {
+        let (mut t, mut m) = setup(40, 6, Shell::Fish);
+        let run = |t: &mut Tracker, m: &mut Model, cmd: &str, private: bool| {
+            let nh = if private { osc("NoHistory") } else { String::new() };
+            feed(t, m, &format!("{cmd}\r\n{}{nh}{}out\r\n{}", osc(&format!("OSCLock={SID}")), osc("PreExec"), precmd(&["ExitCode=0"], "> ")));
+            std::mem::take(&mut t.events)
+        };
+        feed(&mut t, &mut m, &prompt("> "));
+        t.events.clear();
+        // Sent while locked (fish emits it after OSCLock): still honoured; the menu still resets.
+        assert_eq!(run(&mut t, &mut m, " set -l TOKEN hunter2", true), [Event::PreExec, Event::NewCmd(None)]);
+        assert!(!t.no_history);
+        let ev = run(&mut t, &mut m, "ls", false);
+        assert!(matches!(&ev[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "ls"), "{ev:?}");
+        // A running command printing the marker cannot hide itself or the next command.
+        feed(&mut t, &mut m, &format!("make\r\n{}{}", osc(&format!("OSCLock={SID}")), osc("PreExec")));
+        feed(&mut t, &mut m, &format!("{}{}", osc("NoHistory"), precmd(&[], "> ")));
+        assert!(matches!(&t.events[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "make"), "{:?}", t.events);
+    }
+
+    #[test]
+    fn submitted_line_drops_shell_output_before_preexec() {
+        let (mut t, mut m) = setup(40, 6, Shell::Bash);
+        let finish = |t: &mut Tracker, m: &mut Model, screen: &str, submitted: &str| {
+            t.events.clear();
+            feed(t, m, &prompt("$ "));
+            feed(t, m, screen);
+            t.submitted = Some(submitted.into());
+            feed(t, m, &format!("{}{}\r\n{}", osc(&format!("OSCLock={SID}")), osc("PreExec"), precmd(&[], "$ ")));
+            let Some(Event::NewCmd(Some(h))) = t.events.last() else { panic!("{:?}", t.events) };
+            assert_eq!(t.submitted, None);
+            h.command.clone()
+        };
+        // bash/zsh echo the `!!` expansion (and zsh its correction prompt) before PreExec.
+        assert_eq!(finish(&mut t, &mut m, "echo !!\r\necho echo first", "echo !! "), "echo !!");
+        // A line the shell rewrote on Enter (fish abbreviation, PS2 loop) is taken from the screen.
+        assert_eq!(finish(&mut t, &mut m, "git checkout", "gco"), "git checkout");
+        assert_eq!(finish(&mut t, &mut m, &format!("echo 'a\r\n{SP}> {EP}b'"), "echo 'a\nb'"), "echo 'a\nb'");
+    }
+
+    #[test]
+    fn nested_shell_prompt_keeps_outer_command_running() {
+        let (mut t, mut m) = setup(40, 8, Shell::Fish);
+        let at = |pid: u32, exit: u32| precmd(&[&format!("PID={pid}"), &format!("ExitCode={exit}")], "> ");
+        let run = |t: &mut Tracker, m: &mut Model, cmd: &str, then: String| {
+            feed(t, m, &format!("{cmd}\r\n{}{}{then}", osc(&format!("OSCLock={SID}")), osc("PreExec")));
+            std::mem::take(&mut t.events)
+                .into_iter()
+                .filter_map(|e| if let Event::NewCmd(h) = e { Some(h.map(|h| (h.command, h.exit_code))) } else { None })
+                .collect::<Vec<_>>()
+        };
+        feed(&mut t, &mut m, &at(100, 0));
+        t.events.clear();
+        // fish (100) → bash (200) → `false` → `exit 5` → fish prompt (exit 5).
+        assert_eq!(run(&mut t, &mut m, "bash", at(200, 0)), [None]);
+        assert_eq!(run(&mut t, &mut m, "false", at(200, 1)), [Some(("false".into(), Some(1)))]);
+        let done = run(&mut t, &mut m, "exit 5", at(100, 5));
+        assert_eq!(done, [Some(("exit 5".into(), Some(5))), Some(("bash".into(), Some(5)))]);
+        assert!(t.pending.is_empty());
+        // A prompt redraw of the same shell finishes nothing.
+        feed(&mut t, &mut m, &format!("\r{}", prompt("> ")));
+        assert_eq!(t.events, [Event::NewCmd(None)]);
+    }
+
+    #[test]
+    fn pwsh_continuation_and_prompt_text_stripped() {
+        // Default ContinuationPrompt `>> ` before the prompt reports it; the cursor keeps its character.
+        let (mut t, mut m) = setup(40, 6, Shell::Pwsh);
+        feed(&mut t, &mut m, &format!("{}if ($true) {{\r\n>> git ch", prompt("PS> ")));
+        assert_eq!(buf(&t, &m), ("if ($true) {\ngit ch".into(), 19));
+        feed(&mut t, &mut m, "\x1b[2D");
+        assert_eq!(buf(&t, &m), ("if ($true) {\ngit ch".into(), 17));
+        // Reported prompts; PSReadLine re-renders the PromptText `> ` (red) on a parse error.
+        let (mut t, mut m) = setup(40, 6, Shell::Pwsh);
+        let prompts = osc("PwshPrompts=... \x1f> ");
+        feed(&mut t, &mut m, &format!("{prompts}{}echo (2\x1b[3G\x1b[31m> \x1b[0m\x1b[12G", prompt("PS> ")));
+        assert_eq!(buf(&t, &m), ("echo (2".into(), 7));
+        feed(&mut t, &mut m, "\r\n... )");
+        assert_eq!(buf(&t, &m), ("echo (2\n)".into(), 9));
+        // Cursor inside a stripped prompt: at its line start.
+        feed(&mut t, &mut m, "\x1b[2G");
+        assert_eq!(buf(&t, &m), ("echo (2\n)".into(), 8));
+        feed(&mut t, &mut m, "\x1b[A\x1b[3G");
+        assert_eq!(buf(&t, &m), ("echo (2".into(), 0));
+    }
+
+    #[test]
+    fn pwsh_list_view_rows_not_in_buffer() {
+        // PSReadLine pads the input row to the full width, so its ListView rows can look like a wrap continuation.
+        let screen = format!("{}git ch{}<-/4> > cherry-pick\x1b[1;11H", prompt("PS> "), " ".repeat(10));
+        let (mut t, mut m) = setup(20, 6, Shell::Pwsh);
+        feed(&mut t, &mut m, &screen);
+        assert_ne!(buf(&t, &m).0, "git ch");
+        let (mut t, mut m) = setup(20, 6, Shell::Pwsh);
+        feed(&mut t, &mut m, &format!("{}{screen}", osc("PwshListView=1")));
+        assert!(t.pwsh_list_view);
+        assert_eq!(buf(&t, &m), ("git ch".into(), 6));
+        feed(&mut t, &mut m, &osc("PwshListView=0"));
+        assert!(!t.pwsh_list_view);
+        feed(&mut t, &mut m, &format!("{}{}", osc("PwshListView=1"), osc("PreExec")));
+        assert!(!t.pwsh_list_view, "a command (maybe a nested shell) does not inherit it");
+    }
+
+    #[test]
     fn extract_prompt_scrolled_by_output() {
         let (mut t, mut m) = setup(10, 3, Shell::Bash);
         feed(&mut t, &mut m, "1\r\n2\r\n3\r\n");
@@ -977,6 +1272,23 @@ mod tests {
         // Other ESC sequences do not open a string.
         assert_eq!(filter(&mut f, b"\x1b7\x1b(B"), b"\x1b7\x1b(B");
         assert!(!f.in_string());
+    }
+
+    #[test]
+    fn output_filter_passes_overlong_sequence_through() {
+        // A stray `ESC [` before a megabyte of digits: bounded carry (no quadratic rescans), bytes pass through,
+        // and the render guard holds until the final byte.
+        let mut f = OutFilter::new(24);
+        let mut out = filter(&mut f, b"x\x1b[");
+        let digits = vec![b'1'; 16 * 1024];
+        for _ in 0..64 {
+            out.extend(filter(&mut f, &digits));
+            assert!(f.carry.len() <= SEQ_MAX + digits.len());
+        }
+        assert!(f.in_string() && out.len() > 64 * digits.len() - SEQ_MAX - digits.len());
+        out.extend(filter(&mut f, b"1mz\x1b[?9001h"));
+        assert!(!f.in_string());
+        assert_eq!(out, [&b"x\x1b["[..], &vec![b'1'; 64 * digits.len() + 1], b"mz"].concat());
     }
 
     #[test]
