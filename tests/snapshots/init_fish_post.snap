@@ -1,0 +1,79 @@
+# tabsmith post (fish): OSC 697 markers around the prompt functions + preexec/prompt events (SPEC §5.4.4).
+if set -q TABSMITH_SESSION_ID; and not set -q _TS_POST_LOADED
+    set -g _TS_POST_LOADED 1
+    set -q TTY; or set -g TTY (command tty 2>/dev/null)
+
+    function _ts_osc
+        builtin printf '\e]697;%s\a' $argv[1]
+    end
+
+    function _ts_copy_fn
+        functions --erase $argv[2]
+        functions --copy $argv[1] $argv[2]
+    end
+
+    function _ts_wrap_prompt
+        set -l st $status
+        _ts_osc StartPrompt
+        builtin printf '%b' (string join "\n" $argv)
+        _ts_osc EndPrompt
+        return $st
+    end
+
+    # Put the user's prompt functions back (before running a command, or before re-wrapping).
+    function _ts_restore
+        test "$_ts_wrapped" = 1; or return
+        functions -q _ts_user_mode_prompt; and _ts_copy_fn _ts_user_mode_prompt fish_mode_prompt
+        functions -q _ts_user_right_prompt; and _ts_copy_fn _ts_user_right_prompt fish_right_prompt
+        _ts_copy_fn _ts_user_prompt fish_prompt
+        set -g _ts_wrapped 0
+    end
+
+    function _ts_preexec --on-event fish_preexec
+        _ts_osc "OSCLock=$TABSMITH_SESSION_ID"
+        _ts_osc PreExec
+        _ts_restore
+    end
+
+    function _ts_precmd --on-event fish_prompt
+        set -l st $status
+        _ts_restore # Ctrl-C or an empty line: fish_preexec never ran
+        _ts_osc "OSCUnlock=$TABSMITH_SESSION_ID"
+        _ts_osc "Dir=$PWD"
+        _ts_osc Shell=fish
+        _ts_osc "ShellPath="(status fish-path)
+        _ts_osc "PID=$fish_pid"
+        _ts_osc "ExitCode=$st"
+        _ts_osc "TTY=$TTY"
+        if test -n "$USER"
+            _ts_osc "User=$USER"
+        else
+            _ts_osc User=root
+        end
+        _ts_osc "FishSuggestionColor=$fish_color_autosuggestion"
+
+        if functions -q fish_mode_prompt
+            _ts_copy_fn fish_mode_prompt _ts_user_mode_prompt
+            function fish_mode_prompt
+                _ts_wrap_prompt (_ts_user_mode_prompt)
+            end
+        end
+        if functions -q fish_right_prompt
+            _ts_copy_fn fish_right_prompt _ts_user_right_prompt
+            function fish_right_prompt
+                _ts_wrap_prompt (_ts_user_right_prompt)
+            end
+        end
+        _ts_copy_fn fish_prompt _ts_user_prompt
+        function fish_prompt
+            _ts_wrap_prompt (_ts_user_prompt)
+            _ts_osc "NewCmd=$TABSMITH_SESSION_ID"
+        end
+        set -g _ts_wrapped 1
+
+        set -l al (alias | string collect)
+        begin
+            'tabsmith' _ pre-cmd --alias "$al" &>/dev/null &
+        end
+    end
+end
