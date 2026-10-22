@@ -1,0 +1,930 @@
+{
+ "name": "cmd",
+ "description": "Test completion spec used for unit tests",
+ "subcommands": [
+  {
+   "name": "man",
+   "description": "Subcommand that takes multiple mandatory args",
+   "subcommands": [
+    {
+     "name": "generateSpec",
+     "description": "subcommand that generates a new spec",
+     "generateSpec": {
+      "$fn": 1
+     },
+     "options": [
+      {
+       "name": "--anOpt"
+      }
+     ]
+    },
+    {
+     "name": "loadSpec",
+     "description": "subcommand that loads a new spec",
+     "loadSpec": "loadSpecName"
+    },
+    {
+     "name": "module",
+     "description": "subcommand that takes isModule arg",
+     "args": {
+      "isModule": "python/"
+     }
+    },
+    {
+     "name": "normal",
+     "args": {
+      "isOptional": true
+     }
+    }
+   ],
+   "options": [
+    {
+     "name": [
+      "-m",
+      "--man"
+     ],
+     "description": "option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": [
+      "-o",
+      "--opt"
+     ],
+     "description": "option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-v",
+     "description": "option with variadic arg",
+     "args": {
+      "isVariadic": true
+     }
+    },
+    {
+     "name": "--multiple",
+     "description": "option with multiple mandatory args",
+     "args": [
+      {},
+      {}
+     ]
+    },
+    {
+     "name": [
+      "-n",
+      "--none"
+     ],
+     "description": "option with no args"
+    },
+    {
+     "name": "-pnfm",
+     "description": "posix non-compliant option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": "--req-eq",
+     "requiresEquals": true,
+     "description": "option with requiresEquals: true",
+     "args": {}
+    },
+    {
+     "name": "--req-sep",
+     "requiresSeparator": ":",
+     "description": "option with requiresSeparator set",
+     "args": {}
+    },
+    {
+     "name": "-pnfo",
+     "description": "posix non-compliant option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-pnfn",
+     "description": "posix non-compliant option with no arg"
+    }
+   ],
+   "args": [
+    {
+     "name": "arg1"
+    },
+    {
+     "name": "arg2"
+    }
+   ]
+  },
+  {
+   "name": "oas",
+   "description": "Partial test subcommand with fixed set of options for use in unit tests",
+   "subcommands": [
+    {
+     "name": "generateSpec",
+     "description": "subcommand that generates a new spec",
+     "generateSpec": {
+      "$fn": 1
+     },
+     "options": [
+      {
+       "name": "--anOpt"
+      }
+     ]
+    },
+    {
+     "name": "loadSpec",
+     "description": "subcommand that loads a new spec",
+     "loadSpec": "loadSpecName"
+    },
+    {
+     "name": "module",
+     "description": "subcommand that takes isModule arg",
+     "args": {
+      "isModule": "python/"
+     }
+    },
+    {
+     "name": "normal",
+     "args": {
+      "isOptional": true
+     }
+    }
+   ],
+   "options": [
+    {
+     "name": [
+      "-m",
+      "--man"
+     ],
+     "description": "option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": [
+      "-o",
+      "--opt"
+     ],
+     "description": "option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-v",
+     "description": "option with variadic arg",
+     "args": {
+      "isVariadic": true
+     }
+    },
+    {
+     "name": "--multiple",
+     "description": "option with multiple mandatory args",
+     "args": [
+      {},
+      {}
+     ]
+    },
+    {
+     "name": [
+      "-n",
+      "--none"
+     ],
+     "description": "option with no args"
+    },
+    {
+     "name": "-pnfm",
+     "description": "posix non-compliant option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": "--req-eq",
+     "requiresEquals": true,
+     "description": "option with requiresEquals: true",
+     "args": {}
+    },
+    {
+     "name": "--req-sep",
+     "requiresSeparator": ":",
+     "description": "option with requiresSeparator set",
+     "args": {}
+    },
+    {
+     "name": "-pnfo",
+     "description": "posix non-compliant option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-pnfn",
+     "description": "posix non-compliant option with no arg"
+    }
+   ],
+   "parserDirectives": {
+    "optionArgSeparators": [
+     "=",
+     ":"
+    ]
+   },
+   "args": [
+    {
+     "name": "arg1"
+    },
+    {
+     "name": "arg2"
+    }
+   ]
+  },
+  {
+   "name": "opt",
+   "description": "Subcommand that takes multiple optional args",
+   "subcommands": [
+    {
+     "name": "generateSpec",
+     "description": "subcommand that generates a new spec",
+     "generateSpec": {
+      "$fn": 1
+     },
+     "options": [
+      {
+       "name": "--anOpt"
+      }
+     ]
+    },
+    {
+     "name": "loadSpec",
+     "description": "subcommand that loads a new spec",
+     "loadSpec": "loadSpecName"
+    },
+    {
+     "name": "module",
+     "description": "subcommand that takes isModule arg",
+     "args": {
+      "isModule": "python/"
+     }
+    },
+    {
+     "name": "normal",
+     "args": {
+      "isOptional": true
+     }
+    }
+   ],
+   "options": [
+    {
+     "name": [
+      "-m",
+      "--man"
+     ],
+     "description": "option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": [
+      "-o",
+      "--opt"
+     ],
+     "description": "option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-v",
+     "description": "option with variadic arg",
+     "args": {
+      "isVariadic": true
+     }
+    },
+    {
+     "name": "--multiple",
+     "description": "option with multiple mandatory args",
+     "args": [
+      {},
+      {}
+     ]
+    },
+    {
+     "name": [
+      "-n",
+      "--none"
+     ],
+     "description": "option with no args"
+    },
+    {
+     "name": "-pnfm",
+     "description": "posix non-compliant option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": "--req-eq",
+     "requiresEquals": true,
+     "description": "option with requiresEquals: true",
+     "args": {}
+    },
+    {
+     "name": "--req-sep",
+     "requiresSeparator": ":",
+     "description": "option with requiresSeparator set",
+     "args": {}
+    },
+    {
+     "name": "-pnfo",
+     "description": "posix non-compliant option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-pnfn",
+     "description": "posix non-compliant option with no arg"
+    }
+   ],
+   "args": [
+    {
+     "name": "arg1",
+     "isOptional": true
+    },
+    {
+     "name": "arg2",
+     "isOptional": true
+    }
+   ]
+  },
+  {
+   "name": "var",
+   "description": "Subcommand that takes variadic arg",
+   "subcommands": [
+    {
+     "name": "generateSpec",
+     "description": "subcommand that generates a new spec",
+     "generateSpec": {
+      "$fn": 1
+     },
+     "options": [
+      {
+       "name": "--anOpt"
+      }
+     ]
+    },
+    {
+     "name": "loadSpec",
+     "description": "subcommand that loads a new spec",
+     "loadSpec": "loadSpecName"
+    },
+    {
+     "name": "module",
+     "description": "subcommand that takes isModule arg",
+     "args": {
+      "isModule": "python/"
+     }
+    },
+    {
+     "name": "normal",
+     "args": {
+      "isOptional": true
+     }
+    }
+   ],
+   "options": [
+    {
+     "name": [
+      "-m",
+      "--man"
+     ],
+     "description": "option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": [
+      "-o",
+      "--opt"
+     ],
+     "description": "option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-v",
+     "description": "option with variadic arg",
+     "args": {
+      "isVariadic": true
+     }
+    },
+    {
+     "name": "--multiple",
+     "description": "option with multiple mandatory args",
+     "args": [
+      {},
+      {}
+     ]
+    },
+    {
+     "name": [
+      "-n",
+      "--none"
+     ],
+     "description": "option with no args"
+    },
+    {
+     "name": "-pnfm",
+     "description": "posix non-compliant option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": "--req-eq",
+     "requiresEquals": true,
+     "description": "option with requiresEquals: true",
+     "args": {}
+    },
+    {
+     "name": "--req-sep",
+     "requiresSeparator": ":",
+     "description": "option with requiresSeparator set",
+     "args": {}
+    },
+    {
+     "name": "-pnfo",
+     "description": "posix non-compliant option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-pnfn",
+     "description": "posix non-compliant option with no arg"
+    }
+   ],
+   "args": [
+    {
+     "name": "argv",
+     "variadic": true
+    }
+   ]
+  },
+  {
+   "name": "none",
+   "description": "Subcommand that takes no args",
+   "subcommands": [
+    {
+     "name": "generateSpec",
+     "description": "subcommand that generates a new spec",
+     "generateSpec": {
+      "$fn": 1
+     },
+     "options": [
+      {
+       "name": "--anOpt"
+      }
+     ]
+    },
+    {
+     "name": "loadSpec",
+     "description": "subcommand that loads a new spec",
+     "loadSpec": "loadSpecName"
+    },
+    {
+     "name": "module",
+     "description": "subcommand that takes isModule arg",
+     "args": {
+      "isModule": "python/"
+     }
+    },
+    {
+     "name": "normal",
+     "args": {
+      "isOptional": true
+     }
+    }
+   ],
+   "options": [
+    {
+     "name": [
+      "-m",
+      "--man"
+     ],
+     "description": "option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": [
+      "-o",
+      "--opt"
+     ],
+     "description": "option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-v",
+     "description": "option with variadic arg",
+     "args": {
+      "isVariadic": true
+     }
+    },
+    {
+     "name": "--multiple",
+     "description": "option with multiple mandatory args",
+     "args": [
+      {},
+      {}
+     ]
+    },
+    {
+     "name": [
+      "-n",
+      "--none"
+     ],
+     "description": "option with no args"
+    },
+    {
+     "name": "-pnfm",
+     "description": "posix non-compliant option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": "--req-eq",
+     "requiresEquals": true,
+     "description": "option with requiresEquals: true",
+     "args": {}
+    },
+    {
+     "name": "--req-sep",
+     "requiresSeparator": ":",
+     "description": "option with requiresSeparator set",
+     "args": {}
+    },
+    {
+     "name": "-pnfo",
+     "description": "posix non-compliant option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-pnfn",
+     "description": "posix non-compliant option with no arg"
+    }
+   ]
+  },
+  {
+   "name": "pnf",
+   "description": "Subcommand with posix noncompliant flags",
+   "subcommands": [
+    {
+     "name": "generateSpec",
+     "description": "subcommand that generates a new spec",
+     "generateSpec": {
+      "$fn": 1
+     },
+     "options": [
+      {
+       "name": "--anOpt"
+      }
+     ]
+    },
+    {
+     "name": "loadSpec",
+     "description": "subcommand that loads a new spec",
+     "loadSpec": "loadSpecName"
+    },
+    {
+     "name": "module",
+     "description": "subcommand that takes isModule arg",
+     "args": {
+      "isModule": "python/"
+     }
+    },
+    {
+     "name": "normal",
+     "args": {
+      "isOptional": true
+     }
+    }
+   ],
+   "options": [
+    {
+     "name": [
+      "-m",
+      "--man"
+     ],
+     "description": "option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": [
+      "-o",
+      "--opt"
+     ],
+     "description": "option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-v",
+     "description": "option with variadic arg",
+     "args": {
+      "isVariadic": true
+     }
+    },
+    {
+     "name": "--multiple",
+     "description": "option with multiple mandatory args",
+     "args": [
+      {},
+      {}
+     ]
+    },
+    {
+     "name": [
+      "-n",
+      "--none"
+     ],
+     "description": "option with no args"
+    },
+    {
+     "name": "-pnfm",
+     "description": "posix non-compliant option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": "--req-eq",
+     "requiresEquals": true,
+     "description": "option with requiresEquals: true",
+     "args": {}
+    },
+    {
+     "name": "--req-sep",
+     "requiresSeparator": ":",
+     "description": "option with requiresSeparator set",
+     "args": {}
+    },
+    {
+     "name": "-pnfo",
+     "description": "posix non-compliant option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-pnfn",
+     "description": "posix non-compliant option with no arg"
+    }
+   ],
+   "parserDirectives": {
+    "flagsArePosixNoncompliant": true
+   }
+  },
+  {
+   "name": "ompa",
+   "description": "Subcommand with options that must precede arguments",
+   "subcommands": [
+    {
+     "name": "generateSpec",
+     "description": "subcommand that generates a new spec",
+     "generateSpec": {
+      "$fn": 1
+     },
+     "options": [
+      {
+       "name": "--anOpt"
+      }
+     ]
+    },
+    {
+     "name": "loadSpec",
+     "description": "subcommand that loads a new spec",
+     "loadSpec": "loadSpecName"
+    },
+    {
+     "name": "module",
+     "description": "subcommand that takes isModule arg",
+     "args": {
+      "isModule": "python/"
+     }
+    },
+    {
+     "name": "normal",
+     "args": {
+      "isOptional": true
+     }
+    }
+   ],
+   "options": [
+    {
+     "name": [
+      "-m",
+      "--man"
+     ],
+     "description": "option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": [
+      "-o",
+      "--opt"
+     ],
+     "description": "option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-v",
+     "description": "option with variadic arg",
+     "args": {
+      "isVariadic": true
+     }
+    },
+    {
+     "name": "--multiple",
+     "description": "option with multiple mandatory args",
+     "args": [
+      {},
+      {}
+     ]
+    },
+    {
+     "name": [
+      "-n",
+      "--none"
+     ],
+     "description": "option with no args"
+    },
+    {
+     "name": "-pnfm",
+     "description": "posix non-compliant option with mandatory arg",
+     "args": {}
+    },
+    {
+     "name": "--req-eq",
+     "requiresEquals": true,
+     "description": "option with requiresEquals: true",
+     "args": {}
+    },
+    {
+     "name": "--req-sep",
+     "requiresSeparator": ":",
+     "description": "option with requiresSeparator set",
+     "args": {}
+    },
+    {
+     "name": "-pnfo",
+     "description": "posix non-compliant option with optional arg",
+     "args": {
+      "isOptional": true
+     }
+    },
+    {
+     "name": "-pnfn",
+     "description": "posix non-compliant option with no arg"
+    }
+   ],
+   "parserDirectives": {
+    "optionsMustPrecedeArguments": true
+   },
+   "args": [
+    {
+     "name": "argv"
+    }
+   ]
+  },
+  {
+   "name": "generateSpec",
+   "description": "subcommand that generates a new spec",
+   "generateSpec": {
+    "$fn": 1
+   },
+   "options": [
+    {
+     "name": "--anOpt"
+    }
+   ]
+  },
+  {
+   "name": "loadSpec",
+   "description": "subcommand that loads a new spec",
+   "loadSpec": "loadSpecName"
+  },
+  {
+   "name": "module",
+   "description": "subcommand that takes isModule arg",
+   "args": {
+    "isModule": "python/"
+   }
+  },
+  {
+   "name": "normal",
+   "args": {
+    "isOptional": true
+   }
+  },
+  {
+   "name": "recursiveLoadSpec",
+   "description": "subcommand that loads a new spec",
+   "loadSpec": "recursiveLoadSpecNested"
+  },
+  {
+   "name": "recursiveLoadSpecNested",
+   "subcommands": [
+    {
+     "name": "nestedSubcommand",
+     "loadSpec": "recursiveLoadSpecNestedNested"
+    }
+   ]
+  },
+  {
+   "name": "recursiveLoadSpecNestedNested",
+   "subcommands": [
+    {
+     "name": "doubleNestedSubcommand",
+     "args": [
+      {
+       "name": "arg1"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "sudo",
+   "args": {
+    "isCommand": true
+   }
+  }
+ ],
+ "options": [
+  {
+   "name": [
+    "-m",
+    "--man"
+   ],
+   "description": "option with mandatory arg",
+   "args": {}
+  },
+  {
+   "name": [
+    "-o",
+    "--opt"
+   ],
+   "description": "option with optional arg",
+   "args": {
+    "isOptional": true
+   }
+  },
+  {
+   "name": "-v",
+   "description": "option with variadic arg",
+   "args": {
+    "isVariadic": true
+   }
+  },
+  {
+   "name": "--multiple",
+   "description": "option with multiple mandatory args",
+   "args": [
+    {},
+    {}
+   ]
+  },
+  {
+   "name": [
+    "-n",
+    "--none"
+   ],
+   "description": "option with no args"
+  },
+  {
+   "name": "-pnfm",
+   "description": "posix non-compliant option with mandatory arg",
+   "args": {}
+  },
+  {
+   "name": "--req-eq",
+   "requiresEquals": true,
+   "description": "option with requiresEquals: true",
+   "args": {}
+  },
+  {
+   "name": "--req-sep",
+   "requiresSeparator": ":",
+   "description": "option with requiresSeparator set",
+   "args": {}
+  },
+  {
+   "name": "-pnfo",
+   "description": "posix non-compliant option with optional arg",
+   "args": {
+    "isOptional": true
+   }
+  },
+  {
+   "name": "-pnfn",
+   "description": "posix non-compliant option with no arg"
+  }
+ ]
+}

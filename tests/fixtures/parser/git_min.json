@@ -1,0 +1,42 @@
+{
+  "name": "git",
+  "description": "The stupid content tracker (trimmed from specs/git.js)",
+  "generateSpec": {"$fn": 7},
+  "args": {"name": "alias", "description": "Custom user defined git alias", "parserDirectives": {"alias": {"$fn": 8}}, "isOptional": true},
+  "additionalSuggestions": [
+    {"name": "commit -m 'msg'", "description": "Git commit shortcut", "insertValue": "commit -m '{cursor}'", "icon": "fig://template?color=2ecc71&badge=🔥", "type": "shortcut"}
+  ],
+  "options": [
+    {"name": "--version", "description": "Output version"},
+    {"name": ["-C"], "description": "Run as if git was started in <path>", "args": {"name": "path", "template": "folders"}, "isRepeatable": true},
+    {"name": "-c", "description": "Pass a configuration parameter", "args": {"name": "name=value"}, "isRepeatable": 3},
+    {"name": "--no-pager", "description": "Do not pipe git output into a pager", "isPersistent": true}
+  ],
+  "subcommands": [
+    {
+      "name": ["commit", "ci"],
+      "description": "Record changes to the repository",
+      "options": [
+        {"name": ["-a", "--all"], "description": "Stage all modified and deleted paths"},
+        {"name": ["-m", "--message"], "description": "Use the given message", "isRepeatable": true, "args": {"name": "message", "debounce": true}},
+        {"name": "--pathspec-file-nul", "description": "NUL separated pathspec", "dependsOn": ["--pathspec-from-file"]},
+        {"name": "--amend", "description": "Replace the tip of the current branch", "exclusiveOn": ["--no-edit"], "isRepeatable": false}
+      ],
+      "args": {"name": "pathspec", "isOptional": true, "isVariadic": true, "optionsCanBreakVariadicArg": false,
+               "generators": {"script": ["git", "--no-optional-locks", "status", "--short"], "postProcess": {"$fn": 9}, "cache": {"ttl": 1000, "strategy": "max-age", "cacheByDirectory": true}}}
+    },
+    {
+      "name": "checkout",
+      "description": "Switch branches or restore working tree files",
+      "args": [
+        {"name": "branch, file, tag or commit", "isOptional": true, "suggestCurrentToken": true, "filterStrategy": "fuzzy",
+         "generators": [{"script": {"$fn": 10}, "postProcess": {"$fn": 11}, "trigger": {"on": "threshold", "length": 2}, "getQueryTerm": "/", "scriptTimeout": 15000},
+                        {"custom": {"$fn": 12}, "trigger": {"on": "change"}, "filterTemplateSuggestions": {"$fn": 13}}]},
+        {"name": "pathspec", "isOptional": true, "isVariadic": true, "template": "filepaths"}
+      ]
+    },
+    {"name": "flow", "description": "git-flow", "loadSpec": "git-flow"},
+    {"name": "help", "args": {"name": "command", "isOptional": true, "template": "help", "default": "git"}}
+  ],
+  "parserDirectives": {"flagsArePosixNoncompliant": false, "optionArgSeparators": "=:"}
+}
