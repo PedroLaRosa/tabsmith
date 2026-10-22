@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -560,12 +561,23 @@ impl Js {
 }
 
 /// Rewrite an esbuild ES module (`…;export{a as default,b as versions};`, no imports — verified for every file of
-/// the bundle) into a script returning `__ts.json` of its exports.
+/// the bundle) into a script returning `__ts.json` of its exports. A hand-written module (`export default spec;`, the
+/// Fig docs form, common in dev/user/local specs) is accepted too.
 fn wrap_module(src: &str) -> Option<String> {
-    let (at, rest) = src
+    let Some((at, rest)) = src
         .rmatch_indices("export")
         .map(|(i, _)| (i, src[i + 6..].trim_start()))
-        .find(|(_, rest)| rest.starts_with('{'))?;
+        .find(|(_, rest)| rest.starts_with('{'))
+    else {
+        // ponytail: only `default` is exported here; named exports (`versions`) come from esbuild bundles anyway.
+        let i = src.rfind("export default")?;
+        let body: Vec<&str> = src[..i].lines().map(|l| l.strip_prefix("export ").unwrap_or(l)).collect();
+        return Some(format!(
+            "__ts.json((function(){{{}\nvar __ts_default={}\n;return {{default:__ts_default}};}})())",
+            body.join("\n"),
+            &src[i + 14..]
+        ));
+    };
     let clause = rest[1..].split('}').next()?;
     let fields: Vec<String> = clause
         .split(',')
@@ -590,7 +602,9 @@ pub fn exec(input: &ExecInput, ctx: &GenCtx, default_timeout_ms: u64) -> Result<
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }));
     if input.command == "ls" && input.args.iter().map(|a| a.trim()).eq(["-1ApL"]) {
-        return Ok(native_ls(&cwd));
+        // The listed dir itself, never the fallback: `cd nonexist/` must list nothing, not the shell cwd.
+        let dir = input.cwd.as_deref().filter(|c| !c.is_empty()).map_or(cwd, |c| Path::new(&ctx.cwd).join(c));
+        return Ok(native_ls(&dir));
     }
     if ["fig", "q", "kiro", "kiro-cli", "tabsmith"].contains(&input.command.as_str()) {
         return Ok(ExecOutput { status: 1, ..Default::default() }); // bundled ai() helper
@@ -735,8 +749,12 @@ fn git_bash(cwd: &Path, var: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBu
 /// Collect stdout/stderr (reader threads, so full pipes never block the child) while polling for exit every
 /// 5 ms; on timeout kill the child (Unix: its whole session/process group; Windows: its job object) and fail.
 fn wait_output(mut child: Child, timeout_ms: u64, label: &str) -> Result<ExecOutput, String> {
+    #[cfg(unix)]
+    let _live = Live::new(child.id() as isize);
     #[cfg(windows)]
     let job = job::Job::assign(&child);
+    #[cfg(windows)]
+    let _live = job.as_ref().map(|j| Live::new(j.handle() as isize)); // dropped before `job` closes the handle
     let (otx, orx) = mpsc::channel::<(usize, Vec<u8>)>();
     let pipes: [Option<Box<dyn Read + Send>>; 2] = [
         child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
@@ -782,6 +800,54 @@ fn wait_output(mut child: Child, timeout_ms: u64, label: &str) -> Result<ExecOut
     }
 }
 
+/// Exec children still running: Unix process-group ids (each child called setsid), Windows job handles.
+static LIVE: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+
+fn live() -> MutexGuard<'static, Vec<isize>> {
+    LIVE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Registers an exec child in `LIVE` while it runs.
+struct Live(isize);
+
+impl Live {
+    fn new(id: isize) -> Live {
+        #[cfg(unix)]
+        {
+            extern "C" fn at_exit() {
+                kill_live_children();
+            }
+            static AT_EXIT: std::sync::Once = std::sync::Once::new();
+            // SAFETY: registers a plain `extern "C" fn` that only takes a lock and sends signals.
+            AT_EXIT.call_once(|| unsafe {
+                libc::atexit(at_exit);
+            });
+        }
+        live().push(id);
+        Live(id)
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        live().retain(|&g| g != self.0);
+    }
+}
+
+/// Kill every exec child still running, with everything it started, so no generator outlives the session (a hanging
+/// one would run forever, reparented to init). Unix: also runs at process exit (`atexit`, i.e. `std::process::exit`).
+pub fn kill_live_children() {
+    for &id in live().iter() {
+        #[cfg(unix)]
+        // SAFETY: plain syscall; `id` is the process-group id of a child that called setsid.
+        unsafe {
+            libc::kill(-(id as libc::pid_t), libc::SIGKILL);
+        }
+        #[cfg(windows)]
+        job::terminate(id as windows_sys::Win32::Foundation::HANDLE);
+    }
+}
+
 /// Windows job object holding an exec child and every process it starts, so a timeout kills the whole tree (std's
 /// `Child::kill` only ends the direct child; grandchildren would keep the output pipes and reader threads alive).
 #[cfg(windows)]
@@ -817,9 +883,18 @@ mod job {
         }
 
         pub fn kill(&self) {
-            // SAFETY: `self.0` is a job handle owned by `self`.
-            unsafe { TerminateJobObject(self.0, 1) };
+            terminate(self.0);
         }
+
+        pub fn handle(&self) -> HANDLE {
+            self.0
+        }
+    }
+
+    /// `job` must be an open job handle (`kill_live_children` holds the `LIVE` lock, so it is not closed meanwhile).
+    pub fn terminate(job: HANDLE) {
+        // SAFETY: see above.
+        unsafe { TerminateJobObject(job, 1) };
     }
 
     impl Drop for Job {
@@ -906,6 +981,19 @@ mod tests {
         assert!(wrap_module("var x = 1;").is_none());
         // `export` inside the body is not mistaken for the clause.
         assert!(wrap_module("var e=\"export\";export {e as default};\n").unwrap().ends_with("return {default:e};})())"));
+    }
+
+    #[test]
+    fn loads_hand_written_es_modules() {
+        let (mut js, _tx) = js();
+        let dir = TmpDir::new("esm");
+        let src = "export const sub = { name: \"ok\" };\nconst spec = { name: \"zz\", subcommands: [sub] };\nexport default spec;\n";
+        let ns = module(&mut js, &dir, "zz.js", src);
+        assert_eq!(ns["default"], json!({"name": "zz", "subcommands": [{"name": "ok"}]}));
+        let ns = module(&mut js, &dir, "inline.js", "export default {\n  name: \"inline\",\n} // end");
+        assert_eq!(ns["default"], json!({"name": "inline"}));
+        // The esbuild form still wins.
+        assert_eq!(module(&mut js, &dir, "eb.js", "var s={name:\"eb\"};export{s as default};")["default"], json!({"name": "eb"}));
     }
 
     #[test]
@@ -1039,10 +1127,17 @@ mod tests {
         let missing = native_ls(&dir.path().join("nope"));
         assert_eq!((missing.status, missing.stdout.as_str()), (2, ""));
 
-        // exec answers `ls -1ApL` natively (args trimmed; bad input.cwd → ctx cwd) and stubs fig/q/kiro.
+        // exec answers `ls -1ApL` natively (args trimmed; no input.cwd → ctx cwd; relative → under ctx cwd; missing
+        // dir → error, not the ctx cwd's listing) and stubs fig/q/kiro.
         let ctx = GenCtx { cwd: dir.path().display().to_string(), ..Default::default() };
-        let input = ExecInput { command: "ls".into(), args: vec!["-1ApL ".into()], cwd: Some("/no/such/dir".into()), ..Default::default() };
-        assert_eq!(exec(&input, &ctx, 5000).unwrap(), native_ls(dir.path()));
+        let ls = |cwd: Option<&str>| {
+            let input = ExecInput { command: "ls".into(), args: vec!["-1ApL ".into()], cwd: cwd.map(String::from), ..Default::default() };
+            exec(&input, &ctx, 5000).unwrap()
+        };
+        assert_eq!(ls(None), native_ls(dir.path()));
+        assert_eq!(ls(Some("sub/")), native_ls(&dir.path().join("sub")));
+        let missing = ls(Some(&dir.path().join("nonexist/").display().to_string()));
+        assert_eq!((missing.status, missing.stdout.as_str()), (2, ""));
         for cmd in ["fig", "q", "kiro", "kiro-cli", "tabsmith"] {
             let input = ExecInput { command: cmd.into(), ..Default::default() };
             assert_eq!(exec(&input, &ctx, 5000), Ok(ExecOutput { status: 1, ..Default::default() }));
@@ -1146,6 +1241,44 @@ mod tests {
         assert_eq!(exec(&input, &ctx, 5000).unwrap().stdout, "1");
     }
 
+    /// A generator still running when the wrapper exits dies with it (re-runs this test in a child process that
+    /// calls `std::process::exit` mid-exec, like the wrapper at the end of a session).
+    #[cfg(unix)]
+    #[test]
+    fn exec_children_die_with_the_wrapper() {
+        const NAME: &str = "js::tests::exec_children_die_with_the_wrapper";
+        if std::env::var_os("TABSMITH_TEST_EXIT_MID_EXEC").is_some() {
+            std::thread::spawn(|| {
+                let args = vec!["-c".into(), "sleep 30; echo never".into()];
+                exec(&ExecInput { command: "/bin/sh".into(), args, ..Default::default() }, &GenCtx::default(), 60_000)
+            });
+            let pgid = loop {
+                if let Some(&g) = live().first() {
+                    break g;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            std::thread::sleep(Duration::from_millis(100)); // let sh start `sleep`
+            println!("pgid={pgid}");
+            std::process::exit(0);
+        }
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([NAME, "--exact", "--nocapture"])
+            .env("TABSMITH_TEST_EXIT_MID_EXEC", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let pgid: libc::pid_t = stdout.split("pgid=").nth(1).and_then(|r| r.split_whitespace().next()).unwrap().parse().unwrap();
+        // SAFETY: plain syscalls on the child's process group.
+        let gone = (0..300).any(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            (unsafe { libc::kill(-pgid, 0) }) == -1
+        });
+        if !gone {
+            unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        }
+        assert!(gone, "process group {pgid} outlived the wrapper");
+    }
 
     /// A timeout kills the whole tree: the grandchild (inner cmd) never writes its marker.
     #[cfg(windows)]
