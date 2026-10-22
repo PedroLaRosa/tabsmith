@@ -20,6 +20,12 @@ if ($env:TABSMITH_SESSION_ID) {
       $rl = if (Get-Module PSReadLine) { Get-PSReadLineOption }
       # PSReadLine draws its ListView prediction list below the prompt: tabsmith keeps out of the way.
       $lv = [int]($rl -and $rl.PredictionViewStyle -eq 'ListView' -and $rl.PredictionSource -ne 'None')
+      # Prediction colour and continuation/prompt texts, so tabsmith tells typed text from PSReadLine's own drawing.
+      if ($rl) {
+        $o += (__TsOsc ('PwshPredictionColor=' + ($rl.InlinePredictionColor -replace [char]27, ''))) +
+              (__TsOsc ('PwshPrompts=' + ($rl.ContinuationPrompt -replace "$([char]27)\[[0-9;]*m", '') + [char]31 +
+                        (($rl.PromptText -replace "$([char]27)\[[0-9;]*m", '') -join [char]31)))
+      }
       if (-not $ok) { Write-Error '' -ErrorAction Ignore }   # the user's prompt sees the command's $? (no $Error entry)
       $user = & $Global:__TsUserPrompt
       # After NewCmd, which resets the flag.

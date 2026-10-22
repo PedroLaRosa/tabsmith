@@ -371,7 +371,10 @@ impl Menu {
             _ => 0,
         };
         let shared: String = sel.first_name().chars().take(lcp).collect();
-        if shared.is_empty() || shared == sel.query {
+        // ponytail: a shared prefix that would need quoting (`zz;` of `zz;a`, `zz;b`) fails (BEL) instead of being
+        // quoted half-way; the full insertion of a selected row is escaped by the engine.
+        let plain = |c: char| c.is_alphanumeric() || c.is_whitespace() || "-_./+,:@%=~".contains(c);
+        if shared.is_empty() || shared == sel.query || !shared.chars().all(plain) {
             return None;
         }
         let text: String = shared.chars().map(|c| if c.is_whitespace() { "\\ ".into() } else { c.to_string() }).collect();
@@ -765,6 +768,10 @@ pub(crate) mod tests {
         };
         let fx = prefix_fx(&mut with(vec![mk("my dir/"), mk("my dirt/")]));
         assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 5, text, .. }, .. }] if text == "my\\ dir"));
+
+        // A shared prefix with shell syntax (`zz;` of branches `zz;a`, `zz;b`) is never typed unquoted → bell.
+        let mut m = with(vec![item("zz;a", ItemType::Arg, "z"), item("zz;b", ItemType::Arg, "z")]);
+        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
 
         // Auto-execute / special → failure.
         let mut m = with(vec![

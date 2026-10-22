@@ -83,6 +83,8 @@ fn argv(shell: Option<&str>, extra: &[String], login: bool) -> Vec<String> {
 fn fallback(err: &anyhow::Error, argv: &[String]) -> i32 {
     logger::error(&format!("pty: {err:#}"));
     eprintln!("tabsmith had an error: {err:#}");
+    crate::js::kill_live_children(); // exec skips atexit
+
     let argv = if argv.is_empty() { vec![if cfg!(windows) { "pwsh" } else { "/bin/sh" }.to_string()] } else { argv.to_vec() };
     let mut c = std::process::Command::new(&argv[0]);
     c.args(&argv[1..])
@@ -1082,6 +1084,7 @@ impl Session {
         out.extend_from_slice(b"\x1b[0m\x1b[?25h");
         self.emit(&out);
         let _ = self.engine.send(EngineMsg::Shutdown);
+        crate::js::kill_live_children(); // Windows has no atexit hook for running generators
         self.modes.restore();
         if let Some(p) = &self.session_path {
             let _ = std::fs::remove_file(p);
