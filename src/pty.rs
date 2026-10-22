@@ -22,6 +22,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(150);
 const INSERT_LOCK: Duration = Duration::from_millis(100);
+/// A shell that has echoed nothing of an insertion keeps it in the basis this long at most.
+const LOCK_CAP: Duration = Duration::from_secs(1);
+/// A prompt redraw whose line arrives in a later read: its empty line is not acted on before this.
+const REDRAW_GRACE: Duration = Duration::from_millis(50);
 const SPINNER_TICK: Duration = Duration::from_millis(80);
 const FILE_POLL: Duration = Duration::from_secs(2);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
@@ -288,10 +292,18 @@ struct Session {
     changed_at: Instant,
     /// Edit buffer at the last batch.
     cur: Option<Extracted>,
-    /// Insertion lock: (deadline, expected buffer) (SPEC §7.3).
-    lock: Option<(Instant, String)>,
+    /// Insertion lock (SPEC §7.3): (deadline, cap, expected buffer, buffer before it). Re-armed up to the cap while
+    /// the shell has echoed nothing of the insertion (a slow shell).
+    lock: Option<(Instant, Instant, String, String)>,
     /// Printable keys forwarded but not yet echoed (reconciliation basis, SPEC §7.3).
     unechoed: String,
+    /// `req` when a key the echo prediction cannot model was forwarded; cleared by a reply for a later request.
+    echo_pending: Option<u64>,
+    /// Keys that would act on the menu or ghost while `echo_pending`: replayed once the reply came, or at `held_at`.
+    held: Vec<u8>,
+    held_at: Option<Instant>,
+    /// A prompt redraw is in progress (see `REDRAW_GRACE`).
+    redraw_until: Option<Instant>,
     /// Ghost candidates as (buffer they were computed for, text): local (engine) and LLM.
     ghost: Option<(String, String)>,
     llm: Option<(String, String)>,
@@ -438,6 +450,10 @@ impl Session {
             cur: None,
             lock: None,
             unechoed: String::new(),
+            echo_pending: None,
+            held: Vec::new(),
+            held_at: None,
+            redraw_until: None,
             ghost: None,
             llm: None,
             llm_req: 0,
@@ -493,7 +509,12 @@ impl Session {
                 let _ = self.writer.send(b);
             }
             Msg::Stdin(b) => {
-                self.guard(|s| s.on_input(&b));
+                // on_input writes nothing before its last step: after a panic, keys the menu would not have taken go
+                // out raw (an Enter meant for an item is dropped rather than running the line).
+                let raw = !self.menu.intercepting(&self.settings);
+                if !self.guard(|s| s.on_input(&b)) && raw {
+                    let _ = self.writer.send(b);
+                }
             }
             Msg::Pty(mut b) => {
                 // One batch = everything already queued (one model pass, one stdout write).
@@ -533,8 +554,10 @@ impl Session {
             }
             Msg::ChildExit(c) => {
                 self.exit_code = Some(c);
-                if cfg!(windows) {
-                    self.master = None; // ConPTY does not EOF on child exit
+                // ConPTY does not EOF on child exit. Its close may wait until the final frame fits in the pipe, which
+                // the reader drains only with credits from this loop: close it on a helper thread.
+                if let Some(m) = self.master.take_if(|_| cfg!(windows)) {
+                    thread::spawn(move || drop(m));
                 }
                 if self.eof {
                     return false;
@@ -587,7 +610,8 @@ impl Session {
         if self.passthrough {
             return self.exit_at;
         }
-        [self.resize_at, self.lock.as_ref().map(|l| l.0), self.llm_at, self.spinner_at, Some(self.poll_at), self.exit_at]
+        let lock = self.lock.as_ref().map(|l| l.0);
+        [self.resize_at, lock, self.llm_at, self.spinner_at, Some(self.poll_at), self.exit_at, self.redraw_until, self.held_at]
             .into_iter()
             .flatten()
             .min()
@@ -626,23 +650,29 @@ impl Session {
         out.extend(self.take_repaint());
         out.extend(self.frame());
         self.emit(&out);
+        self.release_held();
     }
 
     fn on_event(&mut self, ev: Event) {
         match ev {
-            Event::NewCmd(done) => {
-                // A prompt redraw (SIGWINCH, `zle reset-prompt`) re-emits NewCmd: only a finished command resets
-                // the menu; a cleared line resets through the empty-buffer path in `refresh`.
-                if let Some(h) = done {
-                    let _ = self.engine.send(EngineMsg::CommandFinished(h));
-                    self.menu.error_reset();
-                }
+            // A prompt redraw (SIGWINCH, `zle reset-prompt`, an empty line) re-emits NewCmd: line, menu and ghost
+            // stay, and the unchanged line is not re-requested (its reply would count as a keypress). A cleared line
+            // resets through the empty-buffer path in `refresh`, once a line split off into a later read had time.
+            Event::NewCmd(None) => {
+                self.redraw_until = Some(Instant::now() + REDRAW_GRACE);
+                self.poll_files();
+                return;
+            }
+            Event::NewCmd(Some(h)) => {
+                let _ = self.engine.send(EngineMsg::CommandFinished(h));
+                self.menu.error_reset();
                 self.sent = None;
                 self.poll_files();
             }
             Event::PreExec => self.menu.error_reset(),
         }
         self.unechoed.clear();
+        self.echo_pending = None;
         self.ghost = None;
         self.llm = None;
         self.llm_at = None;
@@ -653,19 +683,30 @@ impl Session {
     fn refresh(&mut self) {
         let new = if self.alt() { None } else { self.tracker.extract(&self.term) };
         if !self.unechoed.is_empty() {
-            let base = self.lock.as_ref().map(|l| l.1.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()));
+            let base = self.lock.as_ref().map(|l| l.2.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()));
             let n = new.as_ref().map(|e| e.buffer.as_str());
             self.unechoed = unechoed_after(&self.unechoed, base, n, self.lock.is_some());
         }
         self.cur = new;
-        if let Some((until, expected)) = &self.lock {
-            let applied = self.cur.as_ref().is_some_and(|e| &e.buffer == expected);
-            if !applied && Instant::now() < *until {
+        if let Some((until, cap, expected, before)) = &mut self.lock {
+            let now = Instant::now();
+            let buf = self.cur.as_ref().map(|e| e.buffer.as_str());
+            let applied = buf == Some(expected.as_str());
+            if !applied && now < *until {
+                return;
+            }
+            // Nothing of it echoed yet (a slow shell): it stays in the basis, or it would be written twice.
+            if !applied && now < *cap && buf == Some(before.as_str()) {
+                *until = now + INSERT_LOCK;
                 return;
             }
             self.lock = None;
         }
         let Some(e) = &self.cur else { return };
+        match self.redraw_until {
+            Some(t) if e.buffer.trim().is_empty() && Instant::now() < t => return,
+            _ => self.redraw_until = None,
+        }
         if self.sent.as_ref().is_some_and(|(b, c)| *b == e.buffer && *c == e.cursor) {
             return;
         }
@@ -676,6 +717,7 @@ impl Session {
         self.llm_at = None;
         if buffer.trim().is_empty() {
             self.menu.error_reset(); // empty buffer (SPEC §7.1); nothing to ask
+            self.echo_pending = None; // nothing stale left for held keys to act on
             return;
         }
         let req = Request { id: self.req, buffer, cursor, cwd: self.cwd(), shell: self.shell(), history_mode: self.menu.history_mode() };
@@ -685,6 +727,9 @@ impl Session {
     fn on_completion(&mut self, c: Completion) {
         if c.req != self.req {
             return; // only the latest request is served
+        }
+        if self.echo_pending.is_some_and(|r| c.req > r) {
+            self.echo_pending = None;
         }
         if c.phase == Phase::Parse || c.ghost.is_some() {
             self.ghost = c.ghost.clone().map(|g| (c.buffer.clone(), g));
@@ -700,6 +745,7 @@ impl Session {
         }
         self.menu.on_completion(c, &self.settings);
         self.redraw();
+        self.release_held();
     }
 
     fn llm_enabled(&self) -> bool {
@@ -724,7 +770,7 @@ impl Session {
     /// The buffer once the shell echoed everything already sent: the pending insertion's result (else the extracted
     /// buffer) plus the printable keys typed ahead of their echo (SPEC §7.3 reconciliation).
     fn basis(&self) -> Option<String> {
-        let b = self.lock.as_ref().map(|l| l.1.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()))?;
+        let b = self.lock.as_ref().map(|l| l.2.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()))?;
         Some(format!("{b}{}", self.unechoed))
     }
 
@@ -734,12 +780,33 @@ impl Session {
         let at_end = self.cur.as_ref().is_some_and(|e| e.cursor == e.buffer.len());
         match key.code {
             KeyCode::Char(c) if key.mods == Mods::default() && at_end => self.unechoed.push(c),
-            _ => self.unechoed.clear(),
+            _ => {
+                self.unechoed.clear();
+                self.echo_pending = Some(self.req);
+            }
         }
     }
 
+    /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
+    fn release_held(&mut self) {
+        let timed_out = self.held_at.is_some_and(|t| t <= Instant::now());
+        if self.held.is_empty() || (self.echo_pending.is_some() && !timed_out) {
+            return;
+        }
+        self.echo_pending = None;
+        self.held_at = None;
+        let held = std::mem::take(&mut self.held);
+        self.on_keys(&held);
+    }
+
     fn suppressed(&self) -> bool {
-        !self.tracker.at_prompt() || self.resize_at.is_some() || self.repaint || self.tracker.filter.in_string()
+        !self.tracker.at_prompt()
+            || self.resize_at.is_some()
+            || self.repaint
+            || self.tracker.filter.in_string()
+            || self.redraw_until.is_some()
+            // PSReadLine's ListView predictions own the rows below a non-empty line.
+            || (self.tracker.pwsh_list_view && self.cur.as_ref().is_some_and(|e| !e.buffer.is_empty()))
     }
 
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
@@ -792,29 +859,53 @@ impl Session {
             }
             _ => chunk,
         };
+        self.on_keys(chunk);
+    }
+
+    fn on_keys(&mut self, chunk: &[u8]) {
+        if !self.held.is_empty() {
+            self.held.extend_from_slice(chunk); // keys keep their order behind held ones
+            return;
+        }
         let mut fwd = Vec::new();
         let (mut redraw, mut rerequest) = (false, false);
         let only_tab = self.settings.bool("autocomplete.onlyShowOnTab", false);
         let disabled = self.settings.bool("autocomplete.disable", false);
+        let mut typed = 0usize;
         for ev in self.decoder.decode(chunk) {
+            #[cfg(test)]
+            tests::maybe_panic();
             let key = ev.key;
-            let prompt = !self.tracker.preexec && !self.alt();
+            // Two or more printable keys in one read are a paste (pwsh has no bracketed paste) or typeahead the menu
+            // was not computed for: the rest of the read reaches the shell as is.
+            let prompt = !self.tracker.preexec && !self.alt() && typed < 2;
             // A logically shown menu acts on keys only while the render guards let it be seen.
             let shown = prompt && self.menu.intercepting(&self.settings);
             let intercepting = shown && self.drawable();
             let global = prompt && !shown && !disabled && self.menu.has_items();
             let binding = if prompt { self.keymap.lookup(&key) } else { None };
+            let tab_show = global && only_tab && key.code == KeyCode::Tab && key.mods == Mods::default();
+            let ghost = ghost_key(&key).filter(|_| prompt && self.drawable()).zip(self.ghost_text(true));
+            let acts = ghost.is_some()
+                || tab_show
+                || (intercepting && matches!(binding, Some(Binding::Action(_) | Binding::Unknown)));
+            if acts && self.echo_pending.is_some() {
+                // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
+                // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
+                self.held.extend_from_slice(&chunk[ev.bytes.start..]);
+                self.held_at = Some(Instant::now() + INSERT_LOCK);
+                self.decoder = keys::Decoder::default(); // held bytes start outside a paste and are decoded again
+                break;
+            }
             let effects = match binding {
                 Some(Binding::Action(a)) if intercepting => self.menu.handle(a, &self.settings),
                 Some(Binding::Unknown) if intercepting => Vec::new(),
-                _ if global && only_tab && key.code == KeyCode::Tab && key.mods == Mods::default() => {
-                    self.menu.show_on_tab(&self.settings)
-                }
+                _ if tab_show => self.menu.show_on_tab(&self.settings),
                 Some(Binding::Action(a @ (Action::ShowAutocomplete | Action::ToggleAutocomplete))) if global => {
                     self.menu.handle(a, &self.settings)
                 }
                 _ => {
-                    match ghost_key(&key).filter(|_| self.drawable()).zip(self.ghost_text(true)) {
+                    match ghost {
                         Some((full, g)) => {
                             let g = if full { g.as_str() } else { next_word(&g) };
                             fwd.extend_from_slice(g.as_bytes());
@@ -824,7 +915,11 @@ impl Session {
                             redraw = true;
                         }
                         None => {
+                            if key.code == KeyCode::Enter && self.tracker.at_prompt() {
+                                self.tracker.submitted = self.basis(); // history: the line, not what follows it
+                            }
                             fwd.extend_from_slice(&chunk[ev.bytes.clone()]);
+                            typed += usize::from(matches!(key.code, KeyCode::Char(_)) && key.mods == Mods::default());
                             self.note_forwarded(&key);
                             if is_ctrl(&key, 'c') || is_ctrl(&key, 'd') {
                                 self.menu.error_reset();
@@ -840,6 +935,9 @@ impl Session {
                 match e {
                     Effect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
                     Effect::Write(b) => {
+                        if b == b"\r" && self.tracker.at_prompt() {
+                            self.tracker.submitted = self.basis(); // `execute`
+                        }
                         fwd.extend(b);
                         self.unechoed.clear();
                     }
@@ -852,15 +950,15 @@ impl Session {
                 }
             }
         }
-        if !fwd.is_empty() {
-            let _ = self.writer.send(fwd);
-        }
         if rerequest {
             self.sent = None;
             self.refresh();
         }
         if redraw {
             self.redraw();
+        }
+        if !fwd.is_empty() {
+            let _ = self.writer.send(fwd); // last: after a panic above, `step` forwards the read raw
         }
     }
 
@@ -875,7 +973,12 @@ impl Session {
         let cur = self.basis().unwrap_or_else(|| ib.clone());
         fwd.extend(insertion_bytes(ins, &ib, &cur));
         self.unechoed.clear();
-        self.lock = Some((Instant::now() + INSERT_LOCK, expected_buffer(ins, &ib, at)));
+        if ins.execute {
+            self.tracker.submitted = None; // the line is whatever the shell shows once the insertion applied
+        }
+        let before = self.cur.as_ref().map_or_else(|| ib.clone(), |e| e.buffer.clone());
+        let now = Instant::now();
+        self.lock = Some((now + INSERT_LOCK, now + LOCK_CAP, expected_buffer(ins, &ib, at), before));
         if let Some((cmd, name)) = record {
             let _ = self.engine.send(EngineMsg::RecordInsert { cmd, name });
         }
@@ -912,6 +1015,12 @@ impl Session {
             self.resize_at = None;
             self.repaint = true;
         }
+        if due(self.redraw_until) {
+            self.redraw_until = None;
+            self.refresh(); // the line really is empty
+            redraw = true;
+        }
+        self.release_held();
         if self.lock.as_ref().is_some_and(|l| l.0 <= now) {
             self.refresh(); // releases the lock and catches up with the buffer
             redraw = true;
@@ -1371,6 +1480,15 @@ mod tests {
 
     const SID: &str = "0123456789abcdef0123456789abcdef";
 
+    thread_local!(static PANIC_IN_INPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+
+    /// Fault injection: a panic while keys are handled (decoder, menu, insertion).
+    pub(super) fn maybe_panic() {
+        if PANIC_IN_INPUT.with(|p| p.get()) {
+            panic!("injected");
+        }
+    }
+
     fn session(json: &str) -> (Session, Receiver<Vec<u8>>) {
         let settings = settings(json);
         let (writer, wrx) = mpsc::channel();
@@ -1402,6 +1520,10 @@ mod tests {
             cur: None,
             lock: None,
             unechoed: String::new(),
+            echo_pending: None,
+            held: Vec::new(),
+            held_at: None,
+            redraw_until: None,
             ghost: None,
             llm: None,
             llm_req: 0,
@@ -1612,5 +1734,207 @@ mod tests {
         assert!(s.step(Msg::ChildExit(3), &mut stash));
         assert!(!s.step(Msg::PtyEof, &mut stash));
         assert_eq!((s.exit_code, s.next_deadline().is_some()), (Some(3), true));
+    }
+
+    #[test]
+    fn panic_while_handling_keys_still_forwards_them() {
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "ls");
+        PANIC_IN_INPUT.with(|p| p.set(true));
+        assert!(s.step(Msg::Stdin(b"BOOM\r".to_vec()), &mut None));
+        PANIC_IN_INPUT.with(|p| p.set(false));
+        assert!(s.passthrough);
+        assert_eq!(sent(&pty), b"BOOM\r", "the read is not lost");
+        // With the menu intercepting it is dropped: an Enter meant for an item never runs the line.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        PANIC_IN_INPUT.with(|p| p.set(true));
+        s.step(Msg::Stdin(b"\r".to_vec()), &mut None);
+        PANIC_IN_INPUT.with(|p| p.set(false));
+        assert!(s.passthrough && sent(&pty).is_empty());
+    }
+
+    /// The shell redraws its prompt (SIGWINCH, `zle reset-prompt`): PS1 with NewCmd=<sid>, then `text`.
+    fn redraw(s: &mut Session, text: &str) {
+        let r = format!("\r\x1b[K\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}");
+        s.on_output(r.as_bytes());
+    }
+
+    #[test]
+    fn prompt_redraw_does_not_reshow_a_hidden_menu() {
+        // Up at the top hides the menu until the next key; a redraw is not a key.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.on_input(b"\x1b[A");
+        assert!(!s.menu.intercepting(&s.settings));
+        let req = s.req;
+        redraw(&mut s, "git ch");
+        assert_eq!(s.req, req, "the unchanged line is not re-requested (its reply would show the menu)");
+        s.on_input(b"\r");
+        assert_eq!(sent(&pty), b"\r");
+        // A recalled line (a large change) stays hidden over a resize redraw: Enter runs it.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.on_output(b"\x08\x08\x1b[Kstatus --short ");
+        let mut c = comp("git status --short ", 2, vec![item("my file.txt", ItemType::File, "")]);
+        c.req = s.req;
+        s.on_completion(c);
+        assert!(!s.menu.intercepting(&s.settings));
+        let req = s.req;
+        redraw(&mut s, "git status --short ");
+        assert_eq!(s.req, req);
+        s.on_input(b"\r");
+        assert_eq!(sent(&pty), b"\r");
+    }
+
+    #[test]
+    fn split_prompt_redraw_keeps_the_menu() {
+        let (mut s, _) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        // The redraw's line arrives in a second read: the empty line in between does not reset the menu.
+        redraw(&mut s, "");
+        s.on_output(b"git ch");
+        assert!(s.menu.intercepting(&s.settings) && s.drawable());
+        // A line that really is empty resets once the grace passed.
+        redraw(&mut s, "");
+        assert!(s.menu.has_items() && !s.drawable(), "held, not drawn, during the grace");
+        s.redraw_until = Some(Instant::now());
+        s.on_timers();
+        assert!(!s.menu.has_items());
+    }
+
+    #[test]
+    fn unbracketed_paste_is_not_intercepted() {
+        // pwsh never enables bracketed paste: a pasted line arrives as keys in one read.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ");
+        reply(&mut s, subs(""), None);
+        assert!(s.menu.intercepting(&s.settings));
+        s.on_input(b"checkout main\r");
+        assert_eq!(sent(&pty), b"checkout main\r");
+    }
+
+    #[test]
+    fn keys_after_an_unmodelled_key_wait_for_its_echo() {
+        // Backspace then Enter before the echo: Enter acts on the menu for the line the shell then has.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git che");
+        reply(&mut s, subs("che"), None);
+        s.on_input(b"\x7f");
+        s.on_input(b"\r");
+        assert_eq!(sent(&pty), b"\x7f", "Enter is held");
+        s.on_output(b"\x08\x1b[K");
+        reply(&mut s, subs("ch"), None);
+        assert_eq!(shell_line("git ch", &sent(&pty)), "git cherry-pick");
+        // Ghost: Backspace, `e`, Right in one read gives `git ce`, not the ghost computed for `git ch`.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, vec![], Some("eckout feature-login"));
+        s.on_input(b"\x7fe\x1b[C");
+        assert_eq!(sent(&pty), b"\x7fe");
+        s.on_output(b"\x08\x1b[Ke");
+        reply(&mut s, vec![], None);
+        assert_eq!(sent(&pty), b"\x1b[C");
+        // No echo at all (nothing changed): the held key goes out after the hold.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.on_input(b"\x1bOC\t");
+        assert_eq!(sent(&pty), b"\x1bOC");
+        s.held_at = Some(Instant::now());
+        s.on_timers();
+        assert_eq!(sent(&pty), b"e", "Tab inserted the common prefix");
+    }
+
+    #[test]
+    fn slow_echo_keeps_the_insertion_in_the_basis() {
+        // Tab inserts `kout`; the shell has echoed nothing when the 100 ms lock runs out, then Right accepts the ghost.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git chec");
+        let items = ["checkout", "checkout-index"].iter().map(|n| item(n, ItemType::Subcommand, "chec")).collect();
+        reply(&mut s, items, Some("kout feature-login"));
+        s.on_input(b"\t");
+        s.lock.as_mut().unwrap().0 = Instant::now();
+        s.on_timers();
+        assert!(s.lock.is_some(), "re-armed: nothing echoed");
+        s.on_input(b"\x1b[C");
+        assert_eq!(shell_line("git chec", &sent(&pty)), "git checkout feature-login");
+        // Never past the cap.
+        let l = s.lock.as_mut().unwrap();
+        (l.0, l.1) = (Instant::now(), Instant::now());
+        s.on_timers();
+        assert!(s.lock.is_none());
+    }
+
+    #[test]
+    fn enter_records_the_submitted_line() {
+        let (mut s, _) = session("{}");
+        prompt(&mut s, "echo !");
+        s.on_input(b"!\r");
+        assert_eq!(s.tracker.submitted.as_deref(), Some("echo !!"));
+        // An insertion that executes: the tracker scrapes the applied line instead.
+        let (mut s, _) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.tracker.submitted = Some("stale".into());
+        let fx = s.menu.handle(Action::InsertSelectedAndExecute, &s.settings);
+        let Some(Effect::Insert { ins, .. }) = fx.into_iter().next() else { panic!("no insertion") };
+        s.insert(&ins, None, &mut Vec::new());
+        assert_eq!(s.tracker.submitted, None);
+    }
+
+    #[test]
+    fn pwsh_list_view_owns_the_rows_below() {
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.tracker.pwsh_list_view = true;
+        assert!(!s.drawable());
+        s.sink.clear();
+        s.redraw();
+        assert!(!String::from_utf8_lossy(&s.sink).contains("checkout"), "menu not drawn");
+        s.on_input(b"\r");
+        assert_eq!(sent(&pty), b"\r");
+        let (mut s, _) = session("{}");
+        prompt(&mut s, "");
+        s.redraw_until = None;
+        s.tracker.pwsh_list_view = true;
+        assert!(s.drawable(), "an empty line has no list");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn conpty_is_closed_off_the_main_loop() {
+        struct Master(mpsc::Sender<thread::ThreadId>);
+        impl MasterPty for Master {
+            fn resize(&self, _: PtySize) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn get_size(&self) -> anyhow::Result<PtySize> {
+                Ok(PtySize::default())
+            }
+            fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
+                bail!("unused")
+            }
+            fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
+                bail!("unused")
+            }
+        }
+        // ClosePseudoConsole runs here and may wait for the reader, which waits for credits from the main loop.
+        impl Drop for Master {
+            fn drop(&mut self) {
+                let _ = self.0.send(thread::current().id());
+            }
+        }
+        let (mut s, _) = session("{}");
+        let (tx, rx) = mpsc::channel();
+        s.master = Some(Box::new(Master(tx)));
+        assert!(s.step(Msg::ChildExit(0), &mut None));
+        let on = rx.recv_timeout(Duration::from_secs(5)).expect("closed");
+        assert_ne!(on, thread::current().id());
     }
 }
