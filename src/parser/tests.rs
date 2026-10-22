@@ -23,7 +23,7 @@ fn cmd(s: &str) -> CommandInfo {
     if s.ends_with(' ') {
         tokens.push(Token { text: String::new(), raw: String::new(), start: s.len(), end: s.len() });
     }
-    CommandInfo { tokens, text: s.into() }
+    CommandInfo { tokens, text: s.into(), original_text: s.into() }
 }
 
 fn spec(v: Value) -> Rc<Subcommand> {
@@ -582,6 +582,56 @@ fn cached_nested_state_keeps_this_commands_prefix() {
     let r = caches.parse(&cmd("doas inner c"), Path::new("/cwd"), false, &mut m).unwrap();
     assert_eq!((r.tokens.join(" "), r.command_index), ("doas inner c".to_string(), 1));
     assert_eq!(m.loads.len(), 3); // sudo, inner, doas: the nested prefix came from the cache
+}
+
+#[test]
+fn composite_option_value_raw_is_the_value_only() {
+    // composite-optarg-delete: completing `--opt=al` must replace `al`, not the whole token
+    let c = fixture("cmd_spec");
+    let mut m = Mock::with(&[("cmd", &c)]);
+    for (buf, raw) in [
+        ("cmd man --opt=al", "al"),
+        ("cmd man --req-eq=", ""),
+        ("cmd man -oal", "al"),
+        ("cmd man -omarg", "arg"),
+        ("cmd man -o=arg", "=arg"),
+        ("cmd pnf -pnfo=arg", "arg"),
+        ("cmd man --opt", "--opt"), // not composite: the whole token
+        ("cmd man -on", "-on"),     // option chain without a value
+    ] {
+        assert_eq!(run(&mut m, buf).unwrap().raw_last_token, raw, "{buf:?}");
+    }
+}
+
+#[test]
+fn first_token_spec_identity_is_stable() {
+    // first-token-identity-churn: one Rc for every first-token parse, so the engine's arg key does not change
+    let mut m = Mock::default();
+    let mut caches = ParseCaches::default();
+    let a = caches.parse(&cmd("g"), Path::new("/cwd"), false, &mut m).unwrap();
+    let b = caches.parse(&cmd("gi"), Path::new("/cwd"), false, &mut m).unwrap();
+    assert!(a.first_token && Rc::ptr_eq(&a.completion, &b.completion));
+}
+
+#[test]
+fn cli_version_detection_survives_an_aborted_parse() {
+    // cli-version-respawn-per-keystroke: an abort keeps the detection running; the next parse reuses it
+    use crate::types::{EngineMsg, Request};
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut js = Js::new(rx, tx.clone(), Settings::default()).unwrap();
+    let dir = crate::specs::testutil::TmpDir::new("cliver");
+    let p = dir.path().join("v.js");
+    let src = "var v=async()=>{await new Promise(r=>setTimeout(r,200));globalThis.n=(globalThis.n||0)+1;return `${globalThis.n}.0.0`};export{v as getVersionCommand};";
+    std::fs::write(&p, src).unwrap();
+    let exports = js.load_module(&p).unwrap();
+    let (gen, mut inflight) = (GenCtx::default(), HashMap::new());
+    let req = Request { id: 1, buffer: "az ".into(), cursor: 3, cwd: "/".into(), shell: Shell::Zsh, history_mode: false };
+    tx.send(EngineMsg::Complete(req)).unwrap();
+    assert!(matches!(cli_version(&exports, "az", &mut js, &gen, &mut inflight), Err(ParseError::Aborted)));
+    assert_eq!(inflight.len(), 1);
+    assert!(matches!(js.next_msg(), Some(EngineMsg::Complete(_))));
+    assert_eq!(cli_version(&exports, "az", &mut js, &gen, &mut inflight).unwrap().as_deref(), Some("1.0.0"));
+    assert!(inflight.is_empty());
 }
 
 #[test]

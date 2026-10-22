@@ -20,6 +20,8 @@ pub enum Query {
     Str(String),
     /// Precomputed: function `getQueryTerm` result, or `""` for args inside an option chain.
     Value(String),
+    /// `filepaths`/`folders` templates: the part after the last path separator (`/`; pwsh also `\`).
+    Path { backslash: bool },
 }
 
 impl Query {
@@ -28,8 +30,15 @@ impl Query {
             Query::Term => search_term.to_string(),
             Query::Str(g) => search_term[search_term.rfind(g.as_str()).map_or(0, |i| i + g.len())..].to_string(),
             Query::Value(v) => v.clone(),
+            Query::Path { backslash } => search_term[after_sep(search_term, *backslash)..].to_string(),
         }
     }
+}
+
+/// Byte index just past the last path separator in `s` (0 when none). `\` counts only in pwsh: POSIX shells
+/// use it as the escape char.
+pub fn after_sep(s: &str, backslash: bool) -> usize {
+    s.rfind(|c| c == '/' || (backslash && c == '\\')).map_or(0, |i| i + 1)
 }
 
 /// A suggestion row inside the pipeline (Fig `Suggestion` + qac internal fields), before it becomes an `Item`.
@@ -655,22 +664,58 @@ fn escape_pwsh(s: &str, folder: bool, quote: bool) -> String {
     }
 }
 
+/// The quote `raw` leaves open (`'` or `"`) and its char index.
+fn open_quote(raw: &str, shell: Shell) -> Option<(char, usize)> {
+    let esc = if shell == Shell::Pwsh { '`' } else { '\\' };
+    let mut open: Option<(char, usize)> = None;
+    let mut chars = raw.chars().enumerate();
+    while let Some((i, ch)) = chars.next() {
+        match open {
+            Some(('\'', _)) => open = open.filter(|_| ch != '\''), // no escapes inside single quotes
+            _ if ch == esc => {
+                chars.next();
+            }
+            Some((q, _)) => open = open.filter(|_| ch != q),
+            None if ch == '\'' || ch == '"' => open = Some((ch, i)),
+            None => {}
+        }
+    }
+    open
+}
+
+/// Escaping inside a quote the user opened before the replaced text (no quotes added around it).
+fn escape_in_quote(s: &str, q: char, shell: Shell) -> String {
+    match (q, shell) {
+        ('\'', Shell::Pwsh) => s.replace('\'', "''"),
+        ('\'', _) => s.replace('\'', "'\\''"),
+        _ => {
+            let (special, esc) = if shell == Shell::Pwsh { ("`\"$", '`') } else { ("\\\"$`", '\\') };
+            s.chars().flat_map(|ch| [esc, ch].into_iter().skip(usize::from(!special.contains(ch)))).collect()
+        }
+    }
+}
+
 /// Precomputed full insertion for a row (SPEC §6.8, D22/D25).
 pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
     let q = s.query.of(c.search_term);
     let raw: Vec<char> = c.raw.chars().collect();
-    let delete = if matches!(s.kind, ItemType::AutoExecute | ItemType::Special) {
+    // special (`help` template) rows replace the typed prefix like any other row (Kiro deletes 0 and doubles it)
+    let delete = if s.kind == ItemType::AutoExecute {
         0
     } else if q == c.search_term {
         raw.len()
     } else if let Query::Str(g) = &s.query {
         c.raw[c.raw.rfind(g.as_str()).map_or(0, |i| i + g.len())..].chars().count()
+    } else if let Query::Path { backslash } = s.query {
+        c.raw[after_sep(c.raw, backslash)..].chars().count()
     } else {
         // function getQueryTerm: Kiro approximation (escaped whitespace), never past the token
         q.chars().map(|ch| if ch.is_whitespace() { 2 } else { 1 }).sum::<usize>().min(raw.len())
     };
     let deleted: String = raw[raw.len() - delete..].iter().collect();
     let quote = deleted.starts_with(['\'', '"']);
+    // a quote opened before the replaced part (`cat "my dir/x`): escape for inside it
+    let inside = open_quote(c.raw, c.shell).filter(|&(_, i)| i < raw.len() - delete).map(|(q, _)| q);
     let folder = s.kind == ItemType::Folder;
     let mut text = match &s.insert_value {
         Some(v) if !matches!(s.kind, ItemType::File | ItemType::Folder) => v.clone(),
@@ -681,9 +726,15 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
                     Some(sep) => format!("{m}{sep}{{cursor}}"),
                     None => m,
                 };
-                match c.shell {
-                    Shell::Pwsh => escape_pwsh(&body, folder, quote),
-                    _ => escape_posix(&body, folder, quote),
+                match (inside, c.shell) {
+                    // a file closes the quote; a folder leaves it open for the next segment
+                    (Some(qc), sh) => {
+                        let mut t = escape_in_quote(&body, qc, sh);
+                        t.extend((s.kind == ItemType::File).then_some(qc));
+                        t
+                    }
+                    (None, Shell::Pwsh) => escape_pwsh(&body, folder, quote),
+                    (None, _) => escape_posix(&body, folder, quote),
                 }
             }
         },
@@ -706,6 +757,9 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
     if execute {
         text.pop();
     }
+    // Names from directories, generators and specs reach the PTY as typed bytes: a CR/LF/ESC/... in them would
+    // run or rewrite the line. Only the trailing "\n" (→ `execute`) is meaningful.
+    text.retain(|ch| !ch.is_control());
     let mut cursor_back = 0;
     if let Some(i) = text.find("{cursor}") {
         text.replace_range(i..i + "{cursor}".len(), "");
@@ -789,9 +843,9 @@ pub fn triggered(t: &Trigger, new: &str, old: &str) -> Option<bool> {
     })
 }
 
-/// Bundled `filepaths()` trigger: the directory part (up to the last `/`) changed.
-pub fn dir_changed(new: &str, old: &str) -> bool {
-    let dir = |s: &str| s.rfind('/').map(|i| s[..i].to_string());
+/// Bundled `filepaths()` trigger: the directory part (up to the last separator, see [`after_sep`]) changed.
+pub fn dir_changed(new: &str, old: &str, backslash: bool) -> bool {
+    let dir = |s: &str| s[..after_sep(s, backslash)].to_string();
     dir(new) != dir(old)
 }
 
@@ -923,11 +977,11 @@ pub fn shell_expand(s: &str, env: &HashMap<String, String>) -> String {
     out
 }
 
-/// Bundled `getCurrentInsertedDirectory(cwd, searchTerm)`.
-pub fn inserted_directory(cwd: &str, search_term: &str, env: &HashMap<String, String>) -> PathBuf {
+/// Bundled `getCurrentInsertedDirectory(cwd, searchTerm)`; `backslash`: `\` separates too (pwsh).
+pub fn inserted_directory(cwd: &str, search_term: &str, env: &HashMap<String, String>, backslash: bool) -> PathBuf {
     let s = shell_expand(search_term, env);
-    let dir = &s[..s.rfind('/').map_or(0, |i| i + 1)];
-    let base = if cwd.ends_with('/') { cwd.to_string() } else { format!("{cwd}/") };
+    let dir = &s[..after_sep(&s, backslash)];
+    let base = if cwd.ends_with('/') || (backslash && cwd.ends_with('\\')) { cwd.to_string() } else { format!("{cwd}/") };
     if dir.is_empty() {
         PathBuf::from(base)
     } else if dir.starts_with('/') || Path::new(dir).is_absolute() {
@@ -949,6 +1003,7 @@ pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<Suggestion> 
             if is_dir { format!("{name}/") } else { name }
         })
         .filter(|n| !n.eq_ignore_ascii_case(".DS_Store"))
+        .filter(|n| !n.chars().any(char::is_control)) // a CR in a name would run the line when inserted
         .collect();
     names.sort_by(|a, b| a.starts_with('.').cmp(&b.starts_with('.')).then_with(|| cmp_locale(a, b)));
     names.push("../".into());
@@ -1273,9 +1328,13 @@ mod tests {
         assert_eq!(triggered(&m, "y", "x"), Some(true));
         assert_eq!(triggered(&m, "z", "w"), Some(false));
         assert_eq!(triggered(&Trigger::Fn(1), "a", "b"), None);
-        assert!(dir_changed("src/a", "lib/a"));
-        assert!(!dir_changed("src/ab", "src/a"));
-        assert!(dir_changed("src/", "src"));
+        assert!(dir_changed("src/a", "lib/a", false));
+        assert!(!dir_changed("src/ab", "src/a", false));
+        assert!(dir_changed("src/", "src", false));
+        // windows-backslash-paths: `\` separates in pwsh only (POSIX: it is the escape char)
+        assert!(dir_changed("src\\", "src", true));
+        assert!(!dir_changed("src\\ab", "src\\a", true));
+        assert!(!dir_changed("my\\ ", "my", false));
     }
 
     #[test]
@@ -1405,7 +1464,7 @@ mod tests {
         assert_eq!((i.text.as_str(), i.cursor_back), ("'my dir/'", 1));
         let i = insertion(&out, &ctx("", "", Shell::Pwsh));
         assert_eq!((i.text.as_str(), i.cursor_back), ("--out= ", 1));
-        // insertValue verbatim with {cursor}; "\n" → execute; auto-execute/special delete nothing
+        // insertValue verbatim with {cursor}; "\n" → execute; auto-execute deletes nothing
         let mut iv = Sugg::new("x", ItemType::Arg);
         iv.insert_value = Some("a{cursor}b\n\n".into());
         assert_eq!(insertion(&iv, &ctx("x", "x", Shell::Bash)), Insertion { delete: 1, text: "ab".into(), cursor_back: 1, execute: true });
@@ -1422,6 +1481,43 @@ mod tests {
         assert_eq!(insertion(&o, &c).text, "--message");
         let i = insertion(&o, &ctx("--m", "--m", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (0, "essage"));
+    }
+
+    #[test]
+    fn insertion_review_regressions() {
+        // composite-optarg-delete: the parser hands over only the value (`al` of `--color=al`)
+        let always = Sugg::new("always", ItemType::Arg);
+        assert_eq!(insertion(&always, &ctx("al", "al", Shell::Zsh)), Insertion { delete: 0, text: "ways".into(), cursor_back: 0, execute: false });
+        // insert-control-chars: CR/LF/ESC/DEL never reach the PTY; a trailing "\n" still means execute
+        for (kind, name) in [(ItemType::File, "a\rtouch${IFS}PWNED\r"), (ItemType::Arg, "x\x1b[2J\nrm\x7f")] {
+            let i = insertion(&Sugg::new(name, kind), &ctx("", "", Shell::Bash));
+            assert!(!i.text.chars().any(char::is_control) && !i.execute, "{name:?} → {i:?}");
+        }
+        let mut gen = Sugg::new("x", ItemType::Arg);
+        gen.insert_value = Some("dev\rrm -rf ~\n".into());
+        assert_eq!(insertion(&gen, &ctx("", "", Shell::Bash)), Insertion { delete: 0, text: "devrm -rf ~".into(), cursor_back: 0, execute: true });
+        // special-rows-no-delete: `help` rows replace the typed prefix instead of doubling it
+        let build = Sugg::new("build", ItemType::Special);
+        assert_eq!(insertion(&build, &ctx("bu", "bu", Shell::Bash)).text, "ild");
+        let i = insertion(&build, &ctx("BU", "BU", Shell::Bash));
+        assert_eq!((i.delete, i.text.as_str()), (2, "build"));
+        // open-quote-escaping: inside a quote opened before the replaced segment, escape for that quote
+        let path = |name: &str, kind| Sugg { query: Query::Path { backslash: false }, ..Sugg::new(name, kind) };
+        let file = path("x y.txt", ItemType::File);
+        let i = insertion(&file, &ctx("my dir/x", "\"my dir/x", Shell::Zsh));
+        assert_eq!((i.delete, i.text.as_str()), (0, " y.txt\""));
+        let i = insertion(&file, &ctx("my dir/x", "'my dir/x", Shell::Bash));
+        assert_eq!((i.delete, i.text.as_str()), (0, " y.txt'"));
+        let i = insertion(&path("sub dir/", ItemType::Folder), &ctx("my dir/", "\"my dir/", Shell::Bash));
+        assert_eq!((i.delete, i.text.as_str()), (0, "sub dir/")); // folders leave the quote open
+        assert_eq!(insertion(&path("a\"b$`\\", ItemType::File), &ctx("d/", "\"d/", Shell::Bash)).text, "a\\\"b\\$\\`\\\\\"");
+        assert_eq!(insertion(&path("it's", ItemType::File), &ctx("d/", "'d/", Shell::Bash)).text, "it'\\''s'");
+        assert_eq!(insertion(&path("it's", ItemType::File), &ctx("d/", "'d/", Shell::Pwsh)).text, "it''s'");
+        assert_eq!(insertion(&path("a\"$b", ItemType::File), &ctx("d/", "\"d/", Shell::Pwsh)).text, "a`\"`$b\"");
+        // closed or escaped quotes, or a quote inside the replaced segment: unchanged escaping
+        assert_eq!(insertion(&file, &ctx("my dir/x", "\"my dir\"/x", Shell::Bash)).text, "\\ y.txt");
+        assert_eq!(insertion(&file, &ctx("\"d/x", "\\\"d/x", Shell::Bash)).text, "\\ y.txt");
+        assert_eq!(insertion(&file, &ctx("d/x", "d/\"x", Shell::Bash)).text, "'x y.txt'");
     }
 
     #[test]
@@ -1444,10 +1540,23 @@ mod tests {
         assert_eq!(shell_expand("~/a", &env), "/h/a");
         assert_eq!(shell_expand("~a", &env), "~a");
         assert_eq!(shell_expand("$X/$NOPE/${X}/${NOPE:-d}/${NOPE}", &env), "x/$NOPE/x/d/${NOPE}");
-        assert_eq!(inserted_directory("/w", "src/ma", &env), PathBuf::from("/w/src/"));
-        assert_eq!(inserted_directory("/w/", "ma", &env), PathBuf::from("/w/"));
-        assert_eq!(inserted_directory("/w", "/etc/pa", &env), PathBuf::from("/etc/"));
-        assert_eq!(inserted_directory("/w", "$HOME/d", &env), PathBuf::from("/h/"));
+        assert_eq!(inserted_directory("/w", "src/ma", &env, false), PathBuf::from("/w/src/"));
+        assert_eq!(inserted_directory("/w/", "ma", &env, false), PathBuf::from("/w/"));
+        assert_eq!(inserted_directory("/w", "/etc/pa", &env, false), PathBuf::from("/etc/"));
+        assert_eq!(inserted_directory("/w", "$HOME/d", &env, false), PathBuf::from("/h/"));
+        // windows-backslash-paths (pwsh)
+        assert_eq!(inserted_directory("C:\\w", "src\\ma", &env, true), PathBuf::from("C:\\w/src\\"));
+        assert_eq!(inserted_directory("C:\\w\\", "ma", &env, true), PathBuf::from("C:\\w\\"));
+        assert_eq!(inserted_directory("/w", "my\\ d", &env, false), PathBuf::from("/w/"));
+        let q = Query::Path { backslash: true };
+        assert_eq!((q.of("src\\ma"), q.of("a/b\\c"), q.of("ma")), ("ma".into(), "c".into(), "ma".into()));
+        assert_eq!(Query::Path { backslash: false }.of("a\\b/c\\d"), "c\\d");
+        let mut main = Sugg::new("main.rs", ItemType::File);
+        main.query = q;
+        let i = insertion(&main, &ctx("src\\ma", "src\\ma", Shell::Pwsh));
+        assert_eq!((i.delete, i.text.as_str()), (0, "in.rs"));
+        let i = insertion(&main, &ctx("src\\MA", "src\\MA", Shell::Pwsh));
+        assert_eq!((i.delete, i.text.as_str()), (2, "main.rs"));
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -1469,6 +1578,18 @@ mod tests {
         assert_eq!(folders.iter().map(|s| s.names[0].as_str()).collect::<Vec<_>>(), ["src/", "../"]);
         assert_eq!(folders[0].template_type.as_deref(), Some("folders"));
         assert!(list_dir(&d.join("missing"), true, false).is_empty());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)] // Windows file names cannot hold control chars
+    #[test]
+    fn list_dir_skips_control_char_names() {
+        let d = temp_dir("ctl");
+        for f in ["ok", "aa\rtouch${IFS}PWNED\r", "esc\x1b[2J"] {
+            std::fs::write(d.join(f), "").unwrap();
+        }
+        let got: Vec<String> = list_dir(&d, true, false).into_iter().map(|s| s.names[0].clone()).collect();
+        assert_eq!(got, ["ok", "../"]);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

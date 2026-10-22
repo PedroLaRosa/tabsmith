@@ -24,6 +24,8 @@ pub struct CommandInfo {
     pub tokens: Vec<Token>,
     /// Source text of the command (after alias expansion).
     pub text: String,
+    /// Source text as typed, before alias expansion (what the menu compares between keystrokes).
+    pub original_text: String,
 }
 
 /// Parse `buffer_before_cursor` and return the command containing the end of it (SPEC §6.1.3), with aliases
@@ -78,6 +80,7 @@ pub fn substitute_token(command: &CommandInfo, index: usize, replacement: &str, 
         return None;
     }
     let mut new = p.command_info(node);
+    new.original_text = command.original_text.clone();
     let (alias_start, alias_end) = (tok.start, tok.start + replacement.len());
     let (mut diff, mut last_in) = (0, false);
     for (k, t) in new.tokens.iter_mut().enumerate() {
@@ -453,7 +456,7 @@ impl<'a> P<'a> {
         if cmd.children.last().map_or(1, |c| c.end) < cmd.end && text.ends_with(' ') {
             tokens.push(Token { text: String::new(), raw: String::new(), start: text.len(), end: text.len() });
         }
-        CommandInfo { tokens, text }
+        CommandInfo { tokens, original_text: text.clone(), text }
     }
 }
 
@@ -660,8 +663,12 @@ mod tests {
             [("g", "git"), ("ll", "ls -l"), ("ls", "ls -G"), ("lg", "ls | grep"), ("x", "a && b"), ("y", "a; b")];
         let c = cmd("g co ", Shell::Bash, &aliases).unwrap();
         assert_eq!(c.text, "git co ");
+        assert_eq!(c.original_text, "g co "); // pre-expansion text for the menu (alias-command-text-hides-menu)
         let raws: Vec<_> = c.tokens.iter().map(|t| t.raw.as_str()).collect();
         assert_eq!(raws, ["g", "co", ""]);
+        let ll = cmd("ll ", Shell::Bash, &aliases).unwrap();
+        assert_eq!((ll.text.as_str(), ll.original_text.as_str()), ("ls -G -l ", "ll "));
+        assert_eq!(cmd("echo | g ch", Shell::Bash, &aliases).unwrap().original_text, "g ch");
         // Multi-word alias: every alias token keeps the alias' raw; later tokens map 1:1.
         let c = cmd("ll foo ", Shell::Bash, &aliases).unwrap();
         let pairs: Vec<_> = c.tokens.iter().map(|t| (t.text.as_str(), t.raw.as_str())).collect();
