@@ -7,10 +7,10 @@ working on **macOS, Linux and Windows**.
 
 ```
 ~/project % git ch█
-             > changelog
-             > checkout
-             > cherry-pick <commit...>
-             Run git-changelog
+              > changelog
+              > checkout
+              > cherry-pick <commit...>
+              Run git-changelog
 ```
 
 - **Dropdown menu** drawn inside the terminal, right under the cursor (or above it at the bottom of the screen).
@@ -32,13 +32,16 @@ tabsmith setup                # adds the shell integration to your dotfiles (ask
 
 Open a new terminal tab and start typing. `tabsmith doctor` checks everything if suggestions don't show up.
 
-Manual integration instead of `setup`: put the *pre* line at the very top and the *post* line at the very bottom of
-your rc file (`~/.zshrc`, `~/.bashrc`, or `$PROFILE` for pwsh):
+To edit your rc file yourself, answer `n` to `setup`: it prints the exact *pre* line for the very top and *post* line
+for the very bottom of `~/.zshrc`, `~/.bashrc` (or `$PROFILE` for pwsh) and writes the script files they source;
+`doctor` and `uninstall` recognise those lines. Sourcing the integration directly also works:
 
 ```sh
 eval "$(tabsmith init zsh pre)"     # top
 eval "$(tabsmith init zsh post)"    # bottom
 ```
+
+but `doctor` then reports the integration as missing, and its automatic fix adds the standard lines as well.
 
 fish: `tabsmith integrations install dotfiles fish` (writes `conf.d/00_tabsmith_pre.fish` / `99_tabsmith_post.fish`).
 
@@ -83,22 +86,45 @@ tabsmith settings inline.profiles.local '{"provider":"openai","model":"qwen2.5-c
 tabsmith inline set-customization claude
 ```
 
-The LLM is asked only when your history has no match. It receives your recent command history and the current
-directory; lines that look like they contain secrets (`password`, `token`, `api_key`, …) are filtered out first.
+The LLM is asked only when your history has no match. It receives the OS, shell, current directory and your last
+`inline.historyCount` (49) commands; lines that look like they contain secrets (`password`, `token`, `api_key`, …)
+are filtered out first, and commands your shell keeps out of its own history (a leading space with
+`ignorespace`/`histignorespace`, fish private mode, PSReadLine's sensitive lines) are never recorded by tabsmith.
 
 ## How it works
 
-The shell integration's *pre* block replaces the interactive shell with `tabsmith _ pty`, which runs your shell
-inside a pseudo-terminal and passes everything through. The *post* block marks prompts and commands with
-`OSC 697` escape sequences. tabsmith reads the command line from its own copy of the screen (alacritty_terminal),
-parses it against the completion spec, and draws the menu and ghost text over the screen cells, restoring them
-exactly afterwards. Design details: [`docs/SPEC.md`](docs/SPEC.md).
+The shell integration's *pre* block replaces the interactive shell with `tabsmith _ pty` (pwsh runs it as a child
+and exits with its code), which runs your shell inside a pseudo-terminal and passes everything through. The *post*
+block marks prompts and commands with `OSC 697` escape sequences. tabsmith reads the command line from its own copy
+of the screen (alacritty_terminal), parses it against the completion spec, and draws the menu and ghost text over the
+screen cells, restoring them exactly afterwards. Design details and the deliberate differences from Kiro:
+[`docs/SPEC.md`](docs/SPEC.md).
 
 ## Known limitations
 
 - `cmd.exe`, nushell and macOS's built-in `/bin/bash` 3.2 are not supported.
-- On Windows, specs whose generators shell out to `bash` only work when Git Bash is on `PATH`.
-- Ghost text is not drawn while the shell shows its own suggestion (zsh-autosuggestions, fish, PSReadLine).
+- Windows: the build and unit tests run in CI, but the console/ConPTY paths were only reviewed, not exercised on a real
+  Windows console. Specs whose generators shell out to `bash` only work when Git Bash is on `PATH`.
+- Ghost text is not drawn while the shell shows its own suggestion (zsh-autosuggestions, fish, PSReadLine). With
+  PSReadLine's ListView predictions the dropdown stays hidden while the line is not empty.
+- No dropdown on a line without a prompt in front of it: an empty `PS1`, a prompt ending in a newline that a theme
+  prints without tabsmith's markers, zsh `Alt-Enter` and fish continuation lines, or a newline-ended `PS1` while zsh
+  lists completions below it. Inline TUIs (fzf `Ctrl-T`, fish's pager) are left alone on purpose.
+- `Esc` with the dropdown open hides it and is not passed to the shell (vi mode: `tabsmith settings
+  autocomplete.keybindings.esc ignore`).
+- Your startup files run twice: the outer shell reads them up to the pre block, the wrapped shell reads them all
+  (zsh `.zshenv` and `/etc/zprofile`, a login bash's `/etc/profile`, pwsh's AllHosts `profile.ps1`).
+- fish: only `--private` reaches the wrapped fish (`-C`, `--features` and `-d` are dropped).
+- pwsh: the session's environment and aliases are not reported, so generators see the environment tabsmith started
+  with; a custom PSReadLine `AddToHistoryHandler` runs twice per line.
+- bash: under `HISTCONTROL=ignoreboth` an immediate repeat of the previous command is not recorded in tabsmith's
+  history, and `set +o history` is ignored; on bash 4.4/5.0 your `PROMPT_COMMAND`s see tabsmith's `PIPESTATUS`.
+- Emoji and ambiguous-width characters can misplace the overlay when the terminal measures them differently from
+  `unicode-width`; text printed before tabsmith started cannot be restored if the dropdown covers it.
+- The Fig `history` template returns nothing; the description pop-out (`Ctrl-K`) hides the loading spinner.
+- In VS Code's terminal every shell start runs `code --locate-shell-integration-path` (the VS Code CLI's start-up time).
+- Logs in `~/.tabsmith/logs` are not rotated; two `integrations install` runs at the same moment can duplicate the
+  dotfile blocks.
 
 ## Licence
 
