@@ -395,6 +395,8 @@ enum Deferred {
 pub enum Event {
     /// New prompt: menu error-reset, settings re-check; carries the finished command, if any (SPEC §3.5).
     NewCmd(Option<HistoryEntry>),
+    /// New prompt after a command that must not be recorded (`NoHistory`): finished like `NewCmd(Some)`.
+    CommandEnded,
     /// A command started: hide menu + ghost, cancel the insertion lock.
     PreExec,
 }
@@ -407,6 +409,9 @@ pub struct Extracted {
     pub cursor: usize,
     /// The shell already draws its own suggestion after the cursor (SPEC §8.1).
     pub shell_ghost: bool,
+    /// The block around the cursor starts on a prompt row: false for an inline TUI a zle widget draws below the
+    /// prompt (fzf `--height`), whose cells carry the open cycle's tag too.
+    pub at_prompt: bool,
 }
 
 /// Shell-integration state of one wrapper session; owns the PTY output path (splitter → model → filter).
@@ -581,46 +586,59 @@ impl Tracker {
     }
 
     fn new_cmd(&mut self, model: &mut Model) {
+        let redraw = self.cycle.filter(|_| !self.preexec);
         let n = self.cycle.map_or(1, |n| n + 1);
         self.cycle = Some(n);
         self.preexec = false;
-        self.submitted = None;
         self.no_history = false;
         tag(model, Some(format!("tabsmith:c{n}")));
+        // A redraw of the prompt alone keeps the line's cells after it (bash readline: CUF over a vi-mode switch,
+        // DCH at the end of an i-search): they are this cycle's text now.
+        if let Some(o) = redraw {
+            retag_redraw(model, &format!("tabsmith:c{o}"));
+        }
         // The prompt finishes this shell's command (and those of nested shells that exited under it); a nested
         // shell's first prompt leaves the outer command running.
         let exit = self.exit_code.take();
         let Some(k) = self.pending.iter().rposition(|p| p.pid == self.pid) else {
             return self.events.push(Event::NewCmd(None));
         };
+        self.submitted = None; // not on a redraw: a transient prompt redraws between Enter and PreExec
         for mut h in self.pending.drain(k..).rev() {
             h.exit_code = exit;
             h.end_time = Some(now_secs());
-            self.events.push(Event::NewCmd(Some(h)));
+            // ponytail: an empty command (NoHistory, or nothing scraped) is the "do not record" mark.
+            self.events.push(if h.command.is_empty() { Event::CommandEnded } else { Event::NewCmd(Some(h)) });
         }
     }
 
     fn pre_exec(&mut self, model: &mut Model) {
         self.flush_deferred(model); // a queued NewCmd belongs before this PreExec
         let scraped = self.extract(model).map(|e| e.buffer.trim().to_string()).unwrap_or_default();
-        // Lines the shell printed after Enter (`!!` echo, correction prompt) are not part of the command; a line the
-        // shell rewrote (abbreviation, PS2 loop) is taken from the screen.
-        let then_output = |s: &str| scraped.strip_prefix(s).is_some_and(|r| r.trim_start_matches(' ').starts_with('\n'));
+        // Lines the shell printed after Enter (`!!` echo, correction prompt) are not part of the command, nor is a
+        // transient prompt redrawn without markers before it; a line the shell rewrote (abbreviation, PS2 loop) is
+        // taken from the screen.
+        let then_output = |s: &str| {
+            scraped.match_indices(s).any(|(i, _)| {
+                let rest = scraped[i + s.len()..].trim_start_matches(' ');
+                (i == 0 || scraped[..i].ends_with(' ')) && (rest.is_empty() || rest.starts_with('\n'))
+            })
+        };
         let command = match self.submitted.take().map(|s| s.trim().to_string()) {
             Some(s) if !s.is_empty() && then_output(&s) => s,
             _ => scraped,
         };
-        if !std::mem::take(&mut self.no_history) {
-            self.pending.push(HistoryEntry {
-                command,
-                shell: self.shell_name.clone().unwrap_or_default(),
-                pid: self.pid,
-                session_id: self.sid.clone(),
-                cwd: self.cwd.as_ref().map(|p| p.display().to_string()),
-                start_time: now_secs(),
-                ..Default::default()
-            });
-        }
+        // Still pending (its prompt finishes it, SPEC §3.5), but blank: not recorded.
+        let command = if std::mem::take(&mut self.no_history) { String::new() } else { command };
+        self.pending.push(HistoryEntry {
+            command,
+            shell: self.shell_name.clone().unwrap_or_default(),
+            pid: self.pid,
+            session_id: self.sid.clone(),
+            cwd: self.cwd.as_ref().map(|p| p.display().to_string()),
+            start_time: now_secs(),
+            ..Default::default()
+        });
         self.preexec = true;
         self.pwsh_list_view = false; // a nested shell does not inherit it; the next pwsh prompt re-reports it
         tag(model, None);
@@ -678,7 +696,10 @@ impl Tracker {
             end += 1;
         }
 
-        let mut e = Extracted::default();
+        // ponytail: an empty PS1, or a prompt more than 100 rows up, reads as not at the prompt; recording the
+        // NewCmd row with scroll tracking (Kiro's cmd_cursor) is the upgrade. A widget TUI drawn after typed text
+        // (`vim ` + Ctrl-T) still joins the prompt row's block.
+        let mut e = Extracted { at_prompt: row(start).iter().any(|c| has(c, TAG_PROMPT)), ..Extracted::default() };
         let mut cursor = None;
         let (mut pad, mut line_has_cmd) = (0, false);
         // Blanks between command cells and the cursor are buffer text (zsh skips them with CUF on a redraw).
@@ -801,6 +822,29 @@ fn parse_sgr(spec: &str) -> Option<(SuggestionColor, Flags)> {
 /// Inject a cell tag into the model only (OSC 8 hyperlink on the cursor template; SPEC D3).
 fn tag(model: &mut Model, uri: Option<String>) {
     model.set_hyperlink(uri.map(|uri| Hyperlink { id: None, uri }));
+}
+
+/// A redraw at the cursor: cells tagged `from` at and after it (its line and wrap continuations) get the cursor
+/// template's tag; before it on its row they are prompt (readline redraws only a multi-line prompt's last line,
+/// without its StartPrompt).
+fn retag_redraw(model: &mut Model, from: &str) {
+    let prompt = Some(alacritty_terminal::term::cell::Hyperlink::new(None::<String>, TAG_PROMPT.into()));
+    let link = model.grid().cursor.template.hyperlink();
+    let (cols, bottom) = (model.grid().columns(), model.grid().bottommost_line());
+    let (mut line, mut split) = (model.grid().cursor.point.line, model.grid().cursor.point.column.0);
+    loop {
+        let row = &mut model.grid_mut()[line];
+        for c in 0..cols {
+            let cell = &mut row[Column(c)];
+            if cell.hyperlink().is_some_and(|h| h.uri() == from) {
+                cell.set_hyperlink(if c < split { prompt.clone() } else { link.clone() });
+            }
+        }
+        if line >= bottom || !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+            break;
+        }
+        (line, split) = (line + 1, 0);
+    }
 }
 
 #[cfg(test)]
@@ -1044,7 +1088,7 @@ mod tests {
         feed(&mut t, &mut m, &format!("{}git \r{}git\x1b[K\x1b[1C", prompt("% "), prompt("% ")));
         assert_eq!(buf(&t, &m), ("git ".into(), 4));
         // Blanks after the prompt alone are not buffer text; blanks after the cursor are still trimmed.
-        feed(&mut t, &mut m, &format!("\r{}\x1b[2C", prompt("% ")));
+        feed(&mut t, &mut m, &format!("\r{}\x1b[K\x1b[2C", prompt("% ")));
         assert_eq!(buf(&t, &m), (String::new(), 0));
         feed(&mut t, &mut m, &format!("\r{}ls -l\x1b[2D", prompt("% ")));
         assert_eq!(buf(&t, &m), ("ls -l".into(), 3));
@@ -1081,7 +1125,8 @@ mod tests {
         feed(&mut t, &mut m, &prompt("> "));
         t.events.clear();
         // Sent while locked (fish emits it after OSCLock): still honoured; the menu still resets.
-        assert_eq!(run(&mut t, &mut m, " set -l TOKEN hunter2", true), [Event::PreExec, Event::NewCmd(None)]);
+        // r3-nohistory-skips-command-finish: it still ends (the engine resets its generator results).
+        assert_eq!(run(&mut t, &mut m, " set -l TOKEN hunter2", true), [Event::PreExec, Event::CommandEnded]);
         assert!(!t.no_history);
         let ev = run(&mut t, &mut m, "ls", false);
         assert!(matches!(&ev[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "ls"), "{ev:?}");
@@ -1109,6 +1154,53 @@ mod tests {
         // A line the shell rewrote on Enter (fish abbreviation, PS2 loop) is taken from the screen.
         assert_eq!(finish(&mut t, &mut m, "git checkout", "gco"), "git checkout");
         assert_eq!(finish(&mut t, &mut m, &format!("echo 'a\r\n{SP}> {EP}b'"), "echo 'a\nb'"), "echo 'a\nb'");
+    }
+
+    #[test]
+    fn bash_redraw_of_the_prompt_alone_keeps_the_line() {
+        // bash-readline-reused-cells-lose-buffer: leaving i-search deletes its prefix (DCH) and reprints only the
+        // prompt and the changed start; the shifted rest of the line stays.
+        let (mut t, mut m) = setup(80, 5, Shell::Bash);
+        feed(&mut t, &mut m, &format!("{}\r(reverse-i-search)`onel': git log --oneline -1 feature-", prompt("$ ")));
+        feed(&mut t, &mut m, &format!("\r\x1b[24P{}git log --onel{}", prompt("$ "), "\x08".repeat(5)));
+        assert_eq!(buf(&t, &m), ("git log --oneline -1 feature-".into(), 9));
+        // vi mode with show-mode-in-prompt: the mode string is redrawn and the line moved over with CUF.
+        let (mut t, mut m) = setup(40, 5, Shell::Bash);
+        feed(&mut t, &mut m, &format!("(ins){}git ch", prompt("$ ")));
+        feed(&mut t, &mut m, &format!("\r(cmd){}\x1b[5C", prompt("$ ")));
+        feed(&mut t, &mut m, &format!("\r(ins){}\x1b[6Ce", prompt("$ ")));
+        assert_eq!(buf(&t, &m), ("git che".into(), 7));
+        // A two-line prompt: only its last line is redrawn, without StartPrompt; it is still the prompt.
+        let (mut t, mut m) = setup(40, 5, Shell::Bash);
+        feed(&mut t, &mut m, &format!("{SP}repo\r\n[I]> {EP}{}git ch", nc()));
+        feed(&mut t, &mut m, &format!("\r[N]> {EP}{}\x1b[5C", nc()));
+        let e = t.extract(&m).unwrap();
+        assert_eq!((e.buffer.as_str(), e.cursor, e.at_prompt), ("git ch", 5, true));
+        // A finished command's cells are not taken over by the next prompt.
+        feed(&mut t, &mut m, &format!("\r\n{}{}", osc("PreExec"), prompt("$ ")));
+        assert_eq!(buf(&t, &m), (String::new(), 0));
+    }
+
+    #[test]
+    fn transient_prompt_before_preexec_keeps_the_submitted_line() {
+        let (mut t, mut m) = setup(60, 8, Shell::Zsh);
+        let run = |t: &mut Tracker, m: &mut Model, typed: &str, finish: &str| {
+            feed(t, m, &format!("{}{typed}", prompt("% ")));
+            t.submitted = Some(typed.into());
+            feed(t, m, &format!("{finish}{}{}out\r\n{}", osc(&format!("OSCLock={SID}")), osc("PreExec"), precmd(&[], "% ")));
+            let Some(Event::NewCmd(Some(h))) = std::mem::take(&mut t.events).pop() else { panic!() };
+            h.command
+        };
+        // r3-transient-redraw-clears-submitted: zle-line-finish re-expands PS1 (NewCmd) between Enter and PreExec.
+        let redraw = format!("\r{}echo !!\r\necho echo second\r\n", prompt("% "));
+        assert_eq!(run(&mut t, &mut m, "echo !!", &redraw), "echo !!");
+        // transient-prompt-pollutes-history: a transient prompt drawn without markers lands in the scrape.
+        let transient = "\r\x1b[K\u{276f} gti status\r\nzsh: correct 'gti' to 'git' [nyae]? y\r\n";
+        assert_eq!(run(&mut t, &mut m, "gti status", transient), "gti status");
+        assert_eq!(run(&mut t, &mut m, "echo hi", "\r\x1b[K\u{276f} echo hi\r\n"), "echo hi");
+        // Only as whole words ending a line: a rewritten line is still read from the screen.
+        assert_eq!(run(&mut t, &mut m, "gco", "\r\x1b[K\u{276f} git checkout\r\n"), "\u{276f} git checkout");
+        assert_eq!(run(&mut t, &mut m, "ls", "\r\x1b[K\u{276f} lsd\r\n"), "\u{276f} lsd");
     }
 
     #[test]

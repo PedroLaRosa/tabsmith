@@ -329,8 +329,10 @@ impl Engine {
     fn handle(&mut self, m: EngineMsg, pending: &mut Option<Request>, js: &mut Js) -> bool {
         match m {
             EngineMsg::Complete(r) => *pending = Some(r),
-            EngineMsg::CommandFinished(e) => {
-                self.history.append(e);
+            EngineMsg::CommandFinished(_) | EngineMsg::CommandEnded => {
+                if let EngineMsg::CommandFinished(e) = m {
+                    self.history.append(e);
+                }
                 if let Ok(mut c) = self.ghost_cache.lock() {
                     c.clear();
                 }

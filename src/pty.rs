@@ -665,8 +665,12 @@ impl Session {
                 self.poll_files();
                 return;
             }
-            Event::NewCmd(Some(h)) => {
-                let _ = self.engine.send(EngineMsg::CommandFinished(h));
+            Event::NewCmd(Some(_)) | Event::CommandEnded => {
+                let msg = match ev {
+                    Event::NewCmd(Some(h)) => EngineMsg::CommandFinished(h),
+                    _ => EngineMsg::CommandEnded, // NoHistory: the end-of-command reset, nothing recorded
+                };
+                let _ = self.engine.send(msg);
                 self.menu.error_reset();
                 self.sent = None;
                 self.poll_files();
@@ -683,7 +687,9 @@ impl Session {
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
     fn refresh(&mut self) {
-        let new = if self.alt() { None } else { self.tracker.extract(&self.term) };
+        // A block not starting on a prompt row is a widget's inline TUI (live UI only: pre_exec still scrapes after
+        // a transient prompt, which is redrawn without markers).
+        let new = if self.alt() { None } else { self.tracker.extract(&self.term).filter(|e| e.at_prompt) };
         if !self.unechoed.is_empty() {
             let base = self.lock.as_ref().map(|l| l.2.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()));
             let n = new.as_ref().map(|e| e.buffer.as_str());
@@ -1888,6 +1894,32 @@ mod tests {
         let Some(Effect::Insert { ins, .. }) = fx.into_iter().next() else { panic!("no insertion") };
         s.insert(&ins, None, &mut Vec::new());
         assert_eq!(s.tracker.submitted, None);
+    }
+
+    #[test]
+    fn no_history_command_still_ends() {
+        // r3-nohistory-skips-command-finish: the engine's end-of-command reset runs; nothing is recorded.
+        let (mut s, _) = session("{}");
+        let (tx, rx) = mpsc::channel();
+        s.engine = tx;
+        prompt(&mut s, " git branch -D fe");
+        s.on_output(b"\r\n\x1b]697;NoHistory\x07\x1b]697;PreExec\x07Deleted branch\r\n");
+        prompt(&mut s, "");
+        let msgs: Vec<_> = rx.try_iter().filter(|m| !matches!(m, EngineMsg::Complete(_))).collect();
+        assert!(matches!(&msgs[..], [EngineMsg::CommandEnded]), "{}", msgs.len());
+    }
+
+    #[test]
+    fn inline_tui_below_the_prompt_is_not_the_line() {
+        // inline-tui-scraped-as-command-line: fzf --height (zsh Ctrl-T) draws its query row below the prompt.
+        let (mut s, _) = session("{}");
+        prompt(&mut s, "");
+        let req = s.req;
+        s.on_output(b"\r\n  git ch");
+        assert_eq!((s.req, s.cur.clone()), (req, None));
+        // fzf exits; the widget redraws the prompt and the line.
+        s.on_output(format!("\r\x1b[J\x1b[A\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch").as_bytes());
+        assert_eq!(s.sent.as_ref().map(|(b, _)| b.as_str()), Some("git ch"));
     }
 
     #[test]

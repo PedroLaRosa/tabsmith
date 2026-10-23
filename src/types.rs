@@ -261,6 +261,8 @@ pub enum Msg {
 pub enum EngineMsg {
     Complete(Request),
     CommandFinished(HistoryEntry),
+    /// A command finished but must not be recorded (NoHistory).
+    CommandEnded,
     RecordInsert { cmd: String, name: String },
     Llm { req: u64, buffer: String, cwd: PathBuf, shell: Shell },
     Settings(Settings),
