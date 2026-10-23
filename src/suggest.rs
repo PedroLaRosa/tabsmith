@@ -1607,6 +1607,8 @@ mod tests {
         }
         assert_eq!(text(Sugg::new("$env:PATH", ItemType::Arg), Shell::Pwsh), "$env:PATH");
         assert_eq!(text(Sugg::new("a$b.txt", ItemType::File), Shell::Pwsh), "'a$b.txt'");
+        // pwsh-unicode-smart-quote-injection: pwsh ends a '…' string at ’ too, so smart single quotes are doubled
+        assert_eq!(text(Sugg::new("r’;x;’.txt", ItemType::File), Shell::Pwsh), "'r’’;x;’’.txt'");
         // pwsh-quoted-folder-midword-guard: folders are backtick-escaped bare words (cursor at the end), and a
         // quoted file can follow in the same word
         let i = insertion(&Sugg::new("dir with space/", ItemType::Folder), &ctx("di", "'di", Shell::Pwsh));

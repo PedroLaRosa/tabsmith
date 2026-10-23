@@ -58,10 +58,11 @@ impl History {
         }
         if let Some(path) = &self.path {
             let line = serde_json::to_string(&entry).unwrap_or_default() + "\n";
-            let res = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| {
-                open_private(path, true)?.write_all(line.as_bytes())
-            });
+            // The data root is gone (`uninstall --purge` while this session runs): don't recreate it.
+            let purged = path.parent().is_some_and(|p| !p.is_dir());
+            let res = if purged { Ok(()) } else { open_private(path, true).and_then(|mut f| f.write_all(line.as_bytes())) };
             match res {
+                Ok(()) if purged => {}
                 Ok(()) => self.lines += 1,
                 Err(e) => crate::logger::warn(&format!("history: appending to {}: {e}", path.display())),
             }
@@ -847,6 +848,10 @@ mod tests {
     fn history_file_round_trip_and_compaction() {
         let d = tmp_dir("hist");
         let path = d.join("sub/history.jsonl");
+        // A missing data root (purged while a session runs) is not recreated; the entry stays in memory only.
+        History::load_from(path.clone()).append(entry("gone", Some(0)));
+        assert!(!d.join("sub").exists());
+        std::fs::create_dir_all(d.join("sub")).unwrap();
         let mut h = History::load_from(path.clone());
         assert!(h.entries().is_empty());
         h.append(entry("echo hi", Some(0)));

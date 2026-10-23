@@ -48,7 +48,12 @@ pub fn init(name: &str, verbose: u8, stderr: bool) {
 /// `<dir>/<name>.log` for appending. Logs hold command text, so on Unix the dir is 0700 and the file 0600
 /// (like history and run files, SPEC §3.1), also when they already existed.
 fn open_log(dir: &std::path::Path, name: &str) -> Option<std::fs::File> {
-    std::fs::create_dir_all(dir).ok()?;
+    // ponytail: only under an existing data root, so a session still running after `uninstall --purge` does not
+    // recreate ~/.tabsmith; the very first command before any data dir exists is not logged.
+    if !dir.parent().is_some_and(|p| p.is_dir()) {
+        return None;
+    }
+    let _ = std::fs::create_dir(dir);
     let mut opts = std::fs::OpenOptions::new();
     opts.create(true).append(true);
     #[cfg(unix)]
