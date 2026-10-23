@@ -548,8 +548,13 @@ fn read(path: &Path) -> Result<String, IntegrationError> {
 
 /// Write through symlinks, creating the parent directory. Atomic (temp file + rename, permissions kept): a failed or
 /// concurrent write never leaves the user's file empty or torn. A file we may not write stays PermissionDenied.
+/// ponytail: a hard-linked dotfile is split (rename); write in place when nlink > 1 if anyone links dotfiles.
 fn write(path: &Path, contents: &str) -> Result<(), IntegrationError> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // A dangling symlink (dotfiles checkout not populated yet) has no canonical path: write where it points.
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| match std::fs::read_link(path) {
+        Ok(link) => path.parent().unwrap_or(Path::new("")).join(link),
+        Err(_) => path.to_path_buf(),
+    });
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
     }
@@ -1617,8 +1622,11 @@ mod tests {
         assert!(p1.contains(&format!("{}{}", osc("NewCmd=abc"), osc("PwshListView=0"))), "{p1:?}");
         let p2 = last.split(" P2=").nth(1).unwrap_or_default();
         assert!(p2.contains(&osc("ExitCode=4")) && p2.contains("[False|4]> "), "{p2:?}");
+        // The foreign prompt is tracked like any other: the session's shell, pid and dir come with it.
         let rewrap = s.split("\nREWRAP").nth(1).and_then(|r| r.split("\nAFTER").next()).unwrap_or_default();
-        assert!(rewrap.contains(&format!("{}{}{}", osc("OSCUnlock=abc"), osc("ExitCode=0"), osc("NewCmd=abc"))), "{rewrap:?}");
+        assert!(rewrap.trim_start().starts_with(&format!("{}{}{}\x1b]697;PID=", osc("OSCUnlock=abc"), osc("ExitCode=0"), osc("Shell=pwsh"))), "{rewrap:?}");
+        assert!(rewrap.contains("\x1b]697;Dir=/") && rewrap.contains(&format!("{}{}", osc("NewCmd=abc"), osc("PwshListView=0"))), "{rewrap:?}");
+        assert!(!rewrap.contains("StartPrompt"), "{rewrap:?}");
         let p3 = last.split(" P3=").nth(1).unwrap_or_default();
         assert!(p3.contains(&format!("{}MY> {}", osc("StartPrompt"), osc("EndPrompt"))), "{p3:?}");
         let p5 = last.split(" P5=").nth(1).unwrap_or_default();
@@ -1773,7 +1781,7 @@ mod tests {
     }
 
     /// bash ≥ 5.1 with bash-preexec: PROMPT_COMMAND is an array whose first element embeds `_ts_first;…;_ts_last`.
-    /// _ts_first still runs once per prompt.
+    /// _ts_first still runs once per prompt; bash-preexec's __bp_interactive_mode stays last (it arms preexec).
     #[test]
     fn integrations_bash_prompt_command_array_runs_first_once() {
         let dir = tmp("bashpcarr");
@@ -1783,7 +1791,118 @@ mod tests {
             printf '\n'; declare -p PROMPT_COMMAND"#;
         if let Some(s) = run_post("bash", &["--norc", "--noprofile", "-c"], &snapshot(Shell::Bash, When::Post), script, &dir) {
             assert_eq!(s.matches("OSCUnlock=abc").count(), 3, "{s:?}");
-            assert!(s.contains(r#"([0]="_ts_first" [1]=$'__bp_precmd_invoke_cmd\n:' [2]="__bp_interactive_mode" [3]="_ts_last")"#), "{s:?}");
+            assert!(s.contains(r#"([0]="_ts_first" [1]=$'__bp_precmd_invoke_cmd\n:' [2]="_ts_last" [3]="__bp_interactive_mode")"#), "{s:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    const GHOSTTY: &str = "/Applications/Ghostty.app/Contents/Resources/ghostty";
+    const VSCODE_BASH: &str =
+        "/Applications/Visual Studio Code.app/Contents/Resources/app/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-bash.sh";
+
+    /// Interactive bash in a PTY with `rc` (HISTFILE=/dev/null, then `rc`, then the post block) typing `input`, with
+    /// `env` added. Output, or None without bash.
+    #[cfg(unix)]
+    fn bash_session(dir: &Path, rc: &str, env: &[(&str, &Path)], input: &str) -> Option<String> {
+        which("bash")?;
+        let f = dir.join("post.bash");
+        std::fs::write(&f, init_for(Shell::Bash, When::Post, &fake_bin(&dir.join("bin")).display().to_string())).unwrap();
+        let rcfile = dir.join("bashrc");
+        std::fs::write(&rcfile, format!("HISTFILE=/dev/null; PS1='$ '\n{rc}\nsource \"$F\"\n")).unwrap();
+        let env = [env, &[("HOME", dir), ("F", &f), ("TABSMITH_SESSION_ID", Path::new("abc"))]].concat();
+        let argv = ["bash", "--noprofile", "--rcfile", &rcfile.display().to_string(), "-i"];
+        Some(pty_run(&argv, &env, "NewCmd=abc", input).0)
+    }
+
+    /// Real bash-preexec copies (Ghostty's bundled 0.6, any `bash-preexec*.sh` in $TABSMITH_THIRD_PARTY, e.g. 0.5.0,
+    /// 0.6.0 and master) sourced before the post block: preexec runs once per command, with that command; the
+    /// installer does not linger in PROMPT_COMMAND (it would delete the DEBUG trap at every prompt).
+    #[cfg(unix)]
+    #[test]
+    fn integrations_bash_preexec_hooks_run() {
+        let mut copies: Vec<PathBuf> = std::env::var_os("TABSMITH_THIRD_PARTY")
+            .and_then(|d| std::fs::read_dir(d).ok())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("bash-preexec")))
+            .collect();
+        copies.push(Path::new(GHOSTTY).join("shell-integration/bash/bash-preexec.sh"));
+        for (i, bp) in copies.iter().filter(|p| p.is_file()).enumerate() {
+            let dir = tmp(&format!("bashpreexec{i}"));
+            let (log, out) = (dir.join("hooks.log"), dir.join("pc.out"));
+            let q = |p: &Path| quote(Shell::Bash, &p.display().to_string());
+            let rc = format!("source {}; preexec() {{ echo \"PRE[$1]\" >> {}; }}", q(bp), q(&log));
+            let input = format!("echo one\recho two\r\recho three\r{{ declare -p PROMPT_COMMAND; trap -p DEBUG; }} > {}\rexit\r", q(&out));
+            let Some(s) = bash_session(&dir, &rc, &[], &input) else { return };
+            let log = std::fs::read_to_string(&log).unwrap_or_default();
+            let pre: Vec<&str> = log.lines().take(3).collect();
+            assert_eq!(pre, ["PRE[echo one]", "PRE[echo two]", "PRE[echo three]"], "{bp:?}: {log}\n{s:?}");
+            let pc = std::fs::read_to_string(&out).unwrap_or_default();
+            assert!(!pc.contains("__bp_install") && pc.matches("__bp_interactive_mode").count() == 1, "{bp:?}: {pc}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// Ghostty's real bash integration (it bundles bash-preexec 0.6), reloaded by the post block when Ghostty
+    /// injected it: command start (OSC 133;C) is reported for every command.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_bash_ghostty_real_integration() {
+        if !Path::new(GHOSTTY).is_dir() {
+            return;
+        }
+        let dir = tmp("bashghostty");
+        let env: &[(&str, &Path)] = &[("GHOSTTY_RESOURCES_DIR", Path::new(GHOSTTY)), ("TABSMITH_GHOSTTY_INJECTED", Path::new("1"))];
+        if let Some(s) = bash_session(&dir, "", env, "echo one\recho two\recho three\rexit\r") {
+            assert!(s.matches("\x1b]133;C").count() >= 3, "{s:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// VS Code's real bash integration: reloaded by the post block (auto-injected, with a PROMPT_COMMAND that sets
+    /// PS1, or after bash-preexec), or sourced by the user's rc (manual install). Every command is reported as typed,
+    /// after the prompt it was typed at (never `_ts_last`/`_ts_first`, also for an empty line), and each prompt is
+    /// wrapped once by VS Code and once by us.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_bash_vscode_real_integration() {
+        use std::os::unix::fs::PermissionsExt;
+        if !Path::new(VSCODE_BASH).is_file() {
+            return;
+        }
+        let dir = tmp("bashvscode");
+        let code = dir.join("codebin/code");
+        std::fs::create_dir_all(code.parent().unwrap()).unwrap();
+        std::fs::write(&code, format!("#!/bin/sh\necho {}\n", quote(Shell::Bash, VSCODE_BASH))).unwrap();
+        std::fs::set_permissions(&code, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!("{}:{}", code.parent().unwrap().display(), std::env::var("PATH").unwrap_or_default());
+        let user = r#"_p() { PS1="[$((n+=1))] \$ "; }; PROMPT_COMMAND=_p"#;
+        let manual = format!("source {}", quote(Shell::Bash, VSCODE_BASH));
+        let injected: &[(&str, &Path)] = &[("VSCODE_INJECTION", Path::new("1")), ("PATH", Path::new(&path))];
+        let mut cases = vec![(user.to_string(), injected), (manual, &[])];
+        // With bash-preexec loaded first (atuin, ...), VS Code takes its hooks instead of a trap of its own.
+        let bp = Path::new(GHOSTTY).join("shell-integration/bash/bash-preexec.sh");
+        if bp.is_file() {
+            cases.push((format!("source {}", quote(Shell::Bash, &bp.display().to_string())), injected));
+        }
+        for (rc, env) in cases {
+            let Some(s) = bash_session(&dir, &rc, env, "echo one\r\recho two\rexit\r") else { return };
+            let codes: Vec<&str> = s.split("\x1b]633;").skip(1).map(|c| &c[..c.find('\x07').unwrap_or(0)]).collect();
+            let cmds: Vec<&str> = codes.iter().filter(|c| c.starts_with("E;")).copied().collect();
+            assert!(cmds.iter().all(|c| !c.contains("_ts")), "{rc}: {codes:?}");
+            assert!(cmds.contains(&"E;echo one;") && cmds.contains(&"E;echo two;"), "{rc}: {codes:?}");
+            let after_prompt = codes.windows(2).all(|w| !w[1].starts_with("E;") || w[0] == "B");
+            assert!(after_prompt, "{rc}: a command reported before its prompt: {codes:?}");
+            let prompts: Vec<&str> = s.split("\x1b]697;NewCmd=abc").collect();
+            for p in &prompts[..prompts.len() - 1] {
+                let ok = p.matches("\x1b]633;A").count() == 1 && p.matches("StartPrompt").count() == 1;
+                assert!(ok, "{rc}: each prompt wrapped once by VS Code and by us: {p:?}");
+            }
+            if rc == user {
+                assert!(s.contains("\x1b]697;StartPrompt\x07[3] $ \x1b]697;EndPrompt"), "{rc}: {s:?}");
+            }
         }
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1991,15 +2110,81 @@ mod tests {
         let env = format!(
             "export GHOSTTY_RESOURCES_DIR={d}/ghostty KITTY_SHELL_INTEGRATION=enabled KITTY_INSTALLATION_DIR={d}/kitty VSCODE_INJECTION=1 PATH={d}/bin:$PATH"
         );
-        let zsh = format!("{env}; PS1='$ '; source \"$F\"; print -r -- \" last=${{precmd_functions[-1]}} inj=$VSCODE_INJECTION\"");
-        if let Some(s) = run_post("zsh", &["-f", "-c"], &snapshot(Shell::Zsh, When::Post), &zsh, &dir) {
-            assert!(s.contains("GHOSTTY-ZSH") && s.contains("KITTY-ZSH") && s.contains("VSCODE-ZSH[]"), "{s:?}");
-            assert!(s.ends_with(" last=_ts_precmd inj=1\n"), "{s:?}");
+        // Ghostty only when it injected (the pre block saw it): never under `shell-integration = none`, nor in a
+        // shell started from this one.
+        for ghostty in ["export TABSMITH_GHOSTTY_INJECTED=1", ":"] {
+            let zsh = format!("{env}; {ghostty}; PS1='$ '; source \"$F\"; print -r -- \" last=${{precmd_functions[-1]}} inj=$VSCODE_INJECTION g=${{TABSMITH_GHOSTTY_INJECTED-}}\"");
+            if let Some(s) = run_post("zsh", &["-f", "-c"], &snapshot(Shell::Zsh, When::Post), &zsh, &dir) {
+                assert_eq!(s.contains("GHOSTTY-ZSH"), ghostty != ":", "{s:?}");
+                assert!(s.contains("KITTY-ZSH") && s.contains("VSCODE-ZSH[]"), "{s:?}");
+                assert!(s.ends_with(" last=_ts_precmd inj=1 g=\n"), "{s:?}");
+            }
+            let bash = format!("{env}; {ghostty}; PS1='$ '; source \"$F\"; (IFS=';'; echo \" PC=${{PROMPT_COMMAND[*]}} inj=$VSCODE_INJECTION g=${{TABSMITH_GHOSTTY_INJECTED-}}\")");
+            if let Some(s) = run_post("bash", &["--norc", "--noprofile", "-c"], &snapshot(Shell::Bash, When::Post), &bash, &dir) {
+                assert_eq!(s.contains("GHOSTTY-BASH"), ghostty != ":", "{s:?}");
+                assert!(s.contains("KITTY-BASH") && s.contains("VSCODE-BASH[]"), "{s:?}");
+                let pc = if ghostty == ":" { "_ts_first;_ts_last" } else { "_ts_first;_g;_ts_last" };
+                assert!(s.ends_with(&format!(" PC={pc} inj=1 g=\n")), "{s:?}");
+            }
         }
-        let bash = format!("{env}; PS1='$ '; source \"$F\"; (IFS=';'; echo \" PC=${{PROMPT_COMMAND[*]}} inj=$VSCODE_INJECTION\")");
-        if let Some(s) = run_post("bash", &["--norc", "--noprofile", "-c"], &snapshot(Shell::Bash, When::Post), &bash, &dir) {
-            assert!(s.contains("GHOSTTY-BASH") && s.contains("KITTY-BASH") && s.contains("VSCODE-BASH[]"), "{s:?}");
-            assert!(s.ends_with(" PC=_ts_first;_g;_ts_last inj=1\n"), "{s:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The pre block tells the wrapper whether Ghostty injected its integration into this shell (zsh: Ghostty's
+    /// .zshenv set `_ghostty_state`; bash: ghostty.bash is sourcing the rc files), not merely ran in Ghostty.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_pre_detects_ghostty_injection() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmp("ghosttypre");
+        let fake = dir.join("fake");
+        let got = dir.join("got");
+        std::fs::write(&fake, format!("#!/bin/sh\necho \"[$TABSMITH_GHOSTTY_INJECTED]\" > {}\n", quote(Shell::Bash, &got.display().to_string()))).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pre = dir.join("pre.sh");
+        std::fs::write(&pre, init_for(Shell::Bash, When::Pre, &fake.display().to_string())).unwrap();
+        let cases = [("bash", "__ghostty_bash_flags=''", "[1]"), ("bash", ":", "[]"), ("zsh", "typeset -gi _ghostty_state", "[1]"), ("zsh", ":", "[]")];
+        for (sh, setup, want) in cases {
+            if which(sh).is_none() {
+                continue;
+            }
+            let rc = dir.join(format!("rc.{sh}"));
+            std::fs::write(&rc, format!("{setup}; source {}\n", quote(Shell::Bash, &pre.display().to_string()))).unwrap();
+            if sh == "zsh" {
+                std::fs::write(dir.join(".zshrc"), std::fs::read(&rc).unwrap()).unwrap();
+            }
+            let _ = std::fs::remove_file(&got);
+            let rcs = rc.display().to_string();
+            let argv: Vec<&str> = if sh == "bash" { vec!["bash", "--noprofile", "--rcfile", &rcs, "-i"] } else { vec!["zsh", "-d", "-i"] };
+            let (out, _) = pty_run(&argv, &[("HOME", &dir), ("ZDOTDIR", &dir)], "", "");
+            assert_eq!(std::fs::read_to_string(&got).unwrap_or_default().trim(), want, "{sh} {setup}: {out:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// zsh: a theme that sets PS1 mid-edit from a `zle -F` handler and redraws it (oh-my-posh streaming with
+    /// `zle reset-prompt`, pure with `zle .reset-prompt`) gets the new prompt wrapped before the line is used.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_zsh_async_prompt_rewrapped() {
+        if which("zsh").is_none() {
+            return;
+        }
+        let dir = tmp("zshasync");
+        let f = dir.join("post.zsh");
+        std::fs::write(&f, init_for(Shell::Zsh, When::Post, &fake_bin(&dir.join("bin")).display().to_string())).unwrap();
+        for reset in ["reset-prompt", ".reset-prompt"] {
+            let rc = format!(
+                "HISTFILE=/dev/null; PS1='$ '; source \"$F\"
+                _st() {{ precmd_functions=(${{precmd_functions:#_st}}); exec {{_fd}}< <(sleep 0.3; print x); zle -F $_fd _h }}
+                _h() {{ read -u $1; zle -F $1; exec {{_fd}}<&-; PS1='SLOW> '; zle {reset} }}
+                precmd_functions+=(_st)\n"
+            );
+            std::fs::write(dir.join(".zshrc"), rc).unwrap();
+            let env: &[(&str, &Path)] = &[("HOME", &dir), ("ZDOTDIR", &dir), ("F", &f), ("TABSMITH_SESSION_ID", Path::new("abc"))];
+            let (out, _) = pty_run(&["zsh", "-d", "-i"], env, "SLOW> ", "echo hi\rexit\r");
+            let line = out.split("\x1b]697;PreExec\x07").next().unwrap_or_default();
+            assert!(line.contains("\x1b]697;StartPrompt\x07SLOW> \x1b]697;EndPrompt"), "{reset}: {out:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2086,6 +2271,13 @@ mod tests {
             assert!(matches!(rc.uninstall(&c), Err(IntegrationError::PermissionDenied(_))));
             assert!(std::fs::read_to_string(&real).unwrap().contains(PRE_MARKER));
         }
+        // A dangling relative symlink (dotfiles checkout not populated yet): the link stays, its target is created.
+        let bashrc = c.home.join(".bashrc");
+        std::os::unix::fs::symlink("../dotfiles/bashrc", &bashrc).unwrap();
+        let rc = Integration { shell: Shell::Bash, path: bashrc.clone(), file_when: None };
+        rc.install(&c).unwrap();
+        assert!(std::fs::symlink_metadata(&bashrc).unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(dir.join("dotfiles/bashrc")).unwrap().contains(PRE_MARKER));
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -9,6 +9,13 @@ if [ -n "${BASH_VERSION:-}" ] && [ -n "${TABSMITH_SESSION_ID:-}" ] && [ -z "${_T
     _ts_osc "OSCUnlock=$TABSMITH_SESSION_ID"; _ts_osc "Dir=$PWD"; _ts_osc "Shell=bash"
     _ts_osc "ShellPath=${TABSMITH_SHELL:-$BASH}"; _ts_osc "PID=$$"; _ts_osc "ExitCode=$_ts_st"
     _ts_osc "TTY=$TTY"; _ts_osc "User=${USER:-root}"
+    # VS Code's own prompt command (see _ts_install) wraps the prompt around ours: take its wrap off, it wraps again.
+    if [ -n "${_ts_vsc:-}" ]; then
+      # shellcheck disable=SC2154  # VS Code's variables
+      [[ -n ${__vsc_custom_PS1:-} && $PS1 == "$__vsc_custom_PS1" ]] && PS1=$__vsc_original_PS1
+      # shellcheck disable=SC2154
+      [[ -n ${__vsc_custom_PS2:-} && $PS2 == "$__vsc_custom_PS2" ]] && PS2=$__vsc_original_PS2
+    fi
     if [ "${_ts_wrapped:-0}" = 1 ]; then
       [ "$PS1" = "$_ts_last1" ] && PS1=$_ts_u1        # keep a PS1 the user changed meanwhile
       [ "$PS2" = "$_ts_last2" ] && PS2=$_ts_u2
@@ -35,40 +42,69 @@ if [ -n "${BASH_VERSION:-}" ] && [ -n "${TABSMITH_SESSION_ID:-}" ] && [ -z "${_T
     _ts_install
     return $st
   }
-  # $1 without its `_ts_first`/`_ts_last` commands, whatever separates them (';' or newline, e.g. bash-preexec),
-  # into _ts_kept.
+  # $1 without our commands, whatever separates them (';' or newline, e.g. bash-preexec), into _ts_kept. Also without
+  # bash-preexec's __bp_interactive_mode (then _ts_im=1), and VS Code's prompt commands when $2 is set.
   _ts_strip() {
     local s=$1 kept='' cmd sep
     while [ -n "$s" ]; do
       cmd=${s%%[;$'\n']*}; s=${s:${#cmd}}; sep=${s:0:1}; s=${s:1}
-      [[ ${cmd//[[:space:]]/} == _ts_first || ${cmd//[[:space:]]/} == _ts_last ]] || kept+=$cmd$sep
+      case ${cmd//[[:space:]]/} in
+        _ts_first | _ts_last) ;;
+        __bp_interactive_mode) _ts_im=1 ;;
+        __vsc_prompt_cmd | __vsc_prompt_cmd_original) [ -n "${2:-}" ] || kept+=$cmd$sep ;;
+        *) kept+=$cmd$sep ;;
+      esac
     done
     kept=${kept#"${kept%%[![:space:];]*}"}; _ts_kept=${kept%"${kept##*[![:space:];]}"}   # ';;' is a syntax error
   }
-  # shellcheck disable=SC2128,SC2178  # PROMPT_COMMAND is either a string or an array
-  _ts_install() {   # PROMPT_COMMAND = _ts_first ; <user commands> ; _ts_last   (string or bash 5.1 array)
-    if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
-      local pc=(_ts_first) c
-      for c in "${PROMPT_COMMAND[@]}"; do _ts_strip "$c"; [ -n "$_ts_kept" ] && pc+=("$_ts_kept"); done
-      pc+=(_ts_last)
-      [[ ${#pc[@]} == "${#PROMPT_COMMAND[@]}" && "${pc[*]}" == "${PROMPT_COMMAND[*]}" ]] || PROMPT_COMMAND=("${pc[@]}")
-    elif (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+  # PROMPT_COMMAND = _ts_first ; <user commands> ; _ts_last   (string, or array from bash 5.1)
+  # A DEBUG-trap preexec arms itself with the last prompt command and takes the next command run as the user's, so
+  # an arming command stays after _ts_last: bash-preexec's __bp_interactive_mode, or VS Code's whole prompt command.
+  # shellcheck disable=SC2128,SC2178,SC2154  # PROMPT_COMMAND is either a string or an array; VS Code's variables
+  _ts_install() {
+    _ts_im='' _ts_vsc=''
+    local pc=() c IFS=$'\n'
+    if [[ -z ${bash_preexec_imported:-} && "${PROMPT_COMMAND[*]}" == *__vsc_prompt_cmd* ]] &&
+       declare -F __vsc_prompt_cmd_original >/dev/null; then
+      # VS Code's own integration (with bash-preexec it uses its hooks instead) evaluates
+      # __vsc_original_prompt_command, wraps PS1 and arms its trap: it stays the only prompt command and runs ours.
+      # ponytail: VS Code internals, as of 1.10x.
+      _ts_vsc=1
+      for c in "${__vsc_original_prompt_command[@]}" "${PROMPT_COMMAND[@]}"; do
+        _ts_strip "$c" vsc; [ -n "$_ts_kept" ] && pc+=("$_ts_kept")
+      done
+      __vsc_original_prompt_command=(_ts_first "${pc[@]}" _ts_last)
+      [[ ${#PROMPT_COMMAND[@]} == 1 && $PROMPT_COMMAND == __vsc_prompt_cmd_original ]] ||
+        { unset PROMPT_COMMAND; PROMPT_COMMAND=__vsc_prompt_cmd_original; }
+      return
+    fi
+    for c in "${PROMPT_COMMAND[@]}"; do _ts_strip "$c"; [ -n "$_ts_kept" ] && pc+=("$_ts_kept"); done
+    if [[ -n ${__bp_install_string:-} && "${PROMPT_COMMAND[*]}" == *"$__bp_install_string"* ]]; then
+      # bash-preexec installs itself at the first prompt; up to 0.6 it rewrites only ${PROMPT_COMMAND} (a string, or
+      # element 0): one string until then. It arms its preexec there, before our _ts_last: arm it again after.
+      unset PROMPT_COMMAND
+      PROMPT_COMMAND=$'_ts_first\n'"${pc[*]}"$'\n_ts_last\n__bp_interactive_mode'
+    elif [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]] ||
+         (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
       # bash 5.1+: as an array, every user command still sees the command's PIPESTATUS (_ts_first clobbers it).
-      _ts_strip "${PROMPT_COMMAND:-}"
-      PROMPT_COMMAND=(_ts_first ${_ts_kept:+"$_ts_kept"} _ts_last)
+      pc=(_ts_first "${pc[@]}" _ts_last ${_ts_im:+__bp_interactive_mode})
+      [[ ${#pc[@]} == "${#PROMPT_COMMAND[@]}" && "${pc[*]}" == "${PROMPT_COMMAND[*]}" ]] || PROMPT_COMMAND=("${pc[@]}")
     else
       # ponytail: bash 4.4/5.0 user commands see the PIPESTATUS of _ts_first.
-      _ts_strip "${PROMPT_COMMAND:-}"
-      local kept="_ts_first;${_ts_kept:+$_ts_kept;}_ts_last"
+      local kept="_ts_first;${pc:+$pc;}_ts_last${_ts_im:+;__bp_interactive_mode}"
       [[ $PROMPT_COMMAND == "$kept" ]] || PROMPT_COMMAND=$kept
     fi
   }
   # The integration Ghostty, kitty and VS Code inject loads around the rc files of the shell they start, which the
   # pre block replaced with the wrapper: load it again in this one (VSCODE_INJECTION unset: no second ~/.bashrc).
-  # ponytail: `code --locate-shell-integration-path` runs the VS Code CLI at every start; cache it if that is slow.
-  if [ -r "${GHOSTTY_RESOURCES_DIR:-}/shell-integration/bash/ghostty.bash" ] && ! declare -F __ghostty_precmd >/dev/null; then
+  # Ghostty exports GHOSTTY_RESOURCES_DIR also with `shell-integration = none` and into tmux: the pre block saw
+  # the injection. ponytail: `code --locate-shell-integration-path` runs the VS Code CLI at every start; cache it
+  # if that is slow.
+  if [ "${TABSMITH_GHOSTTY_INJECTED:-}" = 1 ] && [ -r "${GHOSTTY_RESOURCES_DIR:-}/shell-integration/bash/ghostty.bash" ] &&
+     ! declare -F __ghostty_precmd >/dev/null; then
     builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/bash/ghostty.bash"
   fi
+  unset TABSMITH_GHOSTTY_INJECTED   # not for shells started from this one
   if [ -n "${KITTY_SHELL_INTEGRATION:-}" ] && [ -r "${KITTY_INSTALLATION_DIR:-}/shell-integration/bash/kitty.bash" ]; then
     builtin source "$KITTY_INSTALLATION_DIR/shell-integration/bash/kitty.bash"
   fi

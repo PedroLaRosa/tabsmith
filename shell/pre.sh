@@ -13,6 +13,8 @@ if [ "${SHOULD_TABSMITH_LAUNCH:-1}" = 0 ] && [ -t 0 ] && [ -t 1 ] \
       export TABSMITH_SHELL="${TABSMITH_SHELL:-$SHELL}" TABSMITH_IS_LOGIN_SHELL
       # kitty's bash injection hides KITTY_SHELL_INTEGRATION while the rc files run; the post block needs it.
       [ -n "${kitty_bash_inject:-}" ] && export KITTY_SHELL_INTEGRATION="${ksi_val:-}"
+      # Ghostty injected its integration (zsh: set from its .zshenv; bash: while it sources the rc files).
+      [ -n "${_ghostty_state+x}${__ghostty_bash_flags+x}" ] && export TABSMITH_GHOSTTY_INJECTED=1
       exec -a "${TABSMITH_SHELL##*/} (tabsmith)" {{BIN}} _ pty
     fi ;;
   esac

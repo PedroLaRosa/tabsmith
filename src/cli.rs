@@ -701,10 +701,11 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
     }
     // The wrapper passes the current env to the child.
     std::env::set_var("TABSMITH_DEBUG_SHELL", "1");
-    println!("Starting tabsmith debug shell\n");
+    let _ = writeln!(std::io::stdout(), "Starting tabsmith debug shell\n");
     let code = crate::pty::run(Some(exe), cmd);
-    println!("\nEnding tabsmith debug shell\n");
     let _ = std::fs::remove_dir_all(&dir);
+    // The terminal may be gone (window closed): no panic, the shell's code still counts.
+    let _ = writeln!(std::io::stdout(), "\nEnding tabsmith debug shell\n");
     Ok(code)
 }
 
@@ -948,6 +949,69 @@ mod tests {
                 assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "brblack");
             }
         }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// Closing the terminal of a `debug shell` (its window goes away) ends it cleanly: printing the goodbye to the
+    /// dead terminal does not panic, the shell's code is returned and the rc dir is removed. Re-runs this test in a
+    /// child process on a PTY, then closes the PTY.
+    #[cfg(unix)]
+    #[test]
+    fn debug_shell_survives_closed_terminal() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        const NAME: &str = "cli::tests::debug_shell_survives_closed_terminal";
+        if let Some(marker) = std::env::var_os("TABSMITH_TEST_DEBUG_SHELL") {
+            let code = debug_shell(Some(Shell::Bash));
+            std::fs::write(marker, format!("{code:?}")).unwrap();
+            return;
+        }
+        if crate::integrations::which("bash").is_none() {
+            return;
+        }
+        let home = tmp_dir("dbgclose");
+        let marker = home.join("marker");
+        let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut cb = CommandBuilder::new(std::env::current_exe().unwrap());
+        cb.args([NAME, "--exact", "--nocapture"]);
+        cb.env_clear(); // no terminal integration (kitty, Ghostty, VS Code) of the terminal running the tests
+        cb.env("PATH", std::env::var_os("PATH").unwrap_or_default());
+        cb.env("TERM", "xterm-256color");
+        cb.env("TABSMITH_TEST_DEBUG_SHELL", &marker);
+        cb.env("TABSMITH_HOME", &home);
+        cb.env("HOME", &home);
+        cb.env("HISTFILE", "/dev/null");
+        cb.env("TABSMITH_INIT_SNAPSHOT_TEST", "1"); // the post block calls `tabsmith`, not this test binary
+        let mut child = pair.slave.spawn_command(cb).unwrap();
+        drop(pair.slave);
+        // Read the master itself (a cloned reader would keep the PTY open) until the wrapper runs (it sets the
+        // title), then close it.
+        let fd = pair.master.as_raw_fd().unwrap();
+        let (mut out, mut b) = (Vec::new(), [0u8; 4096]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !String::from_utf8_lossy(&out).contains("\x1b]0;") && std::time::Instant::now() < deadline {
+            let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+            // SAFETY: poll and read on the master fd we own, into a local buffer.
+            if unsafe { libc::poll(&mut p, 1, 100) } == 1 {
+                let n = unsafe { libc::read(fd, b.as_mut_ptr().cast(), b.len()) };
+                if n <= 0 {
+                    break;
+                }
+                out.extend_from_slice(&b[..n as usize]);
+            }
+        }
+        let out = String::from_utf8_lossy(&out).into_owned();
+        drop(pair.master);
+        let exited = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            child.try_wait().ok().flatten().is_some()
+        });
+        if !exited {
+            let _ = child.kill();
+        }
+        assert!(exited, "{out:?}");
+        assert!(std::fs::read_to_string(&marker).unwrap_or_default().starts_with("Ok("), "panicked: {out:?}");
+        let left: Vec<_> = std::fs::read_dir(home.join("run")).into_iter().flatten().flatten().map(|e| e.file_name()).collect();
+        assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("debug-shell-")), "{left:?}");
         let _ = std::fs::remove_dir_all(home);
     }
 }

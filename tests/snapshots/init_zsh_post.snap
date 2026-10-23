@@ -55,17 +55,19 @@ if [[ -n "${ZSH_NAME:-}" && -n "${TABSMITH_SESSION_ID:-}" && -z "${_TS_POST_LOAD
     [[ ${precmd_functions[-1]} == _ts_precmd ]] || precmd_functions=(${precmd_functions:#_ts_precmd} _ts_precmd)
     [[ ${preexec_functions[1]} == _ts_preexec ]] || preexec_functions=(_ts_preexec ${preexec_functions:#_ts_preexec})
   }
-  # Other themes that replace PS1 after our precmd: wrap it before the line is edited.
-  # ponytail: a theme that rewrites PS1 later still (from a `zle -F` handler) is not covered.
+  # Themes that replace PS1 after our precmd, or mid-edit (oh-my-posh streaming, pure: `zle -F` handlers, then
+  # `zle reset-prompt`): wrap it before the line is drawn.
   _ts_line_init() { [[ $PS1 == *$'%{\e]697;StartPrompt\a%}'* ]] || { _ts_wrap; zle .reset-prompt; } }
   # zsh/zle may not be loaded yet in a .zshrc: add-zle-hook-widget would then do nothing.
   [[ -o zle ]] && builtin zmodload zsh/zle && builtin autoload -Uz add-zle-hook-widget &&
-    add-zle-hook-widget line-init _ts_line_init
+    add-zle-hook-widget line-init _ts_line_init && add-zle-hook-widget line-pre-redraw _ts_line_init
   # The integration Ghostty, kitty and VS Code inject loads around the rc files of the shell they start, which the
-  # pre block replaced with the wrapper: load it again in this one.
+  # pre block replaced with the wrapper: load it again in this one. Ghostty exports GHOSTTY_RESOURCES_DIR also
+  # with `shell-integration = none` and into tmux: the pre block saw the injection.
   # ponytail: `code --locate-shell-integration-path` runs the VS Code CLI at every start; cache it if that is slow.
-  [[ -r $GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration ]] &&
+  [[ $TABSMITH_GHOSTTY_INJECTED == 1 && -r $GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration ]] &&
     builtin source -- "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
+  unset TABSMITH_GHOSTTY_INJECTED   # not for shells started from this one
   if [[ -n $KITTY_SHELL_INTEGRATION && -r $KITTY_INSTALLATION_DIR/shell-integration/zsh/kitty-integration ]]; then
     builtin autoload -Uz -- "$KITTY_INSTALLATION_DIR/shell-integration/zsh/kitty-integration"
     kitty-integration; builtin unfunction kitty-integration
