@@ -11,6 +11,8 @@ if [ "${SHOULD_TABSMITH_LAUNCH:-1}" = 0 ] && [ -t 0 ] && [ -t 1 ] \
         TABSMITH_IS_LOGIN_SHELL=1
       fi
       export TABSMITH_SHELL="${TABSMITH_SHELL:-$SHELL}" TABSMITH_IS_LOGIN_SHELL
+      # kitty's bash injection hides KITTY_SHELL_INTEGRATION while the rc files run; the post block needs it.
+      [ -n "${kitty_bash_inject:-}" ] && export KITTY_SHELL_INTEGRATION="${ksi_val:-}"
       exec -a "${TABSMITH_SHELL##*/} (tabsmith)" {{BIN}} _ pty
     fi ;;
   esac

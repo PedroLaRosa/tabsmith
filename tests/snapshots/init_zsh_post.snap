@@ -11,6 +11,24 @@ if [[ -n "${ZSH_NAME:-}" && -n "${TABSMITH_SESSION_ID:-}" && -z "${_TS_POST_LOAD
       if (( ${+RPROMPT2} )); then RPROMPT2=$_ts_ur2; else RPS2=$_ts_ur2; fi
     fi
   }
+  # Wrap every prompt that is not wrapped yet, keeping its own text for _ts_restore. Idempotent: it also runs after
+  # a theme rebuilt PROMPT behind our precmd.
+  _ts_wrap() {
+    local sp=$'%{\e]697;StartPrompt\a%}' ep=$'%{\e]697;EndPrompt\a%}'
+    [[ $PS1 == *"$sp"* ]] || { _ts_u1=$PS1; PS1="$sp$PS1$ep"$'%{\e]697;NewCmd='"$TABSMITH_SESSION_ID"$'\a%}'; }
+    [[ $PS2 == *"$sp"* ]] || { _ts_u2=$PS2; PS2="$sp$PS2$ep"; }
+    if (( ${+RPROMPT} )); then
+      [[ $RPROMPT == *"$sp"* ]] || { _ts_ur1=$RPROMPT; [[ -z $RPROMPT ]] || RPROMPT="$sp$RPROMPT$ep"; }
+    elif [[ $RPS1 != *"$sp"* ]]; then
+      _ts_ur1=$RPS1; [[ -z $RPS1 ]] || RPS1="$sp$RPS1$ep"
+    fi
+    if (( ${+RPROMPT2} )); then
+      [[ $RPROMPT2 == *"$sp"* ]] || { _ts_ur2=$RPROMPT2; [[ -z $RPROMPT2 ]] || RPROMPT2="$sp$RPROMPT2$ep"; }
+    elif [[ $RPS2 != *"$sp"* ]]; then
+      _ts_ur2=$RPS2; [[ -z $RPS2 ]] || RPS2="$sp$RPS2$ep"
+    fi
+    _ts_wrapped=1
+  }
   _ts_preexec() {
     _ts_restore; _ts_osc "OSCLock=$TABSMITH_SESSION_ID"
     [[ -o histignorespace && $1 == ' '* ]] && _ts_osc NoHistory   # kept out of zsh's history: keep it out of ours
@@ -23,13 +41,13 @@ if [[ -n "${ZSH_NAME:-}" && -n "${TABSMITH_SESSION_ID:-}" && -z "${_TS_POST_LOAD
     _ts_osc "ShellPath=${TABSMITH_SHELL:-$SHELL}"; _ts_osc "PID=$$"; _ts_osc "ExitCode=$st"
     _ts_osc "TTY=$TTY"; _ts_osc "User=${USER:-root}"
     (( ${+functions[_zsh_autosuggest_accept]} )) && _ts_osc "ZshAutosuggestionColor=${ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE:-fg=8}"
-    _ts_u1=$PS1 _ts_u2=$PS2 _ts_ur1=${RPROMPT-$RPS1} _ts_ur2=${RPROMPT2-$RPS2}
-    local sp=$'%{\e]697;StartPrompt\a%}' ep=$'%{\e]697;EndPrompt\a%}'
-    local nc=$'%{\e]697;NewCmd='"$TABSMITH_SESSION_ID"$'\a%}'
-    PS1="$sp$PS1$ep$nc"; PS2="$sp$PS2$ep"
-    if (( ${+RPROMPT} )); then [[ -n $RPROMPT ]] && RPROMPT="$sp$RPROMPT$ep"; else [[ -n $RPS1 ]] && RPS1="$sp$RPS1$ep"; fi
-    if (( ${+RPROMPT2} )); then [[ -n $RPROMPT2 ]] && RPROMPT2="$sp$RPROMPT2$ep"; else [[ -n $RPS2 ]] && RPS2="$sp$RPS2$ep"; fi
-    _ts_wrapped=1
+    _ts_wrap
+    # powerlevel10k's precmd re-asserts itself last and rebuilds PROMPT, also on async re-renders: wrap each build.
+    # Checked at every prompt, so a p10k loaded or reloaded later is covered too.
+    if (( ${+functions[_p9k_set_prompt]} )) && [[ $functions[_p9k_set_prompt] != *_ts_wrap* ]]; then
+      functions[_ts_p9k_set_prompt]=$functions[_p9k_set_prompt]
+      _p9k_set_prompt() { _ts_p9k_set_prompt "$@"; local r=$?; [[ $1 == instant_ ]] || _ts_wrap; return $r; }
+    fi
     _ts_reset_hooks
     ( 'tabsmith' _ pre-cmd --alias "$(builtin alias)" >/dev/null 2>&1 & )
   }
@@ -37,5 +55,23 @@ if [[ -n "${ZSH_NAME:-}" && -n "${TABSMITH_SESSION_ID:-}" && -z "${_TS_POST_LOAD
     [[ ${precmd_functions[-1]} == _ts_precmd ]] || precmd_functions=(${precmd_functions:#_ts_precmd} _ts_precmd)
     [[ ${preexec_functions[1]} == _ts_preexec ]] || preexec_functions=(_ts_preexec ${preexec_functions:#_ts_preexec})
   }
+  # Other themes that replace PS1 after our precmd: wrap it before the line is edited.
+  # ponytail: a theme that rewrites PS1 later still (from a `zle -F` handler) is not covered.
+  _ts_line_init() { [[ $PS1 == *$'%{\e]697;StartPrompt\a%}'* ]] || { _ts_wrap; zle .reset-prompt; } }
+  # zsh/zle may not be loaded yet in a .zshrc: add-zle-hook-widget would then do nothing.
+  [[ -o zle ]] && builtin zmodload zsh/zle && builtin autoload -Uz add-zle-hook-widget &&
+    add-zle-hook-widget line-init _ts_line_init
+  # The integration Ghostty, kitty and VS Code inject loads around the rc files of the shell they start, which the
+  # pre block replaced with the wrapper: load it again in this one.
+  # ponytail: `code --locate-shell-integration-path` runs the VS Code CLI at every start; cache it if that is slow.
+  [[ -r $GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration ]] &&
+    builtin source -- "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
+  if [[ -n $KITTY_SHELL_INTEGRATION && -r $KITTY_INSTALLATION_DIR/shell-integration/zsh/kitty-integration ]]; then
+    builtin autoload -Uz -- "$KITTY_INSTALLATION_DIR/shell-integration/zsh/kitty-integration"
+    kitty-integration; builtin unfunction kitty-integration
+  fi
+  # VSCODE_INJECTION unset: the script must not source this .zshrc again.
+  [[ $VSCODE_INJECTION == 1 && -z $VSCODE_SHELL_INTEGRATION ]] && (( ${+commands[code]} )) &&
+    VSCODE_INJECTION= builtin source -- "$(code --locate-shell-integration-path zsh)"
   _ts_reset_hooks
 fi

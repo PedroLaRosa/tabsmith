@@ -278,10 +278,15 @@ pub fn mark_restart() {
 /// Single-quote `s` for `shell` (SPEC §5.3): POSIX `'\''`, fish `\'` + `\\`, pwsh `''`.
 pub fn quote(shell: Shell, s: &str) -> String {
     match shell {
-        Shell::Pwsh => format!("'{}'", s.replace('\'', "''")),
+        Shell::Pwsh => format!("'{}'", pwsh_sq(s)),
         Shell::Fish => format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'")),
         Shell::Bash | Shell::Zsh => format!("'{}'", s.replace('\'', r"'\''")),
     }
+}
+
+/// `s` for inside a pwsh '…' string: every quote PowerShell ends such a string with (`'` and U+2018-U+201B) doubled.
+pub fn pwsh_sq(s: &str) -> String {
+    s.chars().flat_map(|c| std::iter::repeat_n(c, 1 + usize::from("'\u{2018}\u{2019}\u{201A}\u{201B}".contains(c)))).collect()
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -426,14 +431,33 @@ pub fn pre_cmd(alias: Option<String>) -> anyhow::Result<i32> {
     };
     let env = std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect();
     let ctx = SessionCtx { env, alias, ts: now_ms() };
-    write_private(&SessionCtx::path(&sid)?, serde_json::to_string(&ctx)?.as_bytes())?;
+    let path = SessionCtx::path(&sid)?;
+    write_private(&path, serde_json::to_string(&ctx)?.as_bytes())?;
+    prune_run_files(path.parent().context("no parent directory")?);
     Ok(0)
 }
 
-/// Atomic write (temp + rename); Unix: file 0600, parent dir 0700 (SPEC §2.11).
+/// Delete run files untouched for a day. A shell that exits right after a prompt leaves one behind: its background
+/// `_ pre-cmd` writes the file again after the wrapper removed it. A live session rewrites its file at every prompt.
+fn prune_run_files(dir: &Path) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let stale = e.metadata().is_ok_and(|m| {
+            m.is_file() && m.modified().is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(24 * 3600))
+        });
+        if stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// Atomic write (temp + rename); Unix: file 0600, parent dir 0700 (SPEC §2.11). The parent's parent (the data
+/// root) must exist: a running session never recreates a purged `~/.tabsmith`.
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().context("no parent directory")?;
-    std::fs::create_dir_all(dir)?;
+    match std::fs::create_dir(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e.into()),
+        _ => {}
+    }
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
@@ -522,12 +546,25 @@ fn read(path: &Path) -> Result<String, IntegrationError> {
     std::fs::read_to_string(path).map_err(|e| io_err(path, e))
 }
 
-/// Write through symlinks, creating the parent directory.
+/// Write through symlinks, creating the parent directory. Atomic (temp file + rename, permissions kept): a failed or
+/// concurrent write never leaves the user's file empty or torn. A file we may not write stays PermissionDenied.
 fn write(path: &Path, contents: &str) -> Result<(), IntegrationError> {
-    if let Some(dir) = path.parent() {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
     }
-    std::fs::write(path, contents).map_err(|e| io_err(path, e))
+    let old = std::fs::metadata(&target).ok();
+    if old.is_some() {
+        std::fs::OpenOptions::new().write(true).open(&target).map_err(|e| io_err(path, e))?;
+    }
+    let tmp = target.with_extension(format!("tabsmith-tmp-{}", std::process::id()));
+    let r = std::fs::write(&tmp, contents)
+        .and_then(|()| old.map_or(Ok(()), |m| std::fs::set_permissions(&tmp, m.permissions())))
+        .and_then(|()| std::fs::rename(&tmp, &target));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r.map_err(|e| io_err(path, e))
 }
 
 /// Delete a file; missing is fine.
@@ -751,6 +788,22 @@ impl Integration {
         Ok(())
     }
 
+    /// Is `line` one of the four dotfile lines install writes?
+    fn is_own_line(&self, ctx: &Ctx, line: &str) -> bool {
+        let line = line.trim_end();
+        [PRE_MARKER, POST_MARKER].contains(&line) || [When::Pre, When::Post].into_iter().any(|w| self.source_line(ctx, w) == line)
+    }
+
+    /// Anything uninstall would remove is on disk: also true where `is_installed` fails (a moved binary, an edited
+    /// script, lines appended after the post block).
+    fn has_traces(&self, ctx: &Ctx) -> bool {
+        if self.file_when.is_some() {
+            return self.path.exists();
+        }
+        [When::Pre, When::Post].into_iter().any(|w| self.script_path(ctx, w).exists())
+            || read(&self.path).is_ok_and(|t| t.lines().any(|l| self.is_own_line(ctx, l)))
+    }
+
     /// SPEC §5.5 uninstall: drop our exact lines, then delete the script files (missing is fine).
     pub fn uninstall(&self, ctx: &Ctx) -> Result<(), IntegrationError> {
         if self.file_when.is_some() {
@@ -758,14 +811,8 @@ impl Integration {
         }
         if self.path.exists() {
             let text = read(&self.path)?;
-            let ours = [
-                PRE_MARKER.to_string(),
-                self.source_line(ctx, When::Pre),
-                POST_MARKER.to_string(),
-                self.source_line(ctx, When::Post),
-            ];
             let (bom, body) = split_bom(&text);
-            let kept: String = body.split_inclusive('\n').filter(|l| !ours.iter().any(|o| o == l.trim_end())).collect();
+            let kept: String = body.split_inclusive('\n').filter(|l| !self.is_own_line(ctx, l)).collect();
             let new = format!("{bom}{}\n", kept.trim());
             if new != text {
                 write(&self.path, &new)?;
@@ -818,6 +865,12 @@ pub fn install_dotfiles(ctx: &Ctx, shells: &[Shell]) -> Result<bool> {
     apply(ctx, shells, |i| i.is_installed(ctx).is_err(), Integration::install)
 }
 
+/// Uninstall every integration of `shells` with something on disk. Not only the installed ones: `is_installed`
+/// fails exactly when uninstall is needed (a moved binary, lines appended after the post block). Ok(true) if any.
+fn uninstall_dotfiles(ctx: &Ctx, shells: &[Shell]) -> Result<bool> {
+    apply(ctx, shells, |i| i.has_traces(ctx), Integration::uninstall)
+}
+
 fn target_shells(t: &IntegrationTarget) -> Vec<Shell> {
     match t {
         IntegrationTarget::Dotfiles { shell: Some(s) } => vec![(*s).into()],
@@ -838,7 +891,7 @@ pub fn integrations_cmd(cmd: IntegrationsCmd) -> anyhow::Result<i32> {
         Ok(0)
     };
     let uninstall = |target: &IntegrationTarget, silent: bool| -> Result<i32> {
-        let done = apply(&ctx, &target_shells(target), |i| i.is_installed(&ctx).is_ok(), Integration::uninstall)?;
+        let done = uninstall_dotfiles(&ctx, &target_shells(target))?;
         if !silent {
             println!("{}", if done { "Uninstalled!" } else { "Not installed" });
         }
@@ -889,15 +942,23 @@ fn status(ctx: &Ctx, shells: &[Shell], format: OutputFormat) -> Result<i32> {
 // ---------------------------------------------------------------------------------------------------------------
 // setup / uninstall (SPEC §2.9)
 
-/// `[Y/n]` prompt on a tty; empty, `y` or `yes` = yes.
+/// `[Y/n]` prompt on a tty.
 fn confirm(prompt: &str) -> Result<bool> {
     if !std::io::stdin().is_terminal() {
         bail!("You must run with --no-confirm if unattended");
     }
     print!("{prompt}");
     std::io::stdout().flush()?;
+    answer(std::io::stdin().lock())
+}
+
+/// The `[Y/n]` answer on `input`: empty, `y` or `yes` = yes; end of input (Ctrl-D) = no.
+fn answer(mut input: impl std::io::BufRead) -> Result<bool> {
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
+    if input.read_line(&mut line)? == 0 {
+        println!();
+        return Ok(false);
+    }
     Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "" | "y" | "yes"))
 }
 
@@ -928,7 +989,7 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
         }
     }
     if manual {
-        print_manual(&ctx);
+        print!("{}", manual_text(&ctx, &shells));
         // Script files only: the user declined (or we failed) to edit the dotfiles themselves.
         let r = apply(&ctx, &shells, |i| i.file_when.is_none(), Integration::write_scripts);
         if let Err(e) = r {
@@ -943,25 +1004,23 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-/// Manual install instructions (Kiro `installation.rs` text, tabsmith paths).
-fn print_manual(ctx: &Ctx) {
-    let dir = ctx.data.join("shell");
-    let dir = match dir.strip_prefix(&ctx.home) {
-        Ok(rel) => format!("$HOME/{}", rel.iter().map(|c| c.to_string_lossy()).collect::<Vec<_>>().join("/")),
-        Err(_) => dir.display().to_string(),
-    };
-    println!();
-    println!("To install the integrations manually, you will have to add the following to your rc files");
-    println!("This step is required for the application to function properly");
-    println!();
-    println!("At the top of your .bashrc or .zshrc file:");
-    println!("bash:    . \"{dir}/bashrc.pre.bash\"");
-    println!("zsh:     . \"{dir}/zshrc.pre.zsh\"");
-    println!();
-    println!("At the bottom of your .bashrc or .zshrc file:");
-    println!("bash:    . \"{dir}/bashrc.post.bash\"");
-    println!("zsh:     . \"{dir}/zshrc.post.zsh\"");
-    println!();
+/// Manual install instructions (Kiro `installation.rs` text): the exact lines install writes, so doctor and
+/// uninstall recognise them, and their `[ -f … ]` guard keeps a later uninstall from breaking shell startup.
+fn manual_text(ctx: &Ctx, shells: &[Shell]) -> String {
+    let rc = |shell, file: &str| Integration { shell, path: ctx.home.join(file), file_when: None };
+    let mut rcs = vec![("bash:   ", rc(Shell::Bash, ".bashrc")), ("zsh:    ", rc(Shell::Zsh, ".zshrc"))];
+    if shells.contains(&Shell::Pwsh) {
+        rcs.push(("pwsh ($PROFILE):", rc(Shell::Pwsh, "profile")));
+    }
+    let mut s = String::from("\nTo install the integrations manually, you will have to add the following to your rc files\n");
+    s += "This step is required for the application to function properly\n";
+    for (when, at) in [(When::Pre, "top"), (When::Post, "bottom")] {
+        s += &format!("\nAt the {at} of your .bashrc or .zshrc file:\n");
+        for (label, i) in &rcs {
+            s += &format!("{label} {}\n", i.source_line(ctx, when));
+        }
+    }
+    s + "\n"
 }
 
 pub fn uninstall(args: UninstallArgs) -> anyhow::Result<i32> {
@@ -969,21 +1028,31 @@ pub fn uninstall(args: UninstallArgs) -> anyhow::Result<i32> {
         println!("Cancelled");
         return Ok(1);
     }
-    let ctx = Ctx::from_env()?;
-    if let Err(e) = apply(&ctx, &default_shells(), |_| true, Integration::uninstall) {
-        eprintln!("{e:#}");
-    }
-    if args.purge {
+    Ok(uninstall_all(&Ctx::from_env()?, &default_shells(), args.purge))
+}
+
+/// Remove every integration of `shells` (and `ctx.data` on `purge`), carrying on past errors (SPEC §2.9): 1 if any.
+fn uninstall_all(ctx: &Ctx, shells: &[Shell], purge: bool) -> i32 {
+    let mut failed = apply(ctx, shells, |_| true, Integration::uninstall).map_err(|e| eprintln!("{e:#}")).is_err();
+    if purge {
         match std::fs::remove_dir_all(&ctx.data) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                eprintln!("Could not remove {}: {e}", ctx.data.display())
+                eprintln!("Could not remove {}: {e}", ctx.data.display());
+                failed = true;
             }
             _ => {}
         }
     }
+    if failed {
+        println!("Uninstalled tabsmith with errors (see above).");
+        return 1;
+    }
     println!("Uninstalled tabsmith.");
+    if purge {
+        println!("Restart open terminals to stop tabsmith in them.");
+    }
     println!("Remove the binary with your package manager, or delete {}.", ctx.bin);
-    Ok(0)
+    0
 }
 
 #[cfg(test)]
@@ -1104,7 +1173,7 @@ mod tests {
                 Shell::Bash,
                 "bash",
                 &["--norc", "--noprofile", "-c"],
-                r#"PROMPT_COMMAND=$'history -a; '; PS1='$ '; source "$F"; echo "PC=$PROMPT_COMMAND"; _ts_first; _ts_last; _ts_first; _ts_last; printf 'PS1=%s\n' "$PS1""#,
+                r#"PROMPT_COMMAND=$'history -a; '; PS1='$ '; source "$F"; (IFS=';'; echo "PC=${PROMPT_COMMAND[*]}"); _ts_first; _ts_last; _ts_first; _ts_last; printf 'PS1=%s\n' "$PS1""#,
             ),
             (
                 Shell::Zsh,
@@ -1131,6 +1200,7 @@ mod tests {
                 .env("F", &f)
                 .env("TABSMITH_SESSION_ID", "abc")
                 .env_remove("_TS_POST_LOADED")
+            .env_remove("VSCODE_INJECTION") // run in a VS Code terminal, the post block would load VS Code's script
                 .output()
                 .unwrap();
             let s = String::from_utf8_lossy(&out.stdout);
@@ -1333,6 +1403,9 @@ mod tests {
         assert_eq!((back.env["A"].as_str(), back.alias.as_deref(), back.ts), ("1", Some("ll='ls -l'"), 7));
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(dir.join("run")).unwrap().permissions().mode() & 0o777, 0o700);
+        // A purged data root stays gone: a running session's next prompt does not recreate it.
+        assert!(write_private(&dir.join("purged").join("run").join("abc123.json"), b"{}").is_err());
+        assert!(!dir.join("purged").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1453,7 +1526,8 @@ mod tests {
     }
 
     /// PROMPT_COMMAND edited after install (`; true` appended, bash-preexec's newline-separated layout) is put back
-    /// to `_ts_first;…;_ts_last`, and PS1 is wrapped exactly once at every prompt.
+    /// to `_ts_first;…;_ts_last` (bash 5.1+: the array `_ts_first …user… _ts_last`), and PS1 is wrapped exactly
+    /// once at every prompt.
     #[test]
     fn integrations_bash_prompt_command_rewrap() {
         if which("bash").is_none() {
@@ -1463,22 +1537,31 @@ mod tests {
         let f = dir.join("post.bash");
         std::fs::write(&f, snapshot(Shell::Bash, When::Post)).unwrap();
         let script = r#"PS1='$ '; source "$F"; __bp_a() { :; }; __bp_b() { :; }
-            prompts() { for _ in 1 2 3 4; do eval "$PROMPT_COMMAND"; printf '\nLEN=%s\n' "${#PS1}"; done; printf 'PC=%q\n' "$PROMPT_COMMAND"; }
-            eval "$PROMPT_COMMAND"; PROMPT_COMMAND="$PROMPT_COMMAND; true"; prompts
+            pc() { local c; for c in "${PROMPT_COMMAND[@]}"; do eval "$c"; done; }
+            prompts() { for _ in 1 2 3 4; do pc; printf '\nLEN=%s\n' "${#PS1}"; done; local IFS='|'; printf 'PC=%q\n' "${PROMPT_COMMAND[*]}"; }
+            (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) && echo ARRAY
+            pc; PROMPT_COMMAND="$PROMPT_COMMAND; true"; prompts
             PROMPT_COMMAND=$'__bp_a\n'"$PROMPT_COMMAND"$'\n__bp_b'; prompts"#;
         let out = Command::new("bash")
             .args(["--norc", "--noprofile", "-c", script])
             .env("F", &f)
             .env("TABSMITH_SESSION_ID", "abc")
             .env_remove("_TS_POST_LOADED")
+            .env_remove("VSCODE_INJECTION") // run in a VS Code terminal, the post block would load VS Code's script
             .output()
             .unwrap();
         let s = String::from_utf8_lossy(&out.stdout);
         assert!(out.status.success(), "{s}{}", String::from_utf8_lossy(&out.stderr));
         let lens: Vec<&str> = s.lines().filter(|l| l.starts_with("LEN=")).collect();
         assert!(lens.len() == 8 && lens.iter().all(|l| *l == lens[0]), "PS1 grows: {s}");
-        assert!(s.contains("PC=_ts_first\\;true\\;_ts_last\n"), "{s}");
-        assert!(s.contains("PC=$'_ts_first;__bp_a\\ntrue;__bp_b;_ts_last'\n"), "{s}");
+        if s.contains("ARRAY\n") {
+            // `$PROMPT_COMMAND` is element 0 of the array: the user's edits land there.
+            assert!(s.contains("PC=_ts_first\\|true\\|_ts_last\n"), "{s}");
+            assert!(s.contains("PC=$'_ts_first|__bp_a\\n__bp_b|true|_ts_last'\n"), "{s}");
+        } else {
+            assert!(s.contains("PC=_ts_first\\;true\\;_ts_last\n"), "{s}");
+            assert!(s.contains("PC=$'_ts_first;__bp_a\\ntrue;__bp_b;_ts_last'\n"), "{s}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1663,6 +1746,7 @@ mod tests {
             .env("TABSMITH_SESSION_ID", "abc")
             .env("TABSMITH_HOME", dir.join("data"))
             .env_remove("_TS_POST_LOADED")
+            .env_remove("VSCODE_INJECTION") // run in a VS Code terminal, the post block would load VS Code's script
             .output()
             .unwrap();
         let s = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -1816,5 +1900,279 @@ mod tests {
         let (out, code) = pty_run(&["pwsh", "-NoLogo"], env, "PS ", "exit 6\r");
         assert_eq!(code, 6, "a wrapper that cannot start must not end the shell: {out:?}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// powerlevel10k (when installed) rebuilds PROMPT after our precmd at every prompt (its hook re-asserts itself
+    /// last) and again on async re-renders: both get the markers, and _ts_u1 keeps p10k's own prompt.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_zsh_powerlevel10k_prompt_wrapped() {
+        let theme = ["/opt/homebrew/share/powerlevel10k", "/usr/local/share/powerlevel10k", "/usr/share/zsh-theme-powerlevel10k"]
+            .map(|d| Path::new(d).join("powerlevel10k.zsh-theme"))
+            .into_iter()
+            .find(|p| p.is_file());
+        let (Some(theme), Some(_)) = (theme, which("zsh")) else { return };
+        let dir = tmp("p10k");
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let f = dir.join("post.zsh");
+        std::fs::write(&f, init_for(Shell::Zsh, When::Post, &fake_bin(&dir.join("bin")).display().to_string())).unwrap();
+        // The alarm stands in for an async re-render (gitstatus, the worker): p10k rebuilds PROMPT, redraws it.
+        let rc = format!(
+            "HISTFILE=/dev/null POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true POWERLEVEL9K_DISABLE_GITSTATUS=true
+            POWERLEVEL9K_INSTANT_PROMPT=off POWERLEVEL9K_LEFT_PROMPT_ELEMENTS=(dir) POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS=(status)
+            source {}; source \"$F\"
+            TMOUT=1; TRAPALRM() {{ _p9k_set_prompt; _p9k_reset_prompt; [[ $_ts_u1 == *697* || $PS1 == *StartPrompt*StartPrompt* ]] && print -n NESTED; print -n '<ALARM>'; exit }}\n",
+            quote(Shell::Zsh, &theme.display().to_string())
+        );
+        std::fs::write(home.join(".zshrc"), rc).unwrap();
+        let env: &[(&str, &Path)] = &[
+            ("HOME", &home),
+            ("ZDOTDIR", &home),
+            ("XDG_CACHE_HOME", &home.join(".cache")),
+            ("F", &f),
+            ("TABSMITH_SESSION_ID", Path::new("abc")),
+            ("TABSMITH_HOME", &dir.join("data")),
+        ];
+        let (out, _) = pty_run(&["zsh", "-d", "-i"], env, "NewCmd=abc", "true\r");
+        let second = out.split("\x1b]697;PreExec\x07").nth(1).and_then(|r| r.split("<ALARM>").next()).unwrap_or_default();
+        assert!(out.contains("<ALARM>"), "{out:?}");
+        assert!(second.matches("NewCmd=abc").count() >= 2, "the next prompt and its re-render are wrapped: {second:?}");
+        assert!(!second.contains("NESTED"), "{second:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A theme whose precmd hook sets PS1 after ours (it moves itself last too, or was added after the post block,
+    /// e.g. by a .zshrc read after the .zprofile one): line-init wraps the prompt before the line is edited.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_zsh_theme_after_our_precmd_wrapped() {
+        if which("zsh").is_none() {
+            return;
+        }
+        let dir = tmp("zshtheme");
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let f = dir.join("post.zsh");
+        std::fs::write(&f, init_for(Shell::Zsh, When::Post, &fake_bin(&dir.join("bin")).display().to_string())).unwrap();
+        let rc = "HISTFILE=/dev/null; source \"$F\"
+            _theme() { PS1='[mine] %# '; precmd_functions=(${precmd_functions:#_theme} _theme) }; precmd_functions+=(_theme)\n";
+        std::fs::write(home.join(".zshrc"), rc).unwrap();
+        let env: &[(&str, &Path)] = &[("HOME", &home), ("ZDOTDIR", &home), ("F", &f), ("TABSMITH_SESSION_ID", Path::new("abc"))];
+        let (out, _) = pty_run(&["zsh", "-d", "-i"], env, "", "true\rexit\r");
+        let prompts: Vec<&str> = out.split("\x1b]697;PreExec\x07").take(2).collect();
+        assert!(prompts.len() == 2 && prompts.iter().all(|p| p.contains("[mine] % \x1b]697;EndPrompt")), "{out:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Under Ghostty, kitty and VS Code the post block loads the shell integration the terminal injected into the
+    /// outer shell (VS Code's with VSCODE_INJECTION unset, so it does not source the rc file again); our hooks stay
+    /// outermost.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_terminal_injected_integration_reloaded() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmp("injected");
+        let d = dir.display().to_string();
+        let files = [
+            ("ghostty/shell-integration/zsh/ghostty-integration", "print -n GHOSTTY-ZSH; precmd_functions+=(_g)\n"),
+            ("ghostty/shell-integration/bash/ghostty.bash", "printf GHOSTTY-BASH; PROMPT_COMMAND=\"_g;$PROMPT_COMMAND\"\n"),
+            ("kitty/shell-integration/zsh/kitty-integration", "print -n KITTY-ZSH\n"),
+            ("kitty/shell-integration/bash/kitty.bash", "printf KITTY-BASH\n"),
+            ("vscode/rc.zsh", "print -n \"VSCODE-ZSH[$VSCODE_INJECTION]\"\n"),
+            ("vscode/rc.bash", "printf 'VSCODE-BASH[%s]' \"$VSCODE_INJECTION\"\n"),
+            ("bin/code", &format!("#!/bin/sh\n[ \"$1\" = --locate-shell-integration-path ] && echo {d}/vscode/rc.$2\n")),
+        ];
+        for (p, text) in files {
+            std::fs::create_dir_all(dir.join(p).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(p), text).unwrap();
+        }
+        std::fs::set_permissions(dir.join("bin/code"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let env = format!(
+            "export GHOSTTY_RESOURCES_DIR={d}/ghostty KITTY_SHELL_INTEGRATION=enabled KITTY_INSTALLATION_DIR={d}/kitty VSCODE_INJECTION=1 PATH={d}/bin:$PATH"
+        );
+        let zsh = format!("{env}; PS1='$ '; source \"$F\"; print -r -- \" last=${{precmd_functions[-1]}} inj=$VSCODE_INJECTION\"");
+        if let Some(s) = run_post("zsh", &["-f", "-c"], &snapshot(Shell::Zsh, When::Post), &zsh, &dir) {
+            assert!(s.contains("GHOSTTY-ZSH") && s.contains("KITTY-ZSH") && s.contains("VSCODE-ZSH[]"), "{s:?}");
+            assert!(s.ends_with(" last=_ts_precmd inj=1\n"), "{s:?}");
+        }
+        let bash = format!("{env}; PS1='$ '; source \"$F\"; (IFS=';'; echo \" PC=${{PROMPT_COMMAND[*]}} inj=$VSCODE_INJECTION\")");
+        if let Some(s) = run_post("bash", &["--norc", "--noprofile", "-c"], &snapshot(Shell::Bash, When::Post), &bash, &dir) {
+            assert!(s.contains("GHOSTTY-BASH") && s.contains("KITTY-BASH") && s.contains("VSCODE-BASH[]"), "{s:?}");
+            assert!(s.ends_with(" PC=_ts_first;_g;_ts_last inj=1\n"), "{s:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// bash with HISTCONTROL=ignoreboth:erasedups: a re-run of an older command reaches bash's history (the older
+    /// copy goes) and ours; a space-prefixed line and an immediate repeat (ignoredups) do not.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_bash_erasedups_keeps_reruns() {
+        if which("bash").is_none() {
+            return;
+        }
+        let dir = tmp("erasedups");
+        let bin = fake_bin(&dir.join("bin")).display().to_string();
+        let f = dir.join("post.bash");
+        std::fs::write(&f, init_for(Shell::Bash, When::Post, &bin)).unwrap();
+        let rc = dir.join("bashrc");
+        std::fs::write(&rc, "HISTFILE=/dev/null; HISTCONTROL=ignoreboth:erasedups; PS1='$ '; source \"$F\"\n").unwrap();
+        let env: &[(&str, &Path)] = &[("HOME", &dir), ("F", &f), ("TABSMITH_SESSION_ID", Path::new("abc"))];
+        let argv = ["bash", "--noprofile", "--rcfile", &rc.display().to_string(), "-i"];
+        let (out, _) = pty_run(&argv, env, "NewCmd=abc", "echo a\recho b\recho a\r echo secret\recho b\recho b\rexit\r");
+        let got: Vec<bool> = out.split("\x1b]697;PreExec\x07").take(6).map(|c| c.contains("NoHistory")).collect();
+        assert_eq!(got, [false, false, false, true, false, true], "{out:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// bash 5.1+ (when installed): a string PROMPT_COMMAND becomes an array, so the user's prompt command still sees
+    /// the command's PIPESTATUS (starship's pipestatus, for one).
+    #[cfg(unix)]
+    #[test]
+    fn integrations_bash_prompt_command_keeps_pipestatus() {
+        let new = Command::new("bash").args(["-c", "(( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 501 ))"]).status();
+        if !new.is_ok_and(|s| s.success()) {
+            return;
+        }
+        let dir = tmp("pipestatus");
+        let bin = fake_bin(&dir.join("bin")).display().to_string();
+        let f = dir.join("post.bash");
+        std::fs::write(&f, init_for(Shell::Bash, When::Post, &bin)).unwrap();
+        let rc = dir.join("bashrc");
+        let user = r#"_show_ps() { _ps="${PIPESTATUS[*]}"; }; PROMPT_COMMAND=_show_ps; PS1='[ps=$_ps] $ '"#;
+        std::fs::write(&rc, format!("HISTFILE=/dev/null; {user}; source \"$F\"\n")).unwrap();
+        let env: &[(&str, &Path)] = &[("HOME", &dir), ("F", &f), ("TABSMITH_SESSION_ID", Path::new("abc"))];
+        let argv = ["bash", "--noprofile", "--rcfile", &rc.display().to_string(), "-i"];
+        let (out, _) = pty_run(&argv, env, "NewCmd=abc", "false | true | (exit 3)\rexit\r");
+        assert!(out.contains("[ps=1 0 3] $ "), "{out:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Ctrl-D (end of input) at a [Y/n] prompt is no, never yes.
+    #[test]
+    fn integrations_confirm_eof_is_no() {
+        assert!(!answer(&b""[..]).unwrap());
+        assert!(answer(&b"\n"[..]).unwrap() && answer(&b"Yes\n"[..]).unwrap());
+        assert!(!answer(&b"n\n"[..]).unwrap());
+    }
+
+    /// Dotfiles are replaced atomically: whoever holds the old file sees it whole, a symlinked dotfile stays a
+    /// symlink, permissions stay, no temp file is left, and a read-only file still reports PermissionDenied.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_dotfile_write_is_atomic() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmp("atomic");
+        let c = ctx(&dir);
+        let real = dir.join("dotfiles").join("zshrc");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&c.home).unwrap();
+        std::fs::write(&real, "export A=1\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let zshrc = c.home.join(".zshrc");
+        std::os::unix::fs::symlink(&real, &zshrc).unwrap();
+        let old = dir.join("old-zshrc");
+        std::fs::hard_link(&real, &old).unwrap(); // the old inode, as a concurrent reader sees it
+        let rc = Integration { shell: Shell::Zsh, path: zshrc.clone(), file_when: None };
+        rc.install(&c).unwrap();
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "export A=1\n", "rewritten in place");
+        assert!(std::fs::symlink_metadata(&zshrc).unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(&real).unwrap().contains(PRE_MARKER));
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_dir(real.parent().unwrap()).unwrap().count(), 1, "temp file left behind");
+        if !is_root() {
+            std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o444)).unwrap();
+            assert!(matches!(rc.uninstall(&c), Err(IntegrationError::PermissionDenied(_))));
+            assert!(std::fs::read_to_string(&real).unwrap().contains(PRE_MARKER));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `integrations uninstall` removes integrations whose scripts name another binary (it moved): is_installed
+    /// fails for all of them. With nothing left it reports nothing done.
+    #[test]
+    fn integrations_uninstall_after_binary_moved() {
+        let dir = tmp("moved");
+        let c = ctx(&dir);
+        let shells = [Shell::Bash, Shell::Fish];
+        install_dotfiles(&c, &shells).unwrap();
+        let moved = Ctx { bin: "/elsewhere/tabsmith".into(), ..c.clone() };
+        let all: Vec<Integration> = shells.iter().flat_map(|s| integrations(&moved, *s).unwrap()).collect();
+        assert!(all.iter().all(|i| i.is_installed(&moved).is_err()));
+        assert!(uninstall_dotfiles(&moved, &shells).unwrap());
+        assert!(!std::fs::read_to_string(c.home.join(".bashrc")).unwrap().contains("tabsmith"));
+        assert!(all.iter().all(|i| !i.has_traces(&moved)), "{all:?}");
+        assert!(!uninstall_dotfiles(&moved, &shells).unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A dotfile uninstall cannot clean (read-only) makes `uninstall` fail with 1, not claim success.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_uninstall_reports_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        if is_root() {
+            return;
+        }
+        let dir = tmp("uninstfail");
+        let c = ctx(&dir);
+        install_dotfiles(&c, &[Shell::Zsh]).unwrap();
+        let zshrc = c.home.join(".zshrc");
+        std::fs::set_permissions(&zshrc, std::fs::Permissions::from_mode(0o444)).unwrap();
+        assert_eq!(uninstall_all(&c, &[Shell::Zsh], false), 1);
+        assert!(std::fs::read_to_string(&zshrc).unwrap().contains(PRE_MARKER));
+        std::fs::set_permissions(&zshrc, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(uninstall_all(&c, &[Shell::Zsh], true), 0);
+        assert!(!c.data.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The manual-install lines setup prints are the ones is_installed and uninstall recognise.
+    #[test]
+    fn integrations_manual_lines_are_recognised() {
+        let dir = tmp("manual");
+        let c = ctx(&dir);
+        std::fs::create_dir_all(&c.home).unwrap();
+        let text = manual_text(&c, &[Shell::Bash, Shell::Zsh]);
+        let lines: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("zsh:")).map(str::trim).collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        let zshrc = c.home.join(".zshrc");
+        std::fs::write(&zshrc, format!("{}\nexport A=1\n{}\n", lines[0], lines[1])).unwrap();
+        let rc = Integration { shell: Shell::Zsh, path: zshrc.clone(), file_when: None };
+        rc.write_scripts(&c).unwrap(); // what setup's manual path writes
+        rc.is_installed(&c).unwrap();
+        rc.uninstall(&c).unwrap();
+        assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), "export A=1\n");
+        assert!(!text.contains("pwsh") && manual_text(&c, &[Shell::Pwsh]).contains("pwsh ($PROFILE): if (Test-Path"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Run files untouched for a day go (a quick exit can leave one behind); fresh files and directories stay.
+    #[test]
+    fn integrations_prune_run_files() {
+        let dir = tmp("prune");
+        let (old, new, sub) = (dir.join("old.json"), dir.join("new.json"), dir.join("debug-shell-1"));
+        std::fs::write(&old, "{}").unwrap();
+        std::fs::write(&new, "{}").unwrap();
+        std::fs::create_dir(&sub).unwrap();
+        let day_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 24 * 3600);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(day_ago).unwrap();
+        prune_run_files(&dir);
+        assert!(!old.exists() && new.exists() && sub.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// PowerShell also ends a '…' string at U+2018-U+201B: doubled, a file name holding one stays one argument.
+    #[test]
+    fn integrations_quote_pwsh_smart_quotes() {
+        let name = "report\u{2019};Write-Output PWNED;\u{2018}\u{201A}\u{201B}'.txt";
+        let q = quote(Shell::Pwsh, name);
+        assert_eq!(q, "'report\u{2019}\u{2019};Write-Output PWNED;\u{2018}\u{2018}\u{201A}\u{201A}\u{201B}\u{201B}''.txt'");
+        if which("pwsh").is_some() {
+            let script = format!("$a = @({q}); [Console]::Out.Write(\"$($a.Count)|$($a[0])\")");
+            let out = Command::new("pwsh").args(["-NoProfile", "-Command", &script]).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), format!("1|{name}"), "{}", String::from_utf8_lossy(&out.stderr));
+        }
     }
 }
