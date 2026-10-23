@@ -30,6 +30,7 @@ pub struct Suggestion {
     pub is_dangerous: bool,
     /// `context.templateType` (filepaths/folders/help).
     pub template_type: Option<String>,
+    pub icon: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,6 +130,7 @@ pub struct Opt {
     pub description: Option<String>,
     pub display_name: Option<String>,
     pub insert_value: Option<String>,
+    pub icon: Option<String>,
     pub priority: Option<f64>,
     pub hidden: bool,
     pub is_dangerous: bool,
@@ -237,7 +239,10 @@ pub fn normalise(v: &Value) -> anyhow::Result<Subcommand> {
 /// Parse one suggestion: a string or an object with `name` (string or array).
 pub fn suggestion_from_json(v: &Value) -> Option<Suggestion> {
     if let Some(s) = v.as_str() {
-        return Some(Suggestion { names: vec![s.to_string()], ..Default::default() });
+        return Some(Suggestion {
+            names: vec![s.to_string()],
+            ..Default::default()
+        });
     }
     let names = strs(v.get("name"));
     if !v.is_object() || names.is_empty() {
@@ -248,11 +253,15 @@ pub fn suggestion_from_json(v: &Value) -> Option<Suggestion> {
         display_name: s(v, "displayName"),
         insert_value: s(v, "insertValue"),
         description: s(v, "description"),
-        kind: v.get("type").and_then(Value::as_str).map(ItemType::from_fig),
+        kind: v
+            .get("type")
+            .and_then(Value::as_str)
+            .map(ItemType::from_fig),
         priority: v.get("priority").and_then(Value::as_f64),
         hidden: b(v, "hidden"),
         is_dangerous: b(v, "isDangerous"),
         template_type: v.get("context").and_then(|c| s(c, "templateType")),
+        icon: s(v, "icon"),
     })
 }
 
@@ -260,7 +269,9 @@ pub fn suggestion_from_json(v: &Value) -> Option<Suggestion> {
 pub fn load_spec_result(v: &Value) -> Option<LoadSpec> {
     match v {
         Value::Array(a) => Some(LoadSpec::Locations(a.iter().filter_map(location).collect())),
-        Value::Object(o) if o.contains_key("type") => Some(LoadSpec::Locations(location(v).into_iter().collect())),
+        Value::Object(o) if o.contains_key("type") => {
+            Some(LoadSpec::Locations(location(v).into_iter().collect()))
+        }
         Value::Object(_) => Some(LoadSpec::Inline(Rc::new(subcommand(v)))),
         _ => None,
     }
@@ -271,7 +282,10 @@ fn location(v: &Value) -> Option<SpecLocation> {
     let name = s(v, "name")?;
     match v.get("type")?.as_str()? {
         "global" => Some(SpecLocation::Global { name }),
-        "local" => Some(SpecLocation::Local { dir: PathBuf::from(s(v, "path").unwrap_or_else(|| "~/".into())), name }),
+        "local" => Some(SpecLocation::Local {
+            dir: PathBuf::from(s(v, "path").unwrap_or_else(|| "~/".into())),
+            name,
+        }),
         _ => None,
     }
 }
@@ -286,12 +300,16 @@ fn subcommand(v: &Value) -> Subcommand {
         priority: v.get("priority").and_then(Value::as_f64),
         hidden: b(v, "hidden"),
         is_dangerous: b(v, "isDangerous"),
-        subcommands: objects(v.get("subcommands")).map(|x| Rc::new(subcommand(x))).collect(),
+        subcommands: objects(v.get("subcommands"))
+            .map(|x| Rc::new(subcommand(x)))
+            .collect(),
         args: args(v.get("args")),
         load_spec: v.get("loadSpec").and_then(load_spec),
         generate_spec: v.get("generateSpec").and_then(fn_id),
         generate_spec_cache_key: v.get("generateSpecCacheKey").and_then(str_or_fn),
-        additional_suggestions: items(v.get("additionalSuggestions")).filter_map(suggestion_from_json).collect(),
+        additional_suggestions: items(v.get("additionalSuggestions"))
+            .filter_map(suggestion_from_json)
+            .collect(),
         filter_strategy: strategy(v),
         requires_subcommand: v.get("requiresSubcommand").and_then(Value::as_bool),
         ..Default::default()
@@ -326,6 +344,7 @@ fn option(v: &Value) -> Opt {
         description: s(v, "description"),
         display_name: s(v, "displayName"),
         insert_value: s(v, "insertValue"),
+        icon: s(v, "icon"),
         priority: v.get("priority").and_then(Value::as_f64),
         hidden: b(v, "hidden"),
         is_dangerous: b(v, "isDangerous"),
@@ -375,11 +394,16 @@ fn arg(v: &Value) -> Arg {
             None => None,
         },
         options_can_break_variadic: v.get("optionsCanBreakVariadicArg").and_then(Value::as_bool),
-        suggestions: items(v.get("suggestions")).filter_map(suggestion_from_json).collect(),
+        suggestions: items(v.get("suggestions"))
+            .filter_map(suggestion_from_json)
+            .collect(),
         generators,
         load_spec: v.get("loadSpec").and_then(load_spec),
         filter_strategy: strategy(v),
-        alias_directive: v.get("parserDirectives").and_then(|d| d.get("alias")).and_then(str_or_fn),
+        alias_directive: v
+            .get("parserDirectives")
+            .and_then(|d| d.get("alias"))
+            .and_then(str_or_fn),
         default: s(v, "default"),
     }
 }
@@ -392,7 +416,9 @@ fn generator(v: &Value) -> Generator {
         script: v.get("script").and_then(|x| match x {
             Value::Array(_) => Some(Script::Argv(strs(Some(x)))),
             Value::String(c) => Some(Script::Shell(c.clone())),
-            Value::Object(_) => Some(fn_id(x).map_or_else(|| Script::Object(x.clone()), Script::Fn)),
+            Value::Object(_) => {
+                Some(fn_id(x).map_or_else(|| Script::Object(x.clone()), Script::Fn))
+            }
             _ => None,
         }),
         post_process: v.get("postProcess").and_then(fn_id),
@@ -403,7 +429,9 @@ fn generator(v: &Value) -> Generator {
             Some(t) if fn_id(t).is_some() => fn_id(t).map(Trigger::Fn),
             Some(t) => match t.get("on").and_then(Value::as_str) {
                 Some("change") => Some(Trigger::Change),
-                Some("threshold") => Some(Trigger::Threshold(t.get("length").and_then(Value::as_f64).unwrap_or(0.0) as usize)),
+                Some("threshold") => Some(Trigger::Threshold(
+                    t.get("length").and_then(Value::as_f64).unwrap_or(0.0) as usize,
+                )),
                 Some("match") => Some(Trigger::Match(strs(t.get("string")))),
                 _ => None,
             },
@@ -420,7 +448,10 @@ fn generator(v: &Value) -> Generator {
             cache_by_directory: b(c, "cacheByDirectory"),
             cache_key: s(c, "cacheKey"),
         }),
-        script_timeout: v.get("scriptTimeout").and_then(Value::as_f64).map(|ms| ms as u64),
+        script_timeout: v
+            .get("scriptTimeout")
+            .and_then(Value::as_f64)
+            .map(|ms| ms as u64),
         filter_template_suggestions: v.get("filterTemplateSuggestions").and_then(fn_id),
         template,
     }
@@ -429,14 +460,20 @@ fn generator(v: &Value) -> Generator {
 /// String → one global location; `{"$fn"}` → function; other object → inline subcommand.
 fn load_spec(v: &Value) -> Option<LoadSpec> {
     match v {
-        Value::String(name) => Some(LoadSpec::Locations(vec![SpecLocation::Global { name: name.clone() }])),
-        Value::Object(_) => Some(fn_id(v).map_or_else(|| LoadSpec::Inline(Rc::new(subcommand(v))), LoadSpec::Fn)),
+        Value::String(name) => Some(LoadSpec::Locations(vec![SpecLocation::Global {
+            name: name.clone(),
+        }])),
+        Value::Object(_) => {
+            Some(fn_id(v).map_or_else(|| LoadSpec::Inline(Rc::new(subcommand(v))), LoadSpec::Fn))
+        }
         _ => None,
     }
 }
 
 fn str_or_fn(v: &Value) -> Option<StrOrFn> {
-    v.as_str().map(|x| StrOrFn::Str(x.into())).or_else(|| fn_id(v).map(StrOrFn::Fn))
+    v.as_str()
+        .map(|x| StrOrFn::Str(x.into()))
+        .or_else(|| fn_id(v).map(StrOrFn::Fn))
 }
 
 fn strategy(v: &Value) -> Strategy {
@@ -462,7 +499,9 @@ fn objects(v: Option<&Value>) -> impl Iterator<Item = &Value> {
 }
 
 fn strs(v: Option<&Value>) -> Vec<String> {
-    items(v).filter_map(|x| x.as_str().map(String::from)).collect()
+    items(v)
+        .filter_map(|x| x.as_str().map(String::from))
+        .collect()
 }
 
 fn s(v: &Value, key: &str) -> Option<String> {
@@ -484,7 +523,10 @@ mod tests {
     use serde_json::json;
 
     fn fixture(name: &str) -> Subcommand {
-        let path = format!("{}/tests/fixtures/parser/{name}.json", env!("CARGO_MANIFEST_DIR"));
+        let path = format!(
+            "{}/tests/fixtures/parser/{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
         normalise(&serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()).unwrap()
     }
 
@@ -520,8 +562,17 @@ mod tests {
         let a = &s.args[0];
         assert_eq!(a.filter_strategy, Strategy::Fuzzy);
         let g = &a.generators[0];
-        assert_eq!((g.trigger.clone(), g.get_query_term.clone(), g.custom), (Some(Trigger::Fn(0)), Some(StrOrFn::Fn(1)), Some(2)));
-        assert_eq!(a.suggestions.iter().map(|x| (x.names[0].as_str(), x.hidden)).collect::<Vec<_>>(), [("-", true), ("~", true)]);
+        assert_eq!(
+            (g.trigger.clone(), g.get_query_term.clone(), g.custom),
+            (Some(Trigger::Fn(0)), Some(StrOrFn::Fn(1)), Some(2))
+        );
+        assert_eq!(
+            a.suggestions
+                .iter()
+                .map(|x| (x.names[0].as_str(), x.hidden))
+                .collect::<Vec<_>>(),
+            [("-", true), ("~", true)]
+        );
     }
 
     #[test]
@@ -534,10 +585,22 @@ mod tests {
         assert_eq!(opt(check, "--format").args[0].suggestions.len(), 5);
         let g = &check.args[0].generators[0];
         assert_eq!(g.template, ["filepaths"]);
-        assert_eq!((g.trigger.clone(), g.get_query_term.clone()), (Some(Trigger::Str("/".into())), Some(StrOrFn::Str("/".into()))));
+        assert_eq!(
+            (g.trigger.clone(), g.get_query_term.clone()),
+            (
+                Some(Trigger::Str("/".into())),
+                Some(StrOrFn::Str("/".into()))
+            )
+        );
         assert!(check.args[0].is_variadic);
-        assert_eq!(sub(&s, "start").args[0].generators[0].template, ["filepaths", "folders"]);
-        assert_eq!(sub(&s, "init").args[0].generators[0].trigger, Some(Trigger::Str("/".into())));
+        assert_eq!(
+            sub(&s, "start").args[0].generators[0].template,
+            ["filepaths", "folders"]
+        );
+        assert_eq!(
+            sub(&s, "init").args[0].generators[0].trigger,
+            Some(Trigger::Str("/".into()))
+        );
     }
 
     #[test]
@@ -557,7 +620,10 @@ mod tests {
         assert!(s.has_directives);
         assert_eq!(s.directives.option_arg_separators, ["=", ":"]); // a string is a set of chars
         let short = &s.additional_suggestions[0];
-        assert_eq!((short.kind, short.insert_value.as_deref()), (Some(ItemType::Shortcut), Some("commit -m '{cursor}'")));
+        assert_eq!(
+            (short.kind, short.insert_value.as_deref()),
+            (Some(ItemType::Shortcut), Some("commit -m '{cursor}'"))
+        );
         assert_eq!(opt(&s, "-C").is_repeatable, Repeat::Unlimited);
         assert_eq!(opt(&s, "-c").is_repeatable, Repeat::Times(3));
         assert_eq!(opt(&s, "--version").is_repeatable, Repeat::No);
@@ -568,41 +634,88 @@ mod tests {
         assert!(std::ptr::eq(commit, sub(&s, "commit")));
         assert_eq!(opt(commit, "--amend").is_repeatable, Repeat::Times(1)); // explicit false
         assert_eq!(opt(commit, "--amend").exclusive_on, ["--no-edit"]);
-        assert_eq!(opt(commit, "--pathspec-file-nul").depends_on, ["--pathspec-from-file"]);
+        assert_eq!(
+            opt(commit, "--pathspec-file-nul").depends_on,
+            ["--pathspec-from-file"]
+        );
         assert_eq!(opt(commit, "-m").args[0].debounce, Some(200));
         let a = &commit.args[0];
         assert_eq!(a.options_can_break_variadic, Some(false));
         let g = &a.generators[0];
-        assert_eq!(g.script, Some(Script::Argv(vec!["git".into(), "--no-optional-locks".into(), "status".into(), "--short".into()])));
+        assert_eq!(
+            g.script,
+            Some(Script::Argv(vec![
+                "git".into(),
+                "--no-optional-locks".into(),
+                "status".into(),
+                "--short".into()
+            ]))
+        );
         assert_eq!(g.post_process, Some(9));
-        assert_eq!(g.cache, Some(CacheCfg { ttl_ms: 1000, max_age: true, cache_by_directory: true, cache_key: None }));
+        assert_eq!(
+            g.cache,
+            Some(CacheCfg {
+                ttl_ms: 1000,
+                max_age: true,
+                cache_by_directory: true,
+                cache_key: None
+            })
+        );
 
         let co = sub(&s, "checkout");
         let (g0, g1) = (&co.args[0].generators[0], &co.args[0].generators[1]);
-        assert_eq!((g0.script.clone(), g0.trigger.clone(), g0.script_timeout), (Some(Script::Fn(10)), Some(Trigger::Threshold(2)), Some(15000)));
+        assert_eq!(
+            (g0.script.clone(), g0.trigger.clone(), g0.script_timeout),
+            (
+                Some(Script::Fn(10)),
+                Some(Trigger::Threshold(2)),
+                Some(15000)
+            )
+        );
         assert_eq!(g0.get_query_term, Some(StrOrFn::Str("/".into())));
-        assert_eq!((g1.custom, g1.trigger.clone(), g1.filter_template_suggestions), (Some(12), Some(Trigger::Change), Some(13)));
+        assert_eq!(
+            (
+                g1.custom,
+                g1.trigger.clone(),
+                g1.filter_template_suggestions
+            ),
+            (Some(12), Some(Trigger::Change), Some(13))
+        );
         assert_eq!(co.args[0].suggest_current_token, Some(true));
         assert_eq!(co.args[1].generators[0].template, ["filepaths"]);
 
-        assert!(matches!(&sub(&s, "flow").load_spec, Some(LoadSpec::Locations(l)) if l == &[SpecLocation::Global { name: "git-flow".into() }]));
+        assert!(
+            matches!(&sub(&s, "flow").load_spec, Some(LoadSpec::Locations(l)) if l == &[SpecLocation::Global { name: "git-flow".into() }])
+        );
         let help = &sub(&s, "help").args[0];
-        assert_eq!((help.default.as_deref(), help.generators[0].trigger.clone()), (Some("git"), None));
+        assert_eq!(
+            (help.default.as_deref(), help.generators[0].trigger.clone()),
+            (Some("git"), None)
+        );
     }
 
     #[test]
     fn normalise_mock_spec() {
         let s = fixture("cmd_spec");
         let man = sub(&s, "man");
-        assert_eq!((man.args.len(), man.options.len(), man.subcommands.len()), (2, 10, 4));
+        assert_eq!(
+            (man.args.len(), man.options.len(), man.subcommands.len()),
+            (2, 10, 4)
+        );
         assert_eq!(opt(man, "--multiple").args.len(), 2);
-        assert_eq!(opt(man, "--req-sep").requires_separator.as_deref(), Some(":"));
+        assert_eq!(
+            opt(man, "--req-sep").requires_separator.as_deref(),
+            Some(":")
+        );
         assert!(opt(man, "--req-eq").requires_equals);
         assert_eq!(sub(&s, "oas").directives.option_arg_separators, ["=", ":"]);
         assert!(sub(&s, "pnf").directives.flags_posix_noncompliant);
         assert!(sub(&s, "ompa").directives.options_must_precede_args);
         assert_eq!(sub(&s, "generateSpec").generate_spec, Some(1));
-        assert_eq!(sub(&s, "module").args[0].is_module.as_deref(), Some("python/"));
+        assert_eq!(
+            sub(&s, "module").args[0].is_module.as_deref(),
+            Some("python/")
+        );
     }
 
     #[test]
@@ -616,10 +729,15 @@ mod tests {
             "loadSpec": {"$fn": 4}
         }))
         .unwrap();
-        assert_eq!((s.sub_index["a"], s.sub_index["b"], s.subcommands.len()), (0, 1, 2)); // later wins
+        assert_eq!(
+            (s.sub_index["a"], s.sub_index["b"], s.subcommands.len()),
+            (0, 1, 2)
+        ); // later wins
         assert_eq!(s.opt_index["-o"], (false, 0)); // options win over persistent
         assert_eq!((s.args.len(), s.args[0].debounce), (1, Some(50)));
-        assert!(matches!(&s.args[0].load_spec, Some(LoadSpec::Inline(i)) if i.names == ["inner"] && i.args.len() == 1));
+        assert!(
+            matches!(&s.args[0].load_spec, Some(LoadSpec::Inline(i)) if i.names == ["inner"] && i.args.len() == 1)
+        );
         assert!(matches!(s.load_spec, Some(LoadSpec::Fn(4))));
     }
 
@@ -627,7 +745,15 @@ mod tests {
     fn suggestions_and_load_spec_results() {
         assert_eq!(suggestion_from_json(&json!("a")).unwrap().names, ["a"]);
         let o = suggestion_from_json(&json!({"name": ["x", "y"], "type": "folder", "context": {"templateType": "folders"}, "priority": 80})).unwrap();
-        assert_eq!((o.names.len(), o.kind, o.template_type.as_deref(), o.priority), (2, Some(ItemType::Folder), Some("folders"), Some(80.0)));
+        assert_eq!(
+            (
+                o.names.len(),
+                o.kind,
+                o.template_type.as_deref(),
+                o.priority
+            ),
+            (2, Some(ItemType::Folder), Some("folders"), Some(80.0))
+        );
         assert!(suggestion_from_json(&json!({"description": "no name"})).is_none());
         assert!(suggestion_from_json(&json!(3)).is_none());
 
@@ -635,12 +761,31 @@ mod tests {
             Some(LoadSpec::Locations(l)) => l,
             other => panic!("{other:?}"),
         };
-        assert_eq!(locs(json!({"name": "create-x", "type": "global"})), [SpecLocation::Global { name: "create-x".into() }]);
         assert_eq!(
-            locs(json!([{"name": "a", "type": "local", "path": "/p/"}, {"name": "b", "type": "local"}])),
-            [SpecLocation::Local { dir: "/p/".into(), name: "a".into() }, SpecLocation::Local { dir: "~/".into(), name: "b".into() }]
+            locs(json!({"name": "create-x", "type": "global"})),
+            [SpecLocation::Global {
+                name: "create-x".into()
+            }]
         );
-        assert!(matches!(load_spec_result(&json!({"name": "sub", "args": {}})), Some(LoadSpec::Inline(_))));
+        assert_eq!(
+            locs(
+                json!([{"name": "a", "type": "local", "path": "/p/"}, {"name": "b", "type": "local"}])
+            ),
+            [
+                SpecLocation::Local {
+                    dir: "/p/".into(),
+                    name: "a".into()
+                },
+                SpecLocation::Local {
+                    dir: "~/".into(),
+                    name: "b".into()
+                }
+            ]
+        );
+        assert!(matches!(
+            load_spec_result(&json!({"name": "sub", "args": {}})),
+            Some(LoadSpec::Inline(_))
+        ));
         assert!(load_spec_result(&json!("str")).is_none());
     }
 }

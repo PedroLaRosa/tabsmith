@@ -18,7 +18,11 @@ pub enum Vis {
 pub enum Effect {
     /// Write an insertion to the PTY (with buffer reconciliation + insertion lock, SPEC §7.3).
     /// `full` = a full insertion (visibility HiddenByInsertion already applied); `record` = (cmd, name) for recency.
-    Insert { ins: Insertion, full: bool, record: Option<(String, String)> },
+    Insert {
+        ins: Insertion,
+        full: bool,
+        record: Option<(String, String)>,
+    },
     /// Write raw bytes to the PTY (e.g. "\r" for `execute`).
     Write(Vec<u8>),
     /// Ring the bell (common-prefix failure "shake").
@@ -96,7 +100,11 @@ impl Menu {
             return self.error_reset();
         }
         let items = std::mem::take(&mut c.items);
-        self.loading_since = if c.loading { self.loading_since.or_else(|| Some(Instant::now())) } else { None };
+        self.loading_since = if c.loading {
+            self.loading_since.or_else(|| Some(Instant::now()))
+        } else {
+            None
+        };
         if c.phase == Phase::Parse {
             // After a reset Kiro compares against its initial state: new arg, empty command text.
             let (has_new_arg, backspaced, large) = match &self.last {
@@ -119,7 +127,9 @@ impl Menu {
             self.vis = match orig {
                 Vis::HiddenUntilKeypress => Vis::Visible,
                 Vis::HiddenByInsertion => {
-                    let retriggered = self.last_inserted_gen.is_some_and(|g| c.triggered_generators.contains(&g));
+                    let retriggered = self
+                        .last_inserted_gen
+                        .is_some_and(|g| c.triggered_generators.contains(&g));
                     if has_new_arg || retriggered {
                         Vis::Visible
                     } else {
@@ -147,7 +157,9 @@ impl Menu {
     /// replaced: Kiro recomputes when it becomes visible, and show/toggle/Tab must not act on a stale list.
     fn set_items(&mut self, items: Vec<Item>, settings: &Settings) {
         let keep = match self.items.get(self.selected) {
-            Some(old) if self.sticky && self.vis == Vis::Visible => items.iter().position(|it| same_item(it, old)),
+            Some(old) if self.sticky && self.vis == Vis::Visible => {
+                items.iter().position(|it| same_item(it, old))
+            }
             _ => None,
         };
         self.items = items;
@@ -167,7 +179,10 @@ impl Menu {
     /// Error reset: no items, HiddenUntilKeypress, history mode off (SPEC §7.1).
     pub fn error_reset(&mut self) {
         // The pop-out is UI state outside Kiro's store: it survives resets.
-        *self = Menu { popout: self.popout, ..Menu::new() };
+        *self = Menu {
+            popout: self.popout,
+            ..Menu::new()
+        };
     }
 
     /// Menu drawn? (`Visible` and items or arg hint, and not `autocomplete.disable`.)
@@ -179,7 +194,11 @@ impl Menu {
 
     /// Current argument with a name or description (argument-hint row).
     pub fn arg_hint(&self) -> Option<&ArgInfo> {
-        self.last.as_ref()?.current_arg.as_ref().filter(|a| !a.name.is_empty() || !a.description.is_empty())
+        self.last
+            .as_ref()?
+            .current_arg
+            .as_ref()
+            .filter(|a| !a.name.is_empty() || !a.description.is_empty())
     }
 
     /// Keys are intercepted (shown and items non-empty, SPEC §7.2.4).
@@ -202,13 +221,15 @@ impl Menu {
             Action::NavigateDown => self.navigate(1, false, settings),
             Action::InsertSelected => self.insert_full(self.selected, false),
             Action::InsertSelectedAndExecute => self.insert_full(self.selected, true),
-            Action::InsertCommonPrefix => self.common_prefix().unwrap_or_else(|| vec![Effect::Bell]),
-            Action::InsertCommonPrefixOrNavigateDown => {
-                self.common_prefix().unwrap_or_else(|| self.navigate(1, false, settings))
+            Action::InsertCommonPrefix => {
+                self.common_prefix().unwrap_or_else(|| vec![Effect::Bell])
             }
-            Action::InsertCommonPrefixOrInsertSelected => {
-                self.common_prefix().unwrap_or_else(|| self.insert_full(self.selected, false))
-            }
+            Action::InsertCommonPrefixOrNavigateDown => self
+                .common_prefix()
+                .unwrap_or_else(|| self.navigate(1, false, settings)),
+            Action::InsertCommonPrefixOrInsertSelected => self
+                .common_prefix()
+                .unwrap_or_else(|| self.insert_full(self.selected, false)),
             Action::Execute => vec![Effect::Write(b"\r".to_vec())],
             Action::HideAutocomplete => {
                 self.vis = Vis::HiddenUntilShown;
@@ -219,7 +240,11 @@ impl Menu {
                 Vec::new()
             }
             Action::ToggleAutocomplete => {
-                self.vis = if self.vis == Vis::Visible { Vis::HiddenUntilShown } else { Vis::Visible };
+                self.vis = if self.vis == Vis::Visible {
+                    Vis::HiddenUntilShown
+                } else {
+                    Vis::Visible
+                };
                 Vec::new()
             }
             Action::ToggleHistoryMode => {
@@ -289,7 +314,8 @@ impl Menu {
 
     /// Some generator has been loading for > 200 ms (spinner).
     pub fn loading(&self) -> bool {
-        self.loading_since.is_some_and(|t| t.elapsed() > Duration::from_millis(200))
+        self.loading_since
+            .is_some_and(|t| t.elapsed() > Duration::from_millis(200))
     }
 
     fn navigate(&mut self, d: isize, hide_on_negative: bool, settings: &Settings) -> Vec<Effect> {
@@ -332,13 +358,20 @@ impl Menu {
         }
         let name = item.first_name();
         let record = match &self.last {
-            Some(c) if !name.contains('↪') => c.tokens.get(c.command_index).map(|cmd| (cmd.clone(), name.to_string())),
+            Some(c) if !name.contains('↪') => c
+                .tokens
+                .get(c.command_index)
+                .map(|cmd| (cmd.clone(), name.to_string())),
             _ => None,
         };
         self.last_inserted_gen = item.generator;
         self.vis = Vis::HiddenByInsertion;
         self.just_inserted = true;
-        vec![Effect::Insert { ins, full: true, record }]
+        vec![Effect::Insert {
+            ins,
+            full: true,
+            record,
+        }]
     }
 
     /// Kiro `insertCommonPrefix` (`insertion.ts:226-304`); `None` = failure (shake).
@@ -374,9 +407,22 @@ impl Menu {
         if shared.is_empty() || shared == sel.query {
             return None;
         }
-        let text: String = shared.chars().map(|c| if c.is_whitespace() { "\\ ".into() } else { c.to_string() }).collect();
+        let text: String = shared
+            .chars()
+            .map(|c| {
+                if c.is_whitespace() {
+                    "\\ ".into()
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect();
         // The engine strips an already-typed query from `insert.text` (delete == 0): put it back to compare.
-        let full = if sel.insert.delete == 0 { format!("{}{}", sel.query, sel.insert.text) } else { sel.insert.text.clone() };
+        let full = if sel.insert.delete == 0 {
+            format!("{}{}", sel.query, sel.insert.text)
+        } else {
+            sel.insert.text.clone()
+        };
         // The engine escaped the row for its shell: type the shared prefix only as the start of that insertion
         // (`$XDG_` of `$XDG_CONFIG_HOME`), else BEL (`zz;` of `'zz;a'`, pwsh `my\ dir` of `'my dir1.txt'`).
         // ponytail: a prefix that needs quoting is not quoted half-way.
@@ -389,14 +435,23 @@ impl Menu {
         // Partial insertion. Raw on-screen token chars (D22): the item's own delete count, or the query when it was
         // stripped (then the typed text equals the query and is not retyped).
         let q_chars = sel.query.chars().count();
-        let raw = if sel.insert.delete > 0 { sel.insert.delete } else { q_chars };
+        let raw = if sel.insert.delete > 0 {
+            sel.insert.delete
+        } else {
+            q_chars
+        };
         let (delete, text) = match text.strip_prefix(sel.query.as_str()) {
             Some(rest) if raw == q_chars => (0, rest.to_string()),
             _ => (raw, text),
         };
         self.just_inserted = true;
         Some(vec![Effect::Insert {
-            ins: Insertion { delete, text, cursor_back: 0, execute: false },
+            ins: Insertion {
+                delete,
+                text,
+                cursor_back: 0,
+                execute: false,
+            },
             full: false,
             record: None,
         }])
@@ -423,13 +478,18 @@ pub(crate) mod tests {
             query: query.to_string(),
             insert: Insertion {
                 delete: if typed { 0 } else { query.chars().count() },
-                text: if typed { name[query.len()..].to_string() } else { name.to_string() },
+                text: if typed {
+                    name[query.len()..].to_string()
+                } else {
+                    name.to_string()
+                },
                 cursor_back: 0,
                 execute: false,
             },
             generator: None,
             prefix_match: true,
             template_type: None,
+            icon: None,
         }
     }
 
@@ -447,7 +507,10 @@ pub(crate) mod tests {
             command_text: buffer.to_string(),
             command_index: 0,
             arg_key,
-            current_arg: Some(ArgInfo { name: "path".into(), description: "A path".into() }),
+            current_arg: Some(ArgInfo {
+                name: "path".into(),
+                description: "A path".into(),
+            }),
             triggered_generators: Vec::new(),
             items,
             loading: false,
@@ -509,14 +572,26 @@ pub(crate) mod tests {
         assert_eq!(
             fx,
             vec![Effect::Insert {
-                ins: Insertion { delete: 0, text: "heckout".into(), cursor_back: 0, execute: false },
+                ins: Insertion {
+                    delete: 0,
+                    text: "heckout".into(),
+                    cursor_back: 0,
+                    execute: false
+                },
                 full: true,
                 record: Some(("git".into(), "checkout".into())),
             }]
         );
         assert_eq!(m.vis(), Vis::HiddenByInsertion);
-        m.on_completion(comp("git checkout ", 3, vec![item("main", ItemType::Arg, "")]), &s);
-        assert_eq!(m.vis(), Vis::Visible, "multi-char echo is not a large change after an insertion");
+        m.on_completion(
+            comp("git checkout ", 3, vec![item("main", ItemType::Arg, "")]),
+            &s,
+        );
+        assert_eq!(
+            m.vis(),
+            Vis::Visible,
+            "multi-char echo is not a large change after an insertion"
+        );
 
         // Flag without a new argument → hidden until the next key.
         let mut m = typed(&s);
@@ -528,7 +603,17 @@ pub(crate) mod tests {
 
         // Folder `src/` re-triggers its generator → visible.
         let mut m = typed(&s);
-        m.on_completion(comp("git c ", 5, vec![Item { generator: Some(7), ..item("src/", ItemType::Folder, "") }]), &s);
+        m.on_completion(
+            comp(
+                "git c ",
+                5,
+                vec![Item {
+                    generator: Some(7),
+                    ..item("src/", ItemType::Folder, "")
+                }],
+            ),
+            &s,
+        );
         m.handle(Action::InsertSelected, &s);
         let mut c = comp("git c src/", 5, vec![item("main.rs", ItemType::File, "")]);
         c.triggered_generators = vec![7];
@@ -563,7 +648,11 @@ pub(crate) mod tests {
         m.handle(Action::HideAutocomplete, &s);
         m.on_completion(comp("git ", 2, subs("")), &s);
         m.on_completion(comp("git", 1, vec![]), &s);
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress, "backspace into the previous token overrides Esc");
+        assert_eq!(
+            m.vis(),
+            Vis::HiddenUntilKeypress,
+            "backspace into the previous token overrides Esc"
+        );
         m.on_completion(comp("gi", 1, vec![]), &s);
         assert_eq!(m.vis(), Vis::Visible);
 
@@ -584,7 +673,10 @@ pub(crate) mod tests {
         }
         assert_eq!(m.items().len(), 1);
         // Up recalls `echo hi`: a large change hides the menu; Tab must not type `kout` into it.
-        m.on_completion(comp("echo hi", 3, vec![item("hi.txt", ItemType::File, "hi")]), &s);
+        m.on_completion(
+            comp("echo hi", 3, vec![item("hi.txt", ItemType::File, "hi")]),
+            &s,
+        );
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
         let fx = m.show_on_tab(&s);
         assert!(
@@ -596,7 +688,10 @@ pub(crate) mod tests {
     #[test]
     fn large_change_counts_skipped_requests() {
         let s = Settings::default();
-        let at = |req, buffer: &str, arg, items| Completion { req, ..comp(buffer, arg, items) };
+        let at = |req, buffer: &str, arg, items| Completion {
+            req,
+            ..comp(buffer, arg, items)
+        };
         let mut m = Menu::new();
         m.on_completion(at(1, "g", 1, vec![]), &s);
         m.on_completion(at(2, "gi", 1, vec![]), &s);
@@ -650,10 +745,20 @@ pub(crate) mod tests {
         assert_eq!(m.vis(), Vis::Visible);
         m.on_completion(comp("git co", 2, subs("co")), &s);
         assert_eq!(m.vis(), Vis::Visible, "stays open within the argument");
-        m.on_completion(comp("git co ", 3, vec![item("main", ItemType::Arg, "")]), &s);
-        assert_eq!(m.vis(), Vis::HiddenUntilShown, "every new argument hides again");
+        m.on_completion(
+            comp("git co ", 3, vec![item("main", ItemType::Arg, "")]),
+            &s,
+        );
+        assert_eq!(
+            m.vis(),
+            Vis::HiddenUntilShown,
+            "every new argument hides again"
+        );
         let fx = m.show_on_tab(&s);
-        assert!(matches!(&fx[..], [Effect::Insert { full: true, .. }]), "single item: Tab inserts it");
+        assert!(
+            matches!(&fx[..], [Effect::Insert { full: true, .. }]),
+            "single item: Tab inserts it"
+        );
     }
 
     #[test]
@@ -692,7 +797,7 @@ pub(crate) mod tests {
         let s = Settings::default();
         let mut m = typed(&s);
         m.handle(Action::NavigateDown, &s); // cherry-pick
-        // Generator phase reply reorders the same items.
+                                            // Generator phase reply reorders the same items.
         let mut c = comp("git c", 2, subs("c").into_iter().rev().collect());
         c.phase = Phase::Generators;
         m.on_completion(c, &s);
@@ -723,7 +828,12 @@ pub(crate) mod tests {
         assert_eq!(
             fx,
             vec![Effect::Insert {
-                ins: Insertion { delete: 0, text: "e".into(), cursor_back: 0, execute: false },
+                ins: Insertion {
+                    delete: 0,
+                    text: "e".into(),
+                    cursor_back: 0,
+                    execute: false
+                },
                 full: false,
                 record: None
             }]
@@ -732,14 +842,24 @@ pub(crate) mod tests {
         assert!(m.just_inserted);
 
         // Typed in another case → delete the query and retype in the selected item's casing.
-        let fx = prefix_fx(&mut with(["checkout", "cherry-pick"].iter().map(|n| item(n, ItemType::Subcommand, "CH")).collect()));
-        assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 2, text, .. }, full: false, .. }] if text == "che"));
+        let fx = prefix_fx(&mut with(
+            ["checkout", "cherry-pick"]
+                .iter()
+                .map(|n| item(n, ItemType::Subcommand, "CH"))
+                .collect(),
+        ));
+        assert!(
+            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 2, text, .. }, full: false, .. }] if text == "che")
+        );
 
         // No remaining prefix → bell; a single item → full insertion.
         let mut m = typed(&s);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
         m.on_completion(comp("git cl", 2, subs("cl")), &s);
-        assert!(matches!(&prefix_fx(&mut m)[..], [Effect::Insert { full: true, .. }]));
+        assert!(matches!(
+            &prefix_fx(&mut m)[..],
+            [Effect::Insert { full: true, .. }]
+        ));
 
         // Mixed types: only items of the selected item's type count; file and folder match each other.
         let mut m = with(vec![
@@ -747,58 +867,114 @@ pub(crate) mod tests {
             item("setup.py", ItemType::File, "s"),
             item("--src-dir", ItemType::Option, "s"),
         ]);
-        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell], "lcp of src/ and setup.py is the query");
+        assert_eq!(
+            prefix_fx(&mut m),
+            vec![Effect::Bell],
+            "lcp of src/ and setup.py is the query"
+        );
         let mut m = with(vec![
             item("src/", ItemType::Folder, "s"),
             item("srv/", ItemType::Folder, "s"),
             item("stuff", ItemType::Subcommand, "s"),
         ]);
         let fx = prefix_fx(&mut m);
-        assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, full: false, .. }] if text == "r"));
+        assert!(
+            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, full: false, .. }] if text == "r")
+        );
 
         // `../` only matches `../`: with `..foo/` selected, `../` is not a candidate → full insertion.
-        let mut m = with(vec![item("..foo/", ItemType::Folder, ""), item("../", ItemType::Folder, "")]);
-        assert!(matches!(&prefix_fx(&mut m)[..], [Effect::Insert { full: true, .. }]));
+        let mut m = with(vec![
+            item("..foo/", ItemType::Folder, ""),
+            item("../", ItemType::Folder, ""),
+        ]);
+        assert!(matches!(
+            &prefix_fx(&mut m)[..],
+            [Effect::Insert { full: true, .. }]
+        ));
 
         // Shared prefix equal to the full insertion → full insertion (foo vs foobar, foo selected).
-        let mut m = with(vec![item("foo", ItemType::Arg, "f"), item("foobar", ItemType::Arg, "f")]);
-        assert!(matches!(&prefix_fx(&mut m)[..], [Effect::Insert { full: true, .. }]));
+        let mut m = with(vec![
+            item("foo", ItemType::Arg, "f"),
+            item("foobar", ItemType::Arg, "f"),
+        ]);
+        assert!(matches!(
+            &prefix_fx(&mut m)[..],
+            [Effect::Insert { full: true, .. }]
+        ));
 
         // Escaped spaces: the raw token `my\ d` (5 chars) is deleted and retyped escaped (D22).
         let mk = |n: &str| Item {
-            insert: Insertion { delete: 5, text: n.replace(' ', "\\ "), cursor_back: 0, execute: false },
+            insert: Insertion {
+                delete: 5,
+                text: n.replace(' ', "\\ "),
+                cursor_back: 0,
+                execute: false,
+            },
             ..item(n, ItemType::Folder, "my d")
         };
         let fx = prefix_fx(&mut with(vec![mk("my dir/"), mk("my dirt/")]));
-        assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 5, text, .. }, .. }] if text == "my\\ dir"));
+        assert!(
+            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 5, text, .. }, .. }] if text == "my\\ dir")
+        );
 
         // A shared prefix with shell syntax (`zz;` of branches `zz;a`, `zz;b`) is never typed unquoted → bell.
         let quoted = |n: &str, q: &str, ins: &str| Item {
-            insert: Insertion { delete: q.chars().count(), text: ins.into(), cursor_back: 0, execute: false },
+            insert: Insertion {
+                delete: q.chars().count(),
+                text: ins.into(),
+                cursor_back: 0,
+                execute: false,
+            },
             ..item(n, ItemType::File, q)
         };
-        let mut m = with(vec![quoted("zz;a", "z", "'zz;a'"), quoted("zz;b", "z", "'zz;b'")]);
+        let mut m = with(vec![
+            quoted("zz;a", "z", "'zz;a'"),
+            quoted("zz;b", "z", "'zz;b'"),
+        ]);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
         // r3-common-prefix-var-ref-bell: `$XDG_` of `$XDG_CONFIG_HOME` rows is typed (the engine leaves a variable
         // reference bare); files `$foo1.txt` (quoted by the engine) still ring.
-        let fx = prefix_fx(&mut with(vec![item("$XDG_CONFIG_HOME", ItemType::Arg, "$XDG"), item("$XDG_DATA_HOME", ItemType::Arg, "$XDG")]));
-        assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, full: false, .. }] if text == "_"), "{fx:?}");
-        let mut m = with(vec![quoted("$foo1.txt", "$f", "'$foo1.txt'"), quoted("$foo2.txt", "$f", "'$foo2.txt'")]);
+        let fx = prefix_fx(&mut with(vec![
+            item("$XDG_CONFIG_HOME", ItemType::Arg, "$XDG"),
+            item("$XDG_DATA_HOME", ItemType::Arg, "$XDG"),
+        ]));
+        assert!(
+            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, full: false, .. }] if text == "_"),
+            "{fx:?}"
+        );
+        let mut m = with(vec![
+            quoted("$foo1.txt", "$f", "'$foo1.txt'"),
+            quoted("$foo2.txt", "$f", "'$foo2.txt'"),
+        ]);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
         // r3-pwsh-common-prefix-backslash: pwsh quotes `my dir1.txt`, so `my\ dir` (two pwsh args) is never typed
-        let mut m = with(vec![quoted("my dir1.txt", "my", "'my dir1.txt'"), quoted("my dir2.txt", "my", "'my dir2.txt'")]);
+        let mut m = with(vec![
+            quoted("my dir1.txt", "my", "'my dir1.txt'"),
+            quoted("my dir2.txt", "my", "'my dir2.txt'"),
+        ]);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
-        let fx = prefix_fx(&mut with(vec![quoted("my dir1.txt", "my", "my\\ dir1.txt"), quoted("my dir2.txt", "my", "my\\ dir2.txt")]));
-        assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, .. }] if text == "\\ dir"), "{fx:?}");
+        let fx = prefix_fx(&mut with(vec![
+            quoted("my dir1.txt", "my", "my\\ dir1.txt"),
+            quoted("my dir2.txt", "my", "my\\ dir2.txt"),
+        ]));
+        assert!(
+            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, .. }] if text == "\\ dir"),
+            "{fx:?}"
+        );
 
         // Auto-execute / special → failure.
         let mut m = with(vec![
-            Item { original_kind: Some(ItemType::Special), ..item("↪", ItemType::AutoExecute, "") },
+            Item {
+                original_kind: Some(ItemType::Special),
+                ..item("↪", ItemType::AutoExecute, "")
+            },
             item("x", ItemType::Arg, ""),
         ]);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
         // …and `OrNavigateDown` falls back to navigation.
-        assert!(m.handle(Action::InsertCommonPrefixOrNavigateDown, &s).is_empty());
+        assert!(m
+            .handle(Action::InsertCommonPrefixOrNavigateDown, &s)
+            .is_empty());
         assert_eq!(m.selected(), 1);
     }
 
@@ -815,11 +991,26 @@ pub(crate) mod tests {
         let s = Settings::default();
         let mut m = typed(&s);
         let fx = m.handle(Action::InsertSelectedAndExecute, &s);
-        assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { execute: true, .. }, .. }]));
+        assert!(matches!(
+            &fx[..],
+            [Effect::Insert {
+                ins: Insertion { execute: true, .. },
+                ..
+            }]
+        ));
         let mut m = typed(&s);
-        m.on_completion(comp("git c ", 3, vec![item("↪", ItemType::AutoExecute, "")]), &s);
-        assert!(matches!(&m.handle(Action::InsertSelected, &s)[..], [Effect::Insert { record: None, .. }]));
-        assert_eq!(m.handle(Action::Execute, &s), vec![Effect::Write(b"\r".to_vec())]);
+        m.on_completion(
+            comp("git c ", 3, vec![item("↪", ItemType::AutoExecute, "")]),
+            &s,
+        );
+        assert!(matches!(
+            &m.handle(Action::InsertSelected, &s)[..],
+            [Effect::Insert { record: None, .. }]
+        ));
+        assert_eq!(
+            m.handle(Action::Execute, &s),
+            vec![Effect::Write(b"\r".to_vec())]
+        );
         let mut m = typed(&s);
         m.handle(Action::ShowDescription, &s);
         assert!(m.popout(&s));
@@ -827,6 +1018,9 @@ pub(crate) mod tests {
         assert!(!m.popout(&s));
         let always = settings(r#"{"autocomplete.alwaysShowDescription": true}"#);
         m.handle(Action::ToggleDescription, &always);
-        assert!(m.popout(&always) && !m.popout(&s), "toggle is a no-op with alwaysShowDescription");
+        assert!(
+            m.popout(&always) && !m.popout(&s),
+            "toggle is a no-op with alwaysShowDescription"
+        );
     }
 }

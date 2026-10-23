@@ -5,6 +5,7 @@
 mod cli;
 mod doctor;
 mod engine;
+mod icons;
 mod inline;
 mod integrations;
 mod js;
@@ -25,7 +26,11 @@ mod types;
 use clap::{ArgAction, Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "tabsmith", version, about = "IDE-style autocomplete for your terminal")]
+#[command(
+    name = "tabsmith",
+    version,
+    about = "IDE-style autocomplete for your terminal"
+)]
 pub struct Cli {
     /// Increase log verbosity (-v warn, -vv info, -vvv debug, -vvvv trace)
     #[arg(short, long, action = ArgAction::Count, global = true)]
@@ -96,7 +101,10 @@ pub enum InternalCmd {
 
 fn main() {
     let cli = Cli::parse();
-    let is_pty = matches!(cli.command, Some(Command::Internal(InternalCmd::Pty { .. })));
+    let is_pty = matches!(
+        cli.command,
+        Some(Command::Internal(InternalCmd::Pty { .. }))
+    );
     logger::init(if is_pty { "pty" } else { "cli" }, cli.verbose, !is_pty);
 
     let result = match cli.command {

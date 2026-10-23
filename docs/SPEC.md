@@ -479,7 +479,7 @@ Inline (new; Kiro had only `inline.enabled` and env vars `Q_INLINE_SHELL_COMPLET
 | `TABSMITH_INIT_SNAPSHOT_TEST` | Deterministic `init` output. |
 | `TABSMITH_BLESS` | Tests: rewrite the `init` snapshots. |
 | `TABSMITH_DEBUG_SHELL` | Set by `debug shell`. |
-| read: `TMUX`, `INSIDE_EMACS`, `TERM_PROGRAM`, `__CFBundleIdentifier`, `__PWSH_LOGIN_CHECKED`, `CI`, `VSCODE_RESOLVING_ENVIRONMENT`, `TERM`, `COLORTERM`, `WT_SESSION`, `EDITOR`, `ZDOTDIR`, `XDG_CONFIG_HOME`, `SHELL`, `HOME`, `USERPROFILE`, `PATH`, `PATHEXT`, `ComSpec`; scripts: `HISTCONTROL`, `GHOSTTY_RESOURCES_DIR`, `KITTY_SHELL_INTEGRATION`, `KITTY_INSTALLATION_DIR`, `VSCODE_INJECTION`, `VSCODE_SHELL_INTEGRATION` | see §5.2, §5.4, §5.5, §7.7, §9.3 |
+| read: `TMUX`, `TMUX_PANE`, `INSIDE_EMACS`, `TERM_PROGRAM`, `__CFBundleIdentifier`, `__PWSH_LOGIN_CHECKED`, `CI`, `VSCODE_RESOLVING_ENVIRONMENT`, `TERM`, `COLORTERM`, `WT_SESSION`, `EDITOR`, `ZDOTDIR`, `XDG_CONFIG_HOME`, `SHELL`, `HOME`, `USERPROFILE`, `PATH`, `PATHEXT`, `ComSpec`; scripts: `HISTCONTROL`, `GHOSTTY_RESOURCES_DIR`, `KITTY_SHELL_INTEGRATION`, `KITTY_INSTALLATION_DIR`, `VSCODE_INJECTION`, `VSCODE_SHELL_INTEGRATION` | see §5.2, §5.4, §5.5, §7.7, §9.3 |
 
 ### 3.5 History file
 
@@ -2257,8 +2257,8 @@ below  = R - 1 - cy;  above = cy
 side   = below >= h ? Below : above >= h ? Above : (below >= above ? Below : Above)
 room   = side == Below ? below : above
 if room < h: if items == 0 || room < 2 { hide } n = room - 1; h = room
-x0     = clamp(cx - width(query of selected item) - 3, 0, C - w)
-         // rows start with ' ' + icon + ' ': the title's first char lands under the typed query's first char
+x0     = clamp(cx - width(query of selected item) - 4, 0, C - w)
+         // rows start with ' ' + icon (2 cols) + ' ': the title's first char lands under the typed query's first char
 block order is always list rows then the description row:
   Below → list on cy+1 ..= cy+n, description on cy+n+1
   Above → list on cy-h ..= cy-h+n-1, description on cy-1 (block bottom-aligned to the cursor, like Kiro's isAboveCursor)
@@ -2267,9 +2267,23 @@ block order is always list rows then the description row:
 #### 7.4.2 Rows
 
 List row for item `s` (selected row uses selected colours):
-`' '` + icon (1 col) + `' '` + title + (`' '` + args hint in dim when room) + pad to `w`.
-- Icon (ASCII, width 1): subcommand `>`, option `-`, arg/special/generator `*`, file `f`, folder `d`, history `h`,
-  shortcut `@`, auto-execute `↪`. Spec icons/emoji are ignored (terminal width safety).
+`' '` + icon (2 cols) + `' '` + title + (`' '` + args hint in dim when room) + pad to `w`.
+- Icon slot: always two columns. Resolved like Q's `SuggestionIcon.tsx`: a spec `icon` that is a single wide emoji
+  is text (`⭐` for the current git branch). With the kitty graphics protocol (Ghostty, kitty; inside tmux when
+  `tmux display` reports `allow-passthrough` on and a kitty or Ghostty client), `fig://icon?type=<t>` is that PNG and `fig://template?color=&badge=` the template
+  tinted by Q's `scale_u8` (`a·b/256` per channel, alpha kept) with the badge in white. Otherwise the row type's
+  image: subcommand `command`, option `option`, arg `box`, auto-execute `carrot`, file `file`, folder `folder`,
+  shortcut `💡` and mixin `➡` on tinted templates, history `📚`.
+  PNGs live in `assets/icons` (see its README). Each image is transmitted once (`a=t`), placed every frame over the
+  slot (`a=p`, `z=-1`, under the text) and removed by the clear (`a=d,d=a`).
+  Inside tmux each image goes through the passthrough (`ESC P tmux; … ESC \`, ESC doubled) with a 2×1 virtual
+  placement (`a=T,U=1`), and the slot is two Unicode placeholders (`U+10EEEE` + row/column diacritics, the id in the
+  foreground: 256-colour index, or 24-bit plus a top-byte diacritic). tmux keeps, redraws and clears them as text, so
+  no placement or delete goes out. A badge cannot sit on a placeholder, so it is drawn as text alone.
+- Without images, ASCII right-aligned in the slot: subcommand ` >`, option ` -`, arg/special ` *`, file ` f`, folder
+  ` d`, history ` h`, shortcut ` @`, auto-execute ` ↪`.
+- Narrow emoji (`⚙️`) and remote image URLs use the row type's icon: their width differs between terminals, which
+  would tear the frame.
 - Title = `display_name` or names joined `", "`. Highlight: prefix mode → for each name whose lowercase starts with
   the lowercase query, the first `q.chars().count()` chars get `matching-bg`; fuzzy mode → fuzzysort indexes of the best
   name. (No regex; fixes `R:autocomplete-ui §15.4`.)
@@ -2703,7 +2717,7 @@ fish), tmux pane, SSH into a host with tabsmith installed, Windows Terminal + pw
 
 All OSes:
 - **Model/terminal width divergence** (emoji, ambiguous-width CJK, VS16): `unicode-width` may disagree with the real
-  terminal → misplaced restore spans. Mitigation: ASCII icons, exact wide-char span extension, full repaint on resize.
+  terminal → misplaced restore spans. Mitigation: icons are images or two-column slots, exact wide-char span extension, full repaint on resize.
 - **Content printed before the wrapper started** is blank in the model; if the menu covers it, restoring shows blanks.
 - **Programs that change origin mode / scroll regions / charsets at the prompt**: overlay suppressed (guards §7.5.1);
   charset (DEC graphics) not detected → garbled box (rare).

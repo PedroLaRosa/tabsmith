@@ -6,7 +6,9 @@ use crate::menu::{Effect, Menu};
 use crate::render::{FrameInput, Renderer, Theme};
 use crate::settings::Settings;
 use crate::tracker::{Event, Extracted, Tracker};
-use crate::types::{Completion, EngineMsg, Insertion, Model, Msg, Phase, Request, SessionCtx, Shell};
+use crate::types::{
+    Completion, EngineMsg, Insertion, Model, Msg, Phase, Request, SessionCtx, Shell,
+};
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::test::TermSize;
@@ -44,11 +46,19 @@ pub fn run(shell: Option<String>, cmd: Vec<String>) -> i32 {
     std::panic::set_hook(Box::new(|info| logger::error(&format!("panic: {info}"))));
     let shell = shell
         .or_else(|| env_nonempty("TABSMITH_SHELL"))
-        .or_else(|| if cfg!(windows) { Some("pwsh".into()) } else { env_nonempty("SHELL") });
+        .or_else(|| {
+            if cfg!(windows) {
+                Some("pwsh".into())
+            } else {
+                env_nonempty("SHELL")
+            }
+        });
     let login = std::env::var("TABSMITH_IS_LOGIN_SHELL").as_deref() == Ok("1");
     let argv = argv(shell.as_deref(), &cmd, login);
     let mut modes = None;
-    let res = std::panic::catch_unwind(AssertUnwindSafe(|| Session::start(&argv, &mut modes).map(Session::run)));
+    let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        Session::start(&argv, &mut modes).map(Session::run)
+    }));
     let err = match res {
         Ok(Ok(code)) => return code,
         Ok(Err(e)) => e,
@@ -70,9 +80,16 @@ fn argv(shell: Option<&str>, extra: &[String], login: bool) -> Vec<String> {
     if extra.first().is_some_and(|a| !a.starts_with('-')) {
         return extra.to_vec();
     }
-    let Some(shell) = shell else { return Vec::new() };
+    let Some(shell) = shell else {
+        return Vec::new();
+    };
     let mut v = vec![shell.to_string()];
-    if login && matches!(Shell::from_name(shell), Some(Shell::Bash | Shell::Zsh | Shell::Fish)) {
+    if login
+        && matches!(
+            Shell::from_name(shell),
+            Some(Shell::Bash | Shell::Zsh | Shell::Fish)
+        )
+    {
         v.push("--login".into());
     }
     v.extend(extra.iter().cloned());
@@ -85,7 +102,11 @@ fn fallback(err: &anyhow::Error, argv: &[String]) -> i32 {
     eprintln!("tabsmith had an error: {err:#}");
     crate::js::kill_live_children(); // exec skips atexit
 
-    let argv = if argv.is_empty() { vec![if cfg!(windows) { "pwsh" } else { "/bin/sh" }.to_string()] } else { argv.to_vec() };
+    let argv = if argv.is_empty() {
+        vec![if cfg!(windows) { "pwsh" } else { "/bin/sh" }.to_string()]
+    } else {
+        argv.to_vec()
+    };
     let mut c = std::process::Command::new(&argv[0]);
     c.args(&argv[1..])
         .env("TABSMITH_TERM_DISABLED", "1")
@@ -125,7 +146,11 @@ pub fn insertion_bytes(ins: &Insertion, ib: &str, cur: &str) -> Vec<u8> {
 /// Buffer expected once the shell applied an insertion (insertion-lock release, SPEC §7.3).
 /// `cursor` = byte offset into `ib` the reply was computed at.
 pub fn expected_buffer(ins: &Insertion, ib: &str, cursor: usize) -> String {
-    let cursor = if ib.is_char_boundary(cursor) { cursor } else { ib.len() };
+    let cursor = if ib.is_char_boundary(cursor) {
+        cursor
+    } else {
+        ib.len()
+    };
     let mut s = ib[..cursor].to_string();
     for _ in 0..ins.delete {
         s.pop();
@@ -139,8 +164,16 @@ pub fn expected_buffer(ins: &Insertion, ib: &str, cursor: usize) -> String {
 fn ghost_key(k: &Key) -> Option<bool> {
     let m = k.mods;
     let plain = m == Mods::default();
-    let ctrl = m == Mods { ctrl: true, ..Mods::default() };
-    let alt = m == Mods { alt: true, ..Mods::default() };
+    let ctrl = m
+        == Mods {
+            ctrl: true,
+            ..Mods::default()
+        };
+    let alt = m
+        == Mods {
+            alt: true,
+            ..Mods::default()
+        };
     match k.code {
         KeyCode::Right | KeyCode::End if plain => Some(true),
         KeyCode::Char('f' | 'F' | 'e' | 'E') if ctrl => Some(true),
@@ -153,7 +186,9 @@ fn ghost_key(k: &Key) -> Option<bool> {
 /// Leading whitespace + the next run of non-whitespace chars.
 fn next_word(g: &str) -> &str {
     let start = g.len() - g.trim_start().len();
-    let end = g[start..].find(char::is_whitespace).map_or(g.len(), |i| start + i);
+    let end = g[start..]
+        .find(char::is_whitespace)
+        .map_or(g.len(), |i| start + i);
     &g[..end]
 }
 
@@ -166,7 +201,12 @@ fn ghost_rest(buffer: &str, base: &str, g: &str) -> Option<String> {
 
 /// Keys typed ahead that the extracted buffer `new` does not show yet. `base` = the buffer they were typed after
 /// (the pending insertion's result while locked); `in_flight` = that insertion is not echoed yet.
-fn unechoed_after(unechoed: &str, base: Option<&str>, new: Option<&str>, in_flight: bool) -> String {
+fn unechoed_after(
+    unechoed: &str,
+    base: Option<&str>,
+    new: Option<&str>,
+    in_flight: bool,
+) -> String {
     match (base, new) {
         (Some(b), Some(n)) => match n.strip_prefix(b) {
             Some(added) => unechoed.strip_prefix(added).unwrap_or("").to_string(),
@@ -224,7 +264,9 @@ fn parse_probe(buf: &[u8]) -> (Option<(u16, u16)>, Option<Rgb>, Vec<u8>) {
 /// `ESC [ row ; col R` → (row, col, length).
 fn parse_cpr(s: &[u8]) -> Option<(u16, u16, usize)> {
     let body = s.strip_prefix(b"\x1b[")?;
-    let end = body.iter().position(|b| !(b.is_ascii_digit() || *b == b';'))?;
+    let end = body
+        .iter()
+        .position(|b| !(b.is_ascii_digit() || *b == b';'))?;
     if body[end] != b'R' {
         return None;
     }
@@ -236,19 +278,38 @@ fn parse_cpr(s: &[u8]) -> Option<(u16, u16, usize)> {
 fn parse_osc11(s: &[u8]) -> Option<(Option<Rgb>, usize)> {
     let body = s.strip_prefix(b"\x1b]11;")?;
     let end = body.iter().position(|b| *b == 0x07 || *b == 0x1b)?;
-    let term_len = if body[end] == 0x07 { 1 } else if body.get(end + 1) == Some(&b'\\') { 2 } else { return None };
+    let term_len = if body[end] == 0x07 {
+        1
+    } else if body.get(end + 1) == Some(&b'\\') {
+        2
+    } else {
+        return None;
+    };
     let text = std::str::from_utf8(&body[..end]).ok()?;
-    let mut parts = text.strip_prefix("rgb:").into_iter().flat_map(|t| t.split('/')).map(|h| {
-        let v = u32::from_str_radix(h, 16).ok().filter(|_| (1..=4).contains(&h.len()))?;
-        Some((v * 255 / ((1 << (4 * h.len())) - 1)) as u8)
-    });
+    let mut parts = text
+        .strip_prefix("rgb:")
+        .into_iter()
+        .flat_map(|t| t.split('/'))
+        .map(|h| {
+            let v = u32::from_str_radix(h, 16)
+                .ok()
+                .filter(|_| (1..=4).contains(&h.len()))?;
+            Some((v * 255 / ((1 << (4 * h.len())) - 1)) as u8)
+        });
     let rgb = (|| Some((parts.next()??, parts.next()??, parts.next()??)))();
     Some((rgb, 5 + end + term_len))
 }
 
 fn session_id() -> String {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
-    format!("{:016x}{:016x}", nanos, std::process::id() as u64 ^ nanos.rotate_left(17))
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    format!(
+        "{:016x}{:016x}",
+        nanos,
+        std::process::id() as u64 ^ nanos.rotate_left(17)
+    )
 }
 
 fn mtime(p: &Option<PathBuf>) -> Option<SystemTime> {
@@ -333,19 +394,28 @@ impl Session {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             bail!("stdin/stdout is not a terminal");
         }
-        let program = argv.first().context("no shell to run (set SHELL or pass --shell)")?;
+        let program = argv
+            .first()
+            .context("no shell to run (set SHELL or pass --shell)")?;
         let settings = Settings::load();
         let (m, lf_to_ind) = sys::enter()?;
         *modes = Some(m);
         let (cols, rows) = crossterm::terminal::size().context("terminal size")?;
         let (cols, rows) = (cols.max(1), rows.max(1));
         let mut term = Term::new(
-            Config { scrolling_history: 2000, ..Config::default() },
+            Config {
+                scrolling_history: 2000,
+                ..Config::default()
+            },
             &TermSize::new(cols as usize, rows as usize),
             VoidListener,
         );
         let sid = session_id();
-        let shell = Shell::from_name(program).unwrap_or(if cfg!(windows) { Shell::Pwsh } else { Shell::Bash });
+        let shell = Shell::from_name(program).unwrap_or(if cfg!(windows) {
+            Shell::Pwsh
+        } else {
+            Shell::Bash
+        });
         let mut tracker = Tracker::new(sid.clone(), Shell::from_name(program), rows as usize);
         tracker.filter.lf_to_ind = lf_to_ind;
 
@@ -369,17 +439,28 @@ impl Session {
         }
 
         // Everything that can fail goes before the child exists, so the fallback never orphans a shell.
-        let truecolor = matches!(std::env::var("COLORTERM").as_deref(), Ok("truecolor" | "24bit"))
-            || std::env::var_os("WT_SESSION").is_some();
-        let renderer = Renderer::new(Theme::from_settings(&settings, terminal_bg), truecolor);
+        let truecolor = matches!(
+            std::env::var("COLORTERM").as_deref(),
+            Ok("truecolor" | "24bit")
+        ) || std::env::var_os("WT_SESSION").is_some();
+        let renderer = Renderer::new(Theme::from_settings(&settings, terminal_bg), truecolor)
+            .with_images(crate::icons::detect());
         let (menu, keymap) = (Menu::new(), Keymap::from_settings(&settings));
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;
         let engine = crate::engine::spawn(tx.clone(), settings.clone());
 
-        let pair = portable_pty::native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        let pair = portable_pty::native_pty_system().openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
         let mut cb = CommandBuilder::from_argv(argv.iter().map(Into::into).collect());
-        let cwd = std::env::current_dir().ok().filter(|d| d.is_dir()).or_else(|| crate::settings::user_home().ok());
+        let cwd = std::env::current_dir()
+            .ok()
+            .filter(|d| d.is_dir())
+            .or_else(|| crate::settings::user_home().ok());
         if let Some(cwd) = cwd {
             cb.cwd(cwd);
         }
@@ -395,7 +476,9 @@ impl Session {
         drop(pair.slave);
         let reader = pair.master.try_clone_reader()?;
         let mut pty_writer = pair.master.take_writer()?;
-        logger::info(&format!("pty: {argv:?} {cols}x{rows} sid {sid} cpr {cpr:?}"));
+        logger::info(&format!(
+            "pty: {argv:?} {cols}x{rows} sid {sid} cpr {cpr:?}"
+        ));
 
         let base = program.rsplit(['/', '\\']).next().unwrap_or(program);
         write_stdout(format!("\x1b]0;{base}\x07").as_bytes());
@@ -410,7 +493,11 @@ impl Session {
         let (writer, wrx) = mpsc::channel::<Vec<u8>>();
         thread::spawn(move || {
             for b in wrx {
-                if pty_writer.write_all(&b).and_then(|_| pty_writer.flush()).is_err() {
+                if pty_writer
+                    .write_all(&b)
+                    .and_then(|_| pty_writer.flush())
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -481,7 +568,9 @@ impl Session {
             let msg = match stash.take() {
                 Some(m) => Ok(m),
                 None => match self.next_deadline() {
-                    Some(d) => self.rx.recv_timeout(d.saturating_duration_since(Instant::now())),
+                    Some(d) => self
+                        .rx
+                        .recv_timeout(d.saturating_duration_since(Instant::now())),
                     None => self.rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 },
             };
@@ -548,7 +637,12 @@ impl Session {
             }
             Msg::Resize(cols, rows) if self.passthrough => {
                 if let Some(m) = &self.master {
-                    let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                    let _ = m.resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
                 }
             }
             Msg::Resize(c, r) => {
@@ -577,7 +671,9 @@ impl Session {
             Msg::Ghost { req, text } => {
                 self.guard(|s| {
                     if req == s.req && req == s.llm_req {
-                        s.llm = text.zip(s.sent.as_ref().map(|x| x.0.clone())).map(|(t, b)| (b, t));
+                        s.llm = text
+                            .zip(s.sent.as_ref().map(|x| x.0.clone()))
+                            .map(|(t, b)| (b, t));
                         s.redraw();
                     }
                 });
@@ -613,10 +709,19 @@ impl Session {
             return self.exit_at;
         }
         let lock = self.lock.as_ref().map(|l| l.0);
-        [self.resize_at, lock, self.llm_at, self.spinner_at, Some(self.poll_at), self.exit_at, self.redraw_until, self.held_at]
-            .into_iter()
-            .flatten()
-            .min()
+        [
+            self.resize_at,
+            lock,
+            self.llm_at,
+            self.spinner_at,
+            Some(self.poll_at),
+            self.exit_at,
+            self.redraw_until,
+            self.held_at,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     fn alt(&self) -> bool {
@@ -624,7 +729,11 @@ impl Session {
     }
 
     fn cwd(&self) -> PathBuf {
-        self.tracker.cwd.clone().or_else(|| std::env::current_dir().ok()).unwrap_or_default()
+        self.tracker
+            .cwd
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default()
     }
 
     fn shell(&self) -> Shell {
@@ -689,9 +798,17 @@ impl Session {
     fn refresh(&mut self) {
         // Off the command line the cursor is in a widget's inline TUI (fzf, fish's pager; see Tracker::extract). Live
         // UI only: pre_exec still scrapes after a transient prompt, which is redrawn without markers.
-        let new = if self.alt() { None } else { self.tracker.extract(&self.term).filter(|e| e.at_prompt) };
+        let new = if self.alt() {
+            None
+        } else {
+            self.tracker.extract(&self.term).filter(|e| e.at_prompt)
+        };
         if !self.unechoed.is_empty() {
-            let base = self.lock.as_ref().map(|l| l.2.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()));
+            let base = self
+                .lock
+                .as_ref()
+                .map(|l| l.2.as_str())
+                .or(self.cur.as_ref().map(|e| e.buffer.as_str()));
             let n = new.as_ref().map(|e| e.buffer.as_str());
             self.unechoed = unechoed_after(&self.unechoed, base, n, self.lock.is_some());
         }
@@ -715,7 +832,11 @@ impl Session {
             Some(t) if e.buffer.trim().is_empty() && Instant::now() < t => return,
             _ => self.redraw_until = None,
         }
-        if self.sent.as_ref().is_some_and(|(b, c)| *b == e.buffer && *c == e.cursor) {
+        if self
+            .sent
+            .as_ref()
+            .is_some_and(|(b, c)| *b == e.buffer && *c == e.cursor)
+        {
             return;
         }
         let (buffer, cursor) = (e.buffer.clone(), e.cursor);
@@ -728,7 +849,14 @@ impl Session {
             self.echo_pending = None; // nothing stale left for held keys to act on
             return;
         }
-        let req = Request { id: self.req, buffer, cursor, cwd: self.cwd(), shell: self.shell(), history_mode: self.menu.history_mode() };
+        let req = Request {
+            id: self.req,
+            buffer,
+            cursor,
+            cwd: self.cwd(),
+            shell: self.shell(),
+            history_mode: self.menu.history_mode(),
+        };
         let _ = self.engine.send(EngineMsg::Complete(req));
     }
 
@@ -744,7 +872,11 @@ impl Session {
         }
         // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
         // command) too: the inline source depends on the buffer only. A mid-word cursor fails the length check.
-        if c.phase == Phase::Parse && c.ghost.is_none() && c.cursor == c.buffer.len() && self.llm_enabled() {
+        if c.phase == Phase::Parse
+            && c.ghost.is_none()
+            && c.cursor == c.buffer.len()
+            && self.llm_enabled()
+        {
             let debounce = self.settings.i64("inline.debounceMs", 300).max(0) as u64;
             self.llm_at = Some(self.changed_at + Duration::from_millis(debounce));
         }
@@ -758,7 +890,10 @@ impl Session {
 
     fn llm_enabled(&self) -> bool {
         self.settings.bool("inline.enabled", true)
-            && matches!(crate::inline::source(&self.settings), Ok(crate::inline::Source::Profile(_)))
+            && matches!(
+                crate::inline::source(&self.settings),
+                Ok(crate::inline::Source::Profile(_))
+            )
     }
 
     /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
@@ -771,21 +906,35 @@ impl Session {
         if e.buffer.is_empty() || e.cursor != e.buffer.len() || e.shell_ghost {
             return None;
         }
-        let buffer = if typed { self.basis()? } else { e.buffer.clone() };
-        [&self.ghost, &self.llm].into_iter().flatten().find_map(|(b, g)| ghost_rest(&buffer, b, g))
+        let buffer = if typed {
+            self.basis()?
+        } else {
+            e.buffer.clone()
+        };
+        [&self.ghost, &self.llm]
+            .into_iter()
+            .flatten()
+            .find_map(|(b, g)| ghost_rest(&buffer, b, g))
     }
 
     /// The buffer once the shell echoed everything already sent: the pending insertion's result (else the extracted
     /// buffer) plus the printable keys typed ahead of their echo (SPEC §7.3 reconciliation).
     fn basis(&self) -> Option<String> {
-        let b = self.lock.as_ref().map(|l| l.2.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()))?;
+        let b = self
+            .lock
+            .as_ref()
+            .map(|l| l.2.as_str())
+            .or(self.cur.as_ref().map(|e| e.buffer.as_str()))?;
         Some(format!("{b}{}", self.unechoed))
     }
 
     /// Track a forwarded key: a printable char at the end of the line comes back as echo; anything else
     /// (backspace, arrows, control keys, paste) cannot be modelled and drops the prediction.
     fn note_forwarded(&mut self, key: &Key) {
-        let at_end = self.cur.as_ref().is_some_and(|e| e.cursor == e.buffer.len());
+        let at_end = self
+            .cur
+            .as_ref()
+            .is_some_and(|e| e.cursor == e.buffer.len());
         match key.code {
             KeyCode::Char(c) if key.mods == Mods::default() && at_end => self.unechoed.push(c),
             _ => {
@@ -826,7 +975,10 @@ impl Session {
         let g = self.term.grid();
         !self.suppressed()
             && !self.tracker.filter.scroll_region()
-            && !self.term.mode().intersects(TermMode::ALT_SCREEN | TermMode::ORIGIN | TermMode::INSERT)
+            && !self
+                .term
+                .mode()
+                .intersects(TermMode::ALT_SCREEN | TermMode::ORIGIN | TermMode::INSERT)
             && !g.cursor.input_needs_wrap
             && g.columns() >= 10
             && g.screen_lines() >= 3
@@ -860,7 +1012,8 @@ impl Session {
                 let (cpr, bg, rest) = parse_probe(chunk);
                 if bg.is_some() {
                     self.terminal_bg = bg;
-                    self.renderer.set_theme(Theme::from_settings(&self.settings, bg));
+                    self.renderer
+                        .set_theme(Theme::from_settings(&self.settings, bg));
                 }
                 if cpr.is_some() {
                     self.probe_until = None;
@@ -895,9 +1048,16 @@ impl Session {
             let shown = prompt && self.menu.intercepting(&self.settings);
             let intercepting = shown && self.drawable();
             let global = prompt && !shown && !disabled && self.menu.has_items();
-            let binding = if prompt { self.keymap.lookup(&key) } else { None };
-            let tab_show = global && only_tab && key.code == KeyCode::Tab && key.mods == Mods::default();
-            let ghost = ghost_key(&key).filter(|_| prompt && self.drawable()).zip(self.ghost_text(true));
+            let binding = if prompt {
+                self.keymap.lookup(&key)
+            } else {
+                None
+            };
+            let tab_show =
+                global && only_tab && key.code == KeyCode::Tab && key.mods == Mods::default();
+            let ghost = ghost_key(&key)
+                .filter(|_| prompt && self.drawable())
+                .zip(self.ghost_text(true));
             let acts = ghost.is_some()
                 || tab_show
                 || (intercepting && matches!(binding, Some(Binding::Action(_) | Binding::Unknown)));
@@ -913,9 +1073,9 @@ impl Session {
                 Some(Binding::Action(a)) if intercepting => self.menu.handle(a, &self.settings),
                 Some(Binding::Unknown) if intercepting => Vec::new(),
                 _ if tab_show => self.menu.show_on_tab(&self.settings),
-                Some(Binding::Action(a @ (Action::ShowAutocomplete | Action::ToggleAutocomplete))) if global => {
-                    self.menu.handle(a, &self.settings)
-                }
+                Some(Binding::Action(
+                    a @ (Action::ShowAutocomplete | Action::ToggleAutocomplete),
+                )) if global => self.menu.handle(a, &self.settings),
                 _ => {
                     match ghost {
                         Some((full, g)) => {
@@ -931,10 +1091,15 @@ impl Session {
                                 self.tracker.submitted = self.basis(); // history: the line, not what follows it
                             }
                             fwd.extend_from_slice(&chunk[ev.bytes.clone()]);
-                            typed += usize::from(matches!(key.code, KeyCode::Char(_)) && key.mods == Mods::default());
+                            typed += usize::from(
+                                matches!(key.code, KeyCode::Char(_)) && key.mods == Mods::default(),
+                            );
                             self.note_forwarded(&key);
                             // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
-                            if is_ctrl(&key, 'c') || is_ctrl(&key, 'd') || key.code == KeyCode::Enter {
+                            if is_ctrl(&key, 'c')
+                                || is_ctrl(&key, 'd')
+                                || key.code == KeyCode::Enter
+                            {
                                 self.menu.error_reset();
                                 redraw = true;
                             }
@@ -981,7 +1146,11 @@ impl Session {
             return;
         }
         let from = self.menu.last().map(|c| (c.buffer.clone(), c.cursor));
-        let Some((ib, at)) = from.or_else(|| self.cur.as_ref().map(|e| (e.buffer.clone(), e.cursor))) else { return };
+        let Some((ib, at)) =
+            from.or_else(|| self.cur.as_ref().map(|e| (e.buffer.clone(), e.cursor)))
+        else {
+            return;
+        };
         // Against what the shell will show, not the last batch: keys sent ahead of their echo are reconciled too.
         let cur = self.basis().unwrap_or_else(|| ib.clone());
         fwd.extend(insertion_bytes(ins, &ib, &cur));
@@ -992,7 +1161,10 @@ impl Session {
             // reads a line the shell rewrote from the screen.
             self.tracker.submitted = Some(expected.clone());
         }
-        let before = self.cur.as_ref().map_or_else(|| ib.clone(), |e| e.buffer.clone());
+        let before = self
+            .cur
+            .as_ref()
+            .map_or_else(|| ib.clone(), |e| e.buffer.clone());
         let now = Instant::now();
         self.lock = Some((now + INSERT_LOCK, now + LOCK_CAP, expected, before));
         if let Some((cmd, name)) = record {
@@ -1002,13 +1174,22 @@ impl Session {
 
     /// SPEC §7.6: resize PTY + model now, repaint after 150 ms of quiet.
     fn on_resize(&mut self, cols: u16, rows: u16) {
-        if cols == 0 || rows == 0 || (cols as usize, rows as usize) == (self.term.columns(), self.term.screen_lines()) {
+        if cols == 0
+            || rows == 0
+            || (cols as usize, rows as usize) == (self.term.columns(), self.term.screen_lines())
+        {
             return;
         }
         if let Some(m) = &self.master {
-            let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+            let _ = m.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
         }
-        self.term.resize(TermSize::new(cols as usize, rows as usize));
+        self.term
+            .resize(TermSize::new(cols as usize, rows as usize));
         self.tracker.filter.resize(rows as usize);
         self.renderer.drop_clear(); // the terminal reflowed the old frame unpredictably
         self.resize_at = Some(Instant::now() + RESIZE_DEBOUNCE);
@@ -1045,7 +1226,12 @@ impl Session {
             self.llm_at = None;
             if let Some((buffer, _)) = self.sent.clone() {
                 self.llm_req = self.req;
-                let msg = EngineMsg::Llm { req: self.req, buffer, cwd: self.cwd(), shell: self.shell() };
+                let msg = EngineMsg::Llm {
+                    req: self.req,
+                    buffer,
+                    cwd: self.cwd(),
+                    shell: self.shell(),
+                };
                 let _ = self.engine.send(msg);
             }
         }
@@ -1087,7 +1273,8 @@ impl Session {
         self.settings_mtime = m;
         self.settings = Settings::load();
         self.keymap = Keymap::from_settings(&self.settings);
-        self.renderer.set_theme(Theme::from_settings(&self.settings, self.terminal_bg));
+        self.renderer
+            .set_theme(Theme::from_settings(&self.settings, self.terminal_bg));
         let _ = self.engine.send(EngineMsg::Settings(self.settings.clone()));
         true
     }
@@ -1138,8 +1325,18 @@ mod sys {
             libc::FD_ZERO(&mut set);
             libc::FD_SET(0, &mut set);
             let us = t.as_micros();
-            let mut tv = libc::timeval { tv_sec: (us / 1_000_000) as _, tv_usec: (us % 1_000_000) as _ };
-            if libc::select(1, &mut set, std::ptr::null_mut(), std::ptr::null_mut(), &mut tv) <= 0 {
+            let mut tv = libc::timeval {
+                tv_sec: (us / 1_000_000) as _,
+                tv_usec: (us % 1_000_000) as _,
+            };
+            if libc::select(
+                1,
+                &mut set,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut tv,
+            ) <= 0
+            {
                 return Vec::new();
             }
             libc::read(0, buf.as_mut_ptr().cast(), buf.len())
@@ -1223,10 +1420,11 @@ mod sys {
     use std::time::Duration;
     use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Console::{
-        GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetStdHandle, ReadConsoleInputW, SetConsoleCP, SetConsoleMode,
-        SetConsoleOutputCP, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
-        ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT, INPUT_RECORD, KEY_EVENT,
-        STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, WINDOW_BUFFER_SIZE_EVENT,
+        GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetStdHandle, ReadConsoleInputW,
+        SetConsoleCP, SetConsoleMode, SetConsoleOutputCP, DISABLE_NEWLINE_AUTO_RETURN,
+        ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+        ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT,
+        INPUT_RECORD, KEY_EVENT, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, WINDOW_BUFFER_SIZE_EVENT,
     };
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
@@ -1243,7 +1441,12 @@ mod sys {
 
     fn handles() -> (HANDLE, HANDLE) {
         // SAFETY: GetStdHandle has no preconditions.
-        unsafe { (GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE)) }
+        unsafe {
+            (
+                GetStdHandle(STD_INPUT_HANDLE),
+                GetStdHandle(STD_OUTPUT_HANDLE),
+            )
+        }
     }
 
     impl Modes {
@@ -1269,7 +1472,12 @@ mod sys {
             if GetConsoleMode(i, &mut input) == 0 || GetConsoleMode(o, &mut output) == 0 {
                 bail!("not a Windows console");
             }
-            let m = Modes { input, output, in_cp: GetConsoleCP(), out_cp: GetConsoleOutputCP() };
+            let m = Modes {
+                input,
+                output,
+                in_cp: GetConsoleCP(),
+                out_cp: GetConsoleOutputCP(),
+            };
             let raw = (input & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT))
                 | ENABLE_VIRTUAL_TERMINAL_INPUT
                 | ENABLE_WINDOW_INPUT;
@@ -1325,7 +1533,9 @@ mod sys {
         if unsafe { WaitForSingleObject(i, t.as_millis() as u32) } != WAIT_OBJECT_0 {
             return Vec::new();
         }
-        read_console(i, &mut None).map(|(b, _)| b).unwrap_or_default()
+        read_console(i, &mut None)
+            .map(|(b, _)| b)
+            .unwrap_or_default()
     }
 
     pub fn spawn_input(tx: Sender<Msg>) {
@@ -1375,7 +1585,12 @@ mod tests {
     use super::*;
 
     fn ins(delete: usize, text: &str, cursor_back: usize, execute: bool) -> Insertion {
-        Insertion { delete, text: text.into(), cursor_back, execute }
+        Insertion {
+            delete,
+            text: text.into(),
+            cursor_back,
+            execute,
+        }
     }
 
     #[test]
@@ -1391,23 +1606,41 @@ mod tests {
         assert_eq!(insertion_bytes(&i, "git st", "ls"), b"atus ");
         // Delete, cursor-back and execute.
         let i = ins(3, "--out=", 1, true);
-        assert_eq!(insertion_bytes(&i, "x --o", "x --o"), b"\x7f\x7f\x7f--out=\x1b[D\r");
+        assert_eq!(
+            insertion_bytes(&i, "x --o", "x --o"),
+            b"\x7f\x7f\x7f--out=\x1b[D\r"
+        );
     }
 
     #[test]
     fn expected_buffer_after_insertion() {
-        assert_eq!(expected_buffer(&ins(0, "atus ", 0, false), "git st", 6), "git status ");
-        assert_eq!(expected_buffer(&ins(6, "my\\ dir/", 0, false), "cd my\\ di", 9), "cd my\\ dir/");
-        assert_eq!(expected_buffer(&ins(2, "checkout ", 0, false), "git ch | x", 6), "git checkout  | x");
+        assert_eq!(
+            expected_buffer(&ins(0, "atus ", 0, false), "git st", 6),
+            "git status "
+        );
+        assert_eq!(
+            expected_buffer(&ins(6, "my\\ dir/", 0, false), "cd my\\ di", 9),
+            "cd my\\ dir/"
+        );
+        assert_eq!(
+            expected_buffer(&ins(2, "checkout ", 0, false), "git ch | x", 6),
+            "git checkout  | x"
+        );
         assert_eq!(expected_buffer(&ins(1, "é", 0, false), "aé", 3), "aé");
     }
 
     #[test]
     fn probe_replies() {
         let (cpr, bg, rest) = parse_probe(b"ab\x1b]11;rgb:ffff/8080/0000\x1b\\\x1b[12;40Rc");
-        assert_eq!((cpr, bg, rest.as_slice()), (Some((12, 40)), Some((255, 128, 0)), b"abc".as_slice()));
+        assert_eq!(
+            (cpr, bg, rest.as_slice()),
+            (Some((12, 40)), Some((255, 128, 0)), b"abc".as_slice())
+        );
         let (cpr, bg, rest) = parse_probe(b"\x1b]11;rgb:f/0/f\x07\x1b[1;1R");
-        assert_eq!((cpr, bg, rest.len()), (Some((1, 1)), Some((255, 0, 255)), 0));
+        assert_eq!(
+            (cpr, bg, rest.len()),
+            (Some((1, 1)), Some((255, 0, 255)), 0)
+        );
         // Keys typed meanwhile (arrows, partial replies) are kept for the shell.
         let (cpr, _, rest) = parse_probe(b"\x1b[A\x1b[12;");
         assert_eq!((cpr, rest.as_slice()), (None, b"\x1b[A\x1b[12;".as_slice()));
@@ -1418,18 +1651,33 @@ mod tests {
     #[test]
     fn child_argv() {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(argv(Some("/bin/zsh"), &[], true), s(&["/bin/zsh", "--login"]));
+        assert_eq!(
+            argv(Some("/bin/zsh"), &[], true),
+            s(&["/bin/zsh", "--login"])
+        );
         assert_eq!(argv(Some("pwsh"), &[], true), s(&["pwsh"]));
-        assert_eq!(argv(Some("bash"), &s(&["--noprofile", "--rcfile", "x"]), false), s(&["bash", "--noprofile", "--rcfile", "x"]));
-        assert_eq!(argv(Some("bash"), &s(&["vim", "-u"]), true), s(&["vim", "-u"]));
+        assert_eq!(
+            argv(Some("bash"), &s(&["--noprofile", "--rcfile", "x"]), false),
+            s(&["bash", "--noprofile", "--rcfile", "x"])
+        );
+        assert_eq!(
+            argv(Some("bash"), &s(&["vim", "-u"]), true),
+            s(&["vim", "-u"])
+        );
         assert!(argv(None, &[], false).is_empty());
     }
 
     #[test]
     fn ghost_keys_and_words() {
         let k = |code, mods| Key { code, mods };
-        let ctrl = Mods { ctrl: true, ..Mods::default() };
-        let alt = Mods { alt: true, ..Mods::default() };
+        let ctrl = Mods {
+            ctrl: true,
+            ..Mods::default()
+        };
+        let alt = Mods {
+            alt: true,
+            ..Mods::default()
+        };
         assert_eq!(ghost_key(&k(KeyCode::Right, Mods::default())), Some(true));
         assert_eq!(ghost_key(&k(KeyCode::Char('e'), ctrl)), Some(true));
         assert_eq!(ghost_key(&k(KeyCode::Char('f'), alt)), Some(false));
@@ -1443,12 +1691,18 @@ mod tests {
     #[test]
     fn ghost_with_control_chars_is_never_shown_or_accepted() {
         // An LLM reply with bare CRs would run `touch /x` when accepted.
-        assert_eq!(ghost_rest("git sta", "git sta", "tus\rtouch /x\recho"), None);
+        assert_eq!(
+            ghost_rest("git sta", "git sta", "tus\rtouch /x\recho"),
+            None
+        );
         assert_eq!(ghost_rest("git sta", "git st", "atus\x1b[2J"), None);
         assert_eq!(ghost_rest("git sta", "git st", "atus\u{9b}31m"), None);
         assert_eq!(ghost_rest("git sta", "git st", "atus\x7f"), None);
         assert_eq!(ghost_rest("echo", "echo", " a\nb"), None);
-        assert_eq!(ghost_rest("git sta", "git st", "atus -s"), Some("tus -s".into()));
+        assert_eq!(
+            ghost_rest("git sta", "git st", "atus -s"),
+            Some("tus -s".into())
+        );
         assert_eq!(ghost_rest("ls", "git", "x"), None);
     }
 
@@ -1457,10 +1711,20 @@ mod tests {
         assert_eq!(unechoed_after("lo", Some("hel"), Some("hel"), false), "lo");
         assert_eq!(unechoed_after("lo", Some("hel"), Some("hell"), false), "o");
         assert_eq!(unechoed_after("lo", Some("hel"), Some("hello"), false), "");
-        assert_eq!(unechoed_after("lo", Some("hel"), Some("he"), false), "", "the shell did something else");
+        assert_eq!(
+            unechoed_after("lo", Some("hel"), Some("he"), false),
+            "",
+            "the shell did something else"
+        );
         // Locked: typed after a pending insertion (base = its expected buffer).
-        assert_eq!(unechoed_after("y", Some("cat abcd"), Some("cat ab"), true), "y");
-        assert_eq!(unechoed_after("y", Some("cat abcd"), Some("cat abcdy"), true), "");
+        assert_eq!(
+            unechoed_after("y", Some("cat abcd"), Some("cat ab"), true),
+            "y"
+        );
+        assert_eq!(
+            unechoed_after("y", Some("cat abcd"), Some("cat abcdy"), true),
+            ""
+        );
         assert_eq!(unechoed_after("y", None, Some("x"), false), "");
     }
 
@@ -1471,20 +1735,33 @@ mod tests {
         credits.send(()).unwrap();
         credits.send(()).unwrap();
         std::thread::spawn(move || pump(std::io::repeat(b'y'), credit_rx, tx));
-        let pty = |r: Result<Msg, RecvTimeoutError>| matches!(r, Ok(Msg::Pty(b)) if b.len() == 16 * 1024);
+        let pty =
+            |r: Result<Msg, RecvTimeoutError>| matches!(r, Ok(Msg::Pty(b)) if b.len() == 16 * 1024);
         assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
         assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
-        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err(), "an endless child is not read ahead");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "an endless child is not read ahead"
+        );
         credits.send(()).unwrap();
         assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
         drop(credits);
-        assert!(matches!(rx.recv_timeout(Duration::from_secs(5)), Ok(Msg::PtyEof)));
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(Msg::PtyEof)
+        ));
     }
 
     #[cfg(unix)]
     #[test]
     fn signal_death_exit_code() {
-        let sh = |s: &str| std::process::Command::new("/bin/sh").args(["-c", s]).spawn().unwrap().id() as libc::pid_t;
+        let sh = |s: &str| {
+            std::process::Command::new("/bin/sh")
+                .args(["-c", s])
+                .spawn()
+                .unwrap()
+                .id() as libc::pid_t
+        };
         assert_eq!(sys::wait_pid(sh("kill -9 $$")), 137);
         assert_eq!(sys::wait_pid(sh("exit 3")), 3);
     }
@@ -1562,7 +1839,9 @@ mod tests {
 
     /// A bash prompt `$ ` with the integration markers, then `text` echoed.
     fn prompt(s: &mut Session, text: &str) {
-        let p = format!("\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}");
+        let p = format!(
+            "\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}"
+        );
         s.on_output(p.as_bytes());
     }
 
@@ -1577,7 +1856,10 @@ mod tests {
     }
 
     fn subs(q: &str) -> Vec<Item> {
-        ["cherry-pick", "checkout"].iter().map(|n| item(n, ItemType::Subcommand, q)).collect()
+        ["cherry-pick", "checkout"]
+            .iter()
+            .map(|n| item(n, ItemType::Subcommand, q))
+            .collect()
     }
 
     fn sent(pty: &Receiver<Vec<u8>>) -> Vec<u8> {
@@ -1624,9 +1906,17 @@ mod tests {
 
     #[test]
     fn disabled_menu_lets_tab_through() {
-        let (mut s, pty) = session(r#"{"autocomplete.disable": true, "autocomplete.onlyShowOnTab": true}"#);
+        let (mut s, pty) =
+            session(r#"{"autocomplete.disable": true, "autocomplete.onlyShowOnTab": true}"#);
         prompt(&mut s, "cat ");
-        let mut c = comp("cat ", 1, vec![item("a.txt", ItemType::File, ""), item("b.txt", ItemType::File, "")]);
+        let mut c = comp(
+            "cat ",
+            1,
+            vec![
+                item("a.txt", ItemType::File, ""),
+                item("b.txt", ItemType::File, ""),
+            ],
+        );
         c.req = s.req;
         s.on_completion(c.clone());
         c.arg_key = 2; // a new argument: hidden until Tab, with items
@@ -1639,7 +1929,12 @@ mod tests {
     #[test]
     fn insertions_build_on_keys_not_yet_echoed() {
         // Tab + Enter (and Tab + Tab) in one read: the second insertion builds on the first one's result.
-        let files = || vec![item("abcd1.txt", ItemType::File, "ab"), item("abcd2.txt", ItemType::File, "ab")];
+        let files = || {
+            vec![
+                item("abcd1.txt", ItemType::File, "ab"),
+                item("abcd2.txt", ItemType::File, "ab"),
+            ]
+        };
         for (keys, want) in [(&b"\t\r"[..], "cat abcd1.txt"), (b"\t\t", "cat abcd")] {
             let (mut s, pty) = session("{}");
             prompt(&mut s, "cat ab");
@@ -1691,7 +1986,10 @@ mod tests {
         prompt(&mut s, "");
         s.on_input(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\\x1b[5;1Rx");
         assert_eq!(sent(&pty), b"x");
-        assert_eq!((s.terminal_bg, s.probe_until), (Some((255, 255, 255)), None));
+        assert_eq!(
+            (s.terminal_bg, s.probe_until),
+            (Some((255, 255, 255)), None)
+        );
     }
 
     #[test]
@@ -1699,7 +1997,10 @@ mod tests {
         let (mut s, _) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        assert!(s.sink.windows(8).any(|w| w == b"\x1b[?2026h"), "a frame was drawn");
+        assert!(
+            s.sink.windows(8).any(|w| w == b"\x1b[?2026h"),
+            "a frame was drawn"
+        );
         s.sink.clear();
         s.redraw();
         assert!(s.sink.is_empty(), "{:?}", String::from_utf8_lossy(&s.sink));
@@ -1727,7 +2028,11 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.sink.clear();
         s.on_output(b"\x1bP+q");
-        assert!(s.sink.ends_with(b"\x1bP+q"), "{:?}", String::from_utf8_lossy(&s.sink));
+        assert!(
+            s.sink.ends_with(b"\x1bP+q"),
+            "{:?}",
+            String::from_utf8_lossy(&s.sink)
+        );
         s.on_input(b"\x1b[D");
         assert_eq!(sent(&pty), b"\x1b[D");
         s.on_output(b"696e\x1b\\");
@@ -1741,7 +2046,10 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.sink.clear();
         assert!(!s.guard(|_| panic!("injected")));
-        assert!(s.passthrough && s.sink.starts_with(b"\x1b[?2026h"), "overlay cleared");
+        assert!(
+            s.passthrough && s.sink.starts_with(b"\x1b[?2026h"),
+            "overlay cleared"
+        );
         s.sink.clear();
         let mut stash = None;
         assert!(s.step(Msg::Pty(b"out\x1b]697;NewCmd\x07".to_vec()), &mut stash));
@@ -1788,7 +2096,10 @@ mod tests {
         assert!(!s.menu.intercepting(&s.settings));
         let req = s.req;
         redraw(&mut s, "git ch");
-        assert_eq!(s.req, req, "the unchanged line is not re-requested (its reply would show the menu)");
+        assert_eq!(
+            s.req, req,
+            "the unchanged line is not re-requested (its reply would show the menu)"
+        );
         s.on_input(b"\r");
         assert_eq!(sent(&pty), b"\r");
         // A recalled line (a large change) stays hidden over a resize redraw: Enter runs it.
@@ -1796,7 +2107,11 @@ mod tests {
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         s.on_output(b"\x08\x08\x1b[Kstatus --short ");
-        let mut c = comp("git status --short ", 2, vec![item("my file.txt", ItemType::File, "")]);
+        let mut c = comp(
+            "git status --short ",
+            2,
+            vec![item("my file.txt", ItemType::File, "")],
+        );
         c.req = s.req;
         s.on_completion(c);
         assert!(!s.menu.intercepting(&s.settings));
@@ -1818,7 +2133,10 @@ mod tests {
         assert!(s.menu.intercepting(&s.settings) && s.drawable());
         // A line that really is empty resets once the grace passed.
         redraw(&mut s, "");
-        assert!(s.menu.has_items() && !s.drawable(), "held, not drawn, during the grace");
+        assert!(
+            s.menu.has_items() && !s.drawable(),
+            "held, not drawn, during the grace"
+        );
         s.redraw_until = Some(Instant::now());
         s.on_timers();
         assert!(!s.menu.has_items());
@@ -1872,14 +2190,20 @@ mod tests {
         // Tab inserts `kout`; the shell has echoed nothing when the 100 ms lock runs out, then Right accepts the ghost.
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git chec");
-        let items = ["checkout", "checkout-index"].iter().map(|n| item(n, ItemType::Subcommand, "chec")).collect();
+        let items = ["checkout", "checkout-index"]
+            .iter()
+            .map(|n| item(n, ItemType::Subcommand, "chec"))
+            .collect();
         reply(&mut s, items, Some("kout feature-login"));
         s.on_input(b"\t");
         s.lock.as_mut().unwrap().0 = Instant::now();
         s.on_timers();
         assert!(s.lock.is_some(), "re-armed: nothing echoed");
         s.on_input(b"\x1b[C");
-        assert_eq!(shell_line("git chec", &sent(&pty)), "git checkout feature-login");
+        assert_eq!(
+            shell_line("git chec", &sent(&pty)),
+            "git checkout feature-login"
+        );
         // Never past the cap.
         let l = s.lock.as_mut().unwrap();
         (l.0, l.1) = (Instant::now(), Instant::now());
@@ -1902,13 +2226,24 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.tracker.submitted = Some("stale".into());
         let fx = s.menu.handle(Action::InsertSelectedAndExecute, &s.settings);
-        let Some(Effect::Insert { ins, .. }) = fx.into_iter().next() else { panic!("no insertion") };
+        let Some(Effect::Insert { ins, .. }) = fx.into_iter().next() else {
+            panic!("no insertion")
+        };
         s.insert(&ins, None, &mut Vec::new());
         assert_eq!(s.tracker.submitted.as_deref(), Some("git cherry-pick"));
         let run = format!("\r\x1b[K\u{276f} git cherry-pick\r\n\x1b]697;OSCLock={SID}\x07\x1b]697;PreExec\x07x\r\n");
         s.on_output(format!("{run}\x1b]697;OSCUnlock={SID}\x07").as_bytes());
         prompt(&mut s, "");
-        let done: Vec<_> = rx.try_iter().filter_map(|m| if let EngineMsg::CommandFinished(h) = m { Some(h.command) } else { None }).collect();
+        let done: Vec<_> = rx
+            .try_iter()
+            .filter_map(|m| {
+                if let EngineMsg::CommandFinished(h) = m {
+                    Some(h.command)
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(done, ["git cherry-pick"]);
     }
 
@@ -1918,13 +2253,20 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "echo one");
         reply(&mut s, vec![], None);
-        assert!(s.menu.shown(&s.settings) && !s.menu.intercepting(&s.settings), "the argument hint row");
+        assert!(
+            s.menu.shown(&s.settings) && !s.menu.intercepting(&s.settings),
+            "the argument hint row"
+        );
         s.on_input(b"\r");
         assert_eq!(sent(&pty), b"\r");
         assert!(!s.menu.shown(&s.settings));
         s.sink.clear();
         s.on_output(b"\r\n");
-        assert!(!String::from_utf8_lossy(&s.sink).contains("path"), "{:?}", String::from_utf8_lossy(&s.sink));
+        assert!(
+            !String::from_utf8_lossy(&s.sink).contains("path"),
+            "{:?}",
+            String::from_utf8_lossy(&s.sink)
+        );
     }
 
     #[test]
@@ -1936,8 +2278,15 @@ mod tests {
         prompt(&mut s, " git branch -D fe");
         s.on_output(b"\r\n\x1b]697;NoHistory\x07\x1b]697;PreExec\x07Deleted branch\r\n");
         prompt(&mut s, "");
-        let msgs: Vec<_> = rx.try_iter().filter(|m| !matches!(m, EngineMsg::Complete(_))).collect();
-        assert!(matches!(&msgs[..], [EngineMsg::CommandEnded]), "{}", msgs.len());
+        let msgs: Vec<_> = rx
+            .try_iter()
+            .filter(|m| !matches!(m, EngineMsg::Complete(_)))
+            .collect();
+        assert!(
+            matches!(&msgs[..], [EngineMsg::CommandEnded]),
+            "{}",
+            msgs.len()
+        );
     }
 
     #[test]
@@ -1958,7 +2307,11 @@ mod tests {
         s.sink.clear();
         s.on_output(b"\r\n  1/2\r\n> rea");
         assert!(s.menu.intercepting(&s.settings) && !s.drawable());
-        assert!(!String::from_utf8_lossy(&s.sink).contains("checkout"), "{:?}", String::from_utf8_lossy(&s.sink));
+        assert!(
+            !String::from_utf8_lossy(&s.sink).contains("checkout"),
+            "{:?}",
+            String::from_utf8_lossy(&s.sink)
+        );
         s.on_input(b"\x1b[B\r\x1b[C");
         assert_eq!(sent(&pty), b"\x1b[B\r\x1b[C");
         // Nor does a hidden menu's show-on-Tab take fzf's Tab.
@@ -1979,7 +2332,10 @@ mod tests {
         assert!(!s.drawable());
         s.sink.clear();
         s.redraw();
-        assert!(!String::from_utf8_lossy(&s.sink).contains("checkout"), "menu not drawn");
+        assert!(
+            !String::from_utf8_lossy(&s.sink).contains("checkout"),
+            "menu not drawn"
+        );
         s.on_input(b"\r");
         assert_eq!(sent(&pty), b"\r");
         let (mut s, _) = session("{}");

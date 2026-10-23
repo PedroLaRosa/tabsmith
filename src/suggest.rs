@@ -28,9 +28,13 @@ impl Query {
     pub fn of(&self, search_term: &str) -> String {
         match self {
             Query::Term => search_term.to_string(),
-            Query::Str(g) => search_term[search_term.rfind(g.as_str()).map_or(0, |i| i + g.len())..].to_string(),
+            Query::Str(g) => {
+                search_term[search_term.rfind(g.as_str()).map_or(0, |i| i + g.len())..].to_string()
+            }
             Query::Value(v) => v.clone(),
-            Query::Path { backslash } => search_term[after_sep(search_term, *backslash)..].to_string(),
+            Query::Path { backslash } => {
+                search_term[after_sep(search_term, *backslash)..].to_string()
+            }
         }
     }
 }
@@ -38,7 +42,8 @@ impl Query {
 /// Byte index just past the last path separator in `s` (0 when none). `\` counts only in pwsh: POSIX shells
 /// use it as the escape char.
 pub fn after_sep(s: &str, backslash: bool) -> usize {
-    s.rfind(|c| c == '/' || (backslash && c == '\\')).map_or(0, |i| i + 1)
+    s.rfind(|c| c == '/' || (backslash && c == '\\'))
+        .map_or(0, |i| i + 1)
 }
 
 /// A suggestion row inside the pipeline (Fig `Suggestion` + qac internal fields), before it becomes an `Item`.
@@ -61,6 +66,8 @@ pub struct Sugg {
     pub query: Query,
     pub generator: Option<GenKey>,
     pub template_type: Option<String>,
+    /// Spec `icon` (emoji or `fig://icon?type=`), resolved by the renderer.
+    pub icon: Option<String>,
 }
 
 impl Sugg {
@@ -81,6 +88,7 @@ impl Sugg {
             query: Query::Term,
             generator: None,
             template_type: None,
+            icon: None,
         }
     }
 
@@ -95,12 +103,14 @@ impl Sugg {
             display_name: s.display_name.clone(),
             insert_value: s.insert_value.clone(),
             description: s.description.clone(),
+            icon: s.icon.clone(),
             priority: s.priority.unwrap_or(0.0),
             hidden: s.hidden,
             is_dangerous: s.is_dangerous,
             args: s.args.clone(),
             // SPEC §6.7.1 should_add_space
-            should_add_space: mandatory || s.requires_subcommand.unwrap_or(!s.subcommands.is_empty()),
+            should_add_space: mandatory
+                || s.requires_subcommand.unwrap_or(!s.subcommands.is_empty()),
             ..Sugg::new("", ItemType::Subcommand)
         }
     }
@@ -120,6 +130,7 @@ impl Sugg {
             display_name: o.display_name.clone(),
             insert_value: o.insert_value.clone(),
             description: o.description.clone(),
+            icon: o.icon.clone(),
             priority: o.priority.unwrap_or(0.0),
             hidden: o.hidden,
             is_dangerous: o.is_dangerous,
@@ -131,7 +142,12 @@ impl Sugg {
     }
 
     /// Static/additional/generator suggestion (`type` defaults to `arg`).
-    pub fn from_suggestion(s: &Suggestion, dangerous: bool, generator: Option<GenKey>, query: Query) -> Sugg {
+    pub fn from_suggestion(
+        s: &Suggestion,
+        dangerous: bool,
+        generator: Option<GenKey>,
+        query: Query,
+    ) -> Sugg {
         Sugg {
             names: s.names.clone(),
             display_name: s.display_name.clone(),
@@ -143,6 +159,7 @@ impl Sugg {
             query,
             generator,
             template_type: s.template_type.clone(),
+            icon: s.icon.clone(),
             ..Sugg::new("", s.kind.unwrap_or(ItemType::Arg))
         }
     }
@@ -150,7 +167,9 @@ impl Sugg {
 
 /// ICU `localeCompare` approximation: lowercase compare, ties by exact compare (SPEC §6.7.1).
 pub fn cmp_locale(a: &str, b: &str) -> Ordering {
-    a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b))
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
 }
 
 fn cmp_first(a: &Sugg, b: &Sugg) -> Ordering {
@@ -172,8 +191,14 @@ pub struct GenView<'a> {
 /// Options offered at this level: exclusiveOn / repeat limits / dependsOn priority, alphabetical.
 fn static_options(pr: &ParseResult) -> Vec<Sugg> {
     let passed = &pr.passed_options;
-    let excluded: HashSet<&str> = passed.iter().flat_map(|o| o.exclusive_on.iter().map(String::as_str)).collect();
-    let mut unmet: HashSet<&str> = passed.iter().flat_map(|o| o.depends_on.iter().map(String::as_str)).collect();
+    let excluded: HashSet<&str> = passed
+        .iter()
+        .flat_map(|o| o.exclusive_on.iter().map(String::as_str))
+        .collect();
+    let mut unmet: HashSet<&str> = passed
+        .iter()
+        .flat_map(|o| o.depends_on.iter().map(String::as_str))
+        .collect();
     for o in passed {
         for n in &o.names {
             unmet.remove(n.as_str());
@@ -182,7 +207,12 @@ fn static_options(pr: &ParseResult) -> Vec<Sugg> {
     let comp = &pr.completion;
     let mut seen: HashSet<&str> = HashSet::new();
     let mut out = Vec::new();
-    for o in comp.options.iter().chain(&pr.persistent).chain(&comp.persistent) {
+    for o in comp
+        .options
+        .iter()
+        .chain(&pr.persistent)
+        .chain(&comp.persistent)
+    {
         // "unique": the same option may be reachable as local and inherited persistent
         if o.names.iter().any(|n| seen.contains(n.as_str())) {
             continue;
@@ -197,7 +227,10 @@ fn static_options(pr: &ParseResult) -> Vec<Sugg> {
             Repeat::Unlimited => None,
         };
         if let Some(limit) = limit {
-            let used = passed.iter().filter(|p| p.names.iter().any(|n| o.names.contains(n))).count();
+            let used = passed
+                .iter()
+                .filter(|p| p.names.iter().any(|n| o.names.contains(n)))
+                .count();
             if used >= limit {
                 continue;
             }
@@ -214,7 +247,10 @@ fn static_options(pr: &ParseResult) -> Vec<Sugg> {
 
 /// `-x` short name of an option row.
 fn short_name(s: &Sugg) -> Option<String> {
-    s.names.iter().find(|n| n.starts_with('-') && !n.starts_with("--") && n.chars().count() == 2).cloned()
+    s.names
+        .iter()
+        .find(|n| n.starts_with('-') && !n.starts_with("--") && n.chars().count() == 2)
+        .cloned()
 }
 
 /// Build the unfiltered list for a parse result: subcommands, args (static + generators), additional
@@ -230,11 +266,19 @@ pub fn assemble(pr: &ParseResult, gens: &[GenView]) -> Vec<Sugg> {
     }
     if pr.suggest_args {
         if let Some(arg) = &pr.current_arg {
-            out.extend(arg.suggestions.iter().map(|s| Sugg::from_suggestion(s, arg.is_dangerous, None, Query::Term)));
+            out.extend(
+                arg.suggestions
+                    .iter()
+                    .map(|s| Sugg::from_suggestion(s, arg.is_dangerous, None, Query::Term)),
+            );
             for g in gens {
                 // SPEC §6.6.1: stale results of a loading generator only without getQueryTerm
                 if !g.loading || g.query == Query::Term {
-                    out.extend(g.items.iter().map(|s| Sugg::from_suggestion(s, false, Some(g.key), g.query.clone())));
+                    out.extend(
+                        g.items
+                            .iter()
+                            .map(|s| Sugg::from_suggestion(s, false, Some(g.key), g.query.clone())),
+                    );
                 }
             }
         }
@@ -260,10 +304,18 @@ pub fn assemble(pr: &ParseResult, gens: &[GenView]) -> Vec<Sugg> {
 
 /// SPEC §6.7.1 step 5 (typing `-la`).
 fn option_chain(list: Vec<Sugg>, options: &[Sugg], chain: &str, options_flag: bool) -> Vec<Sugg> {
-    let Some(last) = chain.chars().last().map(|c| format!("-{c}")) else { return list };
-    let mut list: Vec<Sugg> = list.into_iter().filter(|s| matches!(s.kind, ItemType::Option | ItemType::Arg)).collect();
+    let Some(last) = chain.chars().last().map(|c| format!("-{c}")) else {
+        return list;
+    };
+    let mut list: Vec<Sugg> = list
+        .into_iter()
+        .filter(|s| matches!(s.kind, ItemType::Option | ItemType::Arg))
+        .collect();
     if !options_flag {
-        if let Some(o) = options.iter().find(|o| short_name(o).as_deref() == Some(last.as_str())) {
+        if let Some(o) = options
+            .iter()
+            .find(|o| short_name(o).as_deref() == Some(last.as_str()))
+        {
             list.push(o.clone());
         }
     }
@@ -297,7 +349,9 @@ pub fn history_rows(prefix: &str, entries: &[HistoryEntry]) -> Vec<Sugg> {
     let mut names: Vec<&str> = Vec::new();
     let mut freq: HashMap<String, usize> = HashMap::new();
     for e in entries.iter().rev() {
-        let Some(rest) = e.command.strip_prefix(prefix) else { continue };
+        let Some(rest) = e.command.strip_prefix(prefix) else {
+            continue;
+        };
         let name = rest.trim_end();
         if name.is_empty() {
             continue; // ponytail: Kiro keeps an empty-name row; it can only render blank
@@ -322,7 +376,11 @@ pub fn history_rows(prefix: &str, entries: &[HistoryEntry]) -> Vec<Sugg> {
             let mut s = Sugg::new(n, ItemType::History);
             s.description = Some("past command".into());
             s.insert_value = Some(n.to_string());
-            s.priority = if f > 1 { 75.0 + f.min(10) as f64 / 10.0 } else { 50.0 };
+            s.priority = if f > 1 {
+                75.0 + f.min(10) as f64 / 10.0
+            } else {
+                50.0
+            };
             s
         })
         .collect()
@@ -338,13 +396,24 @@ pub fn mix_history(spec: Vec<Sugg>, hist: Vec<Sugg>, show: bool) -> Vec<Sugg> {
     for h in &hist {
         by_word.insert(h.first().split(' ').next().unwrap_or(""), h.priority);
     }
-    let existing: HashSet<&str> = spec.iter().flat_map(|s| s.names.iter().map(String::as_str)).collect();
-    let extra: Vec<Sugg> = hist.iter().filter(|h| !existing.contains(h.first())).cloned().collect();
+    let existing: HashSet<&str> = spec
+        .iter()
+        .flat_map(|s| s.names.iter().map(String::as_str))
+        .collect();
+    let extra: Vec<Sugg> = hist
+        .iter()
+        .filter(|h| !existing.contains(h.first()))
+        .cloned()
+        .collect();
     let mut out: Vec<Sugg> = spec
         .iter()
         .map(|s| {
             let mut s = s.clone();
-            s.priority = s.names.iter().filter_map(|n| by_word.get(n.as_str())).fold(s.priority, |a, &b| a.max(b));
+            s.priority = s
+                .names
+                .iter()
+                .filter_map(|n| by_word.get(n.as_str()))
+                .fold(s.priority, |a, &b| a.max(b));
             s
         })
         .collect();
@@ -359,13 +428,21 @@ pub fn mix_history(spec: Vec<Sugg>, hist: Vec<Sugg>, show: bool) -> Vec<Sugg> {
 pub fn update_priorities(list: &mut [Sugg], recency: Option<&HashMap<String, u64>>) {
     for s in list {
         let name = s.first();
-        let rec = recency.filter(|_| name != "../").and_then(|m| m.get(name)).copied().filter(|&ms| ms != 0);
+        let rec = recency
+            .filter(|_| name != "../")
+            .and_then(|m| m.get(name))
+            .copied()
+            .filter(|&ms| ms != 0);
         let boost = rec.map_or(0.0, |ms| ms as f64 / 1e13);
         let mut p = if s.priority == 0.0 { 50.0 } else { s.priority }; // Kiro treats 0 as 50 (kept)
         if s.kind != ItemType::AutoExecute {
             p = p.clamp(0.0, 100.0);
         }
-        s.priority = if rec.is_some() && (50.0..=75.0).contains(&p) { 75.0 + boost } else { p + boost };
+        s.priority = if rec.is_some() && (50.0..=75.0).contains(&p) {
+            75.0 + boost
+        } else {
+            p + boost
+        };
     }
 }
 
@@ -422,7 +499,11 @@ pub fn fuzzysort(q: &str, t: &str) -> Option<(i64, Vec<usize>)> {
     // strict pass: only consecutive matches or word beginnings, with backtracking
     let mut strict: Vec<usize> = Vec::with_capacity(qn);
     let mut ok = false;
-    let mut ti = if simple[0] == 0 { 0 } else { next[simple[0] - 1] };
+    let mut ti = if simple[0] == 0 {
+        0
+    } else {
+        next[simple[0] - 1]
+    };
     if ti != tn {
         let mut qi = 0;
         loop {
@@ -485,7 +566,14 @@ pub fn partial(names: &[String], q: &str, fuzzy: bool) -> Option<(f64, bool)> {
     if !fuzzy {
         return prefix.map(|p| (p as f64, true));
     }
-    let f = if q.is_empty() { Some(0) } else { names.iter().filter_map(|n| fuzzysort(q, n).map(|r| r.0)).max() };
+    let f = if q.is_empty() {
+        Some(0)
+    } else {
+        names
+            .iter()
+            .filter_map(|n| fuzzysort(q, n).map(|r| r.0))
+            .max()
+    };
     f.map(|f| match prefix {
         Some(p) => (p as f64 / 10.0, true),
         None => (f as f64, false),
@@ -505,7 +593,11 @@ fn auto_exec(name: &str, description: &str, original: Option<ItemType>) -> Sugg 
 pub fn filter(list: Vec<Sugg>, search_term: &str, o: &FilterOpts) -> Vec<(Sugg, bool)> {
     if search_term.is_empty() {
         // nothing typed: nothing prefix-matched, so no spec ghost (SPEC §6.11)
-        let mut out: Vec<(Sugg, bool)> = list.into_iter().filter(|s| !s.hidden).map(|s| (s, false)).collect();
+        let mut out: Vec<(Sugg, bool)> = list
+            .into_iter()
+            .filter(|s| !s.hidden)
+            .map(|s| (s, false))
+            .collect();
         if o.exec_after_space && !out.is_empty() && !o.auto_exec_hidden {
             out.insert(0, (auto_exec("↪", "Immediately execute", None), false));
         }
@@ -552,15 +644,40 @@ pub fn filter(list: Vec<Sugg>, search_term: &str, o: &FilterOpts) -> Vec<(Sugg, 
             }
         }
     }
-    c.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap_or(Ordering::Equal).then(y.0.priority.partial_cmp(&x.0.priority).unwrap_or(Ordering::Equal)));
-    let mut out: Vec<(Sugg, bool)> = a.into_iter().chain(b).chain(c.into_iter().map(|(s, _, p)| (s, p))).collect();
+    c.sort_by(|x, y| {
+        y.1.partial_cmp(&x.1).unwrap_or(Ordering::Equal).then(
+            y.0.priority
+                .partial_cmp(&x.0.priority)
+                .unwrap_or(Ordering::Equal),
+        )
+    });
+    let mut out: Vec<(Sugg, bool)> = a
+        .into_iter()
+        .chain(b)
+        .chain(c.into_iter().map(|(s, _, p)| (s, p)))
+        .collect();
     if !out.is_empty() && !added && !o.auto_exec_hidden {
-        let folders = search_term.ends_with('/') && out.iter().any(|(s, _)| s.template_type.as_deref() == Some("folders"));
+        let folders = search_term.ends_with('/')
+            && out
+                .iter()
+                .any(|(s, _)| s.template_type.as_deref() == Some("folders"));
         if search_term == "." || folders {
             let name = if search_term == "." { "." } else { "↪" };
-            out.insert(0, (auto_exec(name, "Enter the current directory", Some(ItemType::Folder)), false));
+            out.insert(
+                0,
+                (
+                    auto_exec(name, "Enter the current directory", Some(ItemType::Folder)),
+                    false,
+                ),
+            );
         } else if o.suggest_current_token {
-            out.insert(0, (auto_exec(search_term, "Enter the current argument", None), false));
+            out.insert(
+                0,
+                (
+                    auto_exec(search_term, "Enter the current argument", None),
+                    false,
+                ),
+            );
         }
     }
     out
@@ -587,9 +704,18 @@ pub fn dedupe(list: Vec<(Sugg, bool)>) -> Vec<(Sugg, bool)> {
 }
 
 /// SPEC §6.7.5: recency priorities → stable sort by priority → filter → dedupe when 0 < n ≤ 50.
-pub fn rank(mut list: Vec<Sugg>, search_term: &str, recency: Option<&HashMap<String, u64>>, o: &FilterOpts) -> Vec<(Sugg, bool)> {
+pub fn rank(
+    mut list: Vec<Sugg>,
+    search_term: &str,
+    recency: Option<&HashMap<String, u64>>,
+    o: &FilterOpts,
+) -> Vec<(Sugg, bool)> {
     update_priorities(&mut list, recency);
-    list.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(Ordering::Equal));
+    list.sort_by(|a, b| {
+        b.priority
+            .partial_cmp(&a.priority)
+            .unwrap_or(Ordering::Equal)
+    });
     let out = filter(list, search_term, o);
     if !out.is_empty() && out.len() <= 50 {
         dedupe(out)
@@ -629,7 +755,13 @@ fn name_match(s: &Sugg, q: &str, fuzzy: bool, verbose: bool) -> Option<String> {
     let matched: Vec<&String> = s
         .names
         .iter()
-        .filter(|n| if fuzzy { q.is_empty() || fuzzysort(q, n).is_some() } else { prefix_score(n, q).is_some() })
+        .filter(|n| {
+            if fuzzy {
+                q.is_empty() || fuzzysort(q, n).is_some()
+            } else {
+                prefix_score(n, q).is_some()
+            }
+        })
         .collect();
     if !matched.is_empty() || s.display_name.is_none() {
         pick(matched)
@@ -640,7 +772,11 @@ fn name_match(s: &Sugg, q: &str, fuzzy: bool, verbose: bool) -> Option<String> {
 
 /// A bare variable reference (`$HOME`, pwsh `$env:PATH`): shell syntax the row means to insert.
 fn is_var_ref(s: &str) -> bool {
-    s.strip_prefix('$').is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+    s.strip_prefix('$').is_some_and(|v| {
+        !v.is_empty()
+            && v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+    })
 }
 
 /// POSIX/fish escaping of a name. `quote`: the user started the token with a quote → keep quoting; `path`: a
@@ -669,13 +805,17 @@ fn escape_posix(s: &str, folder: bool, quote: bool, path: bool, shell: Shell) ->
 /// cursor never sits inside a quote (the mid-word guard would block the next segment).
 fn escape_pwsh(s: &str, folder: bool, quote: bool, path: bool) -> String {
     // PowerShell also delimits strings with the Unicode single (‘ ’ ‚ ‛) and double (“ ” „) quotes
-    const SPECIAL: &str = "$`'\"(){};,&|@#<>\u{2018}\u{2019}\u{201A}\u{201B}\u{201C}\u{201D}\u{201E}";
+    const SPECIAL: &str =
+        "$`'\"(){};,&|@#<>\u{2018}\u{2019}\u{201A}\u{201B}\u{201C}\u{201D}\u{201E}";
     let special = |c: char| c.is_whitespace() || SPECIAL.contains(c);
     if !quote && (!s.chars().any(special) || (!path && is_var_ref(s))) {
         return s.to_string();
     }
     if folder {
-        return s.chars().flat_map(|c| ['`', c].into_iter().skip(usize::from(!special(c)))).collect();
+        return s
+            .chars()
+            .flat_map(|c| ['`', c].into_iter().skip(usize::from(!special(c))))
+            .collect();
     }
     crate::integrations::quote(Shell::Pwsh, s)
 }
@@ -750,24 +890,37 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
     } else if q == c.search_term {
         raw.len()
     } else if let Query::Str(g) = &s.query {
-        c.raw[c.raw.rfind(g.as_str()).map_or(0, |i| i + g.len())..].chars().count()
+        c.raw[c.raw.rfind(g.as_str()).map_or(0, |i| i + g.len())..]
+            .chars()
+            .count()
     } else if let Query::Path { backslash } = s.query {
         c.raw[after_sep(c.raw, backslash)..].chars().count()
     } else {
         // function getQueryTerm: delete the raw chars that spell q's logical chars (quotes/escapes included);
         // otherwise Kiro's approximation (escaped whitespace), never past the token
         let n = q.chars().count();
-        let tail = logical.get(logical.len().saturating_sub(n)..).filter(|t| t.len() == n && t.iter().map(|x| x.1).eq(q.chars()));
+        let tail = logical
+            .get(logical.len().saturating_sub(n)..)
+            .filter(|t| t.len() == n && t.iter().map(|x| x.1).eq(q.chars()));
         match tail {
             Some(t) => raw.len() - t.first().map_or(raw.len(), |x| x.0),
-            None => q.chars().map(|ch| if ch.is_whitespace() { 2 } else { 1 }).sum::<usize>().min(raw.len()),
+            None => q
+                .chars()
+                .map(|ch| if ch.is_whitespace() { 2 } else { 1 })
+                .sum::<usize>()
+                .min(raw.len()),
         }
     };
     let deleted: String = raw[raw.len() - delete..].iter().collect();
     let quote = deleted.starts_with(['\'', '"']);
     // a quote opened before the replaced part (`cat "my dir/x`): escape for inside it
-    let inside = open.filter(|&(_, i)| i < raw.len() - delete).map(|(q, _)| q);
-    let (folder, path) = (s.kind == ItemType::Folder, matches!(s.kind, ItemType::File | ItemType::Folder));
+    let inside = open
+        .filter(|&(_, i)| i < raw.len() - delete)
+        .map(|(q, _)| q);
+    let (folder, path) = (
+        s.kind == ItemType::Folder,
+        matches!(s.kind, ItemType::File | ItemType::Folder),
+    );
     let mut text = match &s.insert_value {
         Some(v) if !path => v.clone(),
         _ => match name_match(s, &q, c.fuzzy, c.prefer_verbose).filter(|m| !m.is_empty()) {
@@ -817,7 +970,12 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
         text.replace_range(i..i + "{cursor}".len(), "");
         cursor_back = text[i..].chars().count();
     }
-    Insertion { delete, text, cursor_back, execute }
+    Insertion {
+        delete,
+        text,
+        cursor_back,
+        execute,
+    }
 }
 
 /// `<file> [mode]...` (SPEC §7.4.2).
@@ -825,8 +983,16 @@ fn args_hint(args: &[Rc<Arg>]) -> String {
     args.iter()
         .filter_map(|a| {
             let n = a.name.as_deref().filter(|n| !n.is_empty())?;
-            let n = if a.is_variadic { format!("{n}...") } else { n.to_string() };
-            Some(if a.is_optional { format!("[{n}]") } else { format!("<{n}>") })
+            let n = if a.is_variadic {
+                format!("{n}...")
+            } else {
+                n.to_string()
+            };
+            Some(if a.is_optional {
+                format!("[{n}]")
+            } else {
+                format!("<{n}>")
+            })
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -848,8 +1014,14 @@ fn highlight(s: &Sugg, q: &str, fuzzy: bool) -> Vec<usize> {
         off += seg.chars().count() + 2; // ", "
     }
     if fuzzy {
-        let best = segs.iter().zip(&offsets).filter_map(|(seg, &o)| fuzzysort(q, seg).map(|r| (r, o))).max_by_key(|((score, _), _)| *score);
-        return best.map(|((_, idx), o)| idx.into_iter().map(|i| i + o).collect()).unwrap_or_default();
+        let best = segs
+            .iter()
+            .zip(&offsets)
+            .filter_map(|(seg, &o)| fuzzysort(q, seg).map(|r| (r, o)))
+            .max_by_key(|((score, _), _)| *score);
+        return best
+            .map(|((_, idx), o)| idx.into_iter().map(|i| i + o).collect())
+            .unwrap_or_default();
     }
     let (ql, qn) = (q.to_lowercase(), q.chars().count());
     segs.iter()
@@ -877,6 +1049,7 @@ pub fn to_item(s: Sugg, prefix_match: bool, c: &InsCtx) -> Item {
         generator: s.generator,
         prefix_match,
         template_type: s.template_type,
+        icon: s.icon,
     }
 }
 
@@ -890,7 +1063,9 @@ pub fn triggered(t: &Trigger, new: &str, old: &str) -> Option<bool> {
         Trigger::Str(p) => last(new, p) != last(old, p),
         Trigger::Change => new != old,
         Trigger::Threshold(n) => new.chars().count() > *n && old.chars().count() <= *n,
-        Trigger::Match(list) => list.iter().position(|x| x == new) != list.iter().position(|x| x == old),
+        Trigger::Match(list) => {
+            list.iter().position(|x| x == new) != list.iter().position(|x| x == old)
+        }
         Trigger::Fn(_) => return None,
     })
 }
@@ -934,27 +1109,50 @@ pub struct GenCache {
 impl GenCache {
     pub fn lookup(&self, key: &str, cfg: &CacheCfg, now: u64) -> Lookup {
         match self.map.get(key) {
-            Some(CacheEntry { value: Some(v), at, inflight }) => {
+            Some(CacheEntry {
+                value: Some(v),
+                at,
+                inflight,
+            }) => {
                 if now.saturating_sub(*at) <= cfg.ttl_ms {
                     Lookup::Fresh(v.clone())
                 } else if cfg.max_age {
                     inflight.map_or(Lookup::Miss, Lookup::Shared)
                 } else {
-                    Lookup::Stale { value: v.clone(), refresh: inflight.is_none() }
+                    Lookup::Stale {
+                        value: v.clone(),
+                        refresh: inflight.is_none(),
+                    }
                 }
             }
-            Some(CacheEntry { inflight: Some(t), .. }) => Lookup::Shared(*t),
+            Some(CacheEntry {
+                inflight: Some(t), ..
+            }) => Lookup::Shared(*t),
             _ => Lookup::Miss,
         }
     }
 
     /// A fetch for `key` started as `task`.
     pub fn start(&mut self, key: &str, task: u64) {
-        self.map.entry(key.to_string()).or_insert(CacheEntry { value: None, at: 0, inflight: None }).inflight = Some(task);
+        self.map
+            .entry(key.to_string())
+            .or_insert(CacheEntry {
+                value: None,
+                at: 0,
+                inflight: None,
+            })
+            .inflight = Some(task);
     }
 
     pub fn store(&mut self, key: &str, value: Value, now: u64) {
-        self.map.insert(key.to_string(), CacheEntry { value: Some(value), at: now, inflight: None });
+        self.map.insert(
+            key.to_string(),
+            CacheEntry {
+                value: Some(value),
+                at: now,
+                inflight: None,
+            },
+        );
     }
 
     /// The fetch failed: keep any older value, forget the in-flight marker.
@@ -973,8 +1171,15 @@ impl GenCache {
 
 /// Bundled `shellExpand`: `~`, `$NAME`, `${NAME}` / `${NAME:-default}` from `env`.
 pub fn shell_expand(s: &str, env: &HashMap<String, String>) -> String {
-    let home = env.get("HOME").or_else(|| env.get("USERPROFILE")).map_or("~", String::as_str);
-    let s = if s.starts_with('~') && (s.len() == 1 || s[1..].starts_with('/')) { format!("{home}{}", &s[1..]) } else { s.to_string() };
+    let home = env
+        .get("HOME")
+        .or_else(|| env.get("USERPROFILE"))
+        .map_or("~", String::as_str);
+    let s = if s.starts_with('~') && (s.len() == 1 || s[1..].starts_with('/')) {
+        format!("{home}{}", &s[1..])
+    } else {
+        s.to_string()
+    };
     let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_';
     // pass 1: $NAME
     let mut out = String::new();
@@ -1009,14 +1214,21 @@ pub fn shell_expand(s: &str, env: &HashMap<String, String>) -> String {
         } else if let Some(t) = tail.strip_prefix('}') {
             Some((None, t))
         } else if let Some(d) = tail.strip_prefix(":-") {
-            d.find('}').filter(|&j| j > 0).map(|j| (Some(&d[..j]), &d[j + 1..]))
+            d.find('}')
+                .filter(|&j| j > 0)
+                .map(|j| (Some(&d[..j]), &d[j + 1..]))
         } else {
             None
         };
         match parsed {
             Some((default, t)) => {
                 let whole = &rest[i..rest.len() - t.len()];
-                out.push_str(env.get(&after[..n]).map(String::as_str).or(default).unwrap_or(whole));
+                out.push_str(
+                    env.get(&after[..n])
+                        .map(String::as_str)
+                        .or(default)
+                        .unwrap_or(whole),
+                );
                 rest = t;
             }
             None => {
@@ -1030,10 +1242,19 @@ pub fn shell_expand(s: &str, env: &HashMap<String, String>) -> String {
 }
 
 /// Bundled `getCurrentInsertedDirectory(cwd, searchTerm)`; `backslash`: `\` separates too (pwsh).
-pub fn inserted_directory(cwd: &str, search_term: &str, env: &HashMap<String, String>, backslash: bool) -> PathBuf {
+pub fn inserted_directory(
+    cwd: &str,
+    search_term: &str,
+    env: &HashMap<String, String>,
+    backslash: bool,
+) -> PathBuf {
     let s = shell_expand(search_term, env);
     let dir = &s[..after_sep(&s, backslash)];
-    let base = if cwd.ends_with('/') || (backslash && cwd.ends_with('\\')) { cwd.to_string() } else { format!("{cwd}/") };
+    let base = if cwd.ends_with('/') || (backslash && cwd.ends_with('\\')) {
+        cwd.to_string()
+    } else {
+        format!("{cwd}/")
+    };
     if dir.is_empty() {
         PathBuf::from(base)
     } else if dir.starts_with('/') || Path::new(dir).is_absolute() {
@@ -1046,18 +1267,28 @@ pub fn inserted_directory(cwd: &str, search_term: &str, env: &HashMap<String, St
 /// Native `filepaths`/`folders` listing: `ls -1ApL` semantics, sorted non-dot then dot names, `.DS_Store`
 /// skipped, `../` appended. Unreadable dir → `[]`.
 pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<Suggestion> {
-    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let mut names: Vec<String> = rd
         .flatten()
         .map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let is_dir = std::fs::metadata(e.path()).is_ok_and(|m| m.is_dir()); // follows symlinks (-L)
-            if is_dir { format!("{name}/") } else { name }
+            if is_dir {
+                format!("{name}/")
+            } else {
+                name
+            }
         })
         .filter(|n| !n.eq_ignore_ascii_case(".DS_Store"))
         .filter(|n| !n.chars().any(char::is_control)) // a CR in a name would run the line when inserted
         .collect();
-    names.sort_by(|a, b| a.starts_with('.').cmp(&b.starts_with('.')).then_with(|| cmp_locale(a, b)));
+    names.sort_by(|a, b| {
+        a.starts_with('.')
+            .cmp(&b.starts_with('.'))
+            .then_with(|| cmp_locale(a, b))
+    });
     names.push("../".into());
     names
         .into_iter()
@@ -1068,7 +1299,11 @@ pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<Suggestion> 
             }
             Some(Suggestion {
                 insert_value: Some(n.clone()),
-                kind: Some(if folder { ItemType::Folder } else { ItemType::File }),
+                kind: Some(if folder {
+                    ItemType::Folder
+                } else {
+                    ItemType::File
+                }),
                 is_dangerous,
                 template_type: Some(if folder { "folders" } else { "filepaths" }.into()),
                 names: vec![n],
@@ -1080,10 +1315,16 @@ pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<Suggestion> 
 
 /// `help` template: subcommand names of the level above the triggering subcommand, minus its aliases.
 pub fn help_items(pr: &ParseResult) -> Vec<Suggestion> {
-    let trig = pr.annotations.iter().rev().find(|a| matches!(a.kind, AnnKind::Subcommand | AnnKind::Option));
+    let trig = pr
+        .annotations
+        .iter()
+        .rev()
+        .find(|a| matches!(a.kind, AnnKind::Subcommand | AnnKind::Option));
     let n = pr.path.len();
     let (level, exclude): (&Subcommand, &[String]) = match trig {
-        Some(a) if a.kind == AnnKind::Subcommand && n >= 2 => (&pr.path[n - 2], &pr.path[n - 1].names),
+        Some(a) if a.kind == AnnKind::Subcommand && n >= 2 => {
+            (&pr.path[n - 2], &pr.path[n - 1].names)
+        }
         _ => (pr.path.last().unwrap_or(&pr.completion), &[]),
     };
     level
@@ -1151,11 +1392,15 @@ fn exe_name(name: String, meta: &std::fs::Metadata, _pathext: Option<&str>) -> O
 fn exe_name(name: String, _meta: &std::fs::Metadata, pathext: Option<&str>) -> Option<String> {
     let exts = pathext.unwrap_or(".COM;.EXE;.BAT;.CMD");
     let (stem, ext) = name.rsplit_once('.')?;
-    exts.split(';').any(|e| e.trim_start_matches('.').eq_ignore_ascii_case(ext)).then(|| stem.to_string())
+    exts.split(';')
+        .any(|e| e.trim_start_matches('.').eq_ignore_ascii_case(ext))
+        .then(|| stem.to_string())
 }
 
 fn executables(dir: &Path, pathext: Option<&str>) -> Vec<String> {
-    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let mut out: Vec<String> = rd
         .flatten()
         .filter_map(|e| {
@@ -1168,7 +1413,12 @@ fn executables(dir: &Path, pathext: Option<&str>) -> Vec<String> {
 }
 
 /// Spec names (priority 40) ∪ aliases (shortcut, priority 100) ∪ PATH executables (priority 40), deduped by name.
-pub fn first_token_items(specs: &[String], aliases: &HashMap<String, String>, path: Option<&str>, pathext: Option<&str>) -> Vec<Sugg> {
+pub fn first_token_items(
+    specs: &[String],
+    aliases: &HashMap<String, String>,
+    path: Option<&str>,
+    pathext: Option<&str>,
+) -> Vec<Sugg> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     let mut push = |name: &str, kind: ItemType, priority: f64, description: Option<&String>| {
@@ -1187,7 +1437,10 @@ pub fn first_token_items(specs: &[String], aliases: &HashMap<String, String>, pa
     for (k, v) in al {
         push(k, ItemType::Shortcut, 100.0, Some(v));
     }
-    for dir in path.map(|p| std::env::split_paths(p).collect::<Vec<_>>()).unwrap_or_default() {
+    for dir in path
+        .map(|p| std::env::split_paths(p).collect::<Vec<_>>())
+        .unwrap_or_default()
+    {
         for exe in executables(&dir, pathext) {
             push(&exe, ItemType::Subcommand, 40.0, None);
         }
@@ -1225,27 +1478,62 @@ mod tests {
     }
 
     fn opts() -> FilterOpts {
-        FilterOpts { fuzzy: false, auto_exec_hidden: false, exec_after_space: false, run_dangerous: false, suggest_current_token: false }
+        FilterOpts {
+            fuzzy: false,
+            auto_exec_hidden: false,
+            exec_after_space: false,
+            run_dangerous: false,
+            suggest_current_token: false,
+        }
     }
 
     fn sub(names: &[&str]) -> Rc<Subcommand> {
-        Rc::new(Subcommand { names: names.iter().map(|s| s.to_string()).collect(), ..Default::default() })
+        Rc::new(Subcommand {
+            names: names.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        })
     }
 
     fn opt(names: &[&str]) -> Opt {
-        Opt { names: names.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+        Opt {
+            names: names.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn arg(optional: bool) -> Rc<Arg> {
-        Rc::new(Arg { name: Some("x".into()), is_optional: optional, ..Default::default() })
+        Rc::new(Arg {
+            name: Some("x".into()),
+            is_optional: optional,
+            ..Default::default()
+        })
     }
 
     fn names(v: &[(Sugg, bool)]) -> Vec<String> {
-        v.iter().map(|(s, _)| format!("{}{}", if s.kind == ItemType::AutoExecute { "!" } else { "" }, s.first())).collect()
+        v.iter()
+            .map(|(s, _)| {
+                format!(
+                    "{}{}",
+                    if s.kind == ItemType::AutoExecute {
+                        "!"
+                    } else {
+                        ""
+                    },
+                    s.first()
+                )
+            })
+            .collect()
     }
 
     fn ctx<'a>(search: &'a str, raw: &'a str, shell: Shell) -> InsCtx<'a> {
-        InsCtx { search_term: search, raw, shell, fuzzy: false, prefer_verbose: false, insert_space: true }
+        InsCtx {
+            search_term: search,
+            raw,
+            shell,
+            fuzzy: false,
+            prefer_verbose: false,
+            insert_space: true,
+        }
     }
 
     #[test]
@@ -1265,8 +1553,14 @@ mod tests {
         assert_eq!(prefix_score("gitk", "git"), Some(-2));
         assert_eq!(prefix_score("Gitk", "git"), Some(-3));
         assert_eq!(prefix_score("hub", "git"), None);
-        assert_eq!(partial(&["checkout".into()], "ch", true), Some((-0.2, true)));
-        assert_eq!(partial(&["cherry-pick".into()], "cp", true).map(|r| r.1), Some(false));
+        assert_eq!(
+            partial(&["checkout".into()], "ch", true),
+            Some((-0.2, true))
+        );
+        assert_eq!(
+            partial(&["cherry-pick".into()], "cp", true).map(|r| r.1),
+            Some(false)
+        );
     }
 
     #[test]
@@ -1275,21 +1569,36 @@ mod tests {
         let folder = Sugg::new("foo/", ItemType::Folder);
         let partial_row = Sugg::new("foobar", ItemType::Arg);
         let list = vec![partial_row, folder, file];
-        assert_eq!(names(&filter(list.clone(), "foo", &opts())), ["!foo", "foo", "foo/", "foobar"]);
+        assert_eq!(
+            names(&filter(list.clone(), "foo", &opts())),
+            ["!foo", "foo", "foo/", "foobar"]
+        );
         // hidden setting
-        let o = FilterOpts { auto_exec_hidden: true, ..opts() };
+        let o = FilterOpts {
+            auto_exec_hidden: true,
+            ..opts()
+        };
         assert_eq!(names(&filter(list, "foo", &o)), ["foo", "foo/", "foobar"]);
         // dangerous / mandatory arg → no auto-execute row; dangerous allowed by setting
         let mut d = Sugg::new("rm", ItemType::Subcommand);
         d.is_dangerous = true;
         assert_eq!(names(&filter(vec![d.clone()], "rm", &opts())), ["rm"]);
-        let o = FilterOpts { run_dangerous: true, ..opts() };
+        let o = FilterOpts {
+            run_dangerous: true,
+            ..opts()
+        };
         assert_eq!(names(&filter(vec![d], "rm", &o)), ["!rm", "rm"]);
         let mut m = Sugg::new("commit", ItemType::Subcommand);
         m.args = vec![arg(false)];
-        assert_eq!(names(&filter(vec![m.clone()], "commit", &opts())), ["commit"]);
+        assert_eq!(
+            names(&filter(vec![m.clone()], "commit", &opts())),
+            ["commit"]
+        );
         m.args = vec![arg(true)];
-        assert_eq!(names(&filter(vec![m], "commit", &opts())), ["!commit", "commit"]);
+        assert_eq!(
+            names(&filter(vec![m], "commit", &opts())),
+            ["!commit", "commit"]
+        );
         // insertValue differing from the name → no auto-execute
         let mut iv = Sugg::new("x", ItemType::Arg);
         iv.insert_value = Some("y".into());
@@ -1309,15 +1618,26 @@ mod tests {
         let mut c = Sugg::new("chmod", ItemType::Arg);
         c.priority = 80.0;
         // check/chmod tie on score −2 → priority decides; CHeck is −3
-        assert_eq!(names(&filter(vec![a, b, c], "ch", &opts())), ["chmod", "check", "CHeck"]);
+        assert_eq!(
+            names(&filter(vec![a, b, c], "ch", &opts())),
+            ["chmod", "check", "CHeck"]
+        );
     }
 
     #[test]
     fn empty_search_term_is_no_prefix_match() {
         // spec-ghost-on-empty-token: `git ` must not ghost the alphabetically first subcommand
-        let subs = || vec![Sugg::new("abort", ItemType::Subcommand), Sugg::new("add", ItemType::Subcommand)];
+        let subs = || {
+            vec![
+                Sugg::new("abort", ItemType::Subcommand),
+                Sugg::new("add", ItemType::Subcommand),
+            ]
+        };
         let ghost = |search: &str| {
-            let items: Vec<Item> = filter(subs(), search, &opts()).into_iter().map(|(s, p)| to_item(s, p, &ctx(search, search, Shell::Zsh))).collect();
+            let items: Vec<Item> = filter(subs(), search, &opts())
+                .into_iter()
+                .map(|(s, p)| to_item(s, p, &ctx(search, search, Shell::Zsh)))
+                .collect();
             crate::inline::spec_ghost(&items)
         };
         assert_eq!(ghost(""), None);
@@ -1337,12 +1657,24 @@ mod tests {
         assert_eq!(out[0].0.original_kind, Some(ItemType::Folder));
         let out = filter(vec![row("lib/")], "src/", &opts());
         assert_eq!(names(&out), ["!↪", "lib/"]);
-        let o = FilterOpts { suggest_current_token: true, ..opts() };
+        let o = FilterOpts {
+            suggest_current_token: true,
+            ..opts()
+        };
         let out = filter(vec![Sugg::new("main", ItemType::Arg)], "ma", &o);
         assert_eq!(names(&out), ["!ma", "main"]);
-        assert_eq!(out[0].0.description.as_deref(), Some("Enter the current argument"));
-        let o = FilterOpts { exec_after_space: true, ..opts() };
-        assert_eq!(names(&filter(vec![Sugg::new("a", ItemType::Arg)], "", &o)), ["!↪", "a"]);
+        assert_eq!(
+            out[0].0.description.as_deref(),
+            Some("Enter the current argument")
+        );
+        let o = FilterOpts {
+            exec_after_space: true,
+            ..opts()
+        };
+        assert_eq!(
+            names(&filter(vec![Sugg::new("a", ItemType::Arg)], "", &o)),
+            ["!↪", "a"]
+        );
     }
 
     #[test]
@@ -1358,8 +1690,18 @@ mod tests {
 
     #[test]
     fn recency_bands_and_priority_zero() {
-        let rec: HashMap<String, u64> = [("a".to_string(), 1_700_000_000_000u64), ("b".into(), 1_700_000_000_000), ("../".into(), 1)].into();
-        let mut list = vec![Sugg::new("a", ItemType::Arg), Sugg::new("b", ItemType::Arg), Sugg::new("c", ItemType::Arg), Sugg::new("../", ItemType::Folder)];
+        let rec: HashMap<String, u64> = [
+            ("a".to_string(), 1_700_000_000_000u64),
+            ("b".into(), 1_700_000_000_000),
+            ("../".into(), 1),
+        ]
+        .into();
+        let mut list = vec![
+            Sugg::new("a", ItemType::Arg),
+            Sugg::new("b", ItemType::Arg),
+            Sugg::new("c", ItemType::Arg),
+            Sugg::new("../", ItemType::Folder),
+        ];
         list[1].priority = 80.0;
         list[2].priority = 0.0;
         update_priorities(&mut list, Some(&rec));
@@ -1387,7 +1729,10 @@ mod tests {
         assert_eq!(triggered(&Trigger::Change, "ab", "a"), Some(true));
         assert_eq!(triggered(&Trigger::Threshold(2), "abc", "ab"), Some(true));
         assert_eq!(triggered(&Trigger::Threshold(2), "ab", "abc"), Some(false));
-        assert_eq!(triggered(&Trigger::Threshold(2), "abcd", "abc"), Some(false));
+        assert_eq!(
+            triggered(&Trigger::Threshold(2), "abcd", "abc"),
+            Some(false)
+        );
         let m = Trigger::Match(vec!["x".into(), "y".into()]);
         assert_eq!(triggered(&m, "y", "x"), Some(true));
         assert_eq!(triggered(&m, "z", "w"), Some(false));
@@ -1404,8 +1749,15 @@ mod tests {
     #[test]
     fn cache_ttl_swr_max_age() {
         let mut c = GenCache::default();
-        let swr = CacheCfg { ttl_ms: 1000, ..Default::default() };
-        let max_age = CacheCfg { ttl_ms: 1000, max_age: true, ..Default::default() };
+        let swr = CacheCfg {
+            ttl_ms: 1000,
+            ..Default::default()
+        };
+        let max_age = CacheCfg {
+            ttl_ms: 1000,
+            max_age: true,
+            ..Default::default()
+        };
         assert_eq!(c.lookup("k", &swr, 0), Lookup::Miss);
         c.start("k", 7);
         assert_eq!(c.lookup("k", &swr, 0), Lookup::Shared(7));
@@ -1413,65 +1765,162 @@ mod tests {
         assert_eq!(c.lookup("k", &swr, 0), Lookup::Miss);
         c.store("k", json!(1), 100);
         assert_eq!(c.lookup("k", &swr, 1100), Lookup::Fresh(json!(1)));
-        assert_eq!(c.lookup("k", &swr, 1101), Lookup::Stale { value: json!(1), refresh: true });
+        assert_eq!(
+            c.lookup("k", &swr, 1101),
+            Lookup::Stale {
+                value: json!(1),
+                refresh: true
+            }
+        );
         assert_eq!(c.lookup("k", &max_age, 1101), Lookup::Miss);
         c.start("k", 9);
-        assert_eq!(c.lookup("k", &swr, 1101), Lookup::Stale { value: json!(1), refresh: false });
+        assert_eq!(
+            c.lookup("k", &swr, 1101),
+            Lookup::Stale {
+                value: json!(1),
+                refresh: false
+            }
+        );
         assert_eq!(c.lookup("k", &max_age, 1101), Lookup::Shared(9));
         c.fail("k"); // a failed refresh keeps the old value
-        assert_eq!(c.lookup("k", &swr, 1101), Lookup::Stale { value: json!(1), refresh: true });
-        let by_dir = CacheCfg { cache_by_directory: true, ..Default::default() };
-        assert_eq!(cache_key(&by_dir, "/w", "git branch".into()), "/w,git branch");
+        assert_eq!(
+            c.lookup("k", &swr, 1101),
+            Lookup::Stale {
+                value: json!(1),
+                refresh: true
+            }
+        );
+        let by_dir = CacheCfg {
+            cache_by_directory: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            cache_key(&by_dir, "/w", "git branch".into()),
+            "/w,git branch"
+        );
         assert_eq!(cache_key(&swr, "/w", "git branch".into()), ",git branch");
     }
 
     #[test]
     fn assembly_options_rules() {
-        let excl = Rc::new(Opt { exclusive_on: vec!["-b".into()], depends_on: vec!["-c".into()], ..opt(&["-a"]) });
+        let excl = Rc::new(Opt {
+            exclusive_on: vec!["-b".into()],
+            depends_on: vec!["-c".into()],
+            ..opt(&["-a"])
+        });
         let comp = Subcommand {
             subcommands: vec![sub(&["zeta"]), sub(&["Alpha"]), sub(&["beta"])],
-            options: vec![excl.clone(), Rc::new(opt(&["-b"])), Rc::new(opt(&["-c"])), Rc::new(Opt { is_repeatable: Repeat::Unlimited, ..opt(&["-v"]) })],
+            options: vec![
+                excl.clone(),
+                Rc::new(opt(&["-b"])),
+                Rc::new(opt(&["-c"])),
+                Rc::new(Opt {
+                    is_repeatable: Repeat::Unlimited,
+                    ..opt(&["-v"])
+                }),
+            ],
             ..Default::default()
         };
         let mut pr = pr_for(comp, "");
-        pr.passed_options = vec![excl, Rc::new(Opt { is_repeatable: Repeat::Unlimited, ..opt(&["-v"]) })];
+        pr.passed_options = vec![
+            excl,
+            Rc::new(Opt {
+                is_repeatable: Repeat::Unlimited,
+                ..opt(&["-v"])
+            }),
+        ];
         let out = assemble(&pr, &[]);
         let got: Vec<(&str, f64)> = out.iter().map(|s| (s.first(), s.priority)).collect();
         // subcommands alphabetical; -a used once (gone), -b excluded, -c depended on → 75, -v repeatable
-        assert_eq!(got, [("Alpha", 0.0), ("beta", 0.0), ("zeta", 0.0), ("-c", 75.0), ("-v", 0.0)]);
+        assert_eq!(
+            got,
+            [
+                ("Alpha", 0.0),
+                ("beta", 0.0),
+                ("zeta", 0.0),
+                ("-c", 75.0),
+                ("-v", 0.0)
+            ]
+        );
     }
 
     #[test]
     fn option_chain_rewriting() {
         let l = Rc::new(opt(&["-l"]));
         let comp = Subcommand {
-            options: vec![l.clone(), Rc::new(opt(&["-a", "--all"])), Rc::new(opt(&["-h"])), Rc::new(opt(&["--long"]))],
+            options: vec![
+                l.clone(),
+                Rc::new(opt(&["-a", "--all"])),
+                Rc::new(opt(&["-h"])),
+                Rc::new(opt(&["--long"])),
+            ],
             subcommands: vec![sub(&["sub"])],
             ..Default::default()
         };
         let mut pr = pr_for(comp, "-la");
         pr.passed_options = vec![l];
         pr.option_chain = Some("-la".into());
-        pr.annotations = vec![Annotation { kind: AnnKind::Option, text: "-la".into(), parts: vec![] }];
+        pr.annotations = vec![Annotation {
+            kind: AnnKind::Option,
+            text: "-la".into(),
+            parts: vec![],
+        }];
         let out = assemble(&pr, &[]);
         let got: Vec<Vec<String>> = out.iter().map(|s| s.names.clone()).collect();
-        assert_eq!(got, [vec!["--long".to_string()], vec!["-la".into(), "--all".into()], vec!["-lah".into()]]);
+        assert_eq!(
+            got,
+            [
+                vec!["--long".to_string()],
+                vec!["-la".into(), "--all".into()],
+                vec!["-lah".into()]
+            ]
+        );
         assert_eq!(out[2].insert_value.as_deref(), Some("-lah"));
-        assert_eq!(names(&rank(out, "-la", None, &opts())), ["!-la", "-la", "-lah"]);
+        assert_eq!(
+            names(&rank(out, "-la", None, &opts())),
+            ["!-la", "-la", "-lah"]
+        );
     }
 
     #[test]
     fn history_rows_priority_and_mixing() {
-        let e = |c: &str| HistoryEntry { command: c.into(), ..Default::default() };
-        let hist = [e("git checkout main"), e("git checkout dev"), e("git status"), e("git checkout main"), e("ls")];
+        let e = |c: &str| HistoryEntry {
+            command: c.into(),
+            ..Default::default()
+        };
+        let hist = [
+            e("git checkout main"),
+            e("git checkout dev"),
+            e("git status"),
+            e("git checkout main"),
+            e("ls"),
+        ];
         let rows = history_rows("git ", &hist);
         let got: Vec<(&str, f64)> = rows.iter().map(|s| (s.first(), s.priority)).collect();
-        assert_eq!(got, [("checkout main", 75.3), ("status", 50.0), ("checkout dev", 75.3)]);
+        assert_eq!(
+            got,
+            [
+                ("checkout main", 75.3),
+                ("status", 50.0),
+                ("checkout dev", 75.3)
+            ]
+        );
         assert_eq!(rows[0].insert_value.as_deref(), Some("checkout main"));
-        let spec = vec![Sugg::new("checkout", ItemType::Subcommand), Sugg::new("status", ItemType::Subcommand)];
+        let spec = vec![
+            Sugg::new("checkout", ItemType::Subcommand),
+            Sugg::new("status", ItemType::Subcommand),
+        ];
         let mixed = mix_history(spec.clone(), rows.clone(), true);
         let got: Vec<(&str, f64)> = mixed.iter().map(|s| (s.first(), s.priority)).collect();
-        assert_eq!(got, [("checkout", 75.3), ("status", 50.0), ("checkout main", 75.3), ("checkout dev", 75.3)]);
+        assert_eq!(
+            got,
+            [
+                ("checkout", 75.3),
+                ("status", 50.0),
+                ("checkout main", 75.3),
+                ("checkout dev", 75.3)
+            ]
+        );
         assert_eq!(mix_history(spec, rows, false).len(), 3);
     }
 
@@ -1483,7 +1932,10 @@ mod tests {
         assert_eq!((i.delete, i.text.as_str()), (0, "atus "));
         let mut checkout = Sugg::new("checkout", ItemType::Subcommand);
         checkout.should_add_space = true;
-        assert_eq!(insertion(&checkout, &ctx("ch", "ch", Shell::Zsh)).text, "eckout ");
+        assert_eq!(
+            insertion(&checkout, &ctx("ch", "ch", Shell::Zsh)).text,
+            "eckout "
+        );
         // case differs → retype the whole token
         let i = insertion(&checkout, &ctx("CH", "CH", Shell::Zsh));
         assert_eq!((i.delete, i.text.as_str()), (2, "checkout "));
@@ -1492,11 +1944,30 @@ mod tests {
         out.separator = Some("=".into());
         out.should_add_space = true;
         let i = insertion(&out, &ctx("", "", Shell::Bash));
-        assert_eq!(i, Insertion { delete: 0, text: "--out= ".into(), cursor_back: 1, execute: false });
+        assert_eq!(
+            i,
+            Insertion {
+                delete: 0,
+                text: "--out= ".into(),
+                cursor_back: 1,
+                execute: false
+            }
+        );
         let i = insertion(&out, &ctx("--o", "--o", Shell::Bash));
-        assert_eq!(i, Insertion { delete: 0, text: "ut= ".into(), cursor_back: 1, execute: false });
+        assert_eq!(
+            i,
+            Insertion {
+                delete: 0,
+                text: "ut= ".into(),
+                cursor_back: 1,
+                execute: false
+            }
+        );
         // auto-space off
-        let c = InsCtx { insert_space: false, ..ctx("ch", "ch", Shell::Zsh) };
+        let c = InsCtx {
+            insert_space: false,
+            ..ctx("ch", "ch", Shell::Zsh)
+        };
         assert_eq!(insertion(&checkout, &c).text, "eckout");
         // escaped space in the raw token
         let mut dir = Sugg::new("my dir/", ItemType::Folder);
@@ -1515,33 +1986,70 @@ mod tests {
         let i = insertion(&main, &ctx("src/ma", "src/ma", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (0, "in.rs"));
         // POSIX special chars → single quotes, embedded quote escaped
-        let i = insertion(&Sugg::new("it's", ItemType::File), &ctx("", "", Shell::Bash));
+        let i = insertion(
+            &Sugg::new("it's", ItemType::File),
+            &ctx("", "", Shell::Bash),
+        );
         assert_eq!(i.text, "'it'\\''s'");
-        let i = insertion(&Sugg::new("a(b)/", ItemType::Folder), &ctx("", "", Shell::Bash));
+        let i = insertion(
+            &Sugg::new("a(b)/", ItemType::Folder),
+            &ctx("", "", Shell::Bash),
+        );
         assert_eq!(i.text, "'a(b)'/");
         // pwsh
-        let i = insertion(&Sugg::new("my file", ItemType::File), &ctx("", "", Shell::Pwsh));
+        let i = insertion(
+            &Sugg::new("my file", ItemType::File),
+            &ctx("", "", Shell::Pwsh),
+        );
         assert_eq!(i.text, "'my file'");
-        let i = insertion(&Sugg::new("it's", ItemType::File), &ctx("", "", Shell::Pwsh));
+        let i = insertion(
+            &Sugg::new("it's", ItemType::File),
+            &ctx("", "", Shell::Pwsh),
+        );
         assert_eq!(i.text, "'it''s'");
-        let i = insertion(&Sugg::new("my dir/", ItemType::Folder), &ctx("", "", Shell::Pwsh));
+        let i = insertion(
+            &Sugg::new("my dir/", ItemType::Folder),
+            &ctx("", "", Shell::Pwsh),
+        );
         assert_eq!((i.text.as_str(), i.cursor_back), ("my` dir/", 0));
         let i = insertion(&out, &ctx("", "", Shell::Pwsh));
         assert_eq!((i.text.as_str(), i.cursor_back), ("--out= ", 1));
         // insertValue verbatim with {cursor}; "\n" → execute; auto-execute deletes nothing
         let mut iv = Sugg::new("x", ItemType::Arg);
         iv.insert_value = Some("a{cursor}b\n\n".into());
-        assert_eq!(insertion(&iv, &ctx("x", "x", Shell::Bash)), Insertion { delete: 1, text: "ab".into(), cursor_back: 1, execute: true });
+        assert_eq!(
+            insertion(&iv, &ctx("x", "x", Shell::Bash)),
+            Insertion {
+                delete: 1,
+                text: "ab".into(),
+                cursor_back: 1,
+                execute: true
+            }
+        );
         let ae = auto_exec("↪", "", None);
-        assert_eq!(insertion(&ae, &ctx("x", "x", Shell::Bash)), Insertion { delete: 0, text: String::new(), cursor_back: 0, execute: true });
+        assert_eq!(
+            insertion(&ae, &ctx("x", "x", Shell::Bash)),
+            Insertion {
+                delete: 0,
+                text: String::new(),
+                cursor_back: 0,
+                execute: true
+            }
+        );
         // option chain arg rows: query "" → nothing deleted
         let mut a = Sugg::new("val", ItemType::Arg);
         a.query = Query::Value(String::new());
         assert_eq!(insertion(&a, &ctx("-la", "-la", Shell::Bash)).delete, 0);
         // preferVerboseSuggestions
-        let o = Sugg { names: vec!["-m".into(), "--message".into()], ..Sugg::new("", ItemType::Option) };
+        let o = Sugg {
+            names: vec!["-m".into(), "--message".into()],
+            ..Sugg::new("", ItemType::Option)
+        };
         assert_eq!(insertion(&o, &ctx("", "", Shell::Bash)).text, "-m");
-        let c = InsCtx { prefer_verbose: true, ..ctx("", "", Shell::Bash) };
+        let c = InsCtx {
+            prefer_verbose: true,
+            ..ctx("", "", Shell::Bash)
+        };
         assert_eq!(insertion(&o, &c).text, "--message");
         let i = insertion(&o, &ctx("--m", "--m", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (0, "essage"));
@@ -1551,37 +2059,102 @@ mod tests {
     fn insertion_review_regressions() {
         // composite-optarg-delete: the parser hands over only the value (`al` of `--color=al`)
         let always = Sugg::new("always", ItemType::Arg);
-        assert_eq!(insertion(&always, &ctx("al", "al", Shell::Zsh)), Insertion { delete: 0, text: "ways".into(), cursor_back: 0, execute: false });
+        assert_eq!(
+            insertion(&always, &ctx("al", "al", Shell::Zsh)),
+            Insertion {
+                delete: 0,
+                text: "ways".into(),
+                cursor_back: 0,
+                execute: false
+            }
+        );
         // insert-control-chars: CR/LF/ESC/DEL never reach the PTY; a trailing "\n" still means execute
-        for (kind, name) in [(ItemType::File, "a\rtouch${IFS}PWNED\r"), (ItemType::Arg, "x\x1b[2J\nrm\x7f")] {
+        for (kind, name) in [
+            (ItemType::File, "a\rtouch${IFS}PWNED\r"),
+            (ItemType::Arg, "x\x1b[2J\nrm\x7f"),
+        ] {
             let i = insertion(&Sugg::new(name, kind), &ctx("", "", Shell::Bash));
-            assert!(!i.text.chars().any(char::is_control) && !i.execute, "{name:?} → {i:?}");
+            assert!(
+                !i.text.chars().any(char::is_control) && !i.execute,
+                "{name:?} → {i:?}"
+            );
         }
         let mut generator = Sugg::new("x", ItemType::Arg);
         generator.insert_value = Some("dev\rrm -rf ~\n".into());
-        assert_eq!(insertion(&generator, &ctx("", "", Shell::Bash)), Insertion { delete: 0, text: "devrm -rf ~".into(), cursor_back: 0, execute: true });
+        assert_eq!(
+            insertion(&generator, &ctx("", "", Shell::Bash)),
+            Insertion {
+                delete: 0,
+                text: "devrm -rf ~".into(),
+                cursor_back: 0,
+                execute: true
+            }
+        );
         // special-rows-no-delete: `help` rows replace the typed prefix instead of doubling it
         let build = Sugg::new("build", ItemType::Special);
         assert_eq!(insertion(&build, &ctx("bu", "bu", Shell::Bash)).text, "ild");
         let i = insertion(&build, &ctx("BU", "BU", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (2, "build"));
         // open-quote-escaping: inside a quote opened before the replaced segment, escape for that quote
-        let path = |name: &str, kind| Sugg { query: Query::Path { backslash: false }, ..Sugg::new(name, kind) };
+        let path = |name: &str, kind| Sugg {
+            query: Query::Path { backslash: false },
+            ..Sugg::new(name, kind)
+        };
         let file = path("x y.txt", ItemType::File);
         let i = insertion(&file, &ctx("my dir/x", "\"my dir/x", Shell::Zsh));
         assert_eq!((i.delete, i.text.as_str()), (0, " y.txt\""));
         let i = insertion(&file, &ctx("my dir/x", "'my dir/x", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (0, " y.txt'"));
-        let i = insertion(&path("sub dir/", ItemType::Folder), &ctx("my dir/", "\"my dir/", Shell::Bash));
+        let i = insertion(
+            &path("sub dir/", ItemType::Folder),
+            &ctx("my dir/", "\"my dir/", Shell::Bash),
+        );
         assert_eq!((i.delete, i.text.as_str()), (0, "sub dir/")); // folders leave the quote open
-        assert_eq!(insertion(&path("a\"b$`\\", ItemType::File), &ctx("d/", "\"d/", Shell::Bash)).text, "a\\\"b\\$\\`\\\\\"");
-        assert_eq!(insertion(&path("it's", ItemType::File), &ctx("d/", "'d/", Shell::Bash)).text, "it'\\''s'");
-        assert_eq!(insertion(&path("it's", ItemType::File), &ctx("d/", "'d/", Shell::Pwsh)).text, "it''s'");
-        assert_eq!(insertion(&path("a\"$b", ItemType::File), &ctx("d/", "\"d/", Shell::Pwsh)).text, "a`\"`$b\"");
+        assert_eq!(
+            insertion(
+                &path("a\"b$`\\", ItemType::File),
+                &ctx("d/", "\"d/", Shell::Bash)
+            )
+            .text,
+            "a\\\"b\\$\\`\\\\\""
+        );
+        assert_eq!(
+            insertion(
+                &path("it's", ItemType::File),
+                &ctx("d/", "'d/", Shell::Bash)
+            )
+            .text,
+            "it'\\''s'"
+        );
+        assert_eq!(
+            insertion(
+                &path("it's", ItemType::File),
+                &ctx("d/", "'d/", Shell::Pwsh)
+            )
+            .text,
+            "it''s'"
+        );
+        assert_eq!(
+            insertion(
+                &path("a\"$b", ItemType::File),
+                &ctx("d/", "\"d/", Shell::Pwsh)
+            )
+            .text,
+            "a`\"`$b\""
+        );
         // closed or escaped quotes, or a quote inside the replaced segment: unchanged escaping
-        assert_eq!(insertion(&file, &ctx("my dir/x", "\"my dir\"/x", Shell::Bash)).text, "\\ y.txt");
-        assert_eq!(insertion(&file, &ctx("\"d/x", "\\\"d/x", Shell::Bash)).text, "\\ y.txt");
-        assert_eq!(insertion(&file, &ctx("d/x", "d/\"x", Shell::Bash)).text, "'x y.txt'");
+        assert_eq!(
+            insertion(&file, &ctx("my dir/x", "\"my dir\"/x", Shell::Bash)).text,
+            "\\ y.txt"
+        );
+        assert_eq!(
+            insertion(&file, &ctx("\"d/x", "\\\"d/x", Shell::Bash)).text,
+            "\\ y.txt"
+        );
+        assert_eq!(
+            insertion(&file, &ctx("d/x", "d/\"x", Shell::Bash)).text,
+            "'x y.txt'"
+        );
     }
 
     #[test]
@@ -1589,55 +2162,157 @@ mod tests {
         let text = |s: Sugg, sh| insertion(&s, &ctx("", "", sh)).text;
         // posix-escape-misses-shell-metachars / path-metachar-injection: names never become live shell syntax
         for sh in [Shell::Bash, Shell::Zsh, Shell::Fish] {
-            for (name, kind) in [("zz;id", ItemType::Arg), ("a$b.txt", ItemType::File), ("a`id`b", ItemType::File), ("x{1,2}.txt", ItemType::File), ("notes;touch${IFS}PWNED.txt", ItemType::File), ("semi;colon dir.txt", ItemType::File), ("~x", ItemType::File), ("=cmd", ItemType::File), ("a=~b", ItemType::File)] {
-                assert_eq!(text(Sugg::new(name, kind), sh), format!("'{name}'"), "{sh:?} {name}");
+            for (name, kind) in [
+                ("zz;id", ItemType::Arg),
+                ("a$b.txt", ItemType::File),
+                ("a`id`b", ItemType::File),
+                ("x{1,2}.txt", ItemType::File),
+                ("notes;touch${IFS}PWNED.txt", ItemType::File),
+                ("semi;colon dir.txt", ItemType::File),
+                ("~x", ItemType::File),
+                ("=cmd", ItemType::File),
+                ("a=~b", ItemType::File),
+            ] {
+                assert_eq!(
+                    text(Sugg::new(name, kind), sh),
+                    format!("'{name}'"),
+                    "{sh:?} {name}"
+                );
             }
             assert_eq!(text(Sugg::new("$b;x/", ItemType::Folder), sh), "'$b;x'/");
-            assert_eq!(text(Sugg::new("a b-c_d.e+f,g:h@i%j=k~", ItemType::File), sh), "a\\ b-c_d.e+f,g:h@i%j=k~");
+            assert_eq!(
+                text(Sugg::new("a b-c_d.e+f,g:h@i%j=k~", ItemType::File), sh),
+                "a\\ b-c_d.e+f,g:h@i%j=k~"
+            );
         }
-        assert_eq!(text(Sugg::new("it's\\", ItemType::File), Shell::Fish), "'it\\'s\\\\'");
+        assert_eq!(
+            text(Sugg::new("it's\\", ItemType::File), Shell::Fish),
+            "'it\\'s\\\\'"
+        );
         // a separator stays outside the escaping (`--out=` + cursor), even when the name needs quotes
-        let sep = Sugg { separator: Some("=".into()), ..Sugg::new("--a;b", ItemType::Option) };
-        assert_eq!(insertion(&sep, &ctx("", "", Shell::Bash)), Insertion { delete: 0, text: "'--a;b'=".into(), cursor_back: 0, execute: false });
+        let sep = Sugg {
+            separator: Some("=".into()),
+            ..Sugg::new("--a;b", ItemType::Option)
+        };
+        assert_eq!(
+            insertion(&sep, &ctx("", "", Shell::Bash)),
+            Insertion {
+                delete: 0,
+                text: "'--a;b'=".into(),
+                cursor_back: 0,
+                execute: false
+            }
+        );
         // pwsh-quotes-variable-refs: a `$NAME` row stays a variable reference; a file named so is still quoted
         for sh in [Shell::Bash, Shell::Fish, Shell::Pwsh] {
             let i = insertion(&Sugg::new("$HOME", ItemType::Arg), &ctx("$HO", "$HO", sh));
             assert_eq!((i.delete, i.text.as_str()), (0, "ME"), "{sh:?}");
             assert_eq!(text(Sugg::new("$foo", ItemType::File), sh), "'$foo'");
         }
-        assert_eq!(text(Sugg::new("$env:PATH", ItemType::Arg), Shell::Pwsh), "$env:PATH");
-        assert_eq!(text(Sugg::new("a$b.txt", ItemType::File), Shell::Pwsh), "'a$b.txt'");
+        assert_eq!(
+            text(Sugg::new("$env:PATH", ItemType::Arg), Shell::Pwsh),
+            "$env:PATH"
+        );
+        assert_eq!(
+            text(Sugg::new("a$b.txt", ItemType::File), Shell::Pwsh),
+            "'a$b.txt'"
+        );
         // pwsh-unicode-smart-quote-injection: pwsh ends a '…' string at ’ too, so smart single quotes are doubled
-        assert_eq!(text(Sugg::new("r’;x;’.txt", ItemType::File), Shell::Pwsh), "'r’’;x;’’.txt'");
+        assert_eq!(
+            text(Sugg::new("r’;x;’.txt", ItemType::File), Shell::Pwsh),
+            "'r’’;x;’’.txt'"
+        );
         // pwsh-quoted-folder-midword-guard: folders are backtick-escaped bare words (cursor at the end), and a
         // quoted file can follow in the same word
-        let i = insertion(&Sugg::new("dir with space/", ItemType::Folder), &ctx("di", "'di", Shell::Pwsh));
-        assert_eq!((i.delete, i.text.as_str(), i.cursor_back), (3, "dir` with` space/", 0));
-        assert_eq!(text(Sugg::new("a$b'(c)/", ItemType::Folder), Shell::Pwsh), "a`$b`'`(c`)/");
-        let file = Sugg { query: Query::Path { backslash: true }, ..Sugg::new("a b.txt", ItemType::File) };
-        let i = insertion(&file, &ctx("dir with space/", "dir` with` space/", Shell::Pwsh));
+        let i = insertion(
+            &Sugg::new("dir with space/", ItemType::Folder),
+            &ctx("di", "'di", Shell::Pwsh),
+        );
+        assert_eq!(
+            (i.delete, i.text.as_str(), i.cursor_back),
+            (3, "dir` with` space/", 0)
+        );
+        assert_eq!(
+            text(Sugg::new("a$b'(c)/", ItemType::Folder), Shell::Pwsh),
+            "a`$b`'`(c`)/"
+        );
+        let file = Sugg {
+            query: Query::Path { backslash: true },
+            ..Sugg::new("a b.txt", ItemType::File)
+        };
+        let i = insertion(
+            &file,
+            &ctx("dir with space/", "dir` with` space/", Shell::Pwsh),
+        );
         assert_eq!((i.delete, i.text.as_str()), (0, "'a b.txt'"));
         // fn-queryterm-quoted-delete: a function getQueryTerm deletes the raw chars spelling the query
-        let fq = |name: &str, kind, q: &str| Sugg { query: Query::Value(q.into()), ..Sugg::new(name, kind) };
-        for (raw, sh) in [("\"dir with space/sub d", Shell::Zsh), ("'dir with space/sub d", Shell::Bash), ("\"dir with space/sub d", Shell::Fish), ("'dir with space/sub d", Shell::Pwsh)] {
-            let i = insertion(&fq("sub dir/", ItemType::Folder, "sub d"), &ctx("dir with space/sub d", raw, sh));
+        let fq = |name: &str, kind, q: &str| Sugg {
+            query: Query::Value(q.into()),
+            ..Sugg::new(name, kind)
+        };
+        for (raw, sh) in [
+            ("\"dir with space/sub d", Shell::Zsh),
+            ("'dir with space/sub d", Shell::Bash),
+            ("\"dir with space/sub d", Shell::Fish),
+            ("'dir with space/sub d", Shell::Pwsh),
+        ] {
+            let i = insertion(
+                &fq("sub dir/", ItemType::Folder, "sub d"),
+                &ctx("dir with space/sub d", raw, sh),
+            );
             assert_eq!((i.delete, i.text.as_str()), (0, "ir/"), "{raw} {sh:?}");
         }
-        let i = insertion(&fq("my file.py", ItemType::File, "my fi"), &ctx("dir with space/my fi", "\"dir with space/my fi", Shell::Bash));
+        let i = insertion(
+            &fq("my file.py", ItemType::File, "my fi"),
+            &ctx(
+                "dir with space/my fi",
+                "\"dir with space/my fi",
+                Shell::Bash,
+            ),
+        );
         assert_eq!((i.delete, i.text.as_str()), (0, "le.py\""));
-        let i = insertion(&fq("my file.py", ItemType::File, "my fi"), &ctx("dir with space/my fi", "dir\\ with\\ space/my\\ fi", Shell::Bash));
+        let i = insertion(
+            &fq("my file.py", ItemType::File, "my fi"),
+            &ctx(
+                "dir with space/my fi",
+                "dir\\ with\\ space/my\\ fi",
+                Shell::Bash,
+            ),
+        );
         assert_eq!((i.delete, i.text.as_str()), (6, "my\\ file.py"));
-        let i = insertion(&fq("my file.py", ItemType::File, "my fi"), &ctx("dir with space/my fi", "dir` with` space/my` fi", Shell::Pwsh));
+        let i = insertion(
+            &fq("my file.py", ItemType::File, "my fi"),
+            &ctx(
+                "dir with space/my fi",
+                "dir` with` space/my` fi",
+                Shell::Pwsh,
+            ),
+        );
         assert_eq!((i.delete, i.text.as_str()), (6, "'my file.py'"));
-        let i = insertion(&fq("it's.txt", ItemType::File, "it's"), &ctx("d/it's", "'d/it''s", Shell::Pwsh));
+        let i = insertion(
+            &fq("it's.txt", ItemType::File, "it's"),
+            &ctx("d/it's", "'d/it''s", Shell::Pwsh),
+        );
         assert_eq!((i.delete, i.text.as_str()), (5, "it''s.txt'"));
         // dq-bang-history-expansion: `!` inside bash/zsh double quotes; fish has no backtick escape there
-        let path = |name: &str| Sugg { query: Query::Path { backslash: false }, ..Sugg::new(name, ItemType::File) };
+        let path = |name: &str| Sugg {
+            query: Query::Path { backslash: false },
+            ..Sugg::new(name, ItemType::File)
+        };
         for sh in [Shell::Bash, Shell::Zsh] {
-            assert_eq!(insertion(&path("wow!x"), &ctx("d/", "\"d/", sh)).text, "wow\"'!'\"x\"");
+            assert_eq!(
+                insertion(&path("wow!x"), &ctx("d/", "\"d/", sh)).text,
+                "wow\"'!'\"x\""
+            );
         }
-        assert_eq!(insertion(&path("a`b!$"), &ctx("d/", "\"d/", Shell::Fish)).text, "a`b!\\$\"");
-        assert_eq!(insertion(&path("a\\b'"), &ctx("d/", "'d/", Shell::Fish)).text, "a\\\\b\\''");
+        assert_eq!(
+            insertion(&path("a`b!$"), &ctx("d/", "\"d/", Shell::Fish)).text,
+            "a`b!\\$\""
+        );
+        assert_eq!(
+            insertion(&path("a\\b'"), &ctx("d/", "'d/", Shell::Fish)).text,
+            "a\\\\b\\''"
+        );
         // r3-escape-quotes-spec-tilde: a spec row's leading `~`/`%` is shell syntax (`cd ~`, `kill %1`)
         for sh in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             assert_eq!(text(Sugg::new("~", ItemType::Arg), sh), "~", "{sh:?}");
@@ -1646,54 +2321,133 @@ mod tests {
         // pwsh-unicode-smart-quote-injection: PowerShell also ends strings at ‘ ’ ‚ ‛ (single) and “ ” „ (double):
         // they force quoting (integrations::quote escapes them), are backtick-escaped in folders and open `"`
         let sq = |s: &str| crate::integrations::quote(Shell::Pwsh, s);
-        for name in ["plain’name.txt", "report’;New-Item -Name TS -ItemType File;’.txt", "a‘b‚c‛d“e”f„g"] {
+        for name in [
+            "plain’name.txt",
+            "report’;New-Item -Name TS -ItemType File;’.txt",
+            "a‘b‚c‛d“e”f„g",
+        ] {
             for kind in [ItemType::File, ItemType::Arg] {
-                assert_eq!(text(Sugg::new(name, kind), Shell::Pwsh), sq(name), "{name} {kind:?}");
+                assert_eq!(
+                    text(Sugg::new(name, kind), Shell::Pwsh),
+                    sq(name),
+                    "{name} {kind:?}"
+                );
             }
-            assert_eq!(insertion(&path(name), &ctx("d/", "'d/", Shell::Pwsh)).text, sq(name)[1..], "{name} in '");
+            assert_eq!(
+                insertion(&path(name), &ctx("d/", "'d/", Shell::Pwsh)).text,
+                sq(name)[1..],
+                "{name} in '"
+            );
         }
-        assert_eq!(text(Sugg::new("x’;calc;‘/", ItemType::Folder), Shell::Pwsh), "x`’`;calc`;`‘/");
-        assert_eq!(insertion(&path("a”;calc;“„"), &ctx("d/", "\"d/", Shell::Pwsh)).text, "a`”;calc;`“`„\"");
+        assert_eq!(
+            text(Sugg::new("x’;calc;‘/", ItemType::Folder), Shell::Pwsh),
+            "x`’`;calc`;`‘/"
+        );
+        assert_eq!(
+            insertion(&path("a”;calc;“„"), &ctx("d/", "\"d/", Shell::Pwsh)).text,
+            "a`”;calc;`“`„\""
+        );
     }
 
     #[test]
     fn history_rows_skip_multiline_entries() {
         // history-multiline-mangled: inserting them would run (or, stripped, change) the command
-        let e = |c: &str| HistoryEntry { command: c.into(), ..Default::default() };
-        let rows = history_rows("git commit ", &[e("git commit -m \"Fix login\nCloses #12\""), e("git commit -m wip")]);
-        assert_eq!(rows.iter().map(|s| s.first()).collect::<Vec<_>>(), ["-m wip"]);
+        let e = |c: &str| HistoryEntry {
+            command: c.into(),
+            ..Default::default()
+        };
+        let rows = history_rows(
+            "git commit ",
+            &[
+                e("git commit -m \"Fix login\nCloses #12\""),
+                e("git commit -m wip"),
+            ],
+        );
+        assert_eq!(
+            rows.iter().map(|s| s.first()).collect::<Vec<_>>(),
+            ["-m wip"]
+        );
     }
 
     #[test]
     fn item_highlight_and_hint() {
         let mut s = Sugg::new("-m", ItemType::Option);
         s.names.push("--message".into());
-        s.args = vec![Rc::new(Arg { name: Some("msg".into()), ..Default::default() }), Rc::new(Arg { name: Some("more".into()), is_optional: true, is_variadic: true, ..Default::default() })];
+        s.args = vec![
+            Rc::new(Arg {
+                name: Some("msg".into()),
+                ..Default::default()
+            }),
+            Rc::new(Arg {
+                name: Some("more".into()),
+                is_optional: true,
+                is_variadic: true,
+                ..Default::default()
+            }),
+        ];
         let it = to_item(s, true, &ctx("--m", "--m", Shell::Bash));
         assert_eq!(it.title(), "-m, --message");
         assert_eq!(it.highlight, [4, 5, 6]);
         assert_eq!(it.args_hint, "<msg> [more...]");
         let s = Sugg::new("Fuzzy Search", ItemType::Arg);
-        let it = to_item(s, false, &InsCtx { fuzzy: true, ..ctx("fs", "fs", Shell::Bash) });
+        let it = to_item(
+            s,
+            false,
+            &InsCtx {
+                fuzzy: true,
+                ..ctx("fs", "fs", Shell::Bash)
+            },
+        );
         assert_eq!(it.highlight, [0, 6]);
     }
 
     #[test]
     fn shell_expand_and_directory() {
-        let env: HashMap<String, String> = [("HOME".to_string(), "/h".to_string()), ("X".into(), "x".into())].into();
+        let env: HashMap<String, String> = [
+            ("HOME".to_string(), "/h".to_string()),
+            ("X".into(), "x".into()),
+        ]
+        .into();
         assert_eq!(shell_expand("~/a", &env), "/h/a");
         assert_eq!(shell_expand("~a", &env), "~a");
-        assert_eq!(shell_expand("$X/$NOPE/${X}/${NOPE:-d}/${NOPE}", &env), "x/$NOPE/x/d/${NOPE}");
-        assert_eq!(inserted_directory("/w", "src/ma", &env, false), PathBuf::from("/w/src/"));
-        assert_eq!(inserted_directory("/w/", "ma", &env, false), PathBuf::from("/w/"));
-        assert_eq!(inserted_directory("/w", "/etc/pa", &env, false), PathBuf::from("/etc/"));
-        assert_eq!(inserted_directory("/w", "$HOME/d", &env, false), PathBuf::from("/h/"));
+        assert_eq!(
+            shell_expand("$X/$NOPE/${X}/${NOPE:-d}/${NOPE}", &env),
+            "x/$NOPE/x/d/${NOPE}"
+        );
+        assert_eq!(
+            inserted_directory("/w", "src/ma", &env, false),
+            PathBuf::from("/w/src/")
+        );
+        assert_eq!(
+            inserted_directory("/w/", "ma", &env, false),
+            PathBuf::from("/w/")
+        );
+        assert_eq!(
+            inserted_directory("/w", "/etc/pa", &env, false),
+            PathBuf::from("/etc/")
+        );
+        assert_eq!(
+            inserted_directory("/w", "$HOME/d", &env, false),
+            PathBuf::from("/h/")
+        );
         // windows-backslash-paths (pwsh)
-        assert_eq!(inserted_directory("C:\\w", "src\\ma", &env, true), PathBuf::from("C:\\w/src\\"));
-        assert_eq!(inserted_directory("C:\\w\\", "ma", &env, true), PathBuf::from("C:\\w\\"));
-        assert_eq!(inserted_directory("/w", "my\\ d", &env, false), PathBuf::from("/w/"));
+        assert_eq!(
+            inserted_directory("C:\\w", "src\\ma", &env, true),
+            PathBuf::from("C:\\w/src\\")
+        );
+        assert_eq!(
+            inserted_directory("C:\\w\\", "ma", &env, true),
+            PathBuf::from("C:\\w\\")
+        );
+        assert_eq!(
+            inserted_directory("/w", "my\\ d", &env, false),
+            PathBuf::from("/w/")
+        );
         let q = Query::Path { backslash: true };
-        assert_eq!((q.of("src\\ma"), q.of("a/b\\c"), q.of("ma")), ("ma".into(), "c".into(), "ma".into()));
+        assert_eq!(
+            (q.of("src\\ma"), q.of("a/b\\c"), q.of("ma")),
+            ("ma".into(), "c".into(), "ma".into())
+        );
         assert_eq!(Query::Path { backslash: false }.of("a\\b/c\\d"), "c\\d");
         let mut main = Sugg::new("main.rs", ItemType::File);
         main.query = q;
@@ -1704,7 +2458,11 @@ mod tests {
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("tabsmith-suggest-{tag}-{}-{}", std::process::id(), crate::types::now_ms()));
+        let d = std::env::temp_dir().join(format!(
+            "tabsmith-suggest-{tag}-{}-{}",
+            std::process::id(),
+            crate::types::now_ms()
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -1716,10 +2474,19 @@ mod tests {
             std::fs::write(d.join(f), "").unwrap();
         }
         std::fs::create_dir(d.join("src")).unwrap();
-        let got: Vec<String> = list_dir(&d, true, false).into_iter().map(|s| s.names[0].clone()).collect();
+        let got: Vec<String> = list_dir(&d, true, false)
+            .into_iter()
+            .map(|s| s.names[0].clone())
+            .collect();
         assert_eq!(got, ["a.txt", "B.txt", "c.txt", "src/", ".hidden", "../"]);
         let folders = list_dir(&d, false, false);
-        assert_eq!(folders.iter().map(|s| s.names[0].as_str()).collect::<Vec<_>>(), ["src/", "../"]);
+        assert_eq!(
+            folders
+                .iter()
+                .map(|s| s.names[0].as_str())
+                .collect::<Vec<_>>(),
+            ["src/", "../"]
+        );
         assert_eq!(folders[0].template_type.as_deref(), Some("folders"));
         assert!(list_dir(&d.join("missing"), true, false).is_empty());
         std::fs::remove_dir_all(&d).unwrap();
@@ -1732,7 +2499,10 @@ mod tests {
         for f in ["ok", "aa\rtouch${IFS}PWNED\r", "esc\x1b[2J"] {
             std::fs::write(d.join(f), "").unwrap();
         }
-        let got: Vec<String> = list_dir(&d, true, false).into_iter().map(|s| s.names[0].clone()).collect();
+        let got: Vec<String> = list_dir(&d, true, false)
+            .into_iter()
+            .map(|s| s.names[0].clone())
+            .collect();
         assert_eq!(got, ["ok", "../"]);
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -1747,10 +2517,22 @@ mod tests {
             std::fs::set_permissions(d.join(f), std::fs::Permissions::from_mode(mode)).unwrap();
         }
         let specs = vec!["git".to_string(), "aws/s3".into(), "@scope/cli".into()];
-        let aliases: HashMap<String, String> = [("gst".to_string(), "git status".to_string())].into();
+        let aliases: HashMap<String, String> =
+            [("gst".to_string(), "git status".to_string())].into();
         let items = first_token_items(&specs, &aliases, d.to_str(), None);
-        let got: Vec<(&str, ItemType, f64)> = items.iter().map(|s| (s.first(), s.kind, s.priority)).collect();
-        assert_eq!(got, [("git", ItemType::Subcommand, 40.0), ("@scope/cli", ItemType::Subcommand, 40.0), ("gst", ItemType::Shortcut, 100.0), ("mytool", ItemType::Subcommand, 40.0)]);
+        let got: Vec<(&str, ItemType, f64)> = items
+            .iter()
+            .map(|s| (s.first(), s.kind, s.priority))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("git", ItemType::Subcommand, 40.0),
+                ("@scope/cli", ItemType::Subcommand, 40.0),
+                ("gst", ItemType::Shortcut, 100.0),
+                ("mytool", ItemType::Subcommand, 40.0)
+            ]
+        );
         assert_eq!(items[2].description.as_deref(), Some("git status"));
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -1758,12 +2540,22 @@ mod tests {
     #[test]
     fn help_template() {
         let help = sub(&["help", "h"]);
-        let root = Rc::new(Subcommand { subcommands: vec![sub(&["add"]), help.clone(), sub(&["commit", "ci"])], ..Default::default() });
+        let root = Rc::new(Subcommand {
+            subcommands: vec![sub(&["add"]), help.clone(), sub(&["commit", "ci"])],
+            ..Default::default()
+        });
         let mut pr = pr_for(Subcommand::default(), "");
         pr.completion = help.clone();
         pr.path = vec![root, help];
-        pr.annotations = vec![Annotation { kind: AnnKind::Subcommand, text: "help".into(), parts: vec![] }];
-        let got: Vec<String> = help_items(&pr).into_iter().map(|s| s.names[0].clone()).collect();
+        pr.annotations = vec![Annotation {
+            kind: AnnKind::Subcommand,
+            text: "help".into(),
+            parts: vec![],
+        }];
+        let got: Vec<String> = help_items(&pr)
+            .into_iter()
+            .map(|s| s.names[0].clone())
+            .collect();
         assert_eq!(got, ["add", "commit", "ci"]);
     }
 }

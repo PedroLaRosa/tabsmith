@@ -1,5 +1,6 @@
 //! Themes, layout and frame bytes for the in-terminal overlay: menu, description bar, pop-out, ghost text, and
 //! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2). OWNER: ui agent.
+use crate::icons::{self, Graphics, Image};
 use crate::menu::{max_rows, Menu};
 use crate::settings::Settings;
 use crate::types::{Item, ItemType, Model};
@@ -9,6 +10,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
@@ -29,8 +31,12 @@ pub struct Theme {
 }
 
 /// base16 filler for custom themes (`themes.ts:46-83`, dark variant).
-const SHADES: [&str; 8] = ["#181818", "#282828", "#383838", "#585858", "#b8b8b8", "#d8d8d8", "#e8e8e8", "#f8f8f8"];
-const ACCENTS: [&str; 8] = ["#ab4642", "#dc9656", "#f7ca88", "#a1b56c", "#86c1b9", "#7cafc2", "#ba8baf", "#a16946"];
+const SHADES: [&str; 8] = [
+    "#181818", "#282828", "#383838", "#585858", "#b8b8b8", "#d8d8d8", "#e8e8e8", "#f8f8f8",
+];
+const ACCENTS: [&str; 8] = [
+    "#ab4642", "#dc9656", "#f7ca88", "#a1b56c", "#86c1b9", "#7cafc2", "#ba8baf", "#a16946",
+];
 
 impl Theme {
     pub fn dark() -> Theme {
@@ -65,12 +71,18 @@ impl Theme {
             "" | "dark" => Theme::dark(),
             "light" => Theme::light(),
             "system" => match terminal_bg {
-                Some((r, g, b)) if (0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64) / 255.0 >= 0.5 => Theme::light(),
+                Some((r, g, b))
+                    if (0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64) / 255.0 >= 0.5 =>
+                {
+                    Theme::light()
+                }
                 _ => Theme::dark(),
             },
             name => crate::settings::home()
                 .ok()
-                .and_then(|h| std::fs::read_to_string(h.join("themes").join(format!("{name}.json"))).ok())
+                .and_then(|h| {
+                    std::fs::read_to_string(h.join("themes").join(format!("{name}.json"))).ok()
+                })
                 .and_then(|s| serde_json::from_str::<Value>(&s).ok())
                 .map_or_else(Theme::dark, |v| Theme::from_json(&v)),
         }
@@ -81,16 +93,20 @@ impl Theme {
     pub fn from_json(v: &Value) -> Theme {
         let col = |p: &str| v.pointer(p).and_then(Value::as_str).and_then(parse_color);
         let d = Theme::dark();
-        if v.get("version").and_then(Value::as_str) == Some("1.0") && v.get("theme").is_some_and(Value::is_object) {
+        if v.get("version").and_then(Value::as_str) == Some("1.0")
+            && v.get("theme").is_some_and(Value::is_object)
+        {
             return Theme {
                 main_bg: col("/theme/backgroundColor").unwrap_or(d.main_bg),
                 main_text: col("/theme/textColor").unwrap_or(d.main_text),
                 matching_bg: col("/theme/matchBackgroundColor").unwrap_or(d.matching_bg),
                 selected_bg: col("/theme/selection/backgroundColor").unwrap_or(d.selected_bg),
                 selected_text: col("/theme/selection/textColor").unwrap_or(d.selected_text),
-                selected_matching_bg: col("/theme/selection/matchBackgroundColor").unwrap_or(d.selected_matching_bg),
+                selected_matching_bg: col("/theme/selection/matchBackgroundColor")
+                    .unwrap_or(d.selected_matching_bg),
                 description_text: col("/theme/description/textColor").unwrap_or(d.description_text),
-                description_border: col("/theme/description/borderColor").unwrap_or(d.description_border),
+                description_border: col("/theme/description/borderColor")
+                    .unwrap_or(d.description_border),
             };
         }
         let filler = |list: &[&str; 8], i: usize| parse_color(list[i]).unwrap_or_default();
@@ -124,7 +140,11 @@ pub fn parse_color(s: &str) -> Option<(u8, u8, u8)> {
             _ => None,
         };
     }
-    let mut it = s.strip_prefix("rgb(")?.strip_suffix(')')?.split(',').map(|p| p.trim().parse::<u8>().ok());
+    let mut it = s
+        .strip_prefix("rgb(")?
+        .strip_suffix(')')?
+        .split(',')
+        .map(|p| p.trim().parse::<u8>().ok());
     let rgb = (it.next()??, it.next()??, it.next()??);
     it.next().is_none().then_some(rgb)
 }
@@ -132,11 +152,20 @@ pub fn parse_color(s: &str) -> Option<(u8, u8, u8)> {
 /// Nearest xterm-256 index (6×6×6 cube or 24-step grey ramp).
 pub fn xterm256((r, g, b): (u8, u8, u8)) -> u8 {
     const LV: [u8; 6] = [0, 95, 135, 175, 215, 255];
-    let near = |c: u8| (0..6).min_by_key(|&i| (LV[i] as i32 - c as i32).abs()).unwrap_or(0);
+    let near = |c: u8| {
+        (0..6)
+            .min_by_key(|&i| (LV[i] as i32 - c as i32).abs())
+            .unwrap_or(0)
+    };
     let (ri, gi, bi) = (near(r), near(g), near(b));
     let grey = ((((r as i32 + g as i32 + b as i32) / 3) - 8 + 5) / 10).clamp(0, 23);
     let gv = (8 + 10 * grey) as u8;
-    let dist = |(x, y, z): Rgb| [(x, r), (y, g), (z, b)].iter().map(|&(p, q)| (p as i32 - q as i32).pow(2)).sum::<i32>();
+    let dist = |(x, y, z): Rgb| {
+        [(x, r), (y, g), (z, b)]
+            .iter()
+            .map(|&(p, q)| (p as i32 - q as i32).pow(2))
+            .sum::<i32>()
+    };
     if dist((gv, gv, gv)) < dist((LV[ri], LV[gi], LV[bi])) {
         232 + grey as u8
     } else {
@@ -165,6 +194,10 @@ pub struct Renderer {
     /// Last frame emitted: an identical frame over a still-drawn one is skipped (render key, SPEC §7.5.3).
     /// ponytail: the key is the frame bytes themselves (a few rows per frame, cheap to build and compare).
     last: Vec<u8>,
+    /// How row icons are drawn (`icons::detect`); with direct placements the clear removes them too.
+    images: Graphics,
+    /// Image ids the terminal already holds: each is transmitted once, placements come every frame.
+    sent: HashSet<u32>,
 }
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -173,12 +206,17 @@ const HEAD: &str = "\x1b[?2026h\x1b[?25l";
 
 /// One covered rect row: `s` (SGR + text) is exactly `w` columns at (`row`, `x`); `pad` = box pen for the cells
 /// added when the span is widened over half of a wide char.
+/// A frame, the clear that undoes it, and the images the terminal does not hold yet (id, transmission).
+type Composed = (Vec<u8>, Vec<u8>, Vec<(u32, String)>);
+
 struct Patch {
     row: usize,
     x: usize,
     w: usize,
     s: String,
     pad: String,
+    /// Image covering the icon slot, placed at column `x + 1` (list rows only).
+    img: Option<Image>,
 }
 
 #[derive(Default)]
@@ -204,7 +242,20 @@ impl Run {
 impl Renderer {
     /// `truecolor` = `COLORTERM ∈ {truecolor, 24bit}` or `WT_SESSION` set.
     pub fn new(theme: Theme, truecolor: bool) -> Renderer {
-        Renderer { theme, truecolor, clear: Vec::new(), last: Vec::new() }
+        Renderer {
+            theme,
+            truecolor,
+            clear: Vec::new(),
+            last: Vec::new(),
+            images: Graphics::Off,
+            sent: HashSet::new(),
+        }
+    }
+
+    /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); ASCII when `Off`.
+    pub fn with_images(mut self, g: Graphics) -> Renderer {
+        self.images = g;
+        self
     }
 
     pub fn set_theme(&mut self, theme: Theme) {
@@ -229,13 +280,17 @@ impl Renderer {
     /// the model); for state-only changes call `frame` alone: a still-drawn frame is cleared in the same bytes,
     /// or nothing is emitted when the new frame is identical.
     pub fn frame(&mut self, model: &Model, menu: &Menu, input: &FrameInput) -> Vec<u8> {
-        let Some((frame, clear)) = self.compose(model, menu, input) else {
+        let Some((frame, clear, transmit)) = self.compose(model, menu, input) else {
             return self.take_clear();
         };
         if frame == self.last && !self.clear.is_empty() {
             return Vec::new();
         }
         let mut out = self.take_clear();
+        for (id, bytes) in transmit {
+            self.sent.insert(id);
+            out.extend_from_slice(bytes.as_bytes());
+        }
         out.extend_from_slice(&frame);
         self.clear = clear;
         self.last = frame;
@@ -248,6 +303,9 @@ impl Renderer {
         self.drop_clear();
         let grid = model.grid();
         let mut s = String::from(HEAD);
+        if self.images == Graphics::Direct {
+            s += icons::CLEAR_PLACEMENTS;
+        }
         for y in 0..grid.screen_lines() {
             let row = &grid[Line(y as i32)];
             cup(&mut s, y, 0);
@@ -261,7 +319,7 @@ impl Renderer {
     }
 
     /// (frame, clear), or None when nothing is drawn (guards SPEC §7.5.1, nothing to show).
-    fn compose(&self, model: &Model, menu: &Menu, input: &FrameInput) -> Option<(Vec<u8>, Vec<u8>)> {
+    fn compose(&self, model: &Model, menu: &Menu, input: &FrameInput) -> Option<Composed> {
         let grid = model.grid();
         let (rows, cols) = (grid.screen_lines(), grid.columns());
         let guarded = TermMode::ALT_SCREEN | TermMode::ORIGIN | TermMode::INSERT;
@@ -274,7 +332,10 @@ impl Renderer {
         {
             return None;
         }
-        let (cy, cx) = (grid.cursor.point.line.0 as usize, grid.cursor.point.column.0);
+        let (cy, cx) = (
+            grid.cursor.point.line.0 as usize,
+            grid.cursor.point.column.0,
+        );
         let mut patches = Vec::new();
         if menu.shown(input.settings) {
             self.menu_patches(menu, input, (rows, cols), (cy, cx), &mut patches);
@@ -286,11 +347,17 @@ impl Renderer {
             return None;
         }
         let (mut frame, mut clear) = (String::from(HEAD), String::from(HEAD));
-        for p in &patches {
+        if self.images == Graphics::Direct {
+            clear += icons::CLEAR_PLACEMENTS;
+        }
+        // Images the terminal does not hold yet; `frame` marks them sent when it emits them.
+        let mut transmit: Vec<(u32, String)> = Vec::new();
+        for (k, p) in patches.iter().enumerate() {
             let row = &grid[Line(p.row as i32)];
             // A covered half of a wide char is blanked by the terminal: cover (and restore) the whole char.
             let left = p.x > 0 && row[Column(p.x)].flags.contains(Flags::WIDE_CHAR_SPACER);
-            let right = p.x + p.w < cols && row[Column(p.x + p.w - 1)].flags.contains(Flags::WIDE_CHAR);
+            let right =
+                p.x + p.w < cols && row[Column(p.x + p.w - 1)].flags.contains(Flags::WIDE_CHAR);
             let xs = p.x - usize::from(left);
             cup(&mut frame, p.row, xs);
             if left {
@@ -302,16 +369,33 @@ impl Renderer {
                 frame += &p.pad;
                 frame.push(' ');
             }
+            if let Some(img) = &p.img {
+                if !self.sent.contains(&img.id) && transmit.iter().all(|(id, _)| *id != img.id) {
+                    transmit.push((img.id, icons::transmit(img, self.images)));
+                }
+                // Behind tmux the placeholders in `p.s` show the image.
+                if self.images == Graphics::Direct {
+                    cup(&mut frame, p.row, p.x + 1);
+                    frame += &icons::place(img, k + 1);
+                }
+            }
             cup(&mut clear, p.row, xs);
             restore_cells(&mut clear, row, xs..p.x + p.w + usize::from(right));
         }
         let tail = tail(model);
         frame += &tail;
         clear += &tail;
-        Some((frame.into_bytes(), clear.into_bytes()))
+        Some((frame.into_bytes(), clear.into_bytes(), transmit))
     }
 
-    fn menu_patches(&self, menu: &Menu, input: &FrameInput, size: (usize, usize), cur: (usize, usize), out: &mut Vec<Patch>) {
+    fn menu_patches(
+        &self,
+        menu: &Menu,
+        input: &FrameInput,
+        size: (usize, usize),
+        cur: (usize, usize),
+        out: &mut Vec<Patch>,
+    ) {
         let s = input.settings;
         let items = menu.items();
         let sel = menu.selected().min(items.len().saturating_sub(1));
@@ -320,7 +404,9 @@ impl Renderer {
             None => menu.last().map_or("", |c| c.search_term.as_str()),
         };
         let menu_w = s.f64("autocomplete.width", 40.0).max(10.0) as usize;
-        let Some(l) = layout(size, cur, items.len(), max_rows(s), menu_w, width(query)) else { return };
+        let Some(l) = layout(size, cur, items.len(), max_rows(s), menu_w, width(query)) else {
+            return;
+        };
         // Keep the selection inside the (possibly shrunk) window.
         let mut top = menu.scroll_top().min(sel);
         if sel >= top + l.n {
@@ -328,8 +414,15 @@ impl Renderer {
         }
         top = top.min(items.len() - l.n);
         for (i, idx) in (top..top + l.n).enumerate() {
-            let (s, pad) = self.list_row(&items[idx], idx == sel, l.w);
-            out.push(Patch { row: l.list_top + i, x: l.x0, w: l.w, s, pad });
+            let (s, pad, img) = self.list_row(&items[idx], idx == sel, l.w);
+            out.push(Patch {
+                row: l.list_top + i,
+                x: l.x0,
+                w: l.w,
+                s,
+                pad,
+                img,
+            });
         }
         let pop_x = match () {
             _ if items.is_empty() || !menu.popout(s) => None,
@@ -340,13 +433,33 @@ impl Renderer {
         if let Some(px) = pop_x {
             // ponytail: no spinner while the pop-out replaces the description bar.
             let pad = self.pen(self.theme.description_text, self.theme.main_bg, "");
-            for (i, s) in self.popout_rows(menu, l.n + 1, &pad).into_iter().enumerate() {
-                out.push(Patch { row: l.list_top + i, x: px, w: POP_W, s, pad: pad.clone() });
+            for (i, s) in self
+                .popout_rows(menu, l.n + 1, &pad)
+                .into_iter()
+                .enumerate()
+            {
+                out.push(Patch {
+                    row: l.list_top + i,
+                    x: px,
+                    w: POP_W,
+                    s,
+                    pad: pad.clone(),
+                    img: None,
+                });
             }
         } else {
-            let spin = menu.loading().then(|| SPINNER[input.spinner % SPINNER.len()]);
+            let spin = menu
+                .loading()
+                .then(|| SPINNER[input.spinner % SPINNER.len()]);
             let (s, pad) = self.desc_row(menu, l.w, spin);
-            out.push(Patch { row: l.desc_row, x: l.x0, w: l.w, s, pad });
+            out.push(Patch {
+                row: l.desc_row,
+                x: l.x0,
+                w: l.w,
+                s,
+                pad,
+                img: None,
+            });
         }
     }
 
@@ -363,19 +476,36 @@ impl Renderer {
         format!("\x1b[0;{};{}{extra}m", self.rgb(38, fg), self.rgb(48, bg))
     }
 
-    /// `' '` + icon + `' '` + title (match highlight) + (`' '` + dim args hint when room) + pad (SPEC §7.4.2).
-    fn list_row(&self, it: &Item, selected: bool, w: usize) -> (String, String) {
+    /// `' '` + icon slot (two columns) + `' '` + title (match highlight) + (`' '` + dim args hint when room) + pad
+    /// (SPEC §7.4.2). The image, if any, goes over the slot.
+    fn list_row(&self, it: &Item, selected: bool, w: usize) -> (String, String, Option<Image>) {
         let t = &self.theme;
-        let (fg, bg, mbg) =
-            if selected { (t.selected_text, t.selected_bg, t.selected_matching_bg) } else { (t.main_text, t.main_bg, t.matching_bg) };
+        let (fg, bg, mbg) = if selected {
+            (t.selected_text, t.selected_bg, t.selected_matching_bg)
+        } else {
+            (t.main_text, t.main_bg, t.matching_bg)
+        };
         let (base, hl) = (self.pen(fg, bg, ""), self.pen(fg, mbg, ""));
         let mut r = Run::default();
-        r.put(&base, &format!(" {} ", icon(it.kind)));
-        let avail = w.saturating_sub(4);
+        let slot = icons::slot(it, self.images);
+        r.put(&base, " ");
+        if slot.badge {
+            r.put(&self.pen((255, 255, 255), bg, ""), &slot.text);
+        } else if let (Graphics::Tmux, Some(img)) = (self.images, &slot.image) {
+            r.put(&self.pen(fg, bg, &icons::color(img.id)), &slot.text);
+        } else {
+            r.put(&base, &slot.text);
+        }
+        r.put(&base, " ");
+        let avail = w.saturating_sub(5);
         let (title, hint) = (clean(&it.title()), clean(&it.args_hint));
         let show_hint = !hint.is_empty() && width(&title) + 1 + width(&hint) <= avail;
         let shown = fit(&title, avail);
-        let kept = if shown == title { usize::MAX } else { shown.chars().count().saturating_sub(1) };
+        let kept = if shown == title {
+            usize::MAX
+        } else {
+            shown.chars().count().saturating_sub(1)
+        };
         let mut on = false;
         for (i, c) in shown.chars().enumerate() {
             let h = i < kept && it.highlight.contains(&i);
@@ -394,7 +524,7 @@ impl Renderer {
             r.put(&self.pen(fg, bg, ";2"), &hint);
         }
         r.pad_to(&base, w);
-        (r.s, base)
+        (r.s, base, slot.image)
     }
 
     /// Description bar / argument hint: `' '` + bold `name: ` + italic description, `No description` in grey,
@@ -407,13 +537,26 @@ impl Renderer {
         let mut r = Run::default();
         r.put(&base, " ");
         if name.is_empty() && desc.is_empty() {
-            r.put(&self.pen((140, 140, 140), t.main_bg, ""), &fit("No description", end.saturating_sub(r.w)));
+            r.put(
+                &self.pen((140, 140, 140), t.main_bg, ""),
+                &fit("No description", end.saturating_sub(r.w)),
+            );
         } else {
             if !name.is_empty() {
-                let label = if desc.is_empty() { name } else { format!("{name}: ") };
-                r.put(&self.pen(t.description_text, t.main_bg, ";1"), &fit(&label, end.saturating_sub(r.w)));
+                let label = if desc.is_empty() {
+                    name
+                } else {
+                    format!("{name}: ")
+                };
+                r.put(
+                    &self.pen(t.description_text, t.main_bg, ";1"),
+                    &fit(&label, end.saturating_sub(r.w)),
+                );
             }
-            r.put(&self.pen(t.description_text, t.main_bg, ";3"), &fit(&desc, end.saturating_sub(r.w)));
+            r.put(
+                &self.pen(t.description_text, t.main_bg, ";3"),
+                &fit(&desc, end.saturating_sub(r.w)),
+            );
         }
         r.pad_to(&base, end);
         if let Some(c) = spin {
@@ -426,8 +569,16 @@ impl Renderer {
     /// Pop-out panel (SPEC §7.4.3): `h` rows of the description wrapped to the panel width.
     fn popout_rows(&self, menu: &Menu, h: usize, pen: &str) -> Vec<String> {
         let (name, desc) = describe(menu);
-        let text = [name, desc].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(": ");
-        let text = if text.is_empty() { "No description".to_string() } else { text };
+        let text = [name, desc]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(": ");
+        let text = if text.is_empty() {
+            "No description".to_string()
+        } else {
+            text
+        };
         let mut lines = wrap(&text, POP_W - 2, h);
         lines.resize(h, String::new());
         (lines.iter())
@@ -446,13 +597,15 @@ impl Renderer {
 /// `Description.tsx:91-102`). Sanitized.
 fn describe(menu: &Menu) -> (String, String) {
     let sel = menu.items().get(menu.selected());
-    let own = sel.and_then(|s| s.description.as_deref()).filter(|d| !d.trim().is_empty()).map(String::from).or_else(|| {
-        match sel.map(|s| s.kind) {
+    let own = sel
+        .and_then(|s| s.description.as_deref())
+        .filter(|d| !d.trim().is_empty())
+        .map(String::from)
+        .or_else(|| match sel.map(|s| s.kind) {
             Some(ItemType::File) => Some("file".into()),
             Some(ItemType::Folder) => Some("folder".into()),
             _ => None,
-        }
-    });
+        });
     match (own, menu.arg_hint()) {
         (Some(d), _) => (String::new(), clean(&d)),
         (None, Some(a)) => (clean(&a.name), clean(&a.description)),
@@ -504,19 +657,33 @@ fn layout(
         n = room - 1;
         h = room;
     }
-    // Rows start with `' '` + icon + `' '`: 3 columns before the title.
-    let x0 = (cx as isize - query_w as isize - 3).clamp(0, (cols - w) as isize) as usize;
+    // Rows start with `' '` + icon (2 columns) + `' '`: 4 columns before the title.
+    let x0 = (cx as isize - query_w as isize - 4).clamp(0, (cols - w) as isize) as usize;
     let (list_top, desc_row) = match side {
         Side::Below => (cy + 1, cy + n + 1),
         Side::Above => (cy - h, cy - 1),
     };
-    Some(Layout { side, n, list_top, desc_row, x0, w })
+    Some(Layout {
+        side,
+        n,
+        list_top,
+        desc_row,
+        x0,
+        w,
+    })
 }
 
 /// Ghost text at the cursor in bright black, clipped at the first non-blank cell to the right and at the right
 /// edge (SPEC §8.2).
-fn ghost_patch(row: &Row<Cell>, cols: usize, (cy, cx): (usize, usize), ghost: &str) -> Option<Patch> {
-    let end = (cx..cols).find(|&x| !blank(&row[Column(x)])).unwrap_or(cols);
+fn ghost_patch(
+    row: &Row<Cell>,
+    cols: usize,
+    (cy, cx): (usize, usize),
+    ghost: &str,
+) -> Option<Patch> {
+    let end = (cx..cols)
+        .find(|&x| !blank(&row[Column(x)]))
+        .unwrap_or(cols);
     let (mut s, mut w) = (String::new(), 0);
     for c in clean(ghost).chars() {
         if w == 0 && cw(c) == 0 {
@@ -528,7 +695,14 @@ fn ghost_patch(row: &Row<Cell>, cols: usize, (cy, cx): (usize, usize), ghost: &s
         s.push(c);
         w += cw(c);
     }
-    (w > 0).then(|| Patch { row: cy, x: cx, w, s: format!("\x1b[0m\x1b[90m{s}"), pad: "\x1b[0m".into() })
+    (w > 0).then(|| Patch {
+        row: cy,
+        x: cx,
+        w,
+        s: format!("\x1b[0m\x1b[90m{s}"),
+        pad: "\x1b[0m".into(),
+        img: None,
+    })
 }
 
 /// Cursor back to the model position with the model's pen and cursor visibility, end of synchronized output. A
@@ -622,7 +796,12 @@ fn color(s: &mut String, c: Color, base: usize, ext: u8) {
             match n as usize {
                 i @ 0..=7 => write!(s, ";{}", base + i),
                 i @ 8..=15 => write!(s, ";{}", base + 60 + i - 8),
-                i if (dim..dim + 8).contains(&i) => write!(s, ";{}{}", base + i - dim, if base == 30 { ";2" } else { "" }),
+                i if (dim..dim + 8).contains(&i) => write!(
+                    s,
+                    ";{}{}",
+                    base + i - dim,
+                    if base == 30 { ";2" } else { "" }
+                ),
                 _ if n == NamedColor::DimForeground && base == 30 => write!(s, ";2"),
                 _ => Ok(()),
             }
@@ -634,27 +813,17 @@ fn color(s: &mut String, c: Color, base: usize, ext: u8) {
 fn blank(c: &Cell) -> bool {
     matches!(c.c, ' ' | '\0')
         && c.bg == Color::Named(NamedColor::Background)
-        && !c.flags.intersects(Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT)
+        && !c
+            .flags
+            .intersects(Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT)
         && c.zerowidth().is_none_or(|z| z.is_empty())
-}
-
-/// ASCII type icons, width 1 (SPEC §7.4.2).
-fn icon(kind: ItemType) -> &'static str {
-    match kind {
-        ItemType::Subcommand => ">",
-        ItemType::Option => "-",
-        ItemType::Arg | ItemType::Special => "*",
-        ItemType::File => "f",
-        ItemType::Folder => "d",
-        ItemType::History => "h",
-        ItemType::Shortcut => "@",
-        ItemType::AutoExecute => "↪",
-    }
 }
 
 /// Control chars (newlines, tabs, ESC) would break the frame: show them as spaces.
 fn clean(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// Display width of a char, as the model computes it (per char, `unicode-width`).
@@ -753,8 +922,19 @@ mod tests {
         let (ga, gb) = (a.grid(), b.grid());
         for y in 0..ga.screen_lines() {
             for x in 0..ga.columns() {
-                let (ca, cb) = (&ga[Line(y as i32)][Column(x)], &gb[Line(y as i32)][Column(x)]);
-                let key = |c: &Cell| (c.c, c.fg, c.bg, c.flags - invisible, c.zerowidth().map(<[char]>::to_vec));
+                let (ca, cb) = (
+                    &ga[Line(y as i32)][Column(x)],
+                    &gb[Line(y as i32)][Column(x)],
+                );
+                let key = |c: &Cell| {
+                    (
+                        c.c,
+                        c.fg,
+                        c.bg,
+                        c.flags - invisible,
+                        c.zerowidth().map(<[char]>::to_vec),
+                    )
+                };
                 assert_eq!(key(ca), key(cb), "cell row {y} col {x}");
             }
         }
@@ -762,12 +942,18 @@ mod tests {
         assert_eq!(ga.cursor.input_needs_wrap, gb.cursor.input_needs_wrap);
         let pen = |c: &Cell| (c.fg, c.bg, c.flags);
         assert_eq!(pen(&ga.cursor.template), pen(&gb.cursor.template));
-        assert_eq!(a.mode().contains(TermMode::SHOW_CURSOR), b.mode().contains(TermMode::SHOW_CURSOR));
+        assert_eq!(
+            a.mode().contains(TermMode::SHOW_CURSOR),
+            b.mode().contains(TermMode::SHOW_CURSOR)
+        );
     }
 
     fn differs(a: &Model, b: &Model) -> bool {
         let (ga, gb) = (a.grid(), b.grid());
-        (0..ga.screen_lines()).any(|y| (0..ga.columns()).any(|x| ga[Line(y as i32)][Column(x)] != gb[Line(y as i32)][Column(x)]))
+        (0..ga.screen_lines()).any(|y| {
+            (0..ga.columns())
+                .any(|x| ga[Line(y as i32)][Column(x)] != gb[Line(y as i32)][Column(x)])
+        })
     }
 
     /// Visible menu over `items` (typed query "c").
@@ -779,7 +965,10 @@ mod tests {
     }
 
     fn subs() -> Vec<Item> {
-        let mut v: Vec<Item> = ["checkout", "cherry-pick", "clone", "commit"].iter().map(|n| item(n, ItemType::Subcommand, "c")).collect();
+        let mut v: Vec<Item> = ["checkout", "cherry-pick", "clone", "commit"]
+            .iter()
+            .map(|n| item(n, ItemType::Subcommand, "c"))
+            .collect();
         v[0].args_hint = "<br>".into();
         v[1].names.push("cp".into());
         v[2].description = Some("multi\nline 中文 description".into());
@@ -787,16 +976,35 @@ mod tests {
     }
 
     fn input<'a>(s: &'a Settings, ghost: Option<&'a str>) -> FrameInput<'a> {
-        FrameInput { settings: s, ghost, spinner: 3, suppress: false, scroll_region: false }
+        FrameInput {
+            settings: s,
+            ghost,
+            spinner: 3,
+            suppress: false,
+            scroll_region: false,
+        }
     }
 
     /// Model A ← output; B ← output + frame + clear → same visible grid (SPEC §10 round-trip invariant).
-    fn round_trip(cols: usize, rows: usize, output: &[u8], m: &Menu, inp: &FrameInput, truecolor: bool) -> String {
+    fn round_trip(
+        cols: usize,
+        rows: usize,
+        output: &[u8],
+        m: &Menu,
+        inp: &FrameInput,
+        truecolor: bool,
+    ) -> String {
         let a = model(cols, rows, &[output]);
         let mut r = Renderer::new(Theme::dark(), truecolor);
         let frame = r.frame(&a, m, inp);
-        assert!(frame.starts_with(HEAD.as_bytes()) && frame.ends_with(b"\x1b[?2026l"), "{frame:?}");
-        assert!(differs(&a, &model(cols, rows, &[output, &frame])), "the frame draws something");
+        assert!(
+            frame.starts_with(HEAD.as_bytes()) && frame.ends_with(b"\x1b[?2026l"),
+            "{frame:?}"
+        );
+        assert!(
+            differs(&a, &model(cols, rows, &[output, &frame])),
+            "the frame draws something"
+        );
         let clear = r.take_clear();
         assert_same(&a, &model(cols, rows, &[output, &frame, &clear]));
         String::from_utf8(frame).unwrap()
@@ -809,7 +1017,11 @@ mod tests {
         o += "\x1b[38;5;196;48;5;22mindexed\x1b[0m \x1b[95;104mbright\x1b[0m\r\n";
         o += "$ git c\x1b[K\r\n";
         o += &format!("abc中{}文zz\r\n", "y".repeat(18));
-        o += &format!("\x1b[48;2;10;20;30m  {}\x1b[44m中\x1b[0m{}\x1b[7m文\x1b[0m\r\n", "e\u{301}".repeat(17), "");
+        o += &format!(
+            "\x1b[48;2;10;20;30m  {}\x1b[44m中\x1b[0m{}\x1b[7m文\x1b[0m\r\n",
+            "e\u{301}".repeat(17),
+            ""
+        );
         o += "    \x1b[3mit\x1b[4mul\x1b[9mst\x1b[7minv\x1b[2mdim\x1b[8mhid\x1b[0m\x1b[4:3mcurl\x1b[0m\x1b[58;2;1;2;3;4mulc\x1b[0m\r\n";
         o += "\x1b[44m        blue bg row            \x1b[0m\r\n";
         o += "abc中文中文中文中文中文中文中文中文\r\n";
@@ -822,13 +1034,22 @@ mod tests {
     fn round_trip_below_wide_edges_truecolor() {
         let s = settings(r#"{"autocomplete.width": 20}"#);
         let m = menu(subs(), &s);
-        // Cursor one past `$ git c` (row 2, col 8) with a green pen: x0 = 8 - 1 - 3 = 4, span 4..24.
+        // Cursor one past `$ git c` (row 2, col 8) with a green pen: x0 = 8 - 1 - 4 = 3, span 3..23.
         let out = screen("\x1b[3;9H\x1b[32m");
         let frame = round_trip(40, 12, &out, &m, &input(&s, None), true);
-        assert!(frame.contains("\x1b[4;4H"), "span widened left over the wide char at 3-4: {frame:?}");
-        assert!(frame.contains("48;2;30;90;199"), "selected row in truecolor");
+        assert!(
+            frame.contains("\x1b[4;4H"),
+            "span widened left over the wide char at 3-4: {frame:?}"
+        );
+        assert!(
+            frame.contains("48;2;30;90;199"),
+            "selected row in truecolor"
+        );
         assert!(frame.contains("<br>"), "args hint when it fits");
-        assert!(frame.contains("\x1b[3;9H\x1b[0;32m\x1b[?25h\x1b[?2026l"), "cursor + pen restore");
+        assert!(
+            frame.contains("\x1b[3;9H\x1b[0;32m\x1b[?25h\x1b[?2026l"),
+            "cursor + pen restore"
+        );
         // 256-colour terminals get the same geometry with downgraded theme colours.
         let frame = round_trip(40, 12, &out, &m, &input(&s, None), false);
         assert!(frame.contains("48;5;26") && !frame.contains("48;2;30;90;199"));
@@ -836,18 +1057,38 @@ mod tests {
 
     #[test]
     fn round_trip_above_ghost_popout() {
-        let s = settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
+        let s =
+            settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
         let mut m = menu(subs(), &s);
         m.handle(crate::keys::Action::NavigateDown, &s);
         // Cursor on the bottom row 13, after `$ ec`: menu above on rows 8..=12 (wide chars, colours), x0 = 0;
         // pop-out right of the list (0 + 20 + 30 <= 60).
         let mut out = String::from_utf8(screen("")).unwrap();
         out += "\r\n\r\n\r\n\r\n\r\n$ ec          \x1b[36m[rprompt]\x1b[0m\x1b[14;5H";
-        let frame = round_trip(60, 14, out.as_bytes(), &m, &input(&s, Some("ho hello\tworld and more")), true);
-        assert!(frame.contains("\x1b[14;5H\x1b[0m\x1b[90mho hello w\x1b"), "ghost clipped at the right prompt: {frame:?}");
-        assert!(frame.contains("\x1b[9;1H") && !frame.contains("\x1b[8;"), "block bottom-aligned to the cursor");
-        assert!(frame.contains("\x1b[9;21H") && frame.contains("about cherry-pick"), "pop-out with the selection");
-        assert!(!frame.contains("\x1b[13;1H"), "no description bar under the pop-out");
+        let frame = round_trip(
+            60,
+            14,
+            out.as_bytes(),
+            &m,
+            &input(&s, Some("ho hello\tworld and more")),
+            true,
+        );
+        assert!(
+            frame.contains("\x1b[14;5H\x1b[0m\x1b[90mho hello w\x1b"),
+            "ghost clipped at the right prompt: {frame:?}"
+        );
+        assert!(
+            frame.contains("\x1b[9;1H") && !frame.contains("\x1b[8;"),
+            "block bottom-aligned to the cursor"
+        );
+        assert!(
+            frame.contains("\x1b[9;21H") && frame.contains("about cherry-pick"),
+            "pop-out with the selection"
+        );
+        assert!(
+            !frame.contains("\x1b[13;1H"),
+            "no description bar under the pop-out"
+        );
     }
 
     #[test]
@@ -861,10 +1102,20 @@ mod tests {
         let a = model(40, 10, &[b"$ c"]);
         let mut r = Renderer::new(Theme::light(), true);
         let f = String::from_utf8(r.frame(&a, &m, &input(&s, None))).unwrap();
-        assert!(f.contains("path: ") && !f.contains('⠸'), "no spinner before 200 ms");
+        assert!(
+            f.contains("path: ") && !f.contains('⠸'),
+            "no spinner before 200 ms"
+        );
         // Ghost with wide chars clipped at the right edge (col 38 cannot hold half of 文).
         let out = format!("{}$ c", " ".repeat(30));
-        round_trip(40, 10, out.as_bytes(), &m, &input(&s, Some("中文中文中文")), true);
+        round_trip(
+            40,
+            10,
+            out.as_bytes(),
+            &m,
+            &input(&s, Some("中文中文中文")),
+            true,
+        );
     }
 
     #[test]
@@ -875,7 +1126,10 @@ mod tests {
         let mut r = Renderer::new(Theme::dark(), true);
         let f1 = r.frame(&a, &m, &input(&s, None));
         assert!(!f1.is_empty());
-        assert!(r.frame(&a, &m, &input(&s, None)).is_empty(), "identical frame skipped");
+        assert!(
+            r.frame(&a, &m, &input(&s, None)).is_empty(),
+            "identical frame skipped"
+        );
         // State-only change: clear + new frame in one write.
         let f2 = r.frame(&a, &m, &input(&s, Some("heckout")));
         assert!(f2.starts_with(HEAD.as_bytes()) && f2.len() > f1.len());
@@ -889,10 +1143,20 @@ mod tests {
         assert!(r.frame(&a, &m, &inp).is_empty());
         let wrap = model(10, 5, &[b"0123456789"]);
         assert!(wrap.grid().cursor.input_needs_wrap);
-        assert!(r.frame(&wrap, &m, &input(&s, Some("x"))).is_empty(), "pending wrap");
-        assert!(r.frame(&model(9, 5, &[b"$ c"]), &m, &input(&s, None)).is_empty(), "too small");
+        assert!(
+            r.frame(&wrap, &m, &input(&s, Some("x"))).is_empty(),
+            "pending wrap"
+        );
+        assert!(
+            r.frame(&model(9, 5, &[b"$ c"]), &m, &input(&s, None))
+                .is_empty(),
+            "too small"
+        );
         let ins = model(40, 12, &[b"$ c\x1b[4h"]);
-        assert!(r.frame(&ins, &m, &input(&s, None)).is_empty(), "insert mode");
+        assert!(
+            r.frame(&ins, &m, &input(&s, None)).is_empty(),
+            "insert mode"
+        );
         r.frame(&a, &m, &input(&s, None));
         r.drop_clear();
         assert!(r.take_clear().is_empty());
@@ -900,12 +1164,25 @@ mod tests {
 
     #[test]
     fn full_repaint_round_trip() {
-        let out = [screen("").as_slice(), b"\x1b[6;1H", "x".repeat(40).as_bytes(), b"\x1b[35;1m"].concat();
+        let out = [
+            screen("").as_slice(),
+            b"\x1b[6;1H",
+            "x".repeat(40).as_bytes(),
+            b"\x1b[35;1m",
+        ]
+        .concat();
         let a = model(40, 12, &[&out]);
         assert!(a.grid().cursor.input_needs_wrap);
         let mut r = Renderer::new(Theme::dark(), true);
         let rep = r.full_repaint(&a);
-        let b = model(40, 12, &[b"garbage\r\n\x1b[41mmore garbage everywhere\x1b[0m\r\n\x1b[5;5Hx", &rep]);
+        let b = model(
+            40,
+            12,
+            &[
+                b"garbage\r\n\x1b[41mmore garbage everywhere\x1b[0m\r\n\x1b[5;5Hx",
+                &rep,
+            ],
+        );
         assert_same(&a, &b);
         // A repaint never adds to the scrollback (ED 2 scrolls the screen into history on alacritty and others).
         let out = b"1\r\n2\r\n3\r\n4\r\n5";
@@ -920,27 +1197,73 @@ mod tests {
     fn layout_decisions() {
         // (rows, cols), (cy, cx), items, n_max, width, query width
         let l = layout((24, 40), (2, 10), 5, 7, 20, 0).unwrap();
-        assert_eq!(l, Layout { side: Side::Below, n: 5, list_top: 3, desc_row: 8, x0: 7, w: 20 });
+        assert_eq!(
+            l,
+            Layout {
+                side: Side::Below,
+                n: 5,
+                list_top: 3,
+                desc_row: 8,
+                x0: 6,
+                w: 20
+            }
+        );
         let l = layout((24, 40), (22, 10), 9, 7, 20, 0).unwrap();
-        assert_eq!(l, Layout { side: Side::Above, n: 7, list_top: 14, desc_row: 21, x0: 7, w: 20 });
+        assert_eq!(
+            l,
+            Layout {
+                side: Side::Above,
+                n: 7,
+                list_top: 14,
+                desc_row: 21,
+                x0: 6,
+                w: 20
+            }
+        );
         // Neither side fits: shrink on the bigger side (above here).
         let l = layout((10, 40), (5, 10), 9, 7, 20, 0).unwrap();
-        assert_eq!(l, Layout { side: Side::Above, n: 4, list_top: 0, desc_row: 4, x0: 7, w: 20 });
+        assert_eq!(
+            l,
+            Layout {
+                side: Side::Above,
+                n: 4,
+                list_top: 0,
+                desc_row: 4,
+                x0: 6,
+                w: 20
+            }
+        );
         let l = layout((10, 40), (4, 10), 9, 7, 20, 0).unwrap();
-        assert_eq!((l.side, l.n, l.list_top, l.desc_row), (Side::Below, 4, 5, 9));
+        assert_eq!(
+            (l.side, l.n, l.list_top, l.desc_row),
+            (Side::Below, 4, 5, 9)
+        );
         // No room for one row + description: hide. Argument hint needs one row.
         assert_eq!(layout((3, 40), (1, 10), 3, 7, 20, 0), None);
         let l = layout((3, 40), (1, 10), 0, 7, 20, 0).unwrap();
-        assert_eq!((l.side, l.n, l.list_top, l.desc_row), (Side::Below, 0, 2, 2));
+        assert_eq!(
+            (l.side, l.n, l.list_top, l.desc_row),
+            (Side::Below, 0, 2, 2)
+        );
         let l = layout((3, 40), (2, 10), 0, 7, 20, 0).unwrap();
         assert_eq!((l.side, l.list_top, l.desc_row), (Side::Above, 1, 1));
         // x0 clamping (aligned under the typed token, kept on screen) and width clamping.
-        // Title (after `' '` + icon + `' '`) starts in the column of the typed token: 12 - 3 = 6 + 3.
-        assert_eq!(layout((24, 40), (2, 12), 3, 7, 20, 3).unwrap().x0, 6);
+        // Title (after `' '` + icon + `' '`) starts in the column of the typed token: 12 - 3 = 5 + 4.
+        assert_eq!(layout((24, 40), (2, 12), 3, 7, 20, 3).unwrap().x0, 5);
         assert_eq!(layout((24, 40), (2, 2), 3, 7, 20, 5).unwrap().x0, 0);
         assert_eq!(layout((24, 40), (2, 39), 3, 7, 20, 0).unwrap().x0, 20);
         let l = layout((24, 30), (2, 9), 3, 7, 40, 0).unwrap();
-        assert_eq!(l, Layout { side: Side::Below, n: 3, list_top: 3, desc_row: 6, x0: 0, w: 30 });
+        assert_eq!(
+            l,
+            Layout {
+                side: Side::Below,
+                n: 3,
+                list_top: 3,
+                desc_row: 6,
+                x0: 0,
+                w: 30
+            }
+        );
     }
 
     #[test]
@@ -954,9 +1277,6 @@ mod tests {
         assert_eq!(wrap("abcdefghij", 4, 5), vec!["abcd", "efgh", "ij"]);
         assert_eq!(wrap("aa bb cc dd", 5, 1), vec!["aa b…"]);
         assert_eq!(wrap("aa bb cc dd", 6, 1), vec!["aa bb…"]);
-        for k in [ItemType::Subcommand, ItemType::AutoExecute, ItemType::History] {
-            assert_eq!(width(icon(k)), 1);
-        }
         assert!(SPINNER.iter().all(|&c| cw(c) == 1) && cw('…') == 1);
     }
 
@@ -966,16 +1286,72 @@ mod tests {
         let r = Renderer::new(Theme::dark(), true);
         let mut it = item("checkout-a-very-long-name", ItemType::Subcommand, "ch");
         it.args_hint = "<branch>".into();
-        let (row, _) = r.list_row(&it, false, 20);
+        let (row, _, _) = r.list_row(&it, false, 20);
         let text: String = strip(&row);
-        assert_eq!(text, " > checkout-a-very… ", "no room for the hint, title truncated");
-        assert!(row.contains(&format!("{}ch", r.pen((180, 180, 180), (95, 89, 56), ""))), "highlighted query");
-        let (row, _) = r.list_row(&item("co", ItemType::Option, "c"), true, 20);
-        assert_eq!(strip(&row), " - co               ");
+        assert_eq!(
+            text, "  > checkout-a-ver… ",
+            "no room for the hint, title truncated"
+        );
+        assert!(
+            row.contains(&format!("{}ch", r.pen((180, 180, 180), (95, 89, 56), ""))),
+            "highlighted query"
+        );
+        let (row, _, _) = r.list_row(&item("co", ItemType::Option, "c"), true, 20);
+        assert_eq!(strip(&row), "  - co              ");
+        assert_eq!(width(&strip(&row)), 20);
         let m = menu(subs(), &s);
         let (row, _) = r.desc_row(&m, 20, Some('⠋'));
         assert_eq!(strip(&row), " about checkout   ⠋ ");
         assert_eq!(width(&strip(&row)), 20);
+    }
+
+    #[test]
+    fn images_fill_the_icon_slot() {
+        let s = settings(r#"{"autocomplete.width": 20}"#);
+        let m = menu(subs(), &s);
+        let base = b"$ git c".to_vec();
+        let a = model(40, 12, &[&base]);
+        let mut r = Renderer::new(Theme::dark(), true).with_images(Graphics::Direct);
+        // First frame sends each icon once, then places one image per row, under the text.
+        let first = r.frame(&a, &m, &input(&s, None));
+        let text = String::from_utf8_lossy(&first).into_owned();
+        assert!(text.contains("\x1b_Ga=t,i="), "{text:?}");
+        assert_eq!(text.matches("\x1b_Ga=p,").count(), 4, "{text:?}");
+        let clear = r.take_clear();
+        assert!(String::from_utf8_lossy(&clear).contains(icons::CLEAR_PLACEMENTS));
+        assert!(
+            differs(&a, &model(40, 12, &[&base, &first])),
+            "the frame draws something"
+        );
+        assert_same(&a, &model(40, 12, &[&base, &first, &clear]));
+        // Next frame: the images are already in the terminal, so only placements go out again.
+        let second = r.frame(&a, &m, &input(&s, Some("x")));
+        let text = String::from_utf8_lossy(&second).into_owned();
+        assert!(!text.contains("a=t,"), "{text:?}");
+        assert_eq!(text.matches("\x1b_Ga=p,").count(), 4, "{text:?}");
+    }
+
+    #[test]
+    fn tmux_images_are_placeholders() {
+        let s = settings(r#"{"autocomplete.width": 20}"#);
+        let m = menu(subs(), &s);
+        let base = b"$ git c".to_vec();
+        let a = model(40, 12, &[&base]);
+        let mut r = Renderer::new(Theme::dark(), true).with_images(Graphics::Tmux);
+        // Images go through tmux's passthrough once; each slot is two placeholder cells, no placement.
+        let first = r.frame(&a, &m, &input(&s, None));
+        let text = String::from_utf8_lossy(&first).into_owned();
+        assert!(
+            text.contains("\x1bPtmux;\x1b\x1b_Ga=T,U=1,c=2,r=1,i="),
+            "{text:?}"
+        );
+        assert!(!text.contains("\x1b_Ga=p,"), "{text:?}");
+        assert_eq!(text.matches('\u{10eeee}').count(), 8, "{text:?}");
+        let clear = r.take_clear();
+        assert!(!String::from_utf8_lossy(&clear).contains(icons::CLEAR_PLACEMENTS));
+        assert_same(&a, &model(40, 12, &[&base, &first, &clear]));
+        let second = r.frame(&a, &m, &input(&s, Some("x")));
+        assert!(!String::from_utf8_lossy(&second).contains("Ptmux"));
     }
 
     /// Text of a styled row (SGR removed).
@@ -1000,7 +1376,14 @@ mod tests {
         assert_eq!(parse_color("#ff000080"), Some((128, 0, 0)));
         assert_eq!(parse_color("rgb( 1, 2, 3 )"), Some((1, 2, 3)));
         assert_eq!(parse_color("rgb(106,142,218)"), Some((106, 142, 218)));
-        for bad in ["rgb(1,2)", "rgb(1,2,3,4)", "red", "#12345", "#ggg", "rgb(300,0,0)"] {
+        for bad in [
+            "rgb(1,2)",
+            "rgb(1,2,3,4)",
+            "red",
+            "#12345",
+            "#ggg",
+            "rgb(300,0,0)",
+        ] {
             assert_eq!(parse_color(bad), None, "{bad}");
         }
         assert_eq!(xterm256((0, 0, 0)), 16);
@@ -1017,16 +1400,36 @@ mod tests {
         .unwrap();
         let t = Theme::from_json(&v1);
         assert_eq!((t.main_bg, t.selected_bg), ((0, 0, 0), (1, 2, 3)));
-        assert_eq!((t.main_text, t.description_text), (Theme::dark().main_text, Theme::dark().description_text));
-        let b16: Value = serde_json::from_str(r##"{"shade0":"#101010","accent6":"#123456"}"##).unwrap();
+        assert_eq!(
+            (t.main_text, t.description_text),
+            (Theme::dark().main_text, Theme::dark().description_text)
+        );
+        let b16: Value =
+            serde_json::from_str(r##"{"shade0":"#101010","accent6":"#123456"}"##).unwrap();
         let t = Theme::from_json(&b16);
-        assert_eq!((t.main_bg, t.matching_bg, t.selected_matching_bg, t.main_text), ((16, 16, 16), (40, 40, 40), (18, 52, 86), (232, 232, 232)));
+        assert_eq!(
+            (
+                t.main_bg,
+                t.matching_bg,
+                t.selected_matching_bg,
+                t.main_text
+            ),
+            ((16, 16, 16), (40, 40, 40), (18, 52, 86), (232, 232, 232))
+        );
 
-        let theme = |name: &str, bg| Theme::from_settings(&settings(&format!(r#"{{"autocomplete.theme": "{name}"}}"#)), bg);
+        let theme = |name: &str, bg| {
+            Theme::from_settings(
+                &settings(&format!(r#"{{"autocomplete.theme": "{name}"}}"#)),
+                bg,
+            )
+        };
         assert_eq!(theme("light", None), Theme::light());
         assert_eq!(theme("system", Some((250, 250, 250))), Theme::light());
         assert_eq!(theme("system", Some((10, 10, 30))), Theme::dark());
         assert_eq!(theme("system", None), Theme::dark());
-        assert_eq!(Theme::from_settings(&Settings::default(), None), Theme::dark());
+        assert_eq!(
+            Theme::from_settings(&Settings::default(), None),
+            Theme::dark()
+        );
     }
 }

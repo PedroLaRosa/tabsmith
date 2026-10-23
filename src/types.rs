@@ -112,12 +112,16 @@ pub struct Item {
     pub prefix_match: bool,
     /// `context.templateType` of the generator result (`filepaths`/`folders`/`help`), if any.
     pub template_type: Option<String>,
+    /// Spec `icon`, if any (SPEC §7.4.2).
+    pub icon: Option<String>,
 }
 
 impl Item {
     /// Display title: `display_name` or names joined by ", ".
     pub fn title(&self) -> String {
-        self.display_name.clone().unwrap_or_else(|| self.names.join(", "))
+        self.display_name
+            .clone()
+            .unwrap_or_else(|| self.names.join(", "))
     }
 
     pub fn first_name(&self) -> &str {
@@ -229,7 +233,9 @@ pub struct SessionCtx {
 
 impl SessionCtx {
     pub fn path(session_id: &str) -> anyhow::Result<PathBuf> {
-        Ok(crate::settings::home()?.join("run").join(format!("{session_id}.json")))
+        Ok(crate::settings::home()?
+            .join("run")
+            .join(format!("{session_id}.json")))
     }
 
     pub fn load(path: &Path) -> Option<SessionCtx> {
@@ -263,15 +269,28 @@ pub enum EngineMsg {
     CommandFinished(HistoryEntry),
     /// A command finished but must not be recorded (NoHistory).
     CommandEnded,
-    RecordInsert { cmd: String, name: String },
-    Llm { req: u64, buffer: String, cwd: PathBuf, shell: Shell },
+    RecordInsert {
+        cmd: String,
+        name: String,
+    },
+    Llm {
+        req: u64,
+        buffer: String,
+        cwd: PathBuf,
+        shell: Shell,
+    },
     Settings(Settings),
     Session(SessionCtx),
     ToggleFuzzy,
     /// Internal (js host): a spawned process finished.
-    ExecDone { id: u64, out: Result<ExecOutput, String> },
+    ExecDone {
+        id: u64,
+        out: Result<ExecOutput, String>,
+    },
     /// Internal (js host): a `setTimeout`/debounce timer fired.
-    Timer { id: u64 },
+    Timer {
+        id: u64,
+    },
     Shutdown,
 }
 
