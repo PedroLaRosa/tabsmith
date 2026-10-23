@@ -371,15 +371,18 @@ impl Menu {
             _ => 0,
         };
         let shared: String = sel.first_name().chars().take(lcp).collect();
-        // ponytail: a shared prefix that would need quoting (`zz;` of `zz;a`, `zz;b`) fails (BEL) instead of being
-        // quoted half-way; the full insertion of a selected row is escaped by the engine.
-        let plain = |c: char| c.is_alphanumeric() || c.is_whitespace() || "-_./+,:@%=~".contains(c);
-        if shared.is_empty() || shared == sel.query || !shared.chars().all(plain) {
+        if shared.is_empty() || shared == sel.query {
             return None;
         }
         let text: String = shared.chars().map(|c| if c.is_whitespace() { "\\ ".into() } else { c.to_string() }).collect();
         // The engine strips an already-typed query from `insert.text` (delete == 0): put it back to compare.
         let full = if sel.insert.delete == 0 { format!("{}{}", sel.query, sel.insert.text) } else { sel.insert.text.clone() };
+        // The engine escaped the row for its shell: type the shared prefix only as the start of that insertion
+        // (`$XDG_` of `$XDG_CONFIG_HOME`), else BEL (`zz;` of `'zz;a'`, pwsh `my\ dir` of `'my dir1.txt'`).
+        // ponytail: a prefix that needs quoting is not quoted half-way.
+        if !full.starts_with(&text) {
+            return None;
+        }
         if text == full || format!("{text} ") == full {
             return (!auto).then(|| self.insert_full(self.selected, false));
         }
@@ -770,8 +773,23 @@ pub(crate) mod tests {
         assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 5, text, .. }, .. }] if text == "my\\ dir"));
 
         // A shared prefix with shell syntax (`zz;` of branches `zz;a`, `zz;b`) is never typed unquoted → bell.
-        let mut m = with(vec![item("zz;a", ItemType::Arg, "z"), item("zz;b", ItemType::Arg, "z")]);
+        let quoted = |n: &str, q: &str, ins: &str| Item {
+            insert: Insertion { delete: q.chars().count(), text: ins.into(), cursor_back: 0, execute: false },
+            ..item(n, ItemType::File, q)
+        };
+        let mut m = with(vec![quoted("zz;a", "z", "'zz;a'"), quoted("zz;b", "z", "'zz;b'")]);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
+        // r3-common-prefix-var-ref-bell: `$XDG_` of `$XDG_CONFIG_HOME` rows is typed (the engine leaves a variable
+        // reference bare); files `$foo1.txt` (quoted by the engine) still ring.
+        let fx = prefix_fx(&mut with(vec![item("$XDG_CONFIG_HOME", ItemType::Arg, "$XDG"), item("$XDG_DATA_HOME", ItemType::Arg, "$XDG")]));
+        assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, full: false, .. }] if text == "_"), "{fx:?}");
+        let mut m = with(vec![quoted("$foo1.txt", "$f", "'$foo1.txt'"), quoted("$foo2.txt", "$f", "'$foo2.txt'")]);
+        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
+        // r3-pwsh-common-prefix-backslash: pwsh quotes `my dir1.txt`, so `my\ dir` (two pwsh args) is never typed
+        let mut m = with(vec![quoted("my dir1.txt", "my", "'my dir1.txt'"), quoted("my dir2.txt", "my", "'my dir2.txt'")]);
+        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
+        let fx = prefix_fx(&mut with(vec![quoted("my dir1.txt", "my", "my\\ dir1.txt"), quoted("my dir2.txt", "my", "my\\ dir2.txt")]));
+        assert!(matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, .. }] if text == "\\ dir"), "{fx:?}");
 
         // Auto-execute / special → failure.
         let mut m = with(vec![

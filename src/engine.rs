@@ -263,7 +263,10 @@ impl Engine {
             logger::error(&format!("engine: specs: {e:#}"));
             SpecIndex::default()
         });
-        let state_path = crate::settings::state_path().ok();
+        Engine::with(tx, settings, index, History::load(), crate::settings::state_path().ok())
+    }
+
+    fn with(tx: Sender<Msg>, settings: Settings, index: SpecIndex, history: History, state_path: Option<PathBuf>) -> Engine {
         let recency = state_path.as_deref().map(load_recency).unwrap_or_default();
         Engine {
             tx,
@@ -271,7 +274,7 @@ impl Engine {
             settings,
             parser: Parser::new(),
             index,
-            history: History::load(),
+            history,
             session: SessionCtx::default(),
             wrapper_env: std::env::vars().collect(),
             aliases: None,
@@ -351,6 +354,7 @@ impl Engine {
             EngineMsg::Session(s) => {
                 self.session = s;
                 self.aliases = None;
+                self.first_token_cache = None; // aliases / PATH from this prompt
             }
             EngineMsg::ToggleFuzzy => self.user_fuzzy = !self.user_fuzzy,
             EngineMsg::ExecDone { .. } | EngineMsg::Timer { .. } => {} // consumed by the js host
@@ -1022,6 +1026,20 @@ mod tests {
         assert_eq!(items[0].insert_value.as_deref(), Some("a"));
         assert!(items[0].is_dangerous);
         assert!(post_process_items(&json!(null), false).is_empty());
+    }
+
+    #[test]
+    fn session_update_refreshes_first_token_items() {
+        // first-token-cache-ignores-session-update: `alias zzal=…` at this prompt shows `zzal` at the next one
+        let dir = crate::specs::testutil::TmpDir::new("engine-session");
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut e = Engine::with(tx, Settings::default(), SpecIndex::default(), History::load_from(dir.path().join("h.jsonl")), None);
+        let (jtx, jrx) = std::sync::mpsc::channel();
+        let mut js = Js::new(jrx, jtx, Settings::default()).unwrap();
+        assert!(e.first_token_items(&HashMap::new(), None, None).is_empty());
+        assert!(e.handle(EngineMsg::Session(SessionCtx::default()), &mut None, &mut js));
+        let aliases = HashMap::from([("zzal".to_string(), "git status".to_string())]);
+        assert_eq!(e.first_token_items(&aliases, None, None).iter().map(|s| s.names[0].as_str()).collect::<Vec<_>>(), ["zzal"]);
     }
 
     #[test]
