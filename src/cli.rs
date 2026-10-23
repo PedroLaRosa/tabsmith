@@ -731,7 +731,13 @@ fn debug_shell_files(home: &Path, shell: Shell, exe: &str, post: &str) -> Result
     match shell {
         Shell::Bash => cmd.extend(["--noprofile".into(), "--rcfile".into(), rc]),
         Shell::Zsh => {}
-        Shell::Fish => cmd.extend(["--no-config".into(), "-C".into(), format!("source {}", q(&rc))]),
+        // --no-config also skips fish's default theme: without an autosuggestion colour, tabsmith takes fish's
+        // suggestion for typed text.
+        Shell::Fish => cmd.extend([
+            "--no-config".into(),
+            "-C".into(),
+            format!("set -q fish_color_autosuggestion[1]; or set -g fish_color_autosuggestion brblack; source {}", q(&rc)),
+        ]),
         Shell::Pwsh => cmd.extend(["-NoProfile".into(), "-NoExit".into(), "-Command".into(), format!(". {}", q(&rc))]),
     }
     Ok((dir, cmd))
@@ -935,6 +941,12 @@ mod tests {
             let out = std::process::Command::new(shell.name()).args(args).output().unwrap();
             let text = String::from_utf8_lossy(&out.stdout);
             assert!(text.trim() == "loaded", "{shell:?}: {text}{}", String::from_utf8_lossy(&out.stderr));
+            if shell == Shell::Fish {
+                // --no-config skips the default theme: the debug shell still colours fish's autosuggestions.
+                let load = format!("{}; echo $fish_color_autosuggestion", argv.last().unwrap());
+                let out = std::process::Command::new("fish").args(["--no-config", "-c", &load]).output().unwrap();
+                assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "brblack");
+            }
         }
         let _ = std::fs::remove_dir_all(home);
     }

@@ -1,10 +1,10 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
-use crate::integrations::{self, epaint, output_with_timeout, paint, which, Ctx, Integration, IntegrationError};
+use crate::integrations::{self, epaint, output_with_timeout, paint, which, Ctx, Integration, IntegrationError, When};
 use crate::settings::{Settings, Store};
 use crate::types::{now_secs, Shell};
 use clap::Args;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -247,18 +247,24 @@ fn dotfile_check(ctx: &Ctx, i: Integration, kind: Kind) -> Check<'_> {
     })
 }
 
-/// (shell, first single-quoted path) of every installed script file and fish `conf.d` file.
+/// (shell, first single-quoted path) of the script files and fish `conf.d` files of the current integrations of
+/// every shell on PATH. Not every file in `~/.tabsmith/shell`: one of a dotfile deleted since (or of a shell gone
+/// from PATH) is sourced by nothing, and install, the fix, would never rewrite it.
 fn script_bins(ctx: &Ctx) -> Vec<(Shell, String)> {
-    let mut files: Vec<PathBuf> =
-        std::fs::read_dir(ctx.data.join("shell")).into_iter().flatten().flatten().map(|e| e.path()).collect();
-    files.extend(["00_tabsmith_pre.fish", "99_tabsmith_post.fish"].map(|f| ctx.fish_dir.join("conf.d").join(f)));
+    // pwsh's script files do not depend on $PROFILE: no second `pwsh` spawn to ask for it.
+    let ctx = &Ctx { pwsh_profile: Some(ctx.pwsh_profile.clone().unwrap_or_default()), ..ctx.clone() };
+    let mut files = Vec::new();
+    for shell in Shell::ALL.into_iter().filter(|s| which(s.name()).is_some()) {
+        for i in integrations::integrations(ctx, shell).unwrap_or_default() {
+            match i.file_when {
+                Some(_) => files.push((shell, i.path)),
+                None => files.extend([When::Pre, When::Post].map(|w| (shell, i.script_path(ctx, w)))),
+            }
+        }
+    }
     files
-        .iter()
-        .filter_map(|p| {
-            let shell = match p.extension()?.to_str()? {
-                "ps1" => Shell::Pwsh,
-                ext => Shell::from_name(ext)?,
-            };
+        .into_iter()
+        .filter_map(|(shell, p)| {
             // ponytail: raw text between the first two quotes; paths containing `'` are not unescaped.
             let bin = std::fs::read_to_string(p).ok()?.split('\'').nth(1)?.to_string();
             Some((shell, bin))
@@ -620,6 +626,35 @@ mod tests {
         assert!(r.group("h", list));
         assert!(!fixed.get());
         assert_eq!((r.errors, r.warnings), (2, 1));
+    }
+
+    /// After the binary moved, the fix (reinstall) makes the check pass even when a dotfile was deleted since
+    /// setup: its orphaned script files are no longer checked.
+    #[test]
+    fn doctor_script_bins_skip_orphans() {
+        let dir = std::env::temp_dir().join(format!("tabsmith-doctor-orphans-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".bash_profile"), "").unwrap();
+        let c = Ctx {
+            data: home.join(".tabsmith"),
+            bin: "/old/tabsmith".into(),
+            zdotdir: None,
+            fish_dir: home.join(".config/fish"),
+            pwsh_profile: Some(home.join("profile.ps1")),
+            home: home.clone(),
+        };
+        integrations::install_dotfiles(&c, &[Shell::Bash]).unwrap();
+        std::fs::remove_file(home.join(".bash_profile")).unwrap();
+        let moved = Ctx { bin: "/new/tabsmith".into(), ..c };
+        integrations::install_dotfiles(&moved, &[Shell::Bash]).unwrap(); // the check's fix
+        assert!(moved.data.join("shell/bash_profile.pre.bash").exists());
+        if which("bash").is_some() {
+            let bins = script_bins(&moved);
+            assert!(!bins.is_empty() && bins.iter().all(|(_, b)| b == "/new/tabsmith"), "{bins:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
