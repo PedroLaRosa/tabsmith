@@ -678,7 +678,16 @@ impl Tracker {
         let (cl, cc) = (cur.point.line.0, if cur.input_needs_wrap { cols } else { cur.point.column.0 });
         let row = |r: i32| &grid[Line(r)][..Column(cols)];
         let has = |c: &Cell, t: &str| c.hyperlink().is_some_and(|h| h.uri() == t);
-        let wraps = |r: i32| row(r)[cols - 1].flags.contains(Flags::WRAPLINE);
+        // Row r continues on r + 1: auto-wrap, or this cycle's text fills it to the last column and goes on at the
+        // next row's first column after the shell's own CRLF, which sets no WRAPLINE (fish rewriting a wrapped line
+        // after an edit or re-highlight on an earlier row). Not a prompt cell there: a right prompt at the margin
+        // (zsh ZLE_RPROMPT_INDENT=0, fish) would join an inline TUI's rows below (fzf --layout=reverse) to the line.
+        // ponytail: a real newline right after a line exactly as wide as the terminal reads as a soft wrap.
+        let bottom = grid.bottommost_line().0;
+        let wraps = |r: i32| {
+            let last = &row(r)[cols - 1];
+            last.flags.contains(Flags::WRAPLINE) || (r < bottom && has(last, &tag) && has(&row(r + 1)[0], &tag))
+        };
         let tagged = |r: i32| row(r).iter().any(|c| has(c, &tag));
 
         let mut start = cl;
@@ -711,11 +720,13 @@ impl Tracker {
             top -= 1;
         }
         let prompt_row = |r: i32| row(r).iter().any(|c| has(c, TAG_PROMPT));
+        // A prompt filling its row to the margin (zsh then moves on with its own CRLF): like a PS1 ending in a newline.
+        let full_prompt = |r: i32| r >= grid.topmost_line().0 && row(r).iter().all(|c| has(c, TAG_PROMPT));
         let cont = self.pwsh_cont.chars().count();
         let below = end < grid.bottommost_line().0 && tagged(end + 1);
         let at_prompt = (top..=cl).any(prompt_row)
             || (pwsh && cont > 0 && row(top).iter().take(cont).map(|c| c.c).eq(self.pwsh_cont.chars()))
-            || (self.line_col0 && top > grid.topmost_line().0 && prompt_row(top - 1) && !below);
+            || ((self.line_col0 || full_prompt(top - 1)) && top > grid.topmost_line().0 && prompt_row(top - 1) && !below);
         let mut e = Extracted { at_prompt, ..Extracted::default() };
         let mut cursor = None;
         let (mut pad, mut line_has_cmd) = (0, false);
@@ -1228,6 +1239,22 @@ mod tests {
         let (mut t, mut m) = setup(40, 8, Shell::Pwsh);
         feed(&mut t, &mut m, &format!("{}ls |\r\n>> git ch", prompt("PS> ")));
         assert_eq!(at(&t, &m), Some(("ls |\ngit ch".into(), true)));
+    }
+
+    #[test]
+    fn soft_wrap_redrawn_with_crlf_is_still_the_line() {
+        // fish redraws a wrapped line after an edit on its first row: up to the margin, then CRLF (no WRAPLINE).
+        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
+        let (mut t, mut m) = setup(20, 8, Shell::Fish);
+        feed(&mut t, &mut m, &format!("{}abcdefghijklmnopqr\r\nstu", prompt("$ ")));
+        assert_eq!(at(&t, &m), Some(("abcdefghijklmnopqrstu".into(), true)));
+        let (mut t, mut m) = setup(20, 8, Shell::Zsh);
+        feed(&mut t, &mut m, &format!("{}\r\ngit ch", prompt("xxxxxxxxxxxxxxxxxx% ")));
+        assert_eq!(at(&t, &m), Some(("git ch".into(), true)));
+        // A right prompt at the margin does not join an inline TUI's query row below (fzf --layout=reverse).
+        let (mut t, mut m) = setup(20, 8, Shell::Zsh);
+        feed(&mut t, &mut m, &format!("{}cat\x1b[18G{SP}[R]{EP}\r\n> rea", prompt("$ ")));
+        assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
     }
 
     #[test]
