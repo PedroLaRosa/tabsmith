@@ -3,7 +3,9 @@
 use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId};
 use crate::settings::Settings;
 use crate::shell_parser::CommandInfo;
-use crate::spec::{normalise, Arg, Directives, FnId, LoadSpec, Opt, Repeat, SpecLocation, StrOrFn, Subcommand};
+use crate::spec::{
+    normalise, Arg, Directives, FnId, LoadSpec, Opt, Repeat, SpecLocation, StrOrFn, Subcommand,
+};
 use crate::specs::SpecIndex;
 use crate::types::Shell;
 use serde_json::{Map, Value};
@@ -108,26 +110,47 @@ pub struct Parser {
 
 impl Parser {
     pub fn new() -> Parser {
-        Parser { loader: Loader::default(), caches: ParseCaches::default() }
+        Parser {
+            loader: Loader::default(),
+            caches: ParseCaches::default(),
+        }
     }
 
     /// Drop caches (dev mode toggles, settings reload). The CLI-version memo survives (qac keeps it too), and so
     /// do spec identities (`by_json`, the first-token spec): unchanged specs are not a "new argument".
     pub fn clear_caches(&mut self) {
         self.loader.specs.clear();
-        self.caches = ParseCaches { first: self.caches.first.clone(), ..ParseCaches::default() };
+        self.caches = ParseCaches {
+            first: self.caches.first.clone(),
+            ..ParseCaches::default()
+        };
     }
 
     /// Parse the command under the cursor against its spec (SPEC §6.4).
-    pub fn parse(&mut self, cmd: &CommandInfo, ctx: &ParseCtx, js: &mut Js) -> Result<ParseResult, ParseError> {
+    pub fn parse(
+        &mut self,
+        cmd: &CommandInfo,
+        ctx: &ParseCtx,
+        js: &mut Js,
+    ) -> Result<ParseResult, ParseError> {
         let dev = dev_mode(ctx.settings);
-        let mut host = JsHost { loader: &mut self.loader, js, ctx, generator: gen_ctx(ctx) };
+        let mut host = JsHost {
+            loader: &mut self.loader,
+            js,
+            ctx,
+            generator: gen_ctx(ctx),
+        };
         self.caches.parse(cmd, ctx.cwd, dev, &mut host)
     }
 
     /// Load (and cache) the spec at `loc`, applying diff versions (SPEC §6.3). `Ok(None)` when it does not exist
     /// or is disabled.
-    pub fn load_spec(&mut self, loc: &SpecLocation, ctx: &ParseCtx, js: &mut Js) -> Result<Option<Rc<Subcommand>>, ParseError> {
+    pub fn load_spec(
+        &mut self,
+        loc: &SpecLocation,
+        ctx: &ParseCtx,
+        js: &mut Js,
+    ) -> Result<Option<Rc<Subcommand>>, ParseError> {
         self.loader.load(loc, ctx, js, &gen_ctx(ctx))
     }
 }
@@ -138,7 +161,9 @@ pub fn spec_location(name: &str, cwd: &Path, is_script: Option<bool>) -> SpecLoc
     let (path, base) = name.split_at(name.rfind('/').map_or(0, |i| i + 1));
     let global = match is_script {
         None if name == "bin/console" || name.ends_with("/bin/console") => {
-            return SpecLocation::Global { name: "php/bin-console".into() }
+            return SpecLocation::Global {
+                name: "php/bin-console".into(),
+            }
         }
         None => !path.contains('/'),
         Some(false) => !["/", "./", "~/"].iter().any(|p| path.starts_with(p)),
@@ -152,7 +177,10 @@ pub fn spec_location(name: &str, cwd: &Path, is_script: Option<bool>) -> SpecLoc
     } else {
         cwd.join(path.strip_prefix("./").unwrap_or(path))
     };
-    SpecLocation::Local { dir, name: base.into() }
+    SpecLocation::Local {
+        dir,
+        name: base.into(),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -193,9 +221,19 @@ struct Loader {
 }
 
 impl Loader {
-    fn load(&mut self, loc: &SpecLocation, ctx: &ParseCtx, js: &mut Js, generator: &GenCtx) -> Result<Option<Rc<Subcommand>>, ParseError> {
+    fn load(
+        &mut self,
+        loc: &SpecLocation,
+        ctx: &ParseCtx,
+        js: &mut Js,
+        generator: &GenCtx,
+    ) -> Result<Option<Rc<Subcommand>>, ParseError> {
         let (SpecLocation::Global { name } | SpecLocation::Local { name, .. }) = loc;
-        if ctx.settings.str_list("autocomplete.disableForCommands").contains(name) {
+        if ctx
+            .settings
+            .str_list("autocomplete.disableForCommands")
+            .contains(name)
+        {
             return Ok(None);
         }
         let dev = dev_mode(ctx.settings);
@@ -209,7 +247,9 @@ impl Loader {
         };
         let exports = js.load_module(&path)?;
         let json = match exports.get("default") {
-            Some(v) if crate::spec::fn_id(v).is_some() => self.versioned(&exports, name, &path, dev, js, generator)?,
+            Some(v) if crate::spec::fn_id(v).is_some() => {
+                self.versioned(&exports, name, &path, dev, js, generator)?
+            }
             Some(v) if v.is_object() => Some(v.clone()),
             _ => None,
         };
@@ -229,7 +269,15 @@ impl Loader {
     }
 
     /// `default` is `async (version) => Subcommand | {versionedSpecPath, version}` (SPEC §6.3).
-    fn versioned(&mut self, exports: &Map<String, Value>, name: &str, path: &Path, dev: bool, js: &mut Js, generator: &GenCtx) -> Result<Option<Value>, ParseError> {
+    fn versioned(
+        &mut self,
+        exports: &Map<String, Value>,
+        name: &str,
+        path: &Path,
+        dev: bool,
+        js: &mut Js,
+        generator: &GenCtx,
+    ) -> Result<Option<Value>, ParseError> {
         let memo = format!("cliVersion-{name}");
         let version = match self.versions.get(&memo).filter(|_| !dev) {
             Some(v) => Some(v.clone()),
@@ -238,7 +286,10 @@ impl Loader {
         if let Some(v) = &version {
             self.versions.insert(memo, v.clone());
         }
-        let default = exports.get("default").and_then(crate::spec::fn_id).ok_or_else(|| no("default is not a function"))?;
+        let default = exports
+            .get("default")
+            .and_then(crate::spec::fn_id)
+            .ok_or_else(|| no("default is not a function"))?;
         let arg = version.map_or(Value::Null, Value::String);
         let r = js.call(default, vec![JsArg::Json(arg)], Some(generator), TIMEOUT)?;
         let Some(vsp) = r.get("versionedSpecPath").and_then(Value::as_str) else {
@@ -248,9 +299,19 @@ impl Loader {
         let base = vsp.rsplit('/').next().unwrap_or(vsp);
         let file = path.with_file_name(format!("{base}.js"));
         let ex = js.load_module(&file)?;
-        match (ex.get("default"), ex.get("versions").and_then(Value::as_object)) {
-            (Some(spec), Some(diffs)) => Ok(Some(apply_versions(spec.clone(), diffs, r.get("version").and_then(Value::as_str)))),
-            _ => Err(no(format!("{}: invalid versioned spec file", file.display()))),
+        match (
+            ex.get("default"),
+            ex.get("versions").and_then(Value::as_object),
+        ) {
+            (Some(spec), Some(diffs)) => Ok(Some(apply_versions(
+                spec.clone(),
+                diffs,
+                r.get("version").and_then(Value::as_str),
+            ))),
+            _ => Err(no(format!(
+                "{}: invalid versioned spec file",
+                file.display()
+            ))),
         }
     }
 }
@@ -266,21 +327,41 @@ fn spec_file(loc: &SpecLocation, ctx: &ParseCtx) -> Option<PathBuf> {
                 Err(_) => dir.clone(),
             };
             let build = dir.join(".fig").join("autocomplete").join("build");
-            [build.join(format!("{name}.js")), build.join(name).join("index.js")].into_iter().find(|p| p.is_file())
+            [
+                build.join(format!("{name}.js")),
+                build.join(name).join("index.js"),
+            ]
+            .into_iter()
+            .find(|p| p.is_file())
         }
     }
 }
 
 /// `getVersionCommand(exec)` if exported, else `semver_clean(<name> --version)`; failures → None. An aborted
 /// wait leaves the detection running in `inflight`, and the next parse waits on that same task.
-fn cli_version(exports: &Map<String, Value>, name: &str, js: &mut Js, generator: &GenCtx, inflight: &mut HashMap<String, TaskId>) -> Result<Option<String>, ParseError> {
+fn cli_version(
+    exports: &Map<String, Value>,
+    name: &str,
+    js: &mut Js,
+    generator: &GenCtx,
+    inflight: &mut HashMap<String, TaskId>,
+) -> Result<Option<String>, ParseError> {
     if name == "@usermn/sdc" {
         return Ok(None); // its version command runs `npx`, which may download a package
     }
-    let f = exports.get("getVersionCommand").and_then(crate::spec::fn_id);
+    let f = exports
+        .get("getVersionCommand")
+        .and_then(crate::spec::fn_id);
     let id = *inflight.entry(name.to_string()).or_insert_with(|| match f {
         Some(f) => js.start_call(f, vec![JsArg::Exec], Some(generator)),
-        None => js.start_exec(ExecInput { command: name.into(), args: vec!["--version".into()], ..Default::default() }, generator),
+        None => js.start_exec(
+            ExecInput {
+                command: name.into(),
+                args: vec!["--version".into()],
+                ..Default::default()
+            },
+            generator,
+        ),
     });
     let r = js.wait(&[id], Instant::now() + TIMEOUT);
     if matches!(r, Err(JsError::Aborted)) {
@@ -288,10 +369,15 @@ fn cli_version(exports: &Map<String, Value>, name: &str, js: &mut Js, generator:
     }
     inflight.remove(name);
     js.forget(&[id]);
-    let Ok(Some(Ok(v))) = r.map(|mut r| r.pop().flatten()) else { return Ok(None) };
+    let Ok(Some(Ok(v))) = r.map(|mut r| r.pop().flatten()) else {
+        return Ok(None);
+    };
     Ok(match f {
         Some(_) => v.as_str().map(String::from),
-        None => v.get("stdout").and_then(Value::as_str).and_then(semver_clean),
+        None => v
+            .get("stdout")
+            .and_then(Value::as_str)
+            .and_then(semver_clean),
     })
 }
 
@@ -318,7 +404,11 @@ fn merge_subcommand(base: &Value, diff: &Value) -> Value {
     }
     let mut out = shallow_merge(base, diff);
     if truthy(diff.get("subcommands")) {
-        out["subcommands"] = merge_named(base.get("subcommands"), diff.get("subcommands"), merge_subcommand);
+        out["subcommands"] = merge_named(
+            base.get("subcommands"),
+            diff.get("subcommands"),
+            merge_subcommand,
+        );
     }
     if truthy(diff.get("options")) {
         out["options"] = merge_named(base.get("options"), diff.get("options"), merge_option);
@@ -338,7 +428,11 @@ fn merge_option(base: &Value, diff: &Value) -> Value {
 }
 
 /// Diff items matched to base items by name overlap; `remove` drops the match. Order: diff items, then untouched base.
-fn merge_named(base: Option<&Value>, diff: Option<&Value>, merge: fn(&Value, &Value) -> Value) -> Value {
+fn merge_named(
+    base: Option<&Value>,
+    diff: Option<&Value>,
+    merge: fn(&Value, &Value) -> Value,
+) -> Value {
     let (bl, dl) = (make_array(base), make_array(diff));
     let mut used = vec![false; bl.len()];
     let mut out = Vec::new();
@@ -354,15 +448,26 @@ fn merge_named(base: Option<&Value>, diff: Option<&Value>, merge: fn(&Value, &Va
             }
         }
     }
-    out.extend(bl.iter().zip(used).filter(|(_, u)| !u).map(|(b, _)| b.clone()));
+    out.extend(
+        bl.iter()
+            .zip(used)
+            .filter(|(_, u)| !u)
+            .map(|(b, _)| b.clone()),
+    );
     Value::Array(out)
 }
 
 /// Positional merge; the index is taken after filtering out removed args (quirk kept).
 fn merge_args(base: Option<&Value>, diff: Option<&Value>) -> Value {
     let bl = make_array(base);
-    let dl = make_array(diff).into_iter().filter(|d| !truthy(d.get("remove")));
-    Value::Array(dl.enumerate().map(|(i, d)| shallow_merge(bl.get(i).unwrap_or(&Value::Null), &d)).collect())
+    let dl = make_array(diff)
+        .into_iter()
+        .filter(|d| !truthy(d.get("remove")));
+    Value::Array(
+        dl.enumerate()
+            .map(|(i, d)| shallow_merge(bl.get(i).unwrap_or(&Value::Null), &d))
+            .collect(),
+    )
 }
 
 /// `{...base, ...diff}`.
@@ -404,33 +509,49 @@ fn semver(s: &str) -> Option<SemVer> {
     let s = s.trim().trim_start_matches(['=', 'v']);
     let s = s.split_once('+').map_or(s, |(v, _)| v);
     let (main, pre) = s.split_once('-').map_or((s, None), |(m, p)| (m, Some(p)));
-    let num = |x: &str| (!x.is_empty() && x.bytes().all(|c| c.is_ascii_digit()) && (x == "0" || !x.starts_with('0'))).then(|| x.parse().ok()).flatten();
+    let num = |x: &str| {
+        (!x.is_empty()
+            && x.bytes().all(|c| c.is_ascii_digit())
+            && (x == "0" || !x.starts_with('0')))
+        .then(|| x.parse().ok())
+        .flatten()
+    };
     let mut it = main.split('.');
     let v = (num(it.next()?)?, num(it.next()?)?, num(it.next()?)?);
     let pre: Vec<String> = pre.map_or(Vec::new(), |p| p.split('.').map(String::from).collect());
-    let ident_ok = |i: &String| !i.is_empty() && i.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-');
+    let ident_ok =
+        |i: &String| !i.is_empty() && i.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-');
     (it.next().is_none() && pre.iter().all(ident_ok)).then_some((v.0, v.1, v.2, pre))
 }
 
 /// `semver.clean`: the normalised version, or None.
 fn semver_clean(s: &str) -> Option<String> {
     let (a, b, c, pre) = semver(s)?;
-    Some(if pre.is_empty() { format!("{a}.{b}.{c}") } else { format!("{a}.{b}.{c}-{}", pre.join(".")) })
+    Some(if pre.is_empty() {
+        format!("{a}.{b}.{c}")
+    } else {
+        format!("{a}.{b}.{c}-{}", pre.join("."))
+    })
 }
 
 /// `semver.compare`; unparsable versions sort as 0.0.0.
 fn semver_cmp(a: &str, b: &str) -> Ordering {
     let zero = || (0, 0, 0, Vec::new());
-    let (a, b) = (semver(a).unwrap_or_else(zero), semver(b).unwrap_or_else(zero));
-    (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)).then_with(|| match (a.3.is_empty(), b.3.is_empty()) {
-        (true, true) => Ordering::Equal,
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        (false, false) => {
-            let ident = |x: &String| x.parse::<u64>().map_or(Err(x.clone()), Ok); // numeric < alphanumeric
-            a.3.iter().map(ident).cmp(b.3.iter().map(ident))
-        }
-    })
+    let (a, b) = (
+        semver(a).unwrap_or_else(zero),
+        semver(b).unwrap_or_else(zero),
+    );
+    (a.0, a.1, a.2)
+        .cmp(&(b.0, b.1, b.2))
+        .then_with(|| match (a.3.is_empty(), b.3.is_empty()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => {
+                let ident = |x: &String| x.parse::<u64>().map_or(Err(x.clone()), Ok); // numeric < alphanumeric
+                a.3.iter().map(ident).cmp(b.3.iter().map(ident))
+            }
+        })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -475,7 +596,10 @@ struct ArgState {
 
 impl ArgState {
     fn new(args: &[Rc<Arg>]) -> ArgState {
-        ArgState { args: args.to_vec(), ..Default::default() }
+        ArgState {
+            args: args.to_vec(),
+            ..Default::default()
+        }
     }
 
     fn cur(&self) -> Option<&Rc<Arg>> {
@@ -485,7 +609,13 @@ impl ArgState {
     fn advance(&mut self) {
         match self.cur() {
             Some(a) if a.is_variadic => self.variadic_count += 1,
-            Some(_) if self.index + 1 < self.args.len() => *self = ArgState { args: std::mem::take(&mut self.args), index: self.index + 1, variadic_count: 0 },
+            Some(_) if self.index + 1 < self.args.len() => {
+                *self = ArgState {
+                    args: std::mem::take(&mut self.args),
+                    index: self.index + 1,
+                    variadic_count: 0,
+                }
+            }
             _ => *self = ArgState::default(),
         }
     }
@@ -517,7 +647,11 @@ struct State {
 }
 
 fn ann(kind: AnnKind, text: &str) -> Annotation {
-    Annotation { kind, text: text.into(), parts: Vec::new() }
+    Annotation {
+        kind,
+        text: text.into(),
+        parts: Vec::new(),
+    }
 }
 
 impl State {
@@ -564,37 +698,63 @@ impl State {
     }
 
     fn can_options(&self) -> bool {
-        if (self.entered_sub_args && self.directives.options_must_precede_args) || self.end_of_options {
+        if (self.entered_sub_args && self.directives.options_must_precede_args)
+            || self.end_of_options
+        {
             return false;
         }
         if let Some(o) = self.opt_args.cur().filter(|a| mandatory_or_var(Some(a))) {
-            return o.is_variadic && self.opt_args.variadic_count > 0 && o.options_can_break_variadic != Some(false);
+            return o.is_variadic
+                && self.opt_args.variadic_count > 0
+                && o.options_can_break_variadic != Some(false);
         }
-        !self.sub_args.cur().is_some_and(|s| s.is_variadic && self.sub_args.variadic_count > 0 && s.options_can_break_variadic == Some(false))
+        !self.sub_args.cur().is_some_and(|s| {
+            s.is_variadic
+                && self.sub_args.variadic_count > 0
+                && s.options_can_break_variadic == Some(false)
+        })
     }
 
     /// `options[flag] || persistentOptions[flag]`.
     fn find_option(&self, flag: &str) -> Option<Rc<Opt>> {
         match self.completion.opt_index.get(flag) {
             Some(&(false, i)) => self.completion.options.get(i).cloned(),
-            _ => self.persistent.iter().find(|o| o.names.iter().any(|n| n == flag)).cloned(),
+            _ => self
+                .persistent
+                .iter()
+                .find(|o| o.names.iter().any(|n| n == flag))
+                .cloned(),
         }
     }
 }
 
 /// First successful interpretation of `token`; None = it fits nowhere.
 fn update(st: &State, token: &str, fin: bool) -> Option<State> {
-    (st.can_subcommands().then(|| subcommand(st, token, fin)).flatten())
-        .or_else(|| st.can_options().then(|| option_or_chain(st, token, fin)).flatten())
-        .or_else(|| st.prefer_opt_arg().then(|| option_arg(st, token, fin)).flatten())
-        .or_else(|| subcommand_arg(st, token, fin))
+    (st.can_subcommands()
+        .then(|| subcommand(st, token, fin))
+        .flatten())
+    .or_else(|| {
+        st.can_options()
+            .then(|| option_or_chain(st, token, fin))
+            .flatten()
+    })
+    .or_else(|| {
+        st.prefer_opt_arg()
+            .then(|| option_arg(st, token, fin))
+            .flatten()
+    })
+    .or_else(|| subcommand_arg(st, token, fin))
 }
 
 fn subcommand(st: &State, token: &str, fin: bool) -> Option<State> {
     if st.entered_sub_args {
         return None;
     }
-    let child = st.completion.subcommands.get(*st.completion.sub_index.get(token)?)?.clone();
+    let child = st
+        .completion
+        .subcommands
+        .get(*st.completion.sub_index.get(token)?)?
+        .clone();
     let mut s = st.clone();
     s.annotations.push(ann(AnnKind::Subcommand, token));
     if fin {
@@ -615,7 +775,11 @@ fn subcommand(st: &State, token: &str, fin: bool) -> Option<State> {
 fn option(st: &State, flag: &str, fin: bool) -> Option<State> {
     let o = st.find_option(flag)?;
     if let Repeat::Times(n) = o.is_repeatable {
-        let count = st.passed.iter().filter(|p| p.names.iter().any(|x| o.names.contains(x))).count();
+        let count = st
+            .passed
+            .iter()
+            .filter(|p| p.names.iter().any(|x| o.names.contains(x)))
+            .count();
         if count >= n as usize {
             return None;
         }
@@ -664,20 +828,34 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
     let composite = |mut s: State, parts: Vec<(AnnKind, String)>| {
         s.annotations.truncate(st.annotations.len());
         let kind = parts.last().map_or(AnnKind::Option, |p| p.0);
-        s.annotations.push(Annotation { kind, text: token.into(), parts });
+        s.annotations.push(Annotation {
+            kind,
+            text: token.into(),
+            parts,
+        });
         s
     };
-    if st.directives.flags_posix_noncompliant || token.starts_with("--") || !token.starts_with('-') {
+    if st.directives.flags_posix_noncompliant || token.starts_with("--") || !token.starts_with('-')
+    {
         // qac matches separators char by char (a Set of strings vs. the token's chars).
         let seps = &st.directives.option_arg_separators;
-        if let Some((pos, c)) = token.char_indices().find(|&(_, c)| seps.iter().any(|s| s.len() == c.len_utf8() && s.starts_with(c))) {
+        if let Some((pos, c)) = token.char_indices().find(|&(_, c)| {
+            seps.iter()
+                .any(|s| s.len() == c.len_utf8() && s.starts_with(c))
+        }) {
             let (flag, val) = (&token[..pos], &token[pos + c.len_utf8()..]);
             let s = option(st, flag, false)?;
             if s.opt_args.args.len() > 1 {
                 return None;
             }
             let s = option_arg(&s, val, fin)?; // no arg slot → the whole token falls back to a positional
-            return Some(composite(s, vec![(AnnKind::Option, format!("{flag}{c}")), (AnnKind::OptionArg, val.into())]));
+            return Some(composite(
+                s,
+                vec![
+                    (AnnKind::Option, format!("{flag}{c}")),
+                    (AnnKind::OptionArg, val.into()),
+                ],
+            ));
         }
         let mut s = option(st, token, fin)?;
         let o = st.find_option(token)?;
@@ -701,7 +879,10 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
             }
             None => return None,
         }
-        parts.push((AnnKind::Option, if i == 1 { flag } else { chars[i].to_string() }));
+        parts.push((
+            AnnKind::Option,
+            if i == 1 { flag } else { chars[i].to_string() },
+        ));
         if mandatory_or_var(cur.opt_args.cur()) {
             opt_val = chars[i + 1..].iter().collect();
             break;
@@ -735,8 +916,14 @@ fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -
                 search_term = t.clone();
                 only_args = true;
                 // `--color=al` / `-oal`: only the value is replaced, never the flag in front of it
-                let flag: String = a.parts[..a.parts.len() - 1].iter().map(|p| p.1.as_str()).collect();
-                raw = raw_last_token.strip_prefix(flag.as_str()).unwrap_or(t).to_string();
+                let flag: String = a.parts[..a.parts.len() - 1]
+                    .iter()
+                    .map(|p| p.1.as_str())
+                    .collect();
+                raw = raw_last_token
+                    .strip_prefix(flag.as_str())
+                    .unwrap_or(t)
+                    .to_string();
             }
             _ => option_chain = Some(a.text.clone()),
         }
@@ -781,7 +968,13 @@ const MAX_CACHED: usize = 1000;
 const MAX_DEPTH: usize = 64;
 
 impl ParseCaches {
-    fn parse(&mut self, cmd: &CommandInfo, cwd: &Path, dev: bool, host: &mut dyn Host) -> Result<ParseResult, ParseError> {
+    fn parse(
+        &mut self,
+        cmd: &CommandInfo,
+        cwd: &Path,
+        dev: bool,
+        host: &mut dyn Host,
+    ) -> Result<ParseResult, ParseError> {
         let last = cmd.tokens.last().ok_or_else(|| no("no tokens"))?;
         let texts: Vec<String> = cmd.tokens.iter().map(|t| t.text.clone()).collect();
         if cmd.tokens.len() == 1 {
@@ -789,9 +982,20 @@ impl ParseCaches {
                 let st = State::initial(self.first.clone(), &last.text, "", texts);
                 return Ok(result(st, &last.text, &last.raw, true));
             }
-            let name = if last.text == "bin/console" { "php/bin-console" } else { "dotslash" };
-            let spec = host.load(&SpecLocation::Global { name: name.into() })?.ok_or_else(|| no(format!("no {name} spec")))?;
-            return Ok(result(State::initial(spec, &last.text, name, texts), &last.text, &last.raw, false));
+            let name = if last.text == "bin/console" {
+                "php/bin-console"
+            } else {
+                "dotslash"
+            };
+            let spec = host
+                .load(&SpecLocation::Global { name: name.into() })?
+                .ok_or_else(|| no(format!("no {name} spec")))?;
+            return Ok(result(
+                State::initial(spec, &last.text, name, texts),
+                &last.text,
+                &last.raw,
+                false,
+            ));
         }
         let loc = spec_location(&texts[0], cwd, None);
         let st = self.parse_prefix(cmd, vec![loc], 0, cwd, dev, host, 0)?;
@@ -805,12 +1009,28 @@ impl ParseCaches {
 
     /// Parse `cmd.tokens[start..len-1]` from the first location that loads (SPEC §6.4 `parse_prefix`).
     #[allow(clippy::too_many_arguments)]
-    fn parse_prefix(&mut self, cmd: &CommandInfo, locations: Vec<SpecLocation>, start: usize, cwd: &Path, dev: bool, host: &mut dyn Host, depth: usize) -> Result<State, ParseError> {
+    fn parse_prefix(
+        &mut self,
+        cmd: &CommandInfo,
+        locations: Vec<SpecLocation>,
+        start: usize,
+        cwd: &Path,
+        dev: bool,
+        host: &mut dyn Host,
+        depth: usize,
+    ) -> Result<State, ParseError> {
         if depth > MAX_DEPTH {
             return Err(no("loadSpec recursion too deep"));
         }
         let texts: Vec<String> = cmd.tokens[start..].iter().map(|t| t.text.clone()).collect();
-        let key = |loc: &SpecLocation| format!("{},{},{}", texts[..texts.len() - 1].join(" "), loc_key(loc), cwd.display());
+        let key = |loc: &SpecLocation| {
+            format!(
+                "{},{},{}",
+                texts[..texts.len() - 1].join(" "),
+                loc_key(loc),
+                cwd.display()
+            )
+        };
         if !dev {
             if let Some(st) = locations.iter().find_map(|l| self.prefix.get(&key(l))) {
                 return Ok(st.clone());
@@ -823,20 +1043,24 @@ impl ParseCaches {
                 break;
             }
         }
-        let (spec, loc) = found.ok_or_else(|| no(format!("failed loading spec for {}", texts[0])))?;
+        let (spec, loc) =
+            found.ok_or_else(|| no(format!("failed loading spec for {}", texts[0])))?;
         let (SpecLocation::Global { name } | SpecLocation::Local { name, .. }) = loc;
         let cache_key = key(loc);
         let mut st = State::initial(spec, &texts[0], name, texts.clone());
         let mut cur = cmd.clone();
         let root_ls = st.completion.load_spec.clone();
-        if let Some(nested) = self.apply_load_spec(&mut st, root_ls, 0, None, &cur, start, cwd, dev, host, depth)? {
+        if let Some(nested) = self.apply_load_spec(
+            &mut st, root_ls, 0, None, &cur, start, cwd, dev, host, depth,
+        )? {
             return Ok(nested);
         }
         let mut substituted: HashSet<String> = HashSet::new();
         let mut i = 1;
         while i < cur.tokens.len() - start {
             if st.completion.generate_spec.is_some() {
-                let tokens: Vec<String> = cur.tokens[start..].iter().map(|t| t.text.clone()).collect();
+                let tokens: Vec<String> =
+                    cur.tokens[start..].iter().map(|t| t.text.clone()).collect();
                 st = self.generate_spec(st, &tokens, dev, host)?;
             }
             if i == cur.tokens.len() - start - 1 {
@@ -844,12 +1068,21 @@ impl ParseCaches {
             }
             let token = cur.tokens[start + i].text.clone();
             let last_arg = st.arg_state().cur().cloned();
-            let last_kind = if st.prefer_opt_arg() { AnnKind::OptionArg } else { AnnKind::SubcommandArg };
+            let last_kind = if st.prefer_opt_arg() {
+                AnnKind::OptionArg
+            } else {
+                AnnKind::SubcommandArg
+            };
             let last_state = st.clone();
-            st = update(&st, &token, false).ok_or_else(|| no(format!("cannot consume {token:?}")))?;
+            st = update(&st, &token, false)
+                .ok_or_else(|| no(format!("cannot consume {token:?}")))?;
             let last_type = st.annotations.last().map_or(AnnKind::None, |a| a.kind);
             let mut alias_err = None;
-            if let Some(alias) = last_arg.as_ref().and_then(|a| a.alias_directive.clone()).filter(|_| last_type == last_kind && !substituted.contains(&token)) {
+            if let Some(alias) = last_arg
+                .as_ref()
+                .and_then(|a| a.alias_directive.clone())
+                .filter(|_| last_type == last_kind && !substituted.contains(&token))
+            {
                 match self.substitute_alias(&cur, start + i, &token, &alias, host) {
                     Ok(next) => {
                         substituted.insert(token);
@@ -857,21 +1090,44 @@ impl ParseCaches {
                         st = last_state;
                         continue; // re-parse this position with the expanded words
                     }
-                    Err(e) if substituted.is_empty() || matches!(e, ParseError::Aborted) => return Err(e),
+                    Err(e) if substituted.is_empty() || matches!(e, ParseError::Aborted) => {
+                        return Err(e)
+                    }
                     Err(e) => alias_err = Some(e),
                 }
             }
-            let mut ls = if last_type == AnnKind::Subcommand { st.completion.load_spec.clone() } else { None };
+            let mut ls = if last_type == AnnKind::Subcommand {
+                st.completion.load_spec.clone()
+            } else {
+                None
+            };
             if let Some(a) = last_arg.filter(|_| last_type == last_kind) {
                 if a.load_spec.is_some() {
                     ls = a.load_spec.clone();
                 } else if a.is_command || a.is_script {
-                    ls = Some(LoadSpec::Locations(vec![spec_location(&token, cwd, Some(a.is_script))]));
+                    ls = Some(LoadSpec::Locations(vec![spec_location(
+                        &token,
+                        cwd,
+                        Some(a.is_script),
+                    )]));
                 } else if let Some(prefix) = &a.is_module {
-                    ls = Some(LoadSpec::Locations(vec![SpecLocation::Global { name: format!("{prefix}{token}") }]));
+                    ls = Some(LoadSpec::Locations(vec![SpecLocation::Global {
+                        name: format!("{prefix}{token}"),
+                    }]));
                 }
             }
-            if let Some(nested) = self.apply_load_spec(&mut st, ls, i, Some(&token), &cur, start, cwd, dev, host, depth)? {
+            if let Some(nested) = self.apply_load_spec(
+                &mut st,
+                ls,
+                i,
+                Some(&token),
+                &cur,
+                start,
+                cwd,
+                dev,
+                host,
+                depth,
+            )? {
                 return Ok(nested);
             }
             if let Some(e) = alias_err {
@@ -891,31 +1147,58 @@ impl ParseCaches {
     }
 
     /// `parserDirectives.alias` (git aliases): the token's expansion re-tokenized into the command.
-    fn substitute_alias(&mut self, cmd: &CommandInfo, index: usize, token: &str, alias: &StrOrFn, host: &mut dyn Host) -> Result<CommandInfo, ParseError> {
+    fn substitute_alias(
+        &mut self,
+        cmd: &CommandInfo,
+        index: usize,
+        token: &str,
+        alias: &StrOrFn,
+        host: &mut dyn Host,
+    ) -> Result<CommandInfo, ParseError> {
         let value = match alias {
             StrOrFn::Str(s) => s.clone(),
             StrOrFn::Fn(f) => {
                 let v = host.call(*f, vec![JsArg::Json(token.into()), JsArg::Exec])?;
-                v.as_str().ok_or_else(|| no("alias did not return a string"))?.to_string()
+                v.as_str()
+                    .ok_or_else(|| no("alias did not return a string"))?
+                    .to_string()
             }
         };
         // `git config --get` output ends with "\n"; a newline would not split words in the re-tokenized command.
-        host.substitute(cmd, index, value.trim_end()).ok_or_else(|| no(format!("invalid alias for {token:?}")))
+        host.substitute(cmd, index, value.trim_end())
+            .ok_or_else(|| no(format!("invalid alias for {token:?}")))
     }
 
     /// `Some(state)` when a location loadSpec took over parsing (SPEC §6.4); inline subcommands replace the level.
     #[allow(clippy::too_many_arguments)]
-    fn apply_load_spec(&mut self, st: &mut State, ls: Option<LoadSpec>, index: usize, token: Option<&str>, cmd: &CommandInfo, start: usize, cwd: &Path, dev: bool, host: &mut dyn Host, depth: usize) -> Result<Option<State>, ParseError> {
+    fn apply_load_spec(
+        &mut self,
+        st: &mut State,
+        ls: Option<LoadSpec>,
+        index: usize,
+        token: Option<&str>,
+        cmd: &CommandInfo,
+        start: usize,
+        cwd: &Path,
+        dev: bool,
+        host: &mut dyn Host,
+        depth: usize,
+    ) -> Result<Option<State>, ParseError> {
         let ls = match (ls, token) {
-            (Some(LoadSpec::Fn(f)), Some(t)) => crate::spec::load_spec_result(&host.call(f, vec![JsArg::Json(t.into()), JsArg::Exec])?),
+            (Some(LoadSpec::Fn(f)), Some(t)) => crate::spec::load_spec_result(
+                &host.call(f, vec![JsArg::Json(t.into()), JsArg::Exec])?,
+            ),
             (Some(LoadSpec::Fn(_)), None) => None, // function loadSpecs are skipped at the root
             (ls, _) => ls,
         };
         match ls {
             Some(LoadSpec::Locations(l)) => {
-                let mut nested = self.parse_prefix(cmd, l, start + index, cwd, dev, host, depth + 1)?;
+                let mut nested =
+                    self.parse_prefix(cmd, l, start + index, cwd, dev, host, depth + 1)?;
                 nested.command_index += index;
-                let prefix = cmd.tokens[start..start + index].iter().map(|t| t.text.clone());
+                let prefix = cmd.tokens[start..start + index]
+                    .iter()
+                    .map(|t| t.text.clone());
                 nested.tokens = prefix.chain(nested.tokens).collect();
                 Ok(Some(nested))
             }
@@ -938,11 +1221,22 @@ impl ParseCaches {
 
     /// Merge `generateSpec(tokens, exec)` into the current level (SPEC §6.4); errors (except an abort) leave the
     /// state unchanged.
-    fn generate_spec(&mut self, mut st: State, tokens: &[String], dev: bool, host: &mut dyn Host) -> Result<State, ParseError> {
-        let Some(f) = st.completion.generate_spec else { return Ok(st) };
+    fn generate_spec(
+        &mut self,
+        mut st: State,
+        tokens: &[String],
+        dev: bool,
+        host: &mut dyn Host,
+    ) -> Result<State, ParseError> {
+        let Some(f) = st.completion.generate_spec else {
+            return Ok(st);
+        };
         let cache_key = match &st.completion.generate_spec_cache_key {
             Some(StrOrFn::Str(k)) => Some(k.clone()),
-            Some(StrOrFn::Fn(kf)) => match host.call(*kf, vec![JsArg::Json(serde_json::json!({ "tokens": tokens }))]) {
+            Some(StrOrFn::Fn(kf)) => match host.call(
+                *kf,
+                vec![JsArg::Json(serde_json::json!({ "tokens": tokens }))],
+            ) {
                 Err(ParseError::Aborted) => return Err(ParseError::Aborted),
                 r => r.ok().and_then(|v| v.as_str().map(String::from)),
             },
@@ -979,7 +1273,9 @@ impl ParseCaches {
         // Object-merge by name, generated wins (later entries win in `reindex`; fully shadowed ones are dropped).
         fn merge<T>(base: &[Rc<T>], generator: &[Rc<T>], names: fn(&T) -> &[String]) -> Vec<Rc<T>> {
             let shadowed: HashSet<&String> = generator.iter().flat_map(|g| names(g)).collect();
-            let kept = base.iter().filter(|b| !names(b).iter().all(|n| shadowed.contains(n)));
+            let kept = base
+                .iter()
+                .filter(|b| !names(b).iter().all(|n| shadowed.contains(n)));
             kept.chain(generator).cloned().collect()
         }
         c.subcommands = merge(&c.subcommands, &generator.subcommands, |s| &s.names);
@@ -990,7 +1286,12 @@ impl ParseCaches {
             st.sub_args = ArgState::new(&c.args);
         }
         c.reindex();
-        st.persistent = generator.persistent.iter().chain(&st.persistent).cloned().collect();
+        st.persistent = generator
+            .persistent
+            .iter()
+            .chain(&st.persistent)
+            .cloned()
+            .collect();
         st.set_completion(Rc::new(c));
         Ok(st)
     }

@@ -34,15 +34,25 @@ fn parse_level(s: &str) -> Option<Level> {
 /// `name` = log file stem (`cli` or `pty`); `verbose` = count of `-v`; `stderr` mirrors records when `-v` was given.
 pub fn init(name: &str, verbose: u8, stderr: bool) {
     let level = match verbose {
-        0 => std::env::var("TABSMITH_LOG_LEVEL").ok().and_then(|l| parse_level(&l)).unwrap_or(Level::Warn),
+        0 => std::env::var("TABSMITH_LOG_LEVEL")
+            .ok()
+            .and_then(|l| parse_level(&l))
+            .unwrap_or(Level::Warn),
         1 => Level::Warn,
         2 => Level::Info,
         3 => Level::Debug,
         _ => Level::Trace,
     };
-    let file = crate::settings::home().ok().and_then(|home| open_log(&home.join("logs"), name));
+    let file = crate::settings::home()
+        .ok()
+        .and_then(|home| open_log(&home.join("logs"), name));
     let session = std::env::var("TABSMITH_SESSION_ID").unwrap_or_else(|_| "-".into());
-    let _ = LOGGER.set(Logger { file: file.map(Mutex::new), level, stderr: stderr && verbose > 0, session });
+    let _ = LOGGER.set(Logger {
+        file: file.map(Mutex::new),
+        level,
+        stderr: stderr && verbose > 0,
+        session,
+    });
 }
 
 /// `<dir>/<name>.log` for appending. Logs hold command text, so on Unix the dir is 0700 and the file 0600
@@ -117,12 +127,15 @@ mod tests {
 
     #[test]
     fn log_files_are_private() {
-        let dir = std::env::temp_dir().join(format!("tabsmith-logger-{}", std::process::id())).join("logs");
+        let dir = std::env::temp_dir()
+            .join(format!("tabsmith-logger-{}", std::process::id()))
+            .join("logs");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(dir.join("old.log"), "x\n").unwrap();
-        std::fs::set_permissions(dir.join("old.log"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(dir.join("old.log"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
         let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         for name in ["new", "old"] {
             assert!(super::open_log(&dir, name).is_some());

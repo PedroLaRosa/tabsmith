@@ -72,15 +72,24 @@ impl Decoder {
         let mut i = 0;
         while i < chunk.len() {
             let (key, len) = if self.paste.is_some() {
-                (key(KeyCode::Paste, Mods::default()), self.scan_paste(&chunk[i..]))
+                (
+                    key(KeyCode::Paste, Mods::default()),
+                    self.scan_paste(&chunk[i..]),
+                )
             } else if chunk[i..].starts_with(PASTE_START) {
                 self.paste = Some(0);
                 let n = PASTE_START.len();
-                (key(KeyCode::Paste, Mods::default()), n + self.scan_paste(&chunk[i + n..]))
+                (
+                    key(KeyCode::Paste, Mods::default()),
+                    n + self.scan_paste(&chunk[i + n..]),
+                )
             } else {
                 decode_one(&chunk[i..])
             };
-            out.push(KeyEvent { key, bytes: i..i + len });
+            out.push(KeyEvent {
+                key,
+                bytes: i..i + len,
+            });
             i += len;
         }
         out
@@ -90,7 +99,11 @@ impl Decoder {
     fn scan_paste(&mut self, bytes: &[u8]) -> usize {
         let mut m = self.paste.unwrap_or(0);
         for (j, &b) in bytes.iter().enumerate() {
-            m = if b == PASTE_END[m] { m + 1 } else { usize::from(b == 0x1b) };
+            m = if b == PASTE_END[m] {
+                m + 1
+            } else {
+                usize::from(b == 0x1b)
+            };
             if m == PASTE_END.len() {
                 self.paste = None;
                 return j + 1;
@@ -123,7 +136,11 @@ fn decode_one(b: &[u8]) -> (Key, usize) {
                 0xf0..=0xf7 => 4,
                 _ => 1,
             };
-            match b.get(..len).and_then(|s| std::str::from_utf8(s).ok()).and_then(|s| s.chars().next()) {
+            match b
+                .get(..len)
+                .and_then(|s| std::str::from_utf8(s).ok())
+                .and_then(|s| s.chars().next())
+            {
                 Some(c) => (key(KeyCode::Char(c), none), len),
                 None => (key(KeyCode::Unknown, none), 1),
             }
@@ -135,7 +152,9 @@ fn decode_esc(b: &[u8]) -> (Key, usize) {
     let none = Mods::default();
     match b.get(1) {
         // ESC + CSI/SS3 (meta-sends-escape Alt+arrow) = alt+<key>; an ESC right before a paste stays a lone Esc.
-        Some(0x1b) if b.len() > 3 && matches!(b[2], b'[' | b'O') && !b[1..].starts_with(PASTE_START) => {
+        Some(0x1b)
+            if b.len() > 3 && matches!(b[2], b'[' | b'O') && !b[1..].starts_with(PASTE_START) =>
+        {
             let (mut k, len) = decode_esc(&b[1..]);
             k.mods.alt = true;
             (k, len + 1)
@@ -170,7 +189,11 @@ fn decode_esc(b: &[u8]) -> (Key, usize) {
 
 /// `ESC [ params final` (xterm keys, CSI-u, CPR).
 fn decode_csi(b: &[u8]) -> (Key, usize) {
-    let Some(end) = b[2..].iter().position(|c| (0x40..=0x7e).contains(c)).map(|p| p + 2) else {
+    let Some(end) = b[2..]
+        .iter()
+        .position(|c| (0x40..=0x7e).contains(c))
+        .map(|p| p + 2)
+    else {
         return (key(KeyCode::Unknown, Mods::default()), b.len());
     };
     let len = end + 1;
@@ -179,7 +202,10 @@ fn decode_csi(b: &[u8]) -> (Key, usize) {
     if fin == b'R' {
         return (key(KeyCode::CursorReport, Mods::default()), len);
     }
-    if params.first().is_some_and(|c| matches!(c, b'?' | b'<' | b'>' | b'=')) {
+    if params
+        .first()
+        .is_some_and(|c| matches!(c, b'?' | b'<' | b'>' | b'='))
+    {
         return (key(KeyCode::Unknown, Mods::default()), len);
     }
     // Numeric params; sub-params (`a:b`) keep their first part.
@@ -189,7 +215,12 @@ fn decode_csi(b: &[u8]) -> (Key, usize) {
         .map(|s| s.split(':').next().unwrap_or("").parse().unwrap_or(0))
         .collect();
     let m = p.get(1).copied().unwrap_or(1).saturating_sub(1);
-    let mods = Mods { shift: m & 1 != 0, alt: m & 2 != 0, ctrl: m & 4 != 0, meta: m & 8 != 0 };
+    let mods = Mods {
+        shift: m & 1 != 0,
+        alt: m & 2 != 0,
+        ctrl: m & 4 != 0,
+        meta: m & 8 != 0,
+    };
     let code = match fin {
         b'A' => KeyCode::Up,
         b'B' => KeyCode::Down,
@@ -198,7 +229,18 @@ fn decode_csi(b: &[u8]) -> (Key, usize) {
         b'H' => KeyCode::Home,
         b'F' => KeyCode::End,
         b'P' | b'Q' | b'S' => KeyCode::F(fin - b'P' + 1),
-        b'Z' => return (key(KeyCode::Tab, Mods { shift: true, ..mods }), len),
+        b'Z' => {
+            return (
+                key(
+                    KeyCode::Tab,
+                    Mods {
+                        shift: true,
+                        ..mods
+                    },
+                ),
+                len,
+            )
+        }
         b'~' => match p[0] {
             1 | 7 => KeyCode::Home,
             2 => KeyCode::Insert,
@@ -368,7 +410,9 @@ pub struct Keymap {
 
 impl Keymap {
     pub fn from_settings(settings: &Settings) -> Keymap {
-        let mut map = Keymap { bindings: Vec::new() };
+        let mut map = Keymap {
+            bindings: Vec::new(),
+        };
         for (k, a) in DEFAULTS {
             map.set(k, Binding::Action(*a));
         }
@@ -385,7 +429,9 @@ impl Keymap {
 
     /// A later binding for the same key replaces the earlier one; unparsable keystrokes are dropped.
     fn set(&mut self, keystroke: &str, b: Binding) {
-        let Some(key) = parse_keystroke(keystroke).map(normalize) else { return };
+        let Some(key) = parse_keystroke(keystroke).map(normalize) else {
+            return;
+        };
         match self.bindings.iter_mut().find(|(k, _)| *k == key) {
             Some(e) => e.1 = b,
             None => self.bindings.push((key, b)),
@@ -395,7 +441,10 @@ impl Keymap {
     /// Binding for a decoded key (handles case-insensitive ctrl/alt letters; `ESC O x` arrows decode as arrows).
     pub fn lookup(&self, key: &Key) -> Option<Binding> {
         let key = normalize(*key);
-        self.bindings.iter().find(|(k, _)| *k == key).map(|(_, b)| *b)
+        self.bindings
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, b)| *b)
     }
 }
 
@@ -403,10 +452,18 @@ impl Keymap {
 mod tests {
     use super::*;
 
-    const NONE: Mods = Mods { ctrl: false, alt: false, shift: false, meta: false };
+    const NONE: Mods = Mods {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        meta: false,
+    };
     const CTRL: Mods = Mods { ctrl: true, ..NONE };
     const ALT: Mods = Mods { alt: true, ..NONE };
-    const SHIFT: Mods = Mods { shift: true, ..NONE };
+    const SHIFT: Mods = Mods {
+        shift: true,
+        ..NONE
+    };
 
     fn k(code: KeyCode, mods: Mods) -> Key {
         Key { code, mods }
@@ -438,7 +495,17 @@ mod tests {
             (b"\x1b[1;5A", k(Up, CTRL)),
             (b"\x1b[1;2B", k(Down, SHIFT)),
             (b"\x1b[1;3C", k(Right, ALT)),
-            (b"\x1b[1;7D", k(Left, Mods { ctrl: true, alt: true, ..NONE })),
+            (
+                b"\x1b[1;7D",
+                k(
+                    Left,
+                    Mods {
+                        ctrl: true,
+                        alt: true,
+                        ..NONE
+                    },
+                ),
+            ),
             (b"\x1b[H", k(Home, NONE)),
             (b"\x1bOH", k(Home, NONE)),
             (b"\x1b[1~", k(Home, NONE)),
@@ -449,7 +516,17 @@ mod tests {
             (b"\x1bOI", k(Tab, NONE)),
             (b"\x1b\x1b[D", k(Left, ALT)),
             (b"\x1b\x1bOA", k(Up, ALT)),
-            (b"\x1b\x1b[1;5C", k(Right, Mods { ctrl: true, alt: true, ..NONE })),
+            (
+                b"\x1b\x1b[1;5C",
+                k(
+                    Right,
+                    Mods {
+                        ctrl: true,
+                        alt: true,
+                        ..NONE
+                    },
+                ),
+            ),
             (b"\x1b[4~", k(End, NONE)),
             (b"\x1b[8~", k(End, NONE)),
             (b"\x1b[3~", k(Delete, NONE)),
@@ -493,7 +570,10 @@ mod tests {
         let ev = decode(chunk);
         let keys: Vec<KeyCode> = ev.iter().map(|e| e.key.code).collect();
         use KeyCode::*;
-        assert_eq!(keys, vec![Char('a'), Char('b'), Up, Enter, Paste, Char('n'), Esc]);
+        assert_eq!(
+            keys,
+            vec![Char('a'), Char('b'), Up, Enter, Paste, Char('n'), Esc]
+        );
         let ranges: Vec<_> = ev.iter().map(|e| e.bytes.clone()).collect();
         assert_eq!(ranges, vec![0..1, 1..2, 2..5, 5..6, 6..21, 21..22, 22..23]);
         // Every byte belongs to exactly one event.
@@ -503,13 +583,18 @@ mod tests {
     #[test]
     fn esc_not_last_and_double_esc() {
         let ev = decode(b"\x1b\x1b");
-        assert_eq!(ev.iter().map(|e| e.key.code).collect::<Vec<_>>(), vec![KeyCode::Esc, KeyCode::Esc]);
+        assert_eq!(
+            ev.iter().map(|e| e.key.code).collect::<Vec<_>>(),
+            vec![KeyCode::Esc, KeyCode::Esc]
+        );
         // Esc right before a bracketed paste in the same chunk: the paste stays opaque.
         let ev = decode(b"\x1b\x1b[200~ls\x1b[201~");
-        assert_eq!(ev.iter().map(|e| (e.key.code, e.bytes.clone())).collect::<Vec<_>>(), vec![
-            (KeyCode::Esc, 0..1),
-            (KeyCode::Paste, 1..15)
-        ]);
+        assert_eq!(
+            ev.iter()
+                .map(|e| (e.key.code, e.bytes.clone()))
+                .collect::<Vec<_>>(),
+            vec![(KeyCode::Esc, 0..1), (KeyCode::Paste, 1..15)]
+        );
         // Incomplete CSI at the end: one opaque unknown event.
         let ev = decode(b"x\x1b[1;");
         assert_eq!(ev[1].key.code, KeyCode::Unknown);
@@ -520,14 +605,20 @@ mod tests {
     fn paste_across_chunks() {
         let mut d = Decoder::default();
         let a = d.decode(b"q\x1b[200~line1\r");
-        assert_eq!(a.iter().map(|e| e.key.code).collect::<Vec<_>>(), vec![KeyCode::Char('q'), KeyCode::Paste]);
+        assert_eq!(
+            a.iter().map(|e| e.key.code).collect::<Vec<_>>(),
+            vec![KeyCode::Char('q'), KeyCode::Paste]
+        );
         assert_eq!(a[1].bytes, 1..13);
         // End marker split across reads; `\r` inside the paste is not Enter.
         let b = d.decode(b"\tline2\r\x1b[20");
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].key.code, KeyCode::Paste);
         let c = d.decode(b"1~\r");
-        assert_eq!(c.iter().map(|e| e.key.code).collect::<Vec<_>>(), vec![KeyCode::Paste, KeyCode::Enter]);
+        assert_eq!(
+            c.iter().map(|e| e.key.code).collect::<Vec<_>>(),
+            vec![KeyCode::Paste, KeyCode::Enter]
+        );
         assert_eq!(c[0].bytes, 0..2);
     }
 
@@ -544,7 +635,10 @@ mod tests {
         assert_eq!(parse_keystroke("f"), Some(k(Char('f'), NONE)));
         assert_eq!(parse_keystroke("hyper+x"), Some(k(Char('x'), NONE)));
         assert_eq!(parse_keystroke("option+arrowup"), Some(k(Up, ALT)));
-        assert_eq!(parse_keystroke("command+i"), Some(k(Char('i'), Mods { meta: true, ..NONE })));
+        assert_eq!(
+            parse_keystroke("command+i"),
+            Some(k(Char('i'), Mods { meta: true, ..NONE }))
+        );
         assert_eq!(parse_keystroke("ctrl+foo"), None);
         assert_eq!(parse_keystroke("a+"), None);
         assert_eq!(parse_keystroke(""), None);
@@ -552,9 +646,18 @@ mod tests {
 
     #[test]
     fn action_ids() {
-        assert_eq!(Action::from_id("insertSelected"), Some(Action::InsertSelected));
-        assert_eq!(Action::from_id("autocomplete.navigateDown"), Some(Action::NavigateDown));
-        assert_eq!(Action::from_id("selectSuggestion10"), Some(Action::SelectSuggestion(10)));
+        assert_eq!(
+            Action::from_id("insertSelected"),
+            Some(Action::InsertSelected)
+        );
+        assert_eq!(
+            Action::from_id("autocomplete.navigateDown"),
+            Some(Action::NavigateDown)
+        );
+        assert_eq!(
+            Action::from_id("selectSuggestion10"),
+            Some(Action::SelectSuggestion(10))
+        );
         assert_eq!(Action::from_id("selectSuggestion0"), None);
         assert_eq!(Action::from_id("increaseSize"), None);
     }
@@ -594,11 +697,20 @@ mod tests {
         let b = |bytes: &[u8]| km.lookup(&one(bytes));
         assert_eq!(b(b"\t"), Some(Binding::Ignore));
         assert_eq!(b(b"\r"), Some(Binding::Unknown));
-        assert_eq!(b(b"\x1bk"), Some(Binding::Action(Action::ToggleAutocomplete)));
-        assert_eq!(b(b"\x1bK"), Some(Binding::Action(Action::ToggleAutocomplete)));
+        assert_eq!(
+            b(b"\x1bk"),
+            Some(Binding::Action(Action::ToggleAutocomplete))
+        );
+        assert_eq!(
+            b(b"\x1bK"),
+            Some(Binding::Action(Action::ToggleAutocomplete))
+        );
         assert_eq!(b(b"\x1b[15~"), None);
         assert_eq!(b(b"\x1b[A"), Some(Binding::Action(Action::NavigateUp)));
         // ctrl+j is 0x0a = Enter on the wire; bound via CSI-u it decodes as ctrl+j.
-        assert_eq!(b(b"\x1b[106;5u"), Some(Binding::Action(Action::NavigateDown)));
+        assert_eq!(
+            b(b"\x1b[106;5u"),
+            Some(Binding::Action(Action::NavigateDown))
+        );
     }
 }

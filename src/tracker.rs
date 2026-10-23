@@ -100,7 +100,9 @@ impl Splitter {
             if !bytes.is_empty() {
                 pieces.push(Piece::Bytes(std::mem::take(bytes)));
             }
-            pieces.push(Piece::Marker(String::from_utf8_lossy(&self.osc[4..]).into_owned()));
+            pieces.push(Piece::Marker(
+                String::from_utf8_lossy(&self.osc[4..]).into_owned(),
+            ));
             self.osc.clear();
         } else {
             bytes.extend_from_slice(b"\x1b]");
@@ -159,7 +161,9 @@ impl SuggestionColor {
 
 /// One colour token: names (+ fish `br*` variants), zsh `0..255`, hex `#rgb`/`#rrggbb` (fish: `#` optional).
 fn parse_color(v: &str, fish: bool) -> Option<Col> {
-    const NAMES: [&str; 8] = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
+    const NAMES: [&str; 8] = [
+        "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+    ];
     let v = v.trim().to_ascii_lowercase();
     if v == "default" || v == "normal" {
         return Some(None);
@@ -167,7 +171,10 @@ fn parse_color(v: &str, fish: bool) -> Option<Col> {
     if let Some(i) = NAMES.iter().position(|n| *n == v) {
         return Some(Some(i as u8));
     }
-    if let Some(i) = v.strip_prefix("br").and_then(|n| NAMES.iter().position(|x| *x == n)) {
+    if let Some(i) = v
+        .strip_prefix("br")
+        .and_then(|n| NAMES.iter().position(|x| *x == n))
+    {
         return Some(Some(i as u8 + 8));
     }
     if !fish {
@@ -180,7 +187,8 @@ fn parse_color(v: &str, fish: bool) -> Option<Col> {
         None if fish => v.as_str(),
         None => return None,
     };
-    let digit = |i: usize, len: usize| u8::from_str_radix(hex.get(i * len..(i + 1) * len)?, 16).ok();
+    let digit =
+        |i: usize, len: usize| u8::from_str_radix(hex.get(i * len..(i + 1) * len)?, 16).ok();
     let (r, g, b) = match hex.len() {
         3 => (digit(0, 1)? * 17, digit(1, 1)? * 17, digit(2, 1)? * 17),
         6 => (digit(0, 2)?, digit(1, 2)?, digit(2, 2)?),
@@ -200,9 +208,15 @@ fn cell_col(c: Color) -> Col {
 /// Nearest xterm-256 index (6×6×6 cube or 24 greys).
 fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
     const LEVELS: [i32; 6] = [0, 95, 135, 175, 215, 255];
-    let near = |v: u8| (0..6).min_by_key(|&i| (LEVELS[i] - v as i32).abs()).unwrap_or(0);
+    let near = |v: u8| {
+        (0..6)
+            .min_by_key(|&i| (LEVELS[i] - v as i32).abs())
+            .unwrap_or(0)
+    };
     let (ri, gi, bi) = (near(r), near(g), near(b));
-    let dist = |x: i32, y: i32, z: i32| (x - r as i32).pow(2) + (y - g as i32).pow(2) + (z - b as i32).pow(2);
+    let dist = |x: i32, y: i32, z: i32| {
+        (x - r as i32).pow(2) + (y - g as i32).pow(2) + (z - b as i32).pow(2)
+    };
     let grey = ((r as i32 + g as i32 + b as i32) / 3 - 3).clamp(0, 230) / 10; // levels 8, 18, …, 238
     let gv = 8 + 10 * grey;
     if dist(gv, gv, gv) < dist(LEVELS[ri], LEVELS[gi], LEVELS[bi]) {
@@ -233,7 +247,15 @@ pub struct OutFilter {
 
 impl OutFilter {
     pub fn new(rows: usize) -> OutFilter {
-        OutFilter { carry: Vec::new(), rows, alt: false, partial_region: false, in_string: false, long_seq: None, lf_to_ind: false }
+        OutFilter {
+            carry: Vec::new(),
+            rows,
+            alt: false,
+            partial_region: false,
+            in_string: false,
+            long_seq: None,
+            lf_to_ind: false,
+        }
     }
 
     /// Terminal resized: real terminals and the model reset the scroll region.
@@ -261,7 +283,10 @@ impl OutFilter {
             if self.in_string {
                 // The body passes through uncarried (sixel can be megabytes). Like the VT parser, any ESC (ST is
                 // `ESC \`) or CAN/SUB ends the string; the ESC is then handled as a normal sequence.
-                let end = data[i..].iter().position(|b| matches!(b, 0x1b | 0x18 | 0x1a)).map_or(data.len(), |k| i + k);
+                let end = data[i..]
+                    .iter()
+                    .position(|b| matches!(b, 0x1b | 0x18 | 0x1a))
+                    .map_or(data.len(), |k| i + k);
                 out.extend_from_slice(&data[i..end]);
                 i = end;
                 if i < data.len() {
@@ -274,7 +299,10 @@ impl OutFilter {
                 continue;
             }
             if let Some(r) = &self.long_seq {
-                let end = data[i..].iter().position(|b| !r.contains(b)).map(|k| i + k + 1);
+                let end = data[i..]
+                    .iter()
+                    .position(|b| !r.contains(b))
+                    .map(|k| i + k + 1);
                 if end.is_some() {
                     self.long_seq = None;
                 }
@@ -287,7 +315,9 @@ impl OutFilter {
             if b == 0x1b {
                 // Final byte (inclusive end): CSI params/intermediates then a final; ESC intermediates then a final.
                 let skip = |from: usize, r: std::ops::RangeInclusive<u8>| {
-                    (from..data.len()).find(|&k| !r.contains(&data[k])).unwrap_or(data.len())
+                    (from..data.len())
+                        .find(|&k| !r.contains(&data[k]))
+                        .unwrap_or(data.len())
                 };
                 let j = match data.get(i + 1) {
                     None => data.len(),
@@ -298,7 +328,11 @@ impl OutFilter {
                 if j >= data.len() {
                     if data.len() - i > SEQ_MAX {
                         // ponytail: no keyboard-protocol upgrade is this long, so it is never stripped.
-                        self.long_seq = Some(if data[i + 1] == b'[' { 0x20..=0x3f } else { 0x20..=0x2f });
+                        self.long_seq = Some(if data[i + 1] == b'[' {
+                            0x20..=0x3f
+                        } else {
+                            0x20..=0x2f
+                        });
                         out.extend_from_slice(&data[i..]);
                         return self.hold_utf8(out);
                     }
@@ -331,12 +365,18 @@ impl OutFilter {
     fn keep_csi(&mut self, body: &[u8], fin: u8) -> bool {
         let numeric = |s: &[u8]| s.iter().all(|c| c.is_ascii_digit() || *c == b';');
         let private = body.first() == Some(&b'?');
-        if private && (fin == b'h' || fin == b'l') && body[1..].split(|c| *c == b';').any(|p| matches!(p, b"1049" | b"1047" | b"47"))
+        if private
+            && (fin == b'h' || fin == b'l')
+            && body[1..]
+                .split(|c| *c == b';')
+                .any(|p| matches!(p, b"1049" | b"1047" | b"47"))
         {
             self.alt = fin == b'h';
         }
         if fin == b'r' && numeric(body) {
-            let mut it = body.split(|c| *c == b';').map(|p| std::str::from_utf8(p).ok()?.parse::<usize>().ok());
+            let mut it = body
+                .split(|c| *c == b';')
+                .map(|p| std::str::from_utf8(p).ok()?.parse::<usize>().ok());
             let top = it.next().flatten().filter(|t| *t > 0).unwrap_or(1);
             let bottom = it.next().flatten().filter(|b| *b > 0).unwrap_or(self.rows);
             if top < bottom {
@@ -537,7 +577,12 @@ impl Tracker {
         if val == Some("") {
             return; // empty values are ignored (Kiro)
         }
-        if self.osc_lock && !matches!(key, "NewCmd" | "PreExec" | "NoHistory" | "OSCLock" | "OSCUnlock" | "User") {
+        if self.osc_lock
+            && !matches!(
+                key,
+                "NewCmd" | "PreExec" | "NoHistory" | "OSCLock" | "OSCUnlock" | "User"
+            )
+        {
             return;
         }
         let v = val.unwrap_or("").trim();
@@ -608,20 +653,28 @@ impl Tracker {
             h.exit_code = exit;
             h.end_time = Some(now_secs());
             // ponytail: an empty command (NoHistory, or nothing scraped) is the "do not record" mark.
-            self.events.push(if h.command.is_empty() { Event::CommandEnded } else { Event::NewCmd(Some(h)) });
+            self.events.push(if h.command.is_empty() {
+                Event::CommandEnded
+            } else {
+                Event::NewCmd(Some(h))
+            });
         }
     }
 
     fn pre_exec(&mut self, model: &mut Model) {
         self.flush_deferred(model); // a queued NewCmd belongs before this PreExec
-        let scraped = self.extract(model).map(|e| e.buffer.trim().to_string()).unwrap_or_default();
+        let scraped = self
+            .extract(model)
+            .map(|e| e.buffer.trim().to_string())
+            .unwrap_or_default();
         // Lines the shell printed after Enter (`!!` echo, correction prompt) are not part of the command, nor is a
         // transient prompt redrawn without markers before it; a line the shell rewrote (abbreviation, PS2 loop) is
         // taken from the screen.
         let then_output = |s: &str| {
             scraped.match_indices(s).any(|(i, _)| {
                 let rest = scraped[i + s.len()..].trim_start_matches(' ');
-                (i == 0 || scraped[..i].ends_with(' ')) && (rest.is_empty() || rest.starts_with('\n'))
+                (i == 0 || scraped[..i].ends_with(' '))
+                    && (rest.is_empty() || rest.starts_with('\n'))
             })
         };
         let command = match self.submitted.take().map(|s| s.trim().to_string()) {
@@ -629,7 +682,11 @@ impl Tracker {
             _ => scraped,
         };
         // Still pending (its prompt finishes it, SPEC §3.5), but blank: not recorded.
-        let command = if std::mem::take(&mut self.no_history) { String::new() } else { command };
+        let command = if std::mem::take(&mut self.no_history) {
+            String::new()
+        } else {
+            command
+        };
         self.pending.push(HistoryEntry {
             command,
             shell: self.shell_name.clone().unwrap_or_default(),
@@ -675,7 +732,14 @@ impl Tracker {
         let cols = grid.columns();
         let cur = &grid.cursor;
         // Pending wrap = the cursor sits past the last column.
-        let (cl, cc) = (cur.point.line.0, if cur.input_needs_wrap { cols } else { cur.point.column.0 });
+        let (cl, cc) = (
+            cur.point.line.0,
+            if cur.input_needs_wrap {
+                cols
+            } else {
+                cur.point.column.0
+            },
+        );
         let row = |r: i32| &grid[Line(r)][..Column(cols)];
         let has = |c: &Cell, t: &str| c.hyperlink().is_some_and(|h| h.uri() == t);
         // Row r continues on r + 1: auto-wrap, or this cycle's text fills it to the last column and goes on at the
@@ -686,12 +750,16 @@ impl Tracker {
         let bottom = grid.bottommost_line().0;
         let wraps = |r: i32| {
             let last = &row(r)[cols - 1];
-            last.flags.contains(Flags::WRAPLINE) || (r < bottom && has(last, &tag) && has(&row(r + 1)[0], &tag))
+            last.flags.contains(Flags::WRAPLINE)
+                || (r < bottom && has(last, &tag) && has(&row(r + 1)[0], &tag))
         };
         let tagged = |r: i32| row(r).iter().any(|c| has(c, &tag));
 
         let mut start = cl;
-        while start > grid.topmost_line().0 && cl - start < 100 && (wraps(start - 1) || tagged(start - 1)) {
+        while start > grid.topmost_line().0
+            && cl - start < 100
+            && (wraps(start - 1) || tagged(start - 1))
+        {
             start -= 1;
         }
         // Below the cursor only wrap continuations and PS2 rows count (not zsh completion listings, not PSReadLine's
@@ -721,13 +789,26 @@ impl Tracker {
         }
         let prompt_row = |r: i32| row(r).iter().any(|c| has(c, TAG_PROMPT));
         // A prompt filling its row to the margin (zsh then moves on with its own CRLF): like a PS1 ending in a newline.
-        let full_prompt = |r: i32| r >= grid.topmost_line().0 && row(r).iter().all(|c| has(c, TAG_PROMPT));
+        let full_prompt =
+            |r: i32| r >= grid.topmost_line().0 && row(r).iter().all(|c| has(c, TAG_PROMPT));
         let cont = self.pwsh_cont.chars().count();
         let below = end < grid.bottommost_line().0 && tagged(end + 1);
         let at_prompt = (top..=cl).any(prompt_row)
-            || (pwsh && cont > 0 && row(top).iter().take(cont).map(|c| c.c).eq(self.pwsh_cont.chars()))
-            || ((self.line_col0 || full_prompt(top - 1)) && top > grid.topmost_line().0 && prompt_row(top - 1) && !below);
-        let mut e = Extracted { at_prompt, ..Extracted::default() };
+            || (pwsh
+                && cont > 0
+                && row(top)
+                    .iter()
+                    .take(cont)
+                    .map(|c| c.c)
+                    .eq(self.pwsh_cont.chars()))
+            || ((self.line_col0 || full_prompt(top - 1))
+                && top > grid.topmost_line().0
+                && prompt_row(top - 1)
+                && !below);
+        let mut e = Extracted {
+            at_prompt,
+            ..Extracted::default()
+        };
         let mut cursor = None;
         let (mut pad, mut line_has_cmd) = (0, false);
         // Blanks between command cells and the cursor are buffer text (zsh skips them with CUF on a redraw).
@@ -749,7 +830,10 @@ impl Tracker {
                 if (r, c) == (cl, cc) {
                     at_cursor(&mut e, &mut pad, line_has_cmd);
                 }
-                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
                     continue;
                 }
                 let after = (r, c) >= (cl, cc);
@@ -792,7 +876,10 @@ impl Tracker {
         let (mut out, mut off, mut shift) = (String::with_capacity(e.buffer.len()), 0, 0);
         for (i, line) in e.buffer.split('\n').enumerate() {
             let p = if i == 0 {
-                self.pwsh_prompt_text.iter().find(|p| line.starts_with(p.as_str())).map_or(0, |p| p.len())
+                self.pwsh_prompt_text
+                    .iter()
+                    .find(|p| line.starts_with(p.as_str()))
+                    .map_or(0, |p| p.len())
             } else if !self.pwsh_cont.is_empty() && line.starts_with(&self.pwsh_cont) {
                 self.pwsh_cont.len()
             } else {
@@ -813,14 +900,20 @@ impl Tracker {
 /// SGR parameters of a pwsh `InlinePredictionColor` (ESC stripped: `[97;2;3m`, `38;5;8`, `[38;2;r;g;bm[3m`): its
 /// colours plus the DIM/ITALIC a prediction cell must carry. None when it sets neither.
 fn parse_sgr(spec: &str) -> Option<(SuggestionColor, Flags)> {
-    let p: Vec<u16> = spec.split([';', ':', '[', 'm']).filter_map(|s| s.trim().parse().ok()).collect();
+    let p: Vec<u16> = spec
+        .split([';', ':', '[', 'm'])
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
     let byte = |k: usize| p.get(k).and_then(|&n| u8::try_from(n).ok());
     let (mut c, mut flags, mut i) = (SuggestionColor::default(), Flags::empty(), 0);
     while i < p.len() {
         // 38/48;5;n and 38/48;2;r;g;b: (colour, parameters used).
         let ext = match p.get(i + 1) {
             Some(5) => (byte(i + 2), 3),
-            Some(2) => ((|| Some(rgb_to_256(byte(i + 2)?, byte(i + 3)?, byte(i + 4)?)))(), 5),
+            Some(2) => (
+                (|| Some(rgb_to_256(byte(i + 2)?, byte(i + 3)?, byte(i + 4)?)))(),
+                5,
+            ),
             _ => (None, 1),
         };
         let mut step = 1;
@@ -858,10 +951,16 @@ fn tag(model: &mut Model, uri: Option<String>) {
 /// line's cells after it (bash readline: CUF over a vi-mode switch, DCH at the end of an i-search): `from` cells at
 /// and after the cursor (its line and wrap continuations) get the cursor template's tag.
 fn mark_line_start(model: &mut Model, from: Option<&str>) {
-    let prompt = Some(alacritty_terminal::term::cell::Hyperlink::new(None::<String>, TAG_PROMPT.into()));
+    let prompt = Some(alacritty_terminal::term::cell::Hyperlink::new(
+        None::<String>,
+        TAG_PROMPT.into(),
+    ));
     let link = model.grid().cursor.template.hyperlink();
     let (cols, bottom) = (model.grid().columns(), model.grid().bottommost_line());
-    let (mut line, mut split) = (model.grid().cursor.point.line, model.grid().cursor.point.column.0);
+    let (mut line, mut split) = (
+        model.grid().cursor.point.line,
+        model.grid().cursor.point.column.0,
+    );
     loop {
         let row = &mut model.grid_mut()[line];
         for c in 0..cols {
@@ -874,7 +973,10 @@ fn mark_line_start(model: &mut Model, from: Option<&str>) {
                 cell.set_hyperlink(link.clone());
             }
         }
-        if from.is_none() || line >= bottom || !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+        if from.is_none()
+            || line >= bottom
+            || !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE)
+        {
             break;
         }
         (line, split) = (line + 1, 0);
@@ -903,7 +1005,10 @@ mod tests {
     fn setup(cols: usize, rows: usize, shell: Shell) -> (Tracker, Model) {
         let mut t = Tracker::new(SID.into(), Some(shell), rows);
         t.defer = false;
-        (t, Term::new(Config::default(), &TermSize::new(cols, rows), VoidListener))
+        (
+            t,
+            Term::new(Config::default(), &TermSize::new(cols, rows), VoidListener),
+        )
     }
 
     fn feed(t: &mut Tracker, m: &mut Model, s: &str) -> Vec<u8> {
@@ -933,11 +1038,29 @@ mod tests {
     }
 
     fn bytes_of(pieces: &[Piece]) -> Vec<u8> {
-        pieces.iter().flat_map(|p| if let Piece::Bytes(b) = p { b.clone() } else { vec![] }).collect()
+        pieces
+            .iter()
+            .flat_map(|p| {
+                if let Piece::Bytes(b) = p {
+                    b.clone()
+                } else {
+                    vec![]
+                }
+            })
+            .collect()
     }
 
     fn markers_of(pieces: &[Piece]) -> Vec<String> {
-        pieces.iter().filter_map(|p| if let Piece::Marker(m) = p { Some(m.clone()) } else { None }).collect()
+        pieces
+            .iter()
+            .filter_map(|p| {
+                if let Piece::Marker(m) = p {
+                    Some(m.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -950,7 +1073,14 @@ mod tests {
         }
         // Marker sits at the exact byte offset.
         let p = split_all(&[b"x\x1b]697;NewCmd\x07y"]);
-        assert_eq!(p, [Piece::Bytes(b"x".to_vec()), Piece::Marker("NewCmd".into()), Piece::Bytes(b"y".to_vec())]);
+        assert_eq!(
+            p,
+            [
+                Piece::Bytes(b"x".to_vec()),
+                Piece::Marker("NewCmd".into()),
+                Piece::Bytes(b"y".to_vec())
+            ]
+        );
     }
 
     #[test]
@@ -960,14 +1090,20 @@ mod tests {
         // Non-697 OSCs and other escapes pass through byte-exact (also split across chunks).
         let raw: &[u8] = b"\x1b]0;title\x07\x1b]8;;http://x\x1b\\l\x1b]8;;\x1b\\\x1b[31m";
         assert_eq!(bytes_of(&split_all(&[raw])), raw);
-        assert_eq!(bytes_of(&split_all(&[&raw[..3], &raw[3..12], &raw[12..]])), raw);
+        assert_eq!(
+            bytes_of(&split_all(&[&raw[..3], &raw[3..12], &raw[12..]])),
+            raw
+        );
         // ESC + other byte inside an OSC abandons it and re-processes the ESC.
         let p = split_all(&[b"\x1b]697;Di\x1b[1m\x1b]697;X\x07"]);
         assert_eq!(bytes_of(&p), b"\x1b]697;Di\x1b[1m");
         assert_eq!(markers_of(&p), ["X"]);
         // Trailing lone ESC is held until the next chunk.
         let mut s = Splitter::default();
-        assert!(s.feed(b"a\x1b").iter().all(|p| p == &Piece::Bytes(b"a".to_vec())));
+        assert!(s
+            .feed(b"a\x1b")
+            .iter()
+            .all(|p| p == &Piece::Bytes(b"a".to_vec())));
         assert_eq!(s.feed(b"[m"), [Piece::Bytes(b"\x1b[m".to_vec())]);
     }
 
@@ -985,7 +1121,11 @@ mod tests {
     #[test]
     fn markers_stripped_from_output() {
         let (mut t, mut m) = setup(40, 5, Shell::Zsh);
-        let out = feed(&mut t, &mut m, &format!("{}\x1b]0;t\x07{}x", osc("Dir=/tmp"), prompt("% ")));
+        let out = feed(
+            &mut t,
+            &mut m,
+            &format!("{}\x1b]0;t\x07{}x", osc("Dir=/tmp"), prompt("% ")),
+        );
         assert_eq!(out, b"\x1b]0;t\x07% x");
         assert_eq!(t.cwd, Some(PathBuf::from("/tmp")));
         assert_eq!(buf(&t, &m), ("x".into(), 1));
@@ -994,13 +1134,30 @@ mod tests {
     #[test]
     fn lock_and_foreign_session_ids() {
         let (mut t, mut m) = setup(40, 5, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}{}", osc("OSCLock=other"), osc("Dir=/a")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}{}", osc("OSCLock=other"), osc("Dir=/a")),
+        );
         assert!(!t.osc_lock);
         assert_eq!(t.cwd, Some(PathBuf::from("/a")));
-        feed(&mut t, &mut m, &format!("{}{}{}", osc(&format!("OSCLock={SID}")), osc("Dir=/b"), osc("OSCUnlock=other")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}{}{}",
+                osc(&format!("OSCLock={SID}")),
+                osc("Dir=/b"),
+                osc("OSCUnlock=other")
+            ),
+        );
         assert!(t.osc_lock);
         assert_eq!(t.cwd, Some(PathBuf::from("/a")));
-        feed(&mut t, &mut m, &format!("{}{}", osc(&format!("OSCUnlock={SID}")), osc("Dir=/c")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}{}", osc(&format!("OSCUnlock={SID}")), osc("Dir=/c")),
+        );
         assert!(!t.osc_lock);
         assert_eq!(t.cwd, Some(PathBuf::from("/c")));
         // Empty values are ignored.
@@ -1019,7 +1176,15 @@ mod tests {
     fn bare_newcmd_cannot_fake_a_prompt_while_locked() {
         let (mut t, mut m) = setup(40, 5, Shell::Bash);
         feed(&mut t, &mut m, &prompt("$ "));
-        feed(&mut t, &mut m, &format!("cat x\r\n{}{}", osc(&format!("OSCLock={SID}")), osc("PreExec")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "cat x\r\n{}{}",
+                osc(&format!("OSCLock={SID}")),
+                osc("PreExec")
+            ),
+        );
         assert!(t.preexec);
         // `cat` of untrusted output prints a bare NewCmd: the command keeps running.
         feed(&mut t, &mut m, "\x1b]697;NewCmd\x07");
@@ -1030,17 +1195,43 @@ mod tests {
     #[test]
     fn command_cycle_produces_history() {
         let (mut t, mut m) = setup(40, 6, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}{}{}", osc("Shell=zsh"), osc("PID=42"), prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}{}{}", osc("Shell=zsh"), osc("PID=42"), prompt("% ")),
+        );
         assert_eq!(t.events, [Event::NewCmd(None)]);
         t.events.clear();
         feed(&mut t, &mut m, "ls -l");
-        feed(&mut t, &mut m, &format!("\r\n{}{}file\r\n", osc(&format!("OSCLock={SID}")), osc("PreExec")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "\r\n{}{}file\r\n",
+                osc(&format!("OSCLock={SID}")),
+                osc("PreExec")
+            ),
+        );
         assert_eq!(t.events, [Event::PreExec]);
         assert!(t.extract(&m).is_none());
         t.events.clear();
-        feed(&mut t, &mut m, &format!("{}{}{}", osc(&format!("OSCUnlock={SID}")), osc("ExitCode=2"), prompt("% ")));
-        let [Event::NewCmd(Some(h))] = &t.events[..] else { panic!("{:?}", t.events) };
-        assert_eq!((h.command.as_str(), h.exit_code, h.pid, h.shell.as_str()), ("ls -l", Some(2), Some(42), "zsh"));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}{}{}",
+                osc(&format!("OSCUnlock={SID}")),
+                osc("ExitCode=2"),
+                prompt("% ")
+            ),
+        );
+        let [Event::NewCmd(Some(h))] = &t.events[..] else {
+            panic!("{:?}", t.events)
+        };
+        assert_eq!(
+            (h.command.as_str(), h.exit_code, h.pid, h.shell.as_str()),
+            ("ls -l", Some(2), Some(42), "zsh")
+        );
         assert_eq!(h.session_id, SID);
         assert_eq!(buf(&t, &m), (String::new(), 0));
     }
@@ -1058,14 +1249,22 @@ mod tests {
     #[test]
     fn extract_ignores_rprompt() {
         let (mut t, mut m) = setup(40, 5, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}\x1b[35G{SP}[rp]{EP}\x1b[3Gls", prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}\x1b[35G{SP}[rp]{EP}\x1b[3Gls", prompt("% ")),
+        );
         assert_eq!(buf(&t, &m), ("ls".into(), 2));
     }
 
     #[test]
     fn extract_ps2_multiline() {
         let (mut t, mut m) = setup(40, 5, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}echo 'a\r\n{SP}> {EP}b", prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}echo 'a\r\n{SP}> {EP}b", prompt("% ")),
+        );
         assert_eq!(buf(&t, &m), ("echo 'a\nb".into(), 9));
         // Cursor back on the first line: the PS2 row below still counts.
         feed(&mut t, &mut m, "\x1b[A\x1b[4G");
@@ -1092,34 +1291,74 @@ mod tests {
     #[test]
     fn extract_excludes_completion_listing_below() {
         let (mut t, mut m) = setup(40, 6, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}git ch\r\ncheckout  cherry-pick\r\ncherry\x1b[2A\r\x1b[8C", prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}git ch\r\ncheckout  cherry-pick\r\ncherry\x1b[2A\r\x1b[8C",
+                prompt("% ")
+            ),
+        );
         assert_eq!(buf(&t, &m), ("git ch".into(), 6));
     }
 
     #[test]
     fn extract_ghost_after_cursor_vs_typed_grey() {
         let (mut t, mut m) = setup(40, 5, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}{}git st\x1b[90matus\x1b[0m\x1b[4D", osc("ZshAutosuggestionColor=fg=8"), prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}{}git st\x1b[90matus\x1b[0m\x1b[4D",
+                osc("ZshAutosuggestionColor=fg=8"),
+                prompt("% ")
+            ),
+        );
         let e = t.extract(&m).unwrap();
-        assert_eq!((e.buffer.as_str(), e.cursor, e.shell_ghost), ("git st", 6, true));
+        assert_eq!(
+            (e.buffer.as_str(), e.cursor, e.shell_ghost),
+            ("git st", 6, true)
+        );
 
         let (mut t, mut m) = setup(40, 5, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}{}\x1b[38;5;8mgit\x1b[0m st", osc("ZshAutosuggestionColor=fg=8"), prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}{}\x1b[38;5;8mgit\x1b[0m st",
+                osc("ZshAutosuggestionColor=fg=8"),
+                prompt("% ")
+            ),
+        );
         let e = t.extract(&m).unwrap();
-        assert_eq!((e.buffer.as_str(), e.cursor, e.shell_ghost), ("git st", 6, false));
+        assert_eq!(
+            (e.buffer.as_str(), e.cursor, e.shell_ghost),
+            ("git st", 6, false)
+        );
 
         // pwsh: PSReadLine predictions are dim/italic.
         let (mut t, mut m) = setup(40, 5, Shell::Pwsh);
-        feed(&mut t, &mut m, &format!("{}ls\x1b[3m -Force\x1b[0m\x1b[7D", prompt("PS> ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}ls\x1b[3m -Force\x1b[0m\x1b[7D", prompt("PS> ")),
+        );
         let e = t.extract(&m).unwrap();
-        assert_eq!((e.buffer.as_str(), e.cursor, e.shell_ghost), ("ls", 2, true));
+        assert_eq!(
+            (e.buffer.as_str(), e.cursor, e.shell_ghost),
+            ("ls", 2, true)
+        );
     }
 
     #[test]
     fn extract_keeps_blank_skipped_before_cursor() {
         // zsh redraw (Ctrl-L, reset-prompt) moves over the trailing blank with CUF instead of writing it.
         let (mut t, mut m) = setup(40, 5, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}git \r{}git\x1b[K\x1b[1C", prompt("% "), prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}git \r{}git\x1b[K\x1b[1C", prompt("% "), prompt("% ")),
+        );
         assert_eq!(buf(&t, &m), ("git ".into(), 4));
         // Blanks after the prompt alone are not buffer text; blanks after the cursor are still trimmed.
         feed(&mut t, &mut m, &format!("\r{}\x1b[K\x1b[2C", prompt("% ")));
@@ -1133,17 +1372,45 @@ mod tests {
         // A custom InlinePredictionColor (plain grey, neither dim nor italic) is excluded after the cursor.
         let (mut t, mut m) = setup(40, 5, Shell::Pwsh);
         let grey = "git ch\x1b[90meckout main\x1b[0m\x1b[11D";
-        feed(&mut t, &mut m, &format!("{}{}{grey}", osc("PwshPredictionColor=[90m"), prompt("PS> ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}{}{grey}",
+                osc("PwshPredictionColor=[90m"),
+                prompt("PS> ")
+            ),
+        );
         let e = t.extract(&m).unwrap();
-        assert_eq!((e.buffer.as_str(), e.cursor, e.shell_ghost), ("git ch", 6, true));
+        assert_eq!(
+            (e.buffer.as_str(), e.cursor, e.shell_ghost),
+            ("git ch", 6, true)
+        );
         // The default colour, reported: bright white + dim + italic; a plain bright white cell is typed text.
-        feed(&mut t, &mut m, &format!("\r\x1b[K{}{}ls\x1b[97;2;3m -Force\x1b[0;97m x\x1b[0m\x1b[9D", osc("PwshPredictionColor=[97;2;3m"), prompt("PS> ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "\r\x1b[K{}{}ls\x1b[97;2;3m -Force\x1b[0;97m x\x1b[0m\x1b[9D",
+                osc("PwshPredictionColor=[97;2;3m"),
+                prompt("PS> ")
+            ),
+        );
         let e = t.extract(&m).unwrap();
         assert_eq!((e.buffer.as_str(), e.cursor), ("ls        x", 2));
         let p = |s: &str| parse_sgr(s).map(|(c, f)| (c.fg, c.bg, f));
-        assert_eq!(p("[97;2;3m"), Some((vec![Some(15)], vec![], Flags::DIM | Flags::ITALIC)));
-        assert_eq!(p("38;5;238;48;2;0;0;0"), Some((vec![Some(238)], vec![Some(16)], Flags::empty())));
-        assert_eq!(p("[38;2;170;170;170m[3m"), Some((vec![Some(rgb_to_256(170, 170, 170))], vec![], Flags::ITALIC)));
+        assert_eq!(
+            p("[97;2;3m"),
+            Some((vec![Some(15)], vec![], Flags::DIM | Flags::ITALIC))
+        );
+        assert_eq!(
+            p("38;5;238;48;2;0;0;0"),
+            Some((vec![Some(238)], vec![Some(16)], Flags::empty()))
+        );
+        assert_eq!(
+            p("[38;2;170;170;170m[3m"),
+            Some((vec![Some(rgb_to_256(170, 170, 170))], vec![], Flags::ITALIC))
+        );
         assert_eq!(p("[39;49m"), Some((vec![None], vec![None], Flags::empty())));
         assert_eq!((p("[0m"), p("[1;4m"), p("x")), (None, None, None));
     }
@@ -1152,22 +1419,57 @@ mod tests {
     fn no_history_marker_drops_the_command() {
         let (mut t, mut m) = setup(40, 6, Shell::Fish);
         let run = |t: &mut Tracker, m: &mut Model, cmd: &str, private: bool| {
-            let nh = if private { osc("NoHistory") } else { String::new() };
-            feed(t, m, &format!("{cmd}\r\n{}{nh}{}out\r\n{}", osc(&format!("OSCLock={SID}")), osc("PreExec"), precmd(&["ExitCode=0"], "> ")));
+            let nh = if private {
+                osc("NoHistory")
+            } else {
+                String::new()
+            };
+            feed(
+                t,
+                m,
+                &format!(
+                    "{cmd}\r\n{}{nh}{}out\r\n{}",
+                    osc(&format!("OSCLock={SID}")),
+                    osc("PreExec"),
+                    precmd(&["ExitCode=0"], "> ")
+                ),
+            );
             std::mem::take(&mut t.events)
         };
         feed(&mut t, &mut m, &prompt("> "));
         t.events.clear();
         // Sent while locked (fish emits it after OSCLock): still honoured; the menu still resets.
         // r3-nohistory-skips-command-finish: it still ends (the engine resets its generator results).
-        assert_eq!(run(&mut t, &mut m, " set -l TOKEN hunter2", true), [Event::PreExec, Event::CommandEnded]);
+        assert_eq!(
+            run(&mut t, &mut m, " set -l TOKEN hunter2", true),
+            [Event::PreExec, Event::CommandEnded]
+        );
         assert!(!t.no_history);
         let ev = run(&mut t, &mut m, "ls", false);
-        assert!(matches!(&ev[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "ls"), "{ev:?}");
+        assert!(
+            matches!(&ev[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "ls"),
+            "{ev:?}"
+        );
         // A running command printing the marker cannot hide itself or the next command.
-        feed(&mut t, &mut m, &format!("make\r\n{}{}", osc(&format!("OSCLock={SID}")), osc("PreExec")));
-        feed(&mut t, &mut m, &format!("{}{}", osc("NoHistory"), precmd(&[], "> ")));
-        assert!(matches!(&t.events[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "make"), "{:?}", t.events);
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "make\r\n{}{}",
+                osc(&format!("OSCLock={SID}")),
+                osc("PreExec")
+            ),
+        );
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}{}", osc("NoHistory"), precmd(&[], "> ")),
+        );
+        assert!(
+            matches!(&t.events[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "make"),
+            "{:?}",
+            t.events
+        );
     }
 
     #[test]
@@ -1178,16 +1480,41 @@ mod tests {
             feed(t, m, &prompt("$ "));
             feed(t, m, screen);
             t.submitted = Some(submitted.into());
-            feed(t, m, &format!("{}{}\r\n{}", osc(&format!("OSCLock={SID}")), osc("PreExec"), precmd(&[], "$ ")));
-            let Some(Event::NewCmd(Some(h))) = t.events.last() else { panic!("{:?}", t.events) };
+            feed(
+                t,
+                m,
+                &format!(
+                    "{}{}\r\n{}",
+                    osc(&format!("OSCLock={SID}")),
+                    osc("PreExec"),
+                    precmd(&[], "$ ")
+                ),
+            );
+            let Some(Event::NewCmd(Some(h))) = t.events.last() else {
+                panic!("{:?}", t.events)
+            };
             assert_eq!(t.submitted, None);
             h.command.clone()
         };
         // bash/zsh echo the `!!` expansion (and zsh its correction prompt) before PreExec.
-        assert_eq!(finish(&mut t, &mut m, "echo !!\r\necho echo first", "echo !! "), "echo !!");
+        assert_eq!(
+            finish(&mut t, &mut m, "echo !!\r\necho echo first", "echo !! "),
+            "echo !!"
+        );
         // A line the shell rewrote on Enter (fish abbreviation, PS2 loop) is taken from the screen.
-        assert_eq!(finish(&mut t, &mut m, "git checkout", "gco"), "git checkout");
-        assert_eq!(finish(&mut t, &mut m, &format!("echo 'a\r\n{SP}> {EP}b'"), "echo 'a\nb'"), "echo 'a\nb'");
+        assert_eq!(
+            finish(&mut t, &mut m, "git checkout", "gco"),
+            "git checkout"
+        );
+        assert_eq!(
+            finish(
+                &mut t,
+                &mut m,
+                &format!("echo 'a\r\n{SP}> {EP}b'"),
+                "echo 'a\nb'"
+            ),
+            "echo 'a\nb'"
+        );
     }
 
     #[test]
@@ -1195,8 +1522,23 @@ mod tests {
         // bash-readline-reused-cells-lose-buffer: leaving i-search deletes its prefix (DCH) and reprints only the
         // prompt and the changed start; the shifted rest of the line stays.
         let (mut t, mut m) = setup(80, 5, Shell::Bash);
-        feed(&mut t, &mut m, &format!("{}\r(reverse-i-search)`onel': git log --oneline -1 feature-", prompt("$ ")));
-        feed(&mut t, &mut m, &format!("\r\x1b[24P{}git log --onel{}", prompt("$ "), "\x08".repeat(5)));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}\r(reverse-i-search)`onel': git log --oneline -1 feature-",
+                prompt("$ ")
+            ),
+        );
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "\r\x1b[24P{}git log --onel{}",
+                prompt("$ "),
+                "\x08".repeat(5)
+            ),
+        );
         assert_eq!(buf(&t, &m), ("git log --oneline -1 feature-".into(), 9));
         // vi mode with show-mode-in-prompt: the mode string is redrawn and the line moved over with CUF.
         let (mut t, mut m) = setup(40, 5, Shell::Bash);
@@ -1206,12 +1548,23 @@ mod tests {
         assert_eq!(buf(&t, &m), ("git che".into(), 7));
         // A two-line prompt: only its last line is redrawn, without StartPrompt; it is still the prompt.
         let (mut t, mut m) = setup(40, 5, Shell::Bash);
-        feed(&mut t, &mut m, &format!("{SP}repo\r\n[I]> {EP}{}git ch", nc()));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{SP}repo\r\n[I]> {EP}{}git ch", nc()),
+        );
         feed(&mut t, &mut m, &format!("\r[N]> {EP}{}\x1b[5C", nc()));
         let e = t.extract(&m).unwrap();
-        assert_eq!((e.buffer.as_str(), e.cursor, e.at_prompt), ("git ch", 5, true));
+        assert_eq!(
+            (e.buffer.as_str(), e.cursor, e.at_prompt),
+            ("git ch", 5, true)
+        );
         // A finished command's cells are not taken over by the next prompt.
-        feed(&mut t, &mut m, &format!("\r\n{}{}", osc("PreExec"), prompt("$ ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("\r\n{}{}", osc("PreExec"), prompt("$ ")),
+        );
         assert_eq!(buf(&t, &m), (String::new(), 0));
     }
 
@@ -1220,24 +1573,47 @@ mod tests {
         let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
         let (mut t, mut m) = setup(40, 12, Shell::Zsh);
         // R4-7: fzf Ctrl-T after typed text draws its query row below the line (no wrap, no prompt).
-        feed(&mut t, &mut m, &format!("{}cat \r\n  3/3\r\n> read", prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}cat \r\n  3/3\r\n> read", prompt("% ")),
+        );
         assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
         // fzf exits; the widget redraws the prompt and the line.
-        feed(&mut t, &mut m, &format!("\r\x1b[2A\x1b[J{}cat readme.md", prompt("% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("\r\x1b[2A\x1b[J{}cat readme.md", prompt("% ")),
+        );
         assert_eq!(at(&t, &m), Some(("cat readme.md".into(), true)));
         // fish-ctrl-r-pager-hijacked: the history pager's search field below the line.
         let (mut t, mut m) = setup(40, 12, Shell::Fish);
-        feed(&mut t, &mut m, &format!("{}git s\r\nsearch: git s\x1b[s\r\n\u{25ba} git status --short\x1b[u", prompt("> ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}git s\r\nsearch: git s\x1b[s\r\n\u{25ba} git status --short\x1b[u",
+                prompt("> ")
+            ),
+        );
         assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
         // A long line wrapped onto the next rows is still the line; so is a PS2 row.
         let (mut t, mut m) = setup(20, 8, Shell::Bash);
-        feed(&mut t, &mut m, &format!("{}abcdefghijklmnopqrstuvwxyz0123456789", prompt("$ ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}abcdefghijklmnopqrstuvwxyz0123456789", prompt("$ ")),
+        );
         assert_eq!(at(&t, &m).map(|e| e.1), Some(true));
         feed(&mut t, &mut m, &format!("\r\n{SP}> {EP}b"));
         assert_eq!(at(&t, &m).map(|e| e.1), Some(true));
         // pwsh: PSReadLine's ContinuationPrompt (drawn after EndPrompt) starts a line of the command too.
         let (mut t, mut m) = setup(40, 8, Shell::Pwsh);
-        feed(&mut t, &mut m, &format!("{}ls |\r\n>> git ch", prompt("PS> ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}ls |\r\n>> git ch", prompt("PS> ")),
+        );
         assert_eq!(at(&t, &m), Some(("ls |\ngit ch".into(), true)));
     }
 
@@ -1246,14 +1622,26 @@ mod tests {
         // fish redraws a wrapped line after an edit on its first row: up to the margin, then CRLF (no WRAPLINE).
         let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
         let (mut t, mut m) = setup(20, 8, Shell::Fish);
-        feed(&mut t, &mut m, &format!("{}abcdefghijklmnopqr\r\nstu", prompt("$ ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}abcdefghijklmnopqr\r\nstu", prompt("$ ")),
+        );
         assert_eq!(at(&t, &m), Some(("abcdefghijklmnopqrstu".into(), true)));
         let (mut t, mut m) = setup(20, 8, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}\r\ngit ch", prompt("xxxxxxxxxxxxxxxxxx% ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}\r\ngit ch", prompt("xxxxxxxxxxxxxxxxxx% ")),
+        );
         assert_eq!(at(&t, &m), Some(("git ch".into(), true)));
         // A right prompt at the margin does not join an inline TUI's query row below (fzf --layout=reverse).
         let (mut t, mut m) = setup(20, 8, Shell::Zsh);
-        feed(&mut t, &mut m, &format!("{}cat\x1b[18G{SP}[R]{EP}\r\n> rea", prompt("$ ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}cat\x1b[18G{SP}[R]{EP}\r\n> rea", prompt("$ ")),
+        );
         assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
     }
 
@@ -1263,19 +1651,46 @@ mod tests {
         let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
         let (mut t, mut m) = setup(20, 12, Shell::Zsh);
         // The prompt's own line wraps too.
-        feed(&mut t, &mut m, &format!("{SP}~/a/very/long/path/here\r\n{EP}{}git ch", nc()));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{SP}~/a/very/long/path/here\r\n{EP}{}git ch", nc()),
+        );
         assert_eq!(at(&t, &m), Some(("git ch".into(), true)));
         // fzf (default layout) from an empty line starts on the line's row: its query row is not the line.
-        feed(&mut t, &mut m, &format!("\r\n{}{SP}~\r\n{EP}{}  a.txt\r\n  b.txt\r\n  2/2\r\n> rea", osc("PreExec"), nc()));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "\r\n{}{SP}~\r\n{EP}{}  a.txt\r\n  b.txt\r\n  2/2\r\n> rea",
+                osc("PreExec"),
+                nc()
+            ),
+        );
         assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
         // After typed text it starts below the line.
-        feed(&mut t, &mut m, &format!("\r\x1b[4A\x1b[J{SP}~\r\n{EP}{}cat \r\n> rea", nc()));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("\r\x1b[4A\x1b[J{SP}~\r\n{EP}{}cat \r\n> rea", nc()),
+        );
         assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
         // Reverse layout (fzf's Ctrl-T default) from an empty line: the query row is the line's own row.
-        feed(&mut t, &mut m, &format!("\r\x1b[2A\x1b[J{SP}~\r\n{EP}{}\x1b[s\r\n  2/2\r\n  a.txt\x1b[u  rea", nc()));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "\r\x1b[2A\x1b[J{SP}~\r\n{EP}{}\x1b[s\r\n  2/2\r\n  a.txt\x1b[u  rea",
+                nc()
+            ),
+        );
         assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
         // fzf exits (clearing its rows); the line is back.
-        feed(&mut t, &mut m, &format!("\r\x1b[J\x1b[A{SP}~\r\n{EP}{}cat a.txt", nc()));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("\r\x1b[J\x1b[A{SP}~\r\n{EP}{}cat a.txt", nc()),
+        );
         assert_eq!(at(&t, &m), Some(("cat a.txt".into(), true)));
     }
 
@@ -1283,11 +1698,33 @@ mod tests {
     fn prompt_drawn_without_markers_is_at_the_prompt() {
         // R4-1: pwsh re-wraps a foreign prompt at ReadLine and sends NewCmd without StartPrompt/EndPrompt.
         let (mut t, mut m) = setup(40, 8, Shell::Pwsh);
-        feed(&mut t, &mut m, &format!("{}PS top> {}{}git ch", osc("PreExec"), osc(&format!("OSCUnlock={SID}")), nc()));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{}PS top> {}{}git ch",
+                osc("PreExec"),
+                osc(&format!("OSCUnlock={SID}")),
+                nc()
+            ),
+        );
         let e = t.extract(&m).unwrap();
-        assert_eq!((e.buffer.as_str(), e.cursor, e.at_prompt), ("git ch", 6, true));
+        assert_eq!(
+            (e.buffer.as_str(), e.cursor, e.at_prompt),
+            ("git ch", 6, true)
+        );
         // The same after a command ran.
-        feed(&mut t, &mut m, &format!("\r\n{}{}out\r\nPS top> {}{}ls", osc(&format!("OSCLock={SID}")), osc("PreExec"), osc(&format!("OSCUnlock={SID}")), nc()));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "\r\n{}{}out\r\nPS top> {}{}ls",
+                osc(&format!("OSCLock={SID}")),
+                osc("PreExec"),
+                osc(&format!("OSCUnlock={SID}")),
+                nc()
+            ),
+        );
         let e = t.extract(&m).unwrap();
         assert_eq!((e.buffer.as_str(), e.at_prompt), ("ls", true));
     }
@@ -1298,8 +1735,19 @@ mod tests {
         let run = |t: &mut Tracker, m: &mut Model, typed: &str, finish: &str| {
             feed(t, m, &format!("{}{typed}", prompt("% ")));
             t.submitted = Some(typed.into());
-            feed(t, m, &format!("{finish}{}{}out\r\n{}", osc(&format!("OSCLock={SID}")), osc("PreExec"), precmd(&[], "% ")));
-            let Some(Event::NewCmd(Some(h))) = std::mem::take(&mut t.events).pop() else { panic!() };
+            feed(
+                t,
+                m,
+                &format!(
+                    "{finish}{}{}out\r\n{}",
+                    osc(&format!("OSCLock={SID}")),
+                    osc("PreExec"),
+                    precmd(&[], "% ")
+                ),
+            );
+            let Some(Event::NewCmd(Some(h))) = std::mem::take(&mut t.events).pop() else {
+                panic!()
+            };
             h.command
         };
         // r3-transient-redraw-clears-submitted: zle-line-finish re-expands PS1 (NewCmd) between Enter and PreExec.
@@ -1308,30 +1756,64 @@ mod tests {
         // transient-prompt-pollutes-history: a transient prompt drawn without markers lands in the scrape.
         let transient = "\r\x1b[K\u{276f} gti status\r\nzsh: correct 'gti' to 'git' [nyae]? y\r\n";
         assert_eq!(run(&mut t, &mut m, "gti status", transient), "gti status");
-        assert_eq!(run(&mut t, &mut m, "echo hi", "\r\x1b[K\u{276f} echo hi\r\n"), "echo hi");
+        assert_eq!(
+            run(&mut t, &mut m, "echo hi", "\r\x1b[K\u{276f} echo hi\r\n"),
+            "echo hi"
+        );
         // Only as whole words ending a line: a rewritten line is still read from the screen.
-        assert_eq!(run(&mut t, &mut m, "gco", "\r\x1b[K\u{276f} git checkout\r\n"), "\u{276f} git checkout");
-        assert_eq!(run(&mut t, &mut m, "ls", "\r\x1b[K\u{276f} lsd\r\n"), "\u{276f} lsd");
+        assert_eq!(
+            run(&mut t, &mut m, "gco", "\r\x1b[K\u{276f} git checkout\r\n"),
+            "\u{276f} git checkout"
+        );
+        assert_eq!(
+            run(&mut t, &mut m, "ls", "\r\x1b[K\u{276f} lsd\r\n"),
+            "\u{276f} lsd"
+        );
     }
 
     #[test]
     fn nested_shell_prompt_keeps_outer_command_running() {
         let (mut t, mut m) = setup(40, 8, Shell::Fish);
-        let at = |pid: u32, exit: u32| precmd(&[&format!("PID={pid}"), &format!("ExitCode={exit}")], "> ");
+        let at = |pid: u32, exit: u32| {
+            precmd(&[&format!("PID={pid}"), &format!("ExitCode={exit}")], "> ")
+        };
         let run = |t: &mut Tracker, m: &mut Model, cmd: &str, then: String| {
-            feed(t, m, &format!("{cmd}\r\n{}{}{then}", osc(&format!("OSCLock={SID}")), osc("PreExec")));
+            feed(
+                t,
+                m,
+                &format!(
+                    "{cmd}\r\n{}{}{then}",
+                    osc(&format!("OSCLock={SID}")),
+                    osc("PreExec")
+                ),
+            );
             std::mem::take(&mut t.events)
                 .into_iter()
-                .filter_map(|e| if let Event::NewCmd(h) = e { Some(h.map(|h| (h.command, h.exit_code))) } else { None })
+                .filter_map(|e| {
+                    if let Event::NewCmd(h) = e {
+                        Some(h.map(|h| (h.command, h.exit_code)))
+                    } else {
+                        None
+                    }
+                })
                 .collect::<Vec<_>>()
         };
         feed(&mut t, &mut m, &at(100, 0));
         t.events.clear();
         // fish (100) → bash (200) → `false` → `exit 5` → fish prompt (exit 5).
         assert_eq!(run(&mut t, &mut m, "bash", at(200, 0)), [None]);
-        assert_eq!(run(&mut t, &mut m, "false", at(200, 1)), [Some(("false".into(), Some(1)))]);
+        assert_eq!(
+            run(&mut t, &mut m, "false", at(200, 1)),
+            [Some(("false".into(), Some(1)))]
+        );
         let done = run(&mut t, &mut m, "exit 5", at(100, 5));
-        assert_eq!(done, [Some(("exit 5".into(), Some(5))), Some(("bash".into(), Some(5)))]);
+        assert_eq!(
+            done,
+            [
+                Some(("exit 5".into(), Some(5))),
+                Some(("bash".into(), Some(5)))
+            ]
+        );
         assert!(t.pending.is_empty());
         // A prompt redraw of the same shell finishes nothing.
         feed(&mut t, &mut m, &format!("\r{}", prompt("> ")));
@@ -1342,14 +1824,25 @@ mod tests {
     fn pwsh_continuation_and_prompt_text_stripped() {
         // Default ContinuationPrompt `>> ` before the prompt reports it; the cursor keeps its character.
         let (mut t, mut m) = setup(40, 6, Shell::Pwsh);
-        feed(&mut t, &mut m, &format!("{}if ($true) {{\r\n>> git ch", prompt("PS> ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}if ($true) {{\r\n>> git ch", prompt("PS> ")),
+        );
         assert_eq!(buf(&t, &m), ("if ($true) {\ngit ch".into(), 19));
         feed(&mut t, &mut m, "\x1b[2D");
         assert_eq!(buf(&t, &m), ("if ($true) {\ngit ch".into(), 17));
         // Reported prompts; PSReadLine re-renders the PromptText `> ` (red) on a parse error.
         let (mut t, mut m) = setup(40, 6, Shell::Pwsh);
         let prompts = osc("PwshPrompts=... \x1f> ");
-        feed(&mut t, &mut m, &format!("{prompts}{}echo (2\x1b[3G\x1b[31m> \x1b[0m\x1b[12G", prompt("PS> ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!(
+                "{prompts}{}echo (2\x1b[3G\x1b[31m> \x1b[0m\x1b[12G",
+                prompt("PS> ")
+            ),
+        );
         assert_eq!(buf(&t, &m), ("echo (2".into(), 7));
         feed(&mut t, &mut m, "\r\n... )");
         assert_eq!(buf(&t, &m), ("echo (2\n)".into(), 9));
@@ -1363,18 +1856,33 @@ mod tests {
     #[test]
     fn pwsh_list_view_rows_not_in_buffer() {
         // PSReadLine pads the input row to the full width, so its ListView rows can look like a wrap continuation.
-        let screen = format!("{}git ch{}<-/4> > cherry-pick\x1b[1;11H", prompt("PS> "), " ".repeat(10));
+        let screen = format!(
+            "{}git ch{}<-/4> > cherry-pick\x1b[1;11H",
+            prompt("PS> "),
+            " ".repeat(10)
+        );
         let (mut t, mut m) = setup(20, 6, Shell::Pwsh);
         feed(&mut t, &mut m, &screen);
         assert_ne!(buf(&t, &m).0, "git ch");
         let (mut t, mut m) = setup(20, 6, Shell::Pwsh);
-        feed(&mut t, &mut m, &format!("{}{screen}", osc("PwshListView=1")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}{screen}", osc("PwshListView=1")),
+        );
         assert!(t.pwsh_list_view);
         assert_eq!(buf(&t, &m), ("git ch".into(), 6));
         feed(&mut t, &mut m, &osc("PwshListView=0"));
         assert!(!t.pwsh_list_view);
-        feed(&mut t, &mut m, &format!("{}{}", osc("PwshListView=1"), osc("PreExec")));
-        assert!(!t.pwsh_list_view, "a command (maybe a nested shell) does not inherit it");
+        feed(
+            &mut t,
+            &mut m,
+            &format!("{}{}", osc("PwshListView=1"), osc("PreExec")),
+        );
+        assert!(
+            !t.pwsh_list_view,
+            "a command (maybe a nested shell) does not inherit it"
+        );
     }
 
     #[test]
@@ -1387,7 +1895,11 @@ mod tests {
         assert!(m.grid().history_size() > 0);
         assert_eq!(buf(&t, &m), (cmd.into(), cmd.len()));
         // Command output below a finished command does not leak into the next buffer.
-        feed(&mut t, &mut m, &format!("\r\n{}out\r\n{}x", osc("PreExec"), prompt("$ ")));
+        feed(
+            &mut t,
+            &mut m,
+            &format!("\r\n{}out\r\n{}x", osc("PreExec"), prompt("$ ")),
+        );
         assert_eq!(buf(&t, &m), ("x".into(), 1));
     }
 
@@ -1404,7 +1916,10 @@ mod tests {
         // A marker-free batch applies the queue in order, at the current cursor.
         feed(&mut t, &mut m, "\x1b[?25h");
         assert!(t.deferred.is_empty());
-        assert_eq!((t.cycle, &t.events[..]), (Some(1), &[Event::NewCmd(None)][..]));
+        assert_eq!(
+            (t.cycle, &t.events[..]),
+            (Some(1), &[Event::NewCmd(None)][..])
+        );
         feed(&mut t, &mut m, "ls");
         assert_eq!(buf(&t, &m), ("ls".into(), 2));
     }
@@ -1412,21 +1927,57 @@ mod tests {
     #[test]
     fn suggestion_colors() {
         let z = SuggestionColor::parse_zsh("fg=8,bold").unwrap();
-        assert_eq!(z, SuggestionColor { fg: vec![Some(8)], bg: vec![] });
-        assert_eq!(SuggestionColor::parse_zsh("fg=yellow").unwrap().fg, [Some(3)]);
-        assert_eq!(SuggestionColor::parse_zsh("fg=245").unwrap().fg, [Some(245)]);
-        assert_eq!(SuggestionColor::parse_zsh("fg=#aaaaaa,bg=default").unwrap().bg, [None]);
+        assert_eq!(
+            z,
+            SuggestionColor {
+                fg: vec![Some(8)],
+                bg: vec![]
+            }
+        );
+        assert_eq!(
+            SuggestionColor::parse_zsh("fg=yellow").unwrap().fg,
+            [Some(3)]
+        );
+        assert_eq!(
+            SuggestionColor::parse_zsh("fg=245").unwrap().fg,
+            [Some(245)]
+        );
+        assert_eq!(
+            SuggestionColor::parse_zsh("fg=#aaaaaa,bg=default")
+                .unwrap()
+                .bg,
+            [None]
+        );
         assert_eq!(SuggestionColor::parse_zsh("bold"), None);
         let f = SuggestionColor::parse_fish("555 brblack --bold").unwrap();
         assert_eq!(f.fg, [Some(rgb_to_256(0x55, 0x55, 0x55)), Some(8)]);
-        assert_eq!(SuggestionColor::parse_fish("-b red 666").unwrap().fg, [Some(rgb_to_256(0x66, 0x66, 0x66))]);
+        assert_eq!(
+            SuggestionColor::parse_fish("-b red 666").unwrap().fg,
+            [Some(rgb_to_256(0x66, 0x66, 0x66))]
+        );
         // Cell colours: named, indexed and truecolor all map to xterm-256.
-        let mut cell = Cell { fg: Color::Named(alacritty_terminal::vte::ansi::NamedColor::BrightBlack), ..Cell::default() };
+        let mut cell = Cell {
+            fg: Color::Named(alacritty_terminal::vte::ansi::NamedColor::BrightBlack),
+            ..Cell::default()
+        };
         assert!(z.matches(&cell));
-        cell.fg = Color::Spec(alacritty_terminal::vte::ansi::Rgb { r: 0xaa, g: 0xaa, b: 0xaa });
-        assert!(SuggestionColor::parse_zsh("fg=#aaaaaa").unwrap().matches(&cell));
+        cell.fg = Color::Spec(alacritty_terminal::vte::ansi::Rgb {
+            r: 0xaa,
+            g: 0xaa,
+            b: 0xaa,
+        });
+        assert!(SuggestionColor::parse_zsh("fg=#aaaaaa")
+            .unwrap()
+            .matches(&cell));
         assert!(!z.matches(&cell));
-        assert_eq!((rgb_to_256(0, 0, 0), rgb_to_256(255, 0, 0), rgb_to_256(128, 128, 128)), (16, 196, 244));
+        assert_eq!(
+            (
+                rgb_to_256(0, 0, 0),
+                rgb_to_256(255, 0, 0),
+                rgb_to_256(128, 128, 128)
+            ),
+            (16, 196, 244)
+        );
     }
 
     fn filter(f: &mut OutFilter, s: &[u8]) -> Vec<u8> {
@@ -1438,10 +1989,30 @@ mod tests {
     #[test]
     fn output_filter_strips_keyboard_upgrades() {
         let mut f = OutFilter::new(24);
-        for seq in ["\x1b[?9001h", "\x1b[?9001l", "\x1b[?u", "\x1b[=1;1u", "\x1b[>1u", "\x1b[<1u", "\x1b[>4;2m", "\x1b[>4m"] {
-            assert_eq!(filter(&mut f, format!("a{seq}b").as_bytes()), b"ab", "{seq:?}");
+        for seq in [
+            "\x1b[?9001h",
+            "\x1b[?9001l",
+            "\x1b[?u",
+            "\x1b[=1;1u",
+            "\x1b[>1u",
+            "\x1b[<1u",
+            "\x1b[>4;2m",
+            "\x1b[>4m",
+        ] {
+            assert_eq!(
+                filter(&mut f, format!("a{seq}b").as_bytes()),
+                b"ab",
+                "{seq:?}"
+            );
         }
-        for seq in ["\x1b[u", "\x1b[>c", "\x1b[?2004h", "\x1b[38;2;219;177;49m", "\x1b(B", "\x1b7"] {
+        for seq in [
+            "\x1b[u",
+            "\x1b[>c",
+            "\x1b[?2004h",
+            "\x1b[38;2;219;177;49m",
+            "\x1b(B",
+            "\x1b7",
+        ] {
             assert_eq!(filter(&mut f, seq.as_bytes()), seq.as_bytes(), "{seq:?}");
         }
         // Split across batches: held back, then stripped / emitted whole.
@@ -1450,8 +2021,14 @@ mod tests {
         assert_eq!(filter(&mut f, b"x\x1b[3"), b"x");
         assert_eq!(filter(&mut f, b"1mz"), b"\x1b[31mz");
         // Inside the alternate screen the app keeps its keyboard protocol.
-        assert_eq!(filter(&mut f, b"\x1b[?1049h\x1b[>1u"), b"\x1b[?1049h\x1b[>1u");
-        assert_eq!(filter(&mut f, b"\x1b[<u\x1b[?1049l\x1b[>1u"), b"\x1b[<u\x1b[?1049l");
+        assert_eq!(
+            filter(&mut f, b"\x1b[?1049h\x1b[>1u"),
+            b"\x1b[?1049h\x1b[>1u"
+        );
+        assert_eq!(
+            filter(&mut f, b"\x1b[<u\x1b[?1049l\x1b[>1u"),
+            b"\x1b[<u\x1b[?1049l"
+        );
     }
 
     #[test]
@@ -1491,7 +2068,10 @@ mod tests {
         assert!(f.in_string() && out.len() > 64 * digits.len() - SEQ_MAX - digits.len());
         out.extend(filter(&mut f, b"1mz\x1b[?9001h"));
         assert!(!f.in_string());
-        assert_eq!(out, [&b"x\x1b["[..], &vec![b'1'; 64 * digits.len() + 1], b"mz"].concat());
+        assert_eq!(
+            out,
+            [&b"x\x1b["[..], &vec![b'1'; 64 * digits.len() + 1], b"mz"].concat()
+        );
     }
 
     #[test]

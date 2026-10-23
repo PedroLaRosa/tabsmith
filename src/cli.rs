@@ -115,7 +115,9 @@ pub enum DebugCmd {
     /// Print the bytes of every key press (Ctrl-D exits)
     KeyTester,
     /// Start a shell with only the tabsmith integration loaded
-    Shell { shell: Option<crate::integrations::ShellArg> },
+    Shell {
+        shell: Option<crate::integrations::ShellArg>,
+    },
     /// Show log file paths and the end of pty.log
     Logs,
 }
@@ -152,7 +154,11 @@ pub fn settings(args: SettingsArgs) -> Result<i32> {
         Some(SettingsCmd::Open) => return open_settings(&path),
         Some(SettingsCmd::List { all, format }) => {
             let map = Store::load(&path)?.map;
-            emit(&if all { render_list_all(&map, format) } else { render_list(&map, format) });
+            emit(&if all {
+                render_list_all(&map, format)
+            } else {
+                render_list(&map, format)
+            });
             return Ok(0);
         }
         Some(SettingsCmd::All { format }) => {
@@ -166,7 +172,9 @@ pub fn settings(args: SettingsArgs) -> Result<i32> {
             bail!("the argument '--delete' requires a <KEY>\n Usage: tabsmith settings --delete <KEY>");
         }
         // Same as `tabsmith settings --help`.
-        if let Err(help) = <crate::Cli as clap::Parser>::try_parse_from(["tabsmith", "settings", "--help"]) {
+        if let Err(help) =
+            <crate::Cli as clap::Parser>::try_parse_from(["tabsmith", "settings", "--help"])
+        {
             help.print()?;
         }
         return Ok(0);
@@ -213,7 +221,10 @@ fn render_get(key: &str, value: Option<&Value>, format: OutputFormat) -> Result<
 }
 
 fn matching_keys(map: &Map<String, Value>, pattern: &str) -> Vec<String> {
-    map.keys().filter(|k| settings::wildcard_match(pattern, k)).cloned().collect()
+    map.keys()
+        .filter(|k| settings::wildcard_match(pattern, k))
+        .cloned()
+        .collect()
 }
 
 fn removal_message(keys: &[String]) -> String {
@@ -229,7 +240,12 @@ fn removal_message(keys: &[String]) -> String {
 /// `settings list`: configured keys (sorted: serde_json's Map is a BTreeMap).
 fn render_list(map: &Map<String, Value>, format: OutputFormat) -> String {
     format.render(
-        || map.iter().map(|(k, v)| format!("{k} = {v}")).collect::<Vec<_>>().join("\n"),
+        || {
+            map.iter()
+                .map(|(k, v)| format!("{k} = {v}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        },
         || Value::Object(map.clone()),
     )
 }
@@ -266,9 +282,16 @@ fn render_list_all(map: &Map<String, Value>, format: OutputFormat) -> String {
 /// `$EDITOR <path>` (waits), else macOS `open -t`, Windows `notepad`.
 fn open_settings(path: &Path) -> Result<i32> {
     if !path.exists() {
-        Store { path: path.to_path_buf(), map: Map::new() }.save()?;
+        Store {
+            path: path.to_path_buf(),
+            map: Map::new(),
+        }
+        .save()?;
     }
-    let mut cmd = if let Some(editor) = std::env::var("EDITOR").ok().filter(|e| !e.trim().is_empty()) {
+    let mut cmd = if let Some(editor) = std::env::var("EDITOR")
+        .ok()
+        .filter(|e| !e.trim().is_empty())
+    {
         // ponytail: whitespace split covers `code --wait`; quoted editor paths with spaces are not supported.
         let mut parts = editor.split_whitespace();
         let mut c = std::process::Command::new(parts.next().unwrap_or_default());
@@ -283,7 +306,10 @@ fn open_settings(path: &Path) -> Result<i32> {
     } else {
         bail!("The EDITOR environment variable is not set")
     };
-    let status = cmd.arg(path).status().context("could not launch the editor")?;
+    let status = cmd
+        .arg(path)
+        .status()
+        .context("could not launch the editor")?;
     Ok(if status.success() { 0 } else { 1 })
 }
 
@@ -347,14 +373,17 @@ pub fn theme(args: ThemeArgs) -> Result<i32> {
     let color = stdout_tty();
     let path = dir.join(format!("{name}.json"));
     if let Ok(text) = std::fs::read_to_string(&path) {
-        let file = parse_theme(&text).with_context(|| format!("invalid theme file {}", path.display()))?;
+        let file =
+            parse_theme(&text).with_context(|| format!("invalid theme file {}", path.display()))?;
         print!("{}", theme_banner(&name, &file, color));
     } else if BUILTIN_THEMES.contains(&name.as_str()) {
         println!("› Switching to theme '{}'", bold(&name, color));
     } else {
         bail!("'{name}' does not exist in {}", dir.display());
     }
-    store.map.insert("autocomplete.theme".into(), Value::String(name));
+    store
+        .map
+        .insert("autocomplete.theme".into(), Value::String(name));
     store.save()?;
     Ok(0)
 }
@@ -376,7 +405,11 @@ fn theme_list(dir: &Path) -> Vec<String> {
         .collect();
     files.sort();
     files.dedup();
-    BUILTIN_THEMES.iter().map(|s| s.to_string()).chain(files).collect()
+    BUILTIN_THEMES
+        .iter()
+        .map(|s| s.to_string())
+        .chain(files)
+        .collect()
 }
 
 fn theme_banner(name: &str, file: &ThemeFile, color: bool) -> String {
@@ -407,12 +440,23 @@ pub fn inline(cmd: InlineCmd) -> Result<i32> {
         InlineCmd::Disable => set_inline_enabled(false, color)?,
         InlineCmd::Status => {
             let on = Settings::from_map(Store::load_settings()?.map).bool("inline.enabled", true);
-            println!("Inline is {}", bold(if on { "enabled" } else { "disabled" }, color));
+            println!(
+                "Inline is {}",
+                bold(if on { "enabled" } else { "disabled" }, color)
+            );
         }
         InlineCmd::SetCustomization { name } => set_customization(name, color)?,
         InlineCmd::ShowCustomizations { format } => {
             let s = Settings::from_map(Store::load_settings()?.map);
-            print!("{}", render_sources(selected_source(&s), &crate::inline::profiles(&s), format, color));
+            print!(
+                "{}",
+                render_sources(
+                    selected_source(&s),
+                    &crate::inline::profiles(&s),
+                    format,
+                    color
+                )
+            );
         }
     }
     Ok(0)
@@ -422,7 +466,18 @@ fn set_inline_enabled(on: bool, color: bool) -> Result<()> {
     let mut store = Store::load_settings()?;
     store.map.insert("inline.enabled".into(), Value::Bool(on));
     store.save()?;
-    println!("{}", sgr(if on { "Inline enabled" } else { "Inline disabled" }, "35", color));
+    println!(
+        "{}",
+        sgr(
+            if on {
+                "Inline enabled"
+            } else {
+                "Inline disabled"
+            },
+            "35",
+            color
+        )
+    );
     Ok(())
 }
 
@@ -440,10 +495,11 @@ fn provider_name(p: Provider) -> &'static str {
 fn set_customization(name: Option<String>, color: bool) -> Result<()> {
     let mut store = Store::load_settings()?;
     // Only valid profiles can be selected (an invalid one would only make doctor fail).
-    let profiles: Vec<(String, Profile)> = crate::inline::profiles(&Settings::from_map(store.map.clone()))
-        .into_iter()
-        .filter_map(|(n, p)| Some((n, p.ok()?)))
-        .collect();
+    let profiles: Vec<(String, Profile)> =
+        crate::inline::profiles(&Settings::from_map(store.map.clone()))
+            .into_iter()
+            .filter_map(|(n, p)| Some((n, p.ok()?)))
+            .collect();
     let name = match name {
         Some(n) => n,
         None => match choose_source(&profiles)? {
@@ -456,10 +512,13 @@ fn set_customization(name: Option<String>, color: bool) -> Result<()> {
             }
         },
     };
-    if !BUILTIN_SOURCES.iter().any(|(b, _)| *b == name) && !profiles.iter().any(|(n, _)| *n == name) {
+    if !BUILTIN_SOURCES.iter().any(|(b, _)| *b == name) && !profiles.iter().any(|(n, _)| *n == name)
+    {
         bail!("Customization not found");
     }
-    store.map.insert("inline.source".into(), Value::String(name.clone()));
+    store
+        .map
+        .insert("inline.source".into(), Value::String(name.clone()));
     store.save()?;
     println!("Customization {} selected", bold(&name, color));
     Ok(())
@@ -470,8 +529,16 @@ fn choose_source(profiles: &[(String, Profile)]) -> Result<Option<String>> {
     if !std::io::stdin().is_terminal() {
         bail!("No customization selected");
     }
-    let mut rows: Vec<(String, String)> = BUILTIN_SOURCES.iter().map(|(n, d)| (n.to_string(), d.to_string())).collect();
-    rows.extend(profiles.iter().map(|(n, p)| (n.clone(), format!("{} {}", provider_name(p.provider), p.model))));
+    let mut rows: Vec<(String, String)> = BUILTIN_SOURCES
+        .iter()
+        .map(|(n, d)| (n.to_string(), d.to_string()))
+        .collect();
+    rows.extend(profiles.iter().map(|(n, p)| {
+        (
+            n.clone(),
+            format!("{} {}", provider_name(p.provider), p.model),
+        )
+    }));
     for (i, (n, d)) in rows.iter().enumerate() {
         println!("{}) {n} - {d}", i + 1);
     }
@@ -548,7 +615,12 @@ pub fn diagnostic(args: DiagnosticArgs) -> Result<i32> {
             || to_toml(&sections),
             || {
                 Value::Object(
-                    sections.iter().map(|(n, rows)| (n.to_string(), Value::Object(rows.iter().cloned().collect()))).collect(),
+                    sections
+                        .iter()
+                        .map(|(n, rows)| {
+                            (n.to_string(), Value::Object(rows.iter().cloned().collect()))
+                        })
+                        .collect(),
                 )
             },
         )
@@ -562,7 +634,8 @@ fn diagnostics() -> Vec<Section> {
         if user.is_empty() {
             s
         } else {
-            s.replace(&format!("/{user}"), "/USER").replace(&format!("\\{user}"), "\\USER")
+            s.replace(&format!("/{user}"), "/USER")
+                .replace(&format!("\\{user}"), "\\USER")
         }
     };
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
@@ -572,19 +645,34 @@ fn diagnostics() -> Vec<Section> {
     let shell = env("SHELL");
     let shell_version = shell
         .as_ref()
-        .and_then(|sh| std::process::Command::new(sh).arg("--version").output().ok())
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().next().map(|l| l.trim().to_string()));
-    let terminal =
-        env("TERM_PROGRAM").or_else(|| env("WT_SESSION").map(|_| "Windows Terminal".into())).or_else(|| env("TERM"));
-    let in_ssh = ["SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"].iter().any(|k| env(k).is_some());
+        .and_then(|sh| {
+            std::process::Command::new(sh)
+                .arg("--version")
+                .output()
+                .ok()
+        })
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .map(|l| l.trim().to_string())
+        });
+    let terminal = env("TERM_PROGRAM")
+        .or_else(|| env("WT_SESSION").map(|_| "Windows Terminal".into()))
+        .or_else(|| env("TERM"));
+    let in_ssh = ["SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"]
+        .iter()
+        .any(|k| env(k).is_some());
     let in_wsl = cfg!(target_os = "linux")
         && (env("WSL_DISTRO_NAME").is_some()
-            || std::fs::read_to_string("/proc/sys/kernel/osrelease").is_ok_and(|s| s.to_lowercase().contains("microsoft")));
+            || std::fs::read_to_string("/proc/sys/kernel/osrelease")
+                .is_ok_and(|s| s.to_lowercase().contains("microsoft")));
 
     let mut env_vars: Vec<(String, Value)> = std::env::vars_os()
         .filter_map(|(k, v)| {
             let k = k.into_string().ok()?;
-            let keep = k.starts_with("TABSMITH_") || ["SHELL", "TERM", "COLORTERM", "ZDOTDIR", "PATH"].contains(&k.as_str());
+            let keep = k.starts_with("TABSMITH_")
+                || ["SHELL", "TERM", "COLORTERM", "ZDOTDIR", "PATH"].contains(&k.as_str());
             keep.then(|| (k, Value::String(clean(v.to_string_lossy().into_owned()))))
         })
         .collect();
@@ -596,14 +684,31 @@ fn diagnostics() -> Vec<Section> {
             "tabsmith",
             vec![
                 row("version", json!(env!("CARGO_PKG_VERSION"))),
-                row("os", json!(format!("{} {}", std::env::consts::OS, std::env::consts::ARCH))),
+                row(
+                    "os",
+                    json!(format!(
+                        "{} {}",
+                        std::env::consts::OS,
+                        std::env::consts::ARCH
+                    )),
+                ),
             ],
         ),
         (
             "environment",
             vec![
-                row("cwd", opt(std::env::current_dir().ok().map(|p| p.display().to_string()))),
-                row("cli-path", opt(std::env::current_exe().ok().map(|p| p.display().to_string()))),
+                row(
+                    "cwd",
+                    opt(std::env::current_dir()
+                        .ok()
+                        .map(|p| p.display().to_string())),
+                ),
+                row(
+                    "cli-path",
+                    opt(std::env::current_exe()
+                        .ok()
+                        .map(|p| p.display().to_string())),
+                ),
                 row("shell-path", opt(shell)),
                 row("shell-version", opt(shell_version)),
                 row("terminal", opt(terminal)),
@@ -622,8 +727,14 @@ fn to_toml(sections: &[Section]) -> String {
     for (name, rows) in sections {
         out += &format!("[{name}]\n");
         for (k, v) in rows.iter().filter(|(_, v)| !v.is_null()) {
-            let bare = k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-            let key = if bare { k.clone() } else { Value::String(k.clone()).to_string() };
+            let bare = k
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+            let key = if bare {
+                k.clone()
+            } else {
+                Value::String(k.clone()).to_string()
+            };
             out += &format!("{key} = {v}\n");
         }
         out.push('\n');
@@ -637,7 +748,12 @@ fn to_toml(sections: &[Section]) -> String {
 pub fn completion(args: CompletionArgs) -> Result<i32> {
     // Buffered: clap_complete panics on a write error (e.g. `| head`).
     let mut buf = Vec::new();
-    clap_complete::generate(args.shell, &mut <crate::Cli as clap::CommandFactory>::command(), "tabsmith", &mut buf);
+    clap_complete::generate(
+        args.shell,
+        &mut <crate::Cli as clap::CommandFactory>::command(),
+        "tabsmith",
+        &mut buf,
+    );
     std::io::stdout().write_all(&buf)?;
     Ok(0)
 }
@@ -652,13 +768,22 @@ pub fn debug(cmd: DebugCmd) -> Result<i32> {
 
 fn key_line(input: &[u8]) -> String {
     let hex: Vec<String> = input.iter().map(|b| format!("{b:#04x}")).collect();
-    format!("{} bytes : \"{}\" : [{}]", input.len(), input.escape_ascii(), hex.join(", "))
+    format!(
+        "{} bytes : \"{}\" : [{}]",
+        input.len(),
+        input.escape_ascii(),
+        hex.join(", ")
+    )
 }
 
 /// ponytail: Windows reads through std's console stdin, so keys without VT input mode show as text only.
 fn key_tester() -> Result<i32> {
     let color = stdout_tty();
-    println!("{} (use {} to quit)", bold("Testing Key Input", color), sgr("ctrl-d", "35", color));
+    println!(
+        "{} (use {} to quit)",
+        bold("Testing Key Input", color),
+        sgr("ctrl-d", "35", color)
+    );
     crossterm::terminal::enable_raw_mode()?;
     let res = (|| -> Result<()> {
         let (mut stdin, mut stdout) = (std::io::stdin().lock(), std::io::stdout().lock());
@@ -693,7 +818,9 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
             .context("Could not determine current shell or shell not supported")?,
     };
     // The user's own binary when $SHELL is that shell, else the name (resolved on PATH by the wrapper).
-    let exe = env_shell.filter(|s| Shell::from_name(s) == Some(shell)).unwrap_or_else(|| shell.name().to_string());
+    let exe = env_shell
+        .filter(|s| Shell::from_name(s) == Some(shell))
+        .unwrap_or_else(|| shell.name().to_string());
     let post = crate::integrations::init_script(shell, When::Post)? + "\n";
     let (dir, cmd) = debug_shell_files(&settings::home()?, shell, &exe, &post)?;
     if shell == Shell::Zsh {
@@ -711,8 +838,15 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
 
 /// Write the rc file `post` into a fresh private dir under `home` (the data dir, never a shared temp dir whose name
 /// another user could claim first); returns the dir (zsh's ZDOTDIR) and the shell argv that loads the rc file.
-fn debug_shell_files(home: &Path, shell: Shell, exe: &str, post: &str) -> Result<(std::path::PathBuf, Vec<String>)> {
-    let dir = home.join("run").join(format!("debug-shell-{}", std::process::id()));
+fn debug_shell_files(
+    home: &Path,
+    shell: Shell,
+    exe: &str,
+    post: &str,
+) -> Result<(std::path::PathBuf, Vec<String>)> {
+    let dir = home
+        .join("run")
+        .join(format!("debug-shell-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir); // a stale dir of ours from a crashed run with the same pid
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
@@ -752,7 +886,9 @@ fn debug_logs() -> Result<i32> {
         let text = String::from_utf8_lossy(&bytes);
         let lines: Vec<&str> = text.lines().collect();
         println!();
-        lines[lines.len().saturating_sub(50)..].iter().for_each(|l| println!("{l}"));
+        lines[lines.len().saturating_sub(50)..]
+            .iter()
+            .for_each(|l| println!("{l}"));
     }
     Ok(0)
 }
@@ -775,7 +911,8 @@ mod tests {
     }
 
     fn tmp_dir(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("tabsmith-cli-test-{}-{name}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("tabsmith-cli-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -795,32 +932,60 @@ mod tests {
     fn settings_get_formats() {
         let s = json!("dark");
         let a = json!(["git", "npm"]);
-        assert_eq!(render_get("k", Some(&s), OutputFormat::Plain).unwrap(), "dark");
-        assert_eq!(render_get("k", Some(&s), OutputFormat::Json).unwrap(), "\"dark\"");
-        assert_eq!(render_get("k", Some(&a), OutputFormat::Json).unwrap(), "[\"git\",\"npm\"]");
-        assert_eq!(render_get("k", Some(&a), OutputFormat::Plain).unwrap(), "[\n  \"git\",\n  \"npm\"\n]");
+        assert_eq!(
+            render_get("k", Some(&s), OutputFormat::Plain).unwrap(),
+            "dark"
+        );
+        assert_eq!(
+            render_get("k", Some(&s), OutputFormat::Json).unwrap(),
+            "\"dark\""
+        );
+        assert_eq!(
+            render_get("k", Some(&a), OutputFormat::Json).unwrap(),
+            "[\"git\",\"npm\"]"
+        );
+        assert_eq!(
+            render_get("k", Some(&a), OutputFormat::Plain).unwrap(),
+            "[\n  \"git\",\n  \"npm\"\n]"
+        );
         assert_eq!(render_get("k", None, OutputFormat::Json).unwrap(), "null");
         assert_eq!(
-            render_get("k", None, OutputFormat::Plain).unwrap_err().to_string(),
+            render_get("k", None, OutputFormat::Plain)
+                .unwrap_err()
+                .to_string(),
             "No value associated with k"
         );
     }
 
     #[test]
     fn settings_delete_wildcards() {
-        let m = map(json!({"autocomplete.theme": "dark", "autocomplete.width": 40, "inline.enabled": true}));
-        assert_eq!(matching_keys(&m, "autocomplete.*"), ["autocomplete.theme", "autocomplete.width"]);
+        let m = map(
+            json!({"autocomplete.theme": "dark", "autocomplete.width": 40, "inline.enabled": true}),
+        );
+        assert_eq!(
+            matching_keys(&m, "autocomplete.*"),
+            ["autocomplete.theme", "autocomplete.width"]
+        );
         assert_eq!(matching_keys(&m, "inline.enabled"), ["inline.enabled"]);
         assert!(matching_keys(&m, "nope*").is_empty());
         assert_eq!(removal_message(&["a.b".into()]), "Removing \"a.b\"");
-        assert_eq!(removal_message(&["a".into(), "b".into()]), "Removing:\n  - a\n  - b");
+        assert_eq!(
+            removal_message(&["a".into(), "b".into()]),
+            "Removing:\n  - a\n  - b"
+        );
     }
 
     #[test]
     fn settings_list_formats() {
         let m = map(json!({"b.key": [1], "a.key": "x"}));
-        assert_eq!(render_list(&m, OutputFormat::Plain), "a.key = \"x\"\nb.key = [1]");
-        assert_eq!(render_list(&m, OutputFormat::Json), r#"{"a.key":"x","b.key":[1]}"#);
+        assert_eq!(
+            render_list(&m, OutputFormat::Plain),
+            "a.key = \"x\"\nb.key = [1]"
+        );
+        assert_eq!(
+            render_list(&m, OutputFormat::Json),
+            r#"{"a.key":"x","b.key":[1]}"#
+        );
         assert_eq!(render_list(&Map::new(), OutputFormat::Plain), "");
 
         let m = map(json!({"autocomplete.theme": "light"}));
@@ -832,12 +997,25 @@ mod tests {
         assert!(lines.contains(&"autocomplete.width\tnumber (columns)\t40\t"));
 
         let v: Value = serde_json::from_str(&render_list_all(&m, OutputFormat::Json)).unwrap();
-        let theme = v.as_array().unwrap().iter().find(|e| e["key"] == "autocomplete.theme").unwrap();
+        let theme = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["key"] == "autocomplete.theme")
+            .unwrap();
         assert_eq!(theme["default"], json!("dark"));
         assert_eq!(theme["value"], json!("light"));
         assert!(theme["description"].is_string());
-        let width = v.as_array().unwrap().iter().find(|e| e["key"] == "autocomplete.width").unwrap();
-        assert_eq!((width["default"].clone(), width["value"].clone()), (json!(40), Value::Null));
+        let width = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["key"] == "autocomplete.width")
+            .unwrap();
+        assert_eq!(
+            (width["default"].clone(), width["value"].clone()),
+            (json!(40), Value::Null)
+        );
     }
 
     #[test]
@@ -853,9 +1031,18 @@ mod tests {
 
     #[test]
     fn theme_file_parsing() {
-        let f = parse_theme(r##"{"author":{"name":"Ann","github":"ann"},"version":"1.0","shade0":"#000000"}"##).unwrap();
-        assert_eq!(theme_banner("ocean", &f, false), "\n› Switching to theme 'ocean' by Ann\n  💻 github.com/ann\n\n");
-        assert_eq!(theme_banner("ocean", &parse_theme("{}").unwrap(), false), "\n› Switching to theme 'ocean'\n\n");
+        let f = parse_theme(
+            r##"{"author":{"name":"Ann","github":"ann"},"version":"1.0","shade0":"#000000"}"##,
+        )
+        .unwrap();
+        assert_eq!(
+            theme_banner("ocean", &f, false),
+            "\n› Switching to theme 'ocean' by Ann\n  💻 github.com/ann\n\n"
+        );
+        assert_eq!(
+            theme_banner("ocean", &parse_theme("{}").unwrap(), false),
+            "\n› Switching to theme 'ocean'\n\n"
+        );
         assert!(parse_theme(r#"{"author":"Ann"}"#).is_err());
         assert!(parse_theme(r#"{"shade3":5}"#).is_err());
         assert!(parse_theme("not json").is_err());
@@ -875,7 +1062,10 @@ mod tests {
 
     #[test]
     fn inline_show_customizations() {
-        let profiles = vec![("claude".to_string(), Ok(profile("claude"))), ("bad".to_string(), Err("model missing".into()))];
+        let profiles = vec![
+            ("claude".to_string(), Ok(profile("claude"))),
+            ("bad".to_string(), Err("model missing".into())),
+        ];
         let out = render_sources("claude", &profiles, OutputFormat::Plain, false);
         assert!(out.starts_with("history+specs\nLocal history, then completion specs\n\nhistory\n"));
         assert!(out.contains("claude (selected)\nanthropic claude-opus-5-5\n\n"));
@@ -886,10 +1076,19 @@ mod tests {
         assert!(out.starts_with("history+specs (selected)\n"));
         assert!(out.ends_with(&format!("{PROFILE_EXAMPLE}\n")));
 
-        let v: Value = serde_json::from_str(&render_sources("claude", &profiles, OutputFormat::Json, false)).unwrap();
+        let v: Value = serde_json::from_str(&render_sources(
+            "claude",
+            &profiles,
+            OutputFormat::Json,
+            false,
+        ))
+        .unwrap();
         let rows = v.as_array().unwrap();
         assert_eq!(rows.len(), 5);
-        assert_eq!(rows[0], json!({"name":"history+specs","kind":"builtin","description":"Local history, then completion specs","selected":false}));
+        assert_eq!(
+            rows[0],
+            json!({"name":"history+specs","kind":"builtin","description":"Local history, then completion specs","selected":false})
+        );
         assert_eq!(rows[3]["selected"], json!(true));
         assert_eq!(rows[3]["provider"], json!("anthropic"));
         assert_eq!(rows[3]["api_key_env"], json!("ANTHROPIC_API_KEY"));
@@ -898,15 +1097,30 @@ mod tests {
 
     #[test]
     fn key_tester_line() {
-        assert_eq!(key_line(b"\x1b[A"), "3 bytes : \"\\x1b[A\" : [0x1b, 0x5b, 0x41]");
+        assert_eq!(
+            key_line(b"\x1b[A"),
+            "3 bytes : \"\\x1b[A\" : [0x1b, 0x5b, 0x41]"
+        );
         assert_eq!(key_line(&[4]), "1 bytes : \"\\x04\" : [0x04]");
     }
 
     #[test]
     fn diagnostic_toml() {
         let sections: Vec<Section> = vec![
-            ("tabsmith", vec![("version".into(), json!("0.1.0")), ("missing".into(), Value::Null)]),
-            ("env-vars", vec![("PATH".into(), json!("/a:\"b\"")), ("in-ci".into(), json!(false))]),
+            (
+                "tabsmith",
+                vec![
+                    ("version".into(), json!("0.1.0")),
+                    ("missing".into(), Value::Null),
+                ],
+            ),
+            (
+                "env-vars",
+                vec![
+                    ("PATH".into(), json!("/a:\"b\"")),
+                    ("in-ci".into(), json!(false)),
+                ],
+            ),
         ];
         assert_eq!(
             to_toml(&sections),
@@ -918,18 +1132,29 @@ mod tests {
     #[test]
     fn debug_shell_rc_dir_and_quoting() {
         let home = tmp_dir("o'brien");
-        let stale = home.join("run").join(format!("debug-shell-{}", std::process::id()));
+        let stale = home
+            .join("run")
+            .join(format!("debug-shell-{}", std::process::id()));
         std::fs::create_dir_all(&stale).unwrap();
         std::fs::write(stale.join("planted"), "").unwrap();
-        let cases = [(Shell::Fish, "set -g __ts_m loaded\n", "; echo $__ts_m"), (Shell::Pwsh, "$__ts_m = 'loaded'\n", "; $__ts_m")];
+        let cases = [
+            (Shell::Fish, "set -g __ts_m loaded\n", "; echo $__ts_m"),
+            (Shell::Pwsh, "$__ts_m = 'loaded'\n", "; $__ts_m"),
+        ];
         for (shell, post, show) in cases {
             let (dir, argv) = debug_shell_files(&home, shell, shell.name(), post).unwrap();
             assert_eq!(dir, stale);
-            assert!(!dir.join("planted").exists(), "the dir is recreated, not reused");
+            assert!(
+                !dir.join("planted").exists(),
+                "the dir is recreated, not reused"
+            );
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+                assert_eq!(
+                    std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+                    0o700
+                );
             }
             if crate::integrations::which(shell.name()).is_none() {
                 continue;
@@ -939,13 +1164,23 @@ mod tests {
                 Shell::Fish => vec!["--no-config", "-c", &load],
                 _ => vec!["-NoProfile", "-Command", &load],
             };
-            let out = std::process::Command::new(shell.name()).args(args).output().unwrap();
+            let out = std::process::Command::new(shell.name())
+                .args(args)
+                .output()
+                .unwrap();
             let text = String::from_utf8_lossy(&out.stdout);
-            assert!(text.trim() == "loaded", "{shell:?}: {text}{}", String::from_utf8_lossy(&out.stderr));
+            assert!(
+                text.trim() == "loaded",
+                "{shell:?}: {text}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
             if shell == Shell::Fish {
                 // --no-config skips the default theme: the debug shell still colours fish's autosuggestions.
                 let load = format!("{}; echo $fish_color_autosuggestion", argv.last().unwrap());
-                let out = std::process::Command::new("fish").args(["--no-config", "-c", &load]).output().unwrap();
+                let out = std::process::Command::new("fish")
+                    .args(["--no-config", "-c", &load])
+                    .output()
+                    .unwrap();
                 assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "brblack");
             }
         }
@@ -970,7 +1205,14 @@ mod tests {
         }
         let home = tmp_dir("dbgclose");
         let marker = home.join("marker");
-        let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
         let mut cb = CommandBuilder::new(std::env::current_exe().unwrap());
         cb.args([NAME, "--exact", "--nocapture"]);
         cb.env_clear(); // no terminal integration (kitty, Ghostty, VS Code) of the terminal running the tests
@@ -988,8 +1230,14 @@ mod tests {
         let fd = pair.master.as_raw_fd().unwrap();
         let (mut out, mut b) = (Vec::new(), [0u8; 4096]);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        while !String::from_utf8_lossy(&out).contains("\x1b]0;") && std::time::Instant::now() < deadline {
-            let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        while !String::from_utf8_lossy(&out).contains("\x1b]0;")
+            && std::time::Instant::now() < deadline
+        {
+            let mut p = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
             // SAFETY: poll and read on the master fd we own, into a local buffer.
             if unsafe { libc::poll(&mut p, 1, 100) } == 1 {
                 let n = unsafe { libc::read(fd, b.as_mut_ptr().cast(), b.len()) };
@@ -1009,9 +1257,23 @@ mod tests {
             let _ = child.kill();
         }
         assert!(exited, "{out:?}");
-        assert!(std::fs::read_to_string(&marker).unwrap_or_default().starts_with("Ok("), "panicked: {out:?}");
-        let left: Vec<_> = std::fs::read_dir(home.join("run")).into_iter().flatten().flatten().map(|e| e.file_name()).collect();
-        assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("debug-shell-")), "{left:?}");
+        assert!(
+            std::fs::read_to_string(&marker)
+                .unwrap_or_default()
+                .starts_with("Ok("),
+            "panicked: {out:?}"
+        );
+        let left: Vec<_> = std::fs::read_dir(home.join("run"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            left.iter()
+                .all(|n| !n.to_string_lossy().starts_with("debug-shell-")),
+            "{left:?}"
+        );
         let _ = std::fs::remove_dir_all(home);
     }
 }

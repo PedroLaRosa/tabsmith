@@ -1,5 +1,7 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
-use crate::integrations::{self, epaint, output_with_timeout, paint, which, Ctx, Integration, IntegrationError, When};
+use crate::integrations::{
+    self, epaint, output_with_timeout, paint, which, Ctx, Integration, IntegrationError, When,
+};
 use crate::settings::{Settings, Store};
 use crate::types::{now_secs, Shell};
 use clap::Args;
@@ -33,11 +35,19 @@ type Fix<'a> = Box<dyn FnOnce() -> anyhow::Result<()> + 'a>;
 enum Outcome<'a> {
     Ok,
     Warn(String),
-    Err { reason: String, info: Vec<String>, fix: Option<Fix<'a>> },
+    Err {
+        reason: String,
+        info: Vec<String>,
+        fix: Option<Fix<'a>>,
+    },
 }
 
 fn err<'a>(reason: impl Into<String>) -> Outcome<'a> {
-    Outcome::Err { reason: reason.into(), info: Vec::new(), fix: None }
+    Outcome::Err {
+        reason: reason.into(),
+        info: Vec::new(),
+        fix: None,
+    }
 }
 
 struct Check<'a> {
@@ -47,7 +57,11 @@ struct Check<'a> {
 }
 
 fn check<'a>(name: impl Into<String>, kind: Kind, run: impl Fn() -> Outcome<'a> + 'a) -> Check<'a> {
-    Check { name: name.into(), kind, run: Box::new(run) }
+    Check {
+        name: name.into(),
+        kind,
+        run: Box::new(run),
+    }
 }
 
 fn print_outcome(name: &str, o: &Outcome) {
@@ -78,7 +92,9 @@ struct Run {
 impl Run {
     fn outcome<'a>(&self, c: &Check<'a>) -> Outcome<'a> {
         match (c.run)() {
-            Outcome::Err { reason, .. } if c.kind == Kind::Soft && !self.strict => Outcome::Warn(reason),
+            Outcome::Err { reason, .. } if c.kind == Kind::Soft && !self.strict => {
+                Outcome::Warn(reason)
+            }
             o => o,
         }
     }
@@ -139,9 +155,18 @@ impl Run {
 
 pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
     if integrations::is_root() {
-        eprintln!("{}", epaint("1;31", "Running doctor as root is not supported."));
+        eprintln!(
+            "{}",
+            epaint("1;31", "Running doctor as root is not supported.")
+        );
         if !args.all {
-            eprintln!("{}", epaint("31", "If you know what you're doing, run the command again with --all."));
+            eprintln!(
+                "{}",
+                epaint(
+                    "31",
+                    "If you know what you're doing, run the command again with --all."
+                )
+            );
             return Ok(1);
         }
     }
@@ -155,13 +180,23 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
         warnings: 0,
         spinner: if args.all { None } else { Spinner::start() },
     };
-    let ok = r.group("Let's check your dotfiles...", dotfile_checks(&ctx, current))
-        && r.group("Let's make sure tabsmith is set up correctly...", setup_checks(&ctx))
-        && r.group("Let's check if your environment is supported...", env_checks(&ctx, parent.as_deref()));
+    let ok = r.group(
+        "Let's check your dotfiles...",
+        dotfile_checks(&ctx, current),
+    ) && r.group(
+        "Let's make sure tabsmith is set up correctly...",
+        setup_checks(&ctx),
+    ) && r.group(
+        "Let's check if your environment is supported...",
+        env_checks(&ctx, parent.as_deref()),
+    );
     if ok {
         // Result ignored (SPEC §2.8): printed, but neither aborts nor counts.
         let (e, w) = (r.errors, r.warnings);
-        r.group("Let's check if your system is compatible...", system_checks(current, parent.as_deref()));
+        r.group(
+            "Let's check if your system is compatible...",
+            system_checks(current, parent.as_deref()),
+        );
         (r.errors, r.warnings) = (e, w);
     }
     r.spinner = None;
@@ -169,7 +204,10 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
     let failed = r.errors > 0 || (args.strict && r.warnings > 0);
     if failed {
         println!();
-        println!("{} Doctor found errors. Please fix them and try again.", paint("31", "✘"));
+        println!(
+            "{} Doctor found errors. Please fix them and try again.",
+            paint("31", "✘")
+        );
         println!();
     } else {
         if !args.all {
@@ -180,10 +218,23 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
         println!();
     }
     if let Ok(mut state) = Store::load_state() {
-        if state.map.get("doctor.prompt-restart-terminal").and_then(|v| v.as_bool()) == Some(true) {
-            println!("  {}", paint("1", "PS. Autocomplete won't work in any existing terminal sessions, only new ones."));
+        if state
+            .map
+            .get("doctor.prompt-restart-terminal")
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
+            println!(
+                "  {}",
+                paint(
+                    "1",
+                    "PS. Autocomplete won't work in any existing terminal sessions, only new ones."
+                )
+            );
             println!("  (You might want to restart your terminal emulator)");
-            state.map.insert("doctor.prompt-restart-terminal".into(), false.into());
+            state
+                .map
+                .insert("doctor.prompt-restart-terminal".into(), false.into());
             let _ = state.save();
         }
     }
@@ -213,7 +264,11 @@ fn dotfile_checks(ctx: &Ctx, current: Option<Shell>) -> Vec<Check<'_>> {
             Ok(list) => v.extend(list.into_iter().map(|i| dotfile_check(ctx, i, kind))),
             Err(e) => {
                 let msg = format!("{e:#}");
-                v.push(check(format!("{} integration check", shell.name()), kind, move || err(msg.clone())));
+                v.push(check(
+                    format!("{} integration check", shell.name()),
+                    kind,
+                    move || err(msg.clone()),
+                ));
             }
         }
     }
@@ -221,21 +276,34 @@ fn dotfile_checks(ctx: &Ctx, current: Option<Shell>) -> Vec<Check<'_>> {
 }
 
 fn dotfile_check(ctx: &Ctx, i: Integration, kind: Kind) -> Check<'_> {
-    let name = format!("{} {} integration check", i.shell.name(), short_path(&ctx.home, &i.path));
+    let name = format!(
+        "{} {} integration check",
+        i.shell.name(),
+        short_path(&ctx.home, &i.path)
+    );
     check(name, kind, move || {
         let e = match i.is_installed(ctx) {
             Ok(()) => return Outcome::Ok,
             Err(e) => e,
         };
         let shell = i.shell.name();
-        let cmd = paint("35", &format!("tabsmith integrations install dotfiles {shell}"));
-        let info = vec![format!("Run {cmd} to reinstall shell integrations for {shell}")];
+        let cmd = paint(
+            "35",
+            &format!("tabsmith integrations install dotfiles {shell}"),
+        );
+        let info = vec![format!(
+            "Run {cmd} to reinstall shell integrations for {shell}"
+        )];
         let reason = match &e {
             IntegrationError::NotInstalled(m) | IntegrationError::Improper(m) => m.clone(),
             e => e.to_string(),
         };
         if matches!(e, IntegrationError::PermissionDenied(_)) {
-            return Outcome::Err { reason, info, fix: None };
+            return Outcome::Err {
+                reason,
+                info,
+                fix: None,
+            };
         }
         let i = i.clone();
         let fix: Fix = Box::new(move || {
@@ -243,7 +311,11 @@ fn dotfile_check(ctx: &Ctx, i: Integration, kind: Kind) -> Check<'_> {
             integrations::mark_restart();
             Ok(())
         });
-        Outcome::Err { reason, info, fix: Some(fix) }
+        Outcome::Err {
+            reason,
+            info,
+            fix: Some(fix),
+        }
     })
 }
 
@@ -252,13 +324,18 @@ fn dotfile_check(ctx: &Ctx, i: Integration, kind: Kind) -> Check<'_> {
 /// from PATH) is sourced by nothing, and install, the fix, would never rewrite it.
 fn script_bins(ctx: &Ctx) -> Vec<(Shell, String)> {
     // pwsh's script files do not depend on $PROFILE: no second `pwsh` spawn to ask for it.
-    let ctx = &Ctx { pwsh_profile: Some(ctx.pwsh_profile.clone().unwrap_or_default()), ..ctx.clone() };
+    let ctx = &Ctx {
+        pwsh_profile: Some(ctx.pwsh_profile.clone().unwrap_or_default()),
+        ..ctx.clone()
+    };
     let mut files = Vec::new();
     for shell in Shell::ALL.into_iter().filter(|s| which(s.name()).is_some()) {
         for i in integrations::integrations(ctx, shell).unwrap_or_default() {
             match i.file_when {
                 Some(_) => files.push((shell, i.path)),
-                None => files.extend([When::Pre, When::Post].map(|w| (shell, i.script_path(ctx, w)))),
+                None => {
+                    files.extend([When::Pre, When::Post].map(|w| (shell, i.script_path(ctx, w))))
+                }
             }
         }
     }
@@ -266,7 +343,11 @@ fn script_bins(ctx: &Ctx) -> Vec<(Shell, String)> {
         .into_iter()
         .filter_map(|(shell, p)| {
             // ponytail: raw text between the first two quotes; paths containing `'` are not unescaped.
-            let bin = std::fs::read_to_string(p).ok()?.split('\'').nth(1)?.to_string();
+            let bin = std::fs::read_to_string(p)
+                .ok()?
+                .split('\'')
+                .nth(1)?
+                .to_string();
             Some((shell, bin))
         })
         .collect()
@@ -274,8 +355,13 @@ fn script_bins(ctx: &Ctx) -> Vec<(Shell, String)> {
 
 /// `Let's make sure tabsmith is set up correctly...`
 fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
-    let settings_path = crate::settings::settings_path().unwrap_or_else(|_| ctx.data.join("settings.json"));
-    let specs_index = ctx.data.join("specs").join(crate::specs::version()).join("index.json");
+    let settings_path =
+        crate::settings::settings_path().unwrap_or_else(|_| ctx.data.join("settings.json"));
+    let specs_index = ctx
+        .data
+        .join("specs")
+        .join(crate::specs::version())
+        .join("index.json");
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut v = vec![
         check("tabsmith data dir exists", Kind::Normal, move || {
@@ -283,38 +369,66 @@ fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
                 return Outcome::Ok;
             }
             let fix: Fix = Box::new(move || Ok(std::fs::create_dir_all(&ctx.data)?));
-            Outcome::Err { reason: format!("No directory at path {}", ctx.data.display()), info: vec![], fix: Some(fix) }
+            Outcome::Err {
+                reason: format!("No directory at path {}", ctx.data.display()),
+                info: vec![],
+                fix: Some(fix),
+            }
         }),
-        check("Integration scripts point at this binary", Kind::Normal, move || {
-            let stale: Vec<(Shell, String)> = script_bins(ctx).into_iter().filter(|(_, b)| *b != ctx.bin).collect();
-            let Some((_, old)) = stale.first() else { return Outcome::Ok };
-            let mut shells: Vec<Shell> = stale.iter().map(|(s, _)| *s).collect();
-            shells.dedup();
-            let fix: Fix = Box::new(move || {
-                integrations::install_dotfiles(ctx, &shells)?;
-                integrations::mark_restart();
-                Ok(())
-            });
-            Outcome::Err { reason: format!("Integration scripts reference {old}"), info: vec![], fix: Some(fix) }
-        }),
+        check(
+            "Integration scripts point at this binary",
+            Kind::Normal,
+            move || {
+                let stale: Vec<(Shell, String)> = script_bins(ctx)
+                    .into_iter()
+                    .filter(|(_, b)| *b != ctx.bin)
+                    .collect();
+                let Some((_, old)) = stale.first() else {
+                    return Outcome::Ok;
+                };
+                let mut shells: Vec<Shell> = stale.iter().map(|(s, _)| *s).collect();
+                shells.dedup();
+                let fix: Fix = Box::new(move || {
+                    integrations::install_dotfiles(ctx, &shells)?;
+                    integrations::mark_restart();
+                    Ok(())
+                });
+                Outcome::Err {
+                    reason: format!("Integration scripts reference {old}"),
+                    info: vec![],
+                    fix: Some(fix),
+                }
+            },
+        ),
         check("tabsmith settings corruption", Kind::Normal, move || {
             if Store::load(&settings_path).is_ok() {
                 return Outcome::Ok;
             }
             let path = settings_path.clone();
             let fix: Fix = Box::new(move || {
-                std::fs::copy(&path, path.with_extension(format!("json.bak-{}", now_secs())))?;
+                std::fs::copy(
+                    &path,
+                    path.with_extension(format!("json.bak-{}", now_secs())),
+                )?;
                 std::fs::write(&path, "{}\n")?;
                 Ok(())
             });
-            Outcome::Err { reason: "tabsmith settings file is corrupted".into(), info: vec![], fix: Some(fix) }
+            Outcome::Err {
+                reason: "tabsmith settings file is corrupted".into(),
+                info: vec![],
+                fix: Some(fix),
+            }
         }),
         check("Completion specs installed", Kind::Normal, move || {
             if specs_index.is_file() {
                 return Outcome::Ok;
             }
             let fix: Fix = Box::new(|| crate::specs::ensure_extracted().map(|_| ()));
-            Outcome::Err { reason: "Completion specs are not extracted".into(), info: vec![], fix: Some(fix) }
+            Outcome::Err {
+                reason: "Completion specs are not extracted".into(),
+                info: vec![],
+                fix: Some(fix),
+            }
         }),
     ];
     #[cfg(windows)]
@@ -343,10 +457,14 @@ fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
                 fix: None,
             }
         }));
-        v.push(check("Windows version", Kind::Normal, || match windows_build() {
-            Some(b) if b < 17763 => err("Windows 10 1809 or newer is required (ConPTY)"),
-            _ => Outcome::Ok,
-        }));
+        v.push(check(
+            "Windows version",
+            Kind::Normal,
+            || match windows_build() {
+                Some(b) if b < 17763 => err("Windows 10 1809 or newer is required (ConPTY)"),
+                _ => Outcome::Ok,
+            },
+        ));
     }
     v
 }
@@ -360,7 +478,11 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
     });
     let settings = Settings::load();
     let sid = var("TABSMITH_SESSION_ID");
-    let inline_kind = if settings.bool("inline.enabled", true) { Kind::Normal } else { Kind::Soft };
+    let inline_kind = if settings.bool("inline.enabled", true) {
+        Kind::Normal
+    } else {
+        Kind::Soft
+    };
     let s2 = settings.clone();
     let s3 = settings.clone();
     vec![
@@ -392,14 +514,18 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
             };
             err(reason)
         }),
-        check("Session check", session_kind(sid.as_deref(), parent, var("TABSMITH_SHELL").as_deref()), move || {
-            let sid = sid.clone().unwrap_or_default();
-            if ctx.data.join("run").join(format!("{sid}.json")).is_file() {
-                Outcome::Ok
-            } else {
-                Outcome::Warn("Shell has not reported its environment yet (tabsmith _ pre-cmd did not run)".into())
-            }
-        }),
+        check(
+            "Session check",
+            session_kind(sid.as_deref(), parent, var("TABSMITH_SHELL").as_deref()),
+            move || {
+                let sid = sid.clone().unwrap_or_default();
+                if ctx.data.join("run").join(format!("{sid}.json")).is_file() {
+                    Outcome::Ok
+                } else {
+                    Outcome::Warn("Shell has not reported its environment yet (tabsmith _ pre-cmd did not run)".into())
+                }
+            },
+        ),
         check("Autocomplete is enabled", Kind::Normal, move || {
             if !settings.bool("autocomplete.disable", false) {
                 return Outcome::Ok;
@@ -417,14 +543,18 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
                 Outcome::Ok
             }
         }),
-        check("Inline", inline_kind, move || inline_outcome(&s3, |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))),
+        check("Inline", inline_kind, move || {
+            inline_outcome(&s3, |k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
+        }),
     ]
 }
 
 /// The Session check runs inside a wrapped session, except pwsh, which never runs `_ pre-cmd` (SPEC §5.4.5).
 /// The session shell is the parent process, else `TABSMITH_SHELL` (exported by the pre scripts).
 fn session_kind(sid: Option<&str>, parent: Option<&str>, tabsmith_shell: Option<&str>) -> Kind {
-    let shell = parent.and_then(Shell::from_name).or_else(|| tabsmith_shell.and_then(Shell::from_name));
+    let shell = parent
+        .and_then(Shell::from_name)
+        .or_else(|| tabsmith_shell.and_then(Shell::from_name));
     if sid.is_some() && shell != Some(Shell::Pwsh) {
         Kind::Normal
     } else {
@@ -436,10 +566,15 @@ fn session_kind(sid: Option<&str>, parent: Option<&str>, tabsmith_shell: Option<
 fn inline_outcome<'a>(settings: &Settings, env_set: impl Fn(&str) -> bool) -> Outcome<'a> {
     use crate::inline::Source;
     if !settings.bool("inline.enabled", true) {
-        return Outcome::Warn("Inline is disabled, to re-enable run: tabsmith inline enable".into());
+        return Outcome::Warn(
+            "Inline is disabled, to re-enable run: tabsmith inline enable".into(),
+        );
     }
     match crate::inline::source(settings) {
-        Err(_) => err(format!("Inline source '{}' is not a valid profile", settings.string("inline.source").unwrap_or(""))),
+        Err(_) => err(format!(
+            "Inline source '{}' is not a valid profile",
+            settings.string("inline.source").unwrap_or("")
+        )),
         Ok(Source::Profile(p)) if !is_local(&p.base_url) && !env_set(&p.api_key_env) => {
             err(format!("{} is not set", p.api_key_env))
         }
@@ -448,13 +583,20 @@ fn inline_outcome<'a>(settings: &Settings, env_set: impl Fn(&str) -> bool) -> Ou
 }
 
 fn is_local(url: &str) -> bool {
-    ["://localhost", "://127.0.0.1", "://[::1]"].iter().any(|h| url.contains(h))
+    ["://localhost", "://127.0.0.1", "://[::1]"]
+        .iter()
+        .any(|h| url.contains(h))
 }
 
 /// Numbers of the first dotted version in `s` (`GNU bash, version 5.2.37(1)` → [5, 2, 37]).
 fn version_of(s: &str) -> Option<Vec<u32>> {
-    let v = s.split(|c: char| !(c.is_ascii_digit() || c == '.')).find(|t| t.contains('.') && t.starts_with(|c: char| c.is_ascii_digit()))?;
-    v.split('.').filter(|p| !p.is_empty()).map(|p| p.parse().ok()).collect()
+    let v = s
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .find(|t| t.contains('.') && t.starts_with(|c: char| c.is_ascii_digit()))?;
+    v.split('.')
+        .filter(|p| !p.is_empty())
+        .map(|p| p.parse().ok())
+        .collect()
 }
 
 /// Version printed by `prog args` (5 s timeout).
@@ -471,11 +613,22 @@ fn windows_build() -> Option<u32> {
 
 /// `Let's check if your system is compatible...`
 fn system_checks<'a>(current: Option<Shell>, parent: Option<&str>) -> Vec<Check<'a>> {
-    let bash = if current == Some(Shell::Bash) { parent.unwrap_or("bash").to_string() } else { "bash".into() };
+    let bash = if current == Some(Shell::Bash) {
+        parent.unwrap_or("bash").to_string()
+    } else {
+        "bash".into()
+    };
     vec![
         check("OS is supported", Kind::Normal, os_outcome),
-        check("Bash is new enough", if current == Some(Shell::Bash) { Kind::Soft } else { Kind::Skip }, move || {
-            match version_from(&bash, &["--version"]) {
+        check(
+            "Bash is new enough",
+            if current == Some(Shell::Bash) {
+                Kind::Soft
+            } else {
+                Kind::Skip
+            },
+            move || {
+                match version_from(&bash, &["--version"]) {
                 Some(v) if v.as_slice() < [4, 4].as_slice() => err(format!(
                     "Bash {}.{} is not supported (needs >= 4.4 for PS0); install a newer bash or switch to zsh",
                     v[0],
@@ -483,16 +636,26 @@ fn system_checks<'a>(current: Option<Shell>, parent: Option<&str>) -> Vec<Check<
                 )),
                 _ => Outcome::Ok,
             }
-        }),
-        check("Fish is up to date", if which("fish").is_some() { Kind::Normal } else { Kind::Skip }, || {
-            match version_from("fish", &["--version"]) {
+            },
+        ),
+        check(
+            "Fish is up to date",
+            if which("fish").is_some() {
+                Kind::Normal
+            } else {
+                Kind::Skip
+            },
+            || match version_from("fish", &["--version"]) {
                 Some(v) if v.as_slice() < [3, 3, 0].as_slice() => {
                     let v: Vec<String> = v.iter().map(u32::to_string).collect();
-                    err(format!("your fish version is outdated (need at least 3.3.0, found {})", v.join(".")))
+                    err(format!(
+                        "your fish version is outdated (need at least 3.3.0, found {})",
+                        v.join(".")
+                    ))
                 }
                 _ => Outcome::Ok,
-            }
-        }),
+            },
+        ),
     ]
 }
 
@@ -503,13 +666,18 @@ fn os_outcome<'a>() -> Outcome<'a> {
         "macos" => match version_from("sw_vers", &["-productVersion"]) {
             Some(v) if v[0] < 11 => {
                 let v: Vec<String> = v.iter().map(u32::to_string).collect();
-                Outcome::Warn(format!("macOS {} is not supported (needs macOS 11 or newer)", v.join(".")))
+                Outcome::Warn(format!(
+                    "macOS {} is not supported (needs macOS 11 or newer)",
+                    v.join(".")
+                ))
             }
             _ => Outcome::Ok,
         },
         #[cfg(windows)]
         "windows" => match windows_build() {
-            Some(b) if b < 17763 => Outcome::Warn("Windows 10 1809 or newer is required (ConPTY)".into()),
+            Some(b) if b < 17763 => {
+                Outcome::Warn("Windows 10 1809 or newer is required (ConPTY)".into())
+            }
             _ => Outcome::Ok,
         },
         os => Outcome::Warn(format!("{os} is not supported")),
@@ -540,7 +708,10 @@ impl Spinner {
                 std::thread::sleep(Duration::from_millis(80));
             }
         });
-        Some(Spinner { stop, thread: Some(thread) })
+        Some(Spinner {
+            stop,
+            thread: Some(thread),
+        })
     }
 }
 
@@ -584,7 +755,13 @@ mod tests {
     use std::cell::Cell;
 
     fn run(all: bool, strict: bool) -> Run {
-        Run { all, strict, errors: 0, warnings: 0, spinner: None }
+        Run {
+            all,
+            strict,
+            errors: 0,
+            warnings: 0,
+            spinner: None,
+        }
     }
 
     #[test]
@@ -603,10 +780,16 @@ mod tests {
                         fixed.set(true);
                         Ok(())
                     });
-                    Outcome::Err { reason: "broken".into(), info: vec![], fix: Some(fix) }
+                    Outcome::Err {
+                        reason: "broken".into(),
+                        info: vec![],
+                        fix: Some(fix),
+                    }
                 }),
                 check("fatal", Kind::Normal, || err("nope")),
-                check("after", Kind::Normal, || panic!("must not run after an abort")),
+                check("after", Kind::Normal, || {
+                    panic!("must not run after an abort")
+                }),
             ]
         };
         let mut r = run(false, false);
@@ -632,7 +815,8 @@ mod tests {
     /// setup: its orphaned script files are no longer checked.
     #[test]
     fn doctor_script_bins_skip_orphans() {
-        let dir = std::env::temp_dir().join(format!("tabsmith-doctor-orphans-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("tabsmith-doctor-orphans-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
@@ -647,12 +831,18 @@ mod tests {
         };
         integrations::install_dotfiles(&c, &[Shell::Bash]).unwrap();
         std::fs::remove_file(home.join(".bash_profile")).unwrap();
-        let moved = Ctx { bin: "/new/tabsmith".into(), ..c };
+        let moved = Ctx {
+            bin: "/new/tabsmith".into(),
+            ..c
+        };
         integrations::install_dotfiles(&moved, &[Shell::Bash]).unwrap(); // the check's fix
         assert!(moved.data.join("shell/bash_profile.pre.bash").exists());
         if which("bash").is_some() {
             let bins = script_bins(&moved);
-            assert!(!bins.is_empty() && bins.iter().all(|(_, b)| b == "/new/tabsmith"), "{bins:?}");
+            assert!(
+                !bins.is_empty() && bins.iter().all(|(_, b)| b == "/new/tabsmith"),
+                "{bins:?}"
+            );
         }
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -662,17 +852,31 @@ mod tests {
         let pwsh = Some(r"C:\Program Files\PowerShell\7\pwsh.exe");
         assert_eq!(session_kind(Some("s1"), pwsh, None), Kind::Skip);
         assert_eq!(session_kind(Some("s1"), None, pwsh), Kind::Skip); // parent unknown: TABSMITH_SHELL decides
-        assert_eq!(session_kind(Some("s1"), Some("/bin/zsh"), pwsh), Kind::Normal); // zsh nested in pwsh runs pre-cmd
-        assert_eq!(session_kind(Some("s1"), Some("/bin/zsh"), None), Kind::Normal);
+        assert_eq!(
+            session_kind(Some("s1"), Some("/bin/zsh"), pwsh),
+            Kind::Normal
+        ); // zsh nested in pwsh runs pre-cmd
+        assert_eq!(
+            session_kind(Some("s1"), Some("/bin/zsh"), None),
+            Kind::Normal
+        );
         assert_eq!(session_kind(None, Some("/bin/zsh"), None), Kind::Skip);
     }
 
     #[test]
     fn doctor_version_parsing() {
-        assert_eq!(version_of("GNU bash, version 3.2.57(1)-release (arm64-apple-darwin24)"), Some(vec![3, 2, 57]));
+        assert_eq!(
+            version_of("GNU bash, version 3.2.57(1)-release (arm64-apple-darwin24)"),
+            Some(vec![3, 2, 57])
+        );
         assert_eq!(version_of("fish, version 3.7.1"), Some(vec![3, 7, 1]));
-        assert_eq!(version_of("Microsoft Windows [Version 10.0.19045.3803]"), Some(vec![10, 0, 19045, 3803]));
+        assert_eq!(
+            version_of("Microsoft Windows [Version 10.0.19045.3803]"),
+            Some(vec![10, 0, 19045, 3803])
+        );
         assert_eq!(version_of("14.5\n"), Some(vec![14, 5]));
-        assert!([3, 2, 57].as_slice() < [4, 4].as_slice() && [4, 4, 0].as_slice() >= [4, 4].as_slice());
+        assert!(
+            [3, 2, 57].as_slice() < [4, 4].as_slice() && [4, 4, 0].as_slice() >= [4, 4].as_slice()
+        );
     }
 }

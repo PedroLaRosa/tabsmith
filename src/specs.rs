@@ -35,7 +35,10 @@ pub fn ensure_extracted() -> anyhow::Result<PathBuf> {
     #[cfg(feature = "embed-specs")]
     return extract_to(ARCHIVE, &root, version());
     #[cfg(not(feature = "embed-specs"))]
-    anyhow::bail!("no specs in {} (built without the `embed-specs` feature)", dir.display())
+    anyhow::bail!(
+        "no specs in {} (built without the `embed-specs` feature)",
+        dir.display()
+    )
 }
 
 /// Unpack `archive` (tar.zst) into `<root>/<ver>.tmp-<pid>/`, rename it to `<root>/<ver>/` and [`cleanup`]
@@ -64,7 +67,8 @@ pub(crate) fn extract_to(archive: &[u8], root: &Path, ver: &str) -> anyhow::Resu
 }
 
 fn touch(dir: &Path) {
-    let _ = std::fs::File::create(dir.join(LAST_USED)).and_then(|f| f.set_modified(SystemTime::now()));
+    let _ =
+        std::fs::File::create(dir.join(LAST_USED)).and_then(|f| f.set_modified(SystemTime::now()));
 }
 
 /// Remove other version dirs unused for [`VERSION_STALE`] (age of `.last-used`, else of the dir; a version a
@@ -73,15 +77,26 @@ fn touch(dir: &Path) {
 /// ponytail: a session running longer than a week without a restart may lose its version to a newer binary.
 fn cleanup(root: &Path, ver: &str) {
     for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        let (name, p) = (entry.file_name().to_string_lossy().into_owned(), entry.path());
+        let (name, p) = (
+            entry.file_name().to_string_lossy().into_owned(),
+            entry.path(),
+        );
         let (stem, max) = match name.split_once(".tmp-") {
             Some((stem, _)) => (stem, TMP_STALE),
             None => (name.as_str(), VERSION_STALE),
         };
         // ponytail: npm versions are `1.2.3`; a pre-release suffix would make its dirs look like the user's (kept)
-        let ours = stem.split('.').all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-        let age = std::fs::metadata(p.join(LAST_USED)).or_else(|_| std::fs::metadata(&p)).and_then(|m| m.modified());
-        if ours && name != ver && p.is_dir() && age.is_ok_and(|t| t.elapsed().unwrap_or_default() > max) {
+        let ours = stem
+            .split('.')
+            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        let age = std::fs::metadata(p.join(LAST_USED))
+            .or_else(|_| std::fs::metadata(&p))
+            .and_then(|m| m.modified());
+        if ours
+            && name != ver
+            && p.is_dir()
+            && age.is_ok_and(|t| t.elapsed().unwrap_or_default() > max)
+        {
             let _ = std::fs::remove_dir_all(&p);
         }
     }
@@ -94,7 +109,10 @@ fn unpack(archive: &[u8], dst: &Path) -> std::io::Result<()> {
     let mut ar = tar::Archive::new(zstd::Decoder::new(archive)?);
     for entry in ar.entries()? {
         let mut entry = entry?;
-        let apple_double = entry.path()?.file_name().is_some_and(|n| n.to_string_lossy().starts_with("._"));
+        let apple_double = entry
+            .path()?
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("._"));
         if entry.header().entry_type().is_file() && !apple_double {
             entry.unpack_in(dst)?;
         }
@@ -130,8 +148,10 @@ impl SpecIndex {
             diff_versioned: Vec<String>,
         }
         let path = bundle.join("index.json");
-        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let raw: Raw = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let raw: Raw =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         let mut completions = raw.completions;
         for entry in std::fs::read_dir(user).into_iter().flatten().flatten() {
             let p = entry.path();
@@ -143,7 +163,10 @@ impl SpecIndex {
                 }
             }
         }
-        Ok(SpecIndex { completions, diff_versioned: raw.diff_versioned.into_iter().collect() })
+        Ok(SpecIndex {
+            completions,
+            diff_versioned: raw.diff_versioned.into_iter().collect(),
+        })
     }
 }
 
@@ -159,12 +182,16 @@ pub fn resolve(name: &str, settings: &Settings, index: &SpecIndex) -> Option<Pat
 
 /// `autocomplete.devCompletionsFolder` (leading `~` = the user's home) when `autocomplete.developerMode` is on.
 fn dev_folder(settings: &Settings) -> Option<PathBuf> {
-    let d = settings.string("autocomplete.devCompletionsFolder").filter(|d| !d.is_empty())?;
+    let d = settings
+        .string("autocomplete.devCompletionsFolder")
+        .filter(|d| !d.is_empty())?;
     if !settings.bool("autocomplete.developerMode", false) {
         return None;
     }
     Some(match Path::new(d).strip_prefix("~") {
-        Ok(rest) => crate::settings::user_home().map_or_else(|_| PathBuf::from(d), |h| h.join(rest)),
+        Ok(rest) => {
+            crate::settings::user_home().map_or_else(|_| PathBuf::from(d), |h| h.join(rest))
+        }
         Err(_) => PathBuf::from(d),
     })
 }
@@ -172,7 +199,11 @@ fn dev_folder(settings: &Settings) -> Option<PathBuf> {
 /// [`resolve`] over explicit roots (first wins). Only plain relative names: absolute, drive-relative (`C:foo`),
 /// `.` and `..` components are rejected.
 pub(crate) fn resolve_in(name: &str, roots: &[PathBuf], index: &SpecIndex) -> Option<PathBuf> {
-    if name.is_empty() || !Path::new(name).components().all(|c| matches!(c, Component::Normal(_))) {
+    if name.is_empty()
+        || !Path::new(name)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+    {
         return None;
     }
     let diff = index.diff_versioned.contains(name);
@@ -197,7 +228,10 @@ pub(crate) mod testutil {
         pub fn new(tag: &str) -> TmpDir {
             use std::sync::atomic::{AtomicU32, Ordering};
             static N: AtomicU32 = AtomicU32::new(0);
-            let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
             let p = std::env::temp_dir().join(format!(
                 "tabsmith-test-{tag}-{}-{nanos}-{}",
                 std::process::id(),
@@ -267,20 +301,32 @@ mod tests {
         last_used(&root.path().join("0.9.0"), Duration::from_secs(8 * 86400));
         std::fs::create_dir_all(root.path().join("user")).unwrap();
         last_used(&root.path().join("user"), Duration::from_secs(8 * 86400));
-        let archive =
-            tar_zst(&[("./index.json", r#"{"completions":["git"]}"#), ("./aws/s3.js", "x"), ("./aws/._s3.js", "\u{0}")]);
+        let archive = tar_zst(&[
+            ("./index.json", r#"{"completions":["git"]}"#),
+            ("./aws/s3.js", "x"),
+            ("./aws/._s3.js", "\u{0}"),
+        ]);
         let dir = extract_to(&archive, root.path(), "1.0.0").unwrap();
         assert_eq!(dir, root.path().join("1.0.0"));
         assert!(dir.join("index.json").is_file() && dir.join("aws/s3.js").is_file());
-        assert!(!dir.join("aws/._s3.js").exists(), "AppleDouble entries skipped");
-        assert!(!root.path().join("0.9.0").exists(), "version unused for a week removed");
+        assert!(
+            !dir.join("aws/._s3.js").exists(),
+            "AppleDouble entries skipped"
+        );
+        assert!(
+            !root.path().join("0.9.0").exists(),
+            "version unused for a week removed"
+        );
         assert!(dir.join(".last-used").is_file(), "new version marked used");
         assert!(root.path().join("user").is_dir(), "user dir kept");
         // Loser of a concurrent extraction: the winner's dir stays, the temp dir is gone.
         std::fs::write(dir.join("marker"), "winner").unwrap();
         assert_eq!(extract_to(&archive, root.path(), "1.0.0").unwrap(), dir);
         assert!(dir.join("marker").is_file());
-        let names: Vec<_> = std::fs::read_dir(root.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names.len(), 2, "{names:?}");
     }
 
@@ -291,8 +337,10 @@ mod tests {
     }
 
     fn names(root: &Path) -> Vec<String> {
-        let mut n: Vec<String> =
-            std::fs::read_dir(root).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let mut n: Vec<String> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
         n.sort();
         n
     }
@@ -321,7 +369,10 @@ mod tests {
         for d in ["1.0.0.tmp-99999", "1.0.0.tmp-11111"] {
             std::fs::create_dir_all(root.path().join(d)).unwrap();
         }
-        last_used(&root.path().join("1.0.0.tmp-99999"), Duration::from_secs(3600));
+        last_used(
+            &root.path().join("1.0.0.tmp-99999"),
+            Duration::from_secs(3600),
+        );
         extract_to(&tar_zst(&[("./index.json", "{}")]), root.path(), "1.0.0").unwrap();
         assert_eq!(names(root.path()), ["1.0.0", "1.0.0.tmp-11111"]);
     }
@@ -349,13 +400,23 @@ mod tests {
         assert_eq!(idx.completions, ["git", "az", "mytool"]);
         assert!(idx.diff_versioned.contains("az") && idx.diff_versioned.len() == 1);
         // Missing user dir is fine.
-        assert_eq!(SpecIndex::load_from(bundle.path(), &user.path().join("nope")).unwrap().completions.len(), 2);
+        assert_eq!(
+            SpecIndex::load_from(bundle.path(), &user.path().join("nope"))
+                .unwrap()
+                .completions
+                .len(),
+            2
+        );
     }
 
     #[test]
     fn resolve_order() {
         let t = TmpDir::new("resolve");
-        let (dev, user, bundle) = (t.path().join("dev"), t.path().join("user"), t.path().join("bundle"));
+        let (dev, user, bundle) = (
+            t.path().join("dev"),
+            t.path().join("user"),
+            t.path().join("bundle"),
+        );
         for (dir, file) in [
             (&user, "git.js"),
             (&bundle, "git.js"),
@@ -369,13 +430,25 @@ mod tests {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, "").unwrap();
         }
-        let idx = SpecIndex { completions: vec![], diff_versioned: ["az".to_string()].into() };
+        let idx = SpecIndex {
+            completions: vec![],
+            diff_versioned: ["az".to_string()].into(),
+        };
         let roots = [dev.clone(), user.clone(), bundle.clone()];
         assert_eq!(resolve_in("git", &roots, &idx), Some(user.join("git.js")));
-        assert_eq!(resolve_in("az", &roots, &idx), Some(bundle.join("az/index.js")));
-        assert_eq!(resolve_in("aws/s3", &roots, &idx), Some(bundle.join("aws/s3.js")));
+        assert_eq!(
+            resolve_in("az", &roots, &idx),
+            Some(bundle.join("az/index.js"))
+        );
+        assert_eq!(
+            resolve_in("aws/s3", &roots, &idx),
+            Some(bundle.join("aws/s3.js"))
+        );
         assert_eq!(resolve_in("foo", &roots, &idx), Some(dev.join("foo.js")));
-        assert_eq!(resolve_in("foo", &roots[1..], &idx), Some(bundle.join("foo/index.js")));
+        assert_eq!(
+            resolve_in("foo", &roots[1..], &idx),
+            Some(bundle.join("foo/index.js"))
+        );
         assert_eq!(resolve_in("gcloud/alpha", &roots, &idx), None);
         assert_eq!(resolve_in("../bundle/git", &roots, &idx), None);
         assert_eq!(resolve_in("/etc/passwd", &roots, &idx), None);
@@ -391,7 +464,11 @@ mod tests {
         let planted = cwd.join(format!("{stem}.js"));
         std::fs::write(&planted, "").unwrap();
         let root = TmpDir::new("drive");
-        let r = resolve_in(&format!("{drive}:{stem}"), &[root.path().to_path_buf()], &SpecIndex::default());
+        let r = resolve_in(
+            &format!("{drive}:{stem}"),
+            &[root.path().to_path_buf()],
+            &SpecIndex::default(),
+        );
         let _ = std::fs::remove_file(&planted);
         assert_eq!(r, None);
     }
@@ -399,14 +476,31 @@ mod tests {
     #[test]
     fn dev_folder_expands_tilde() {
         let s = |dev: bool, d: &str| {
-            let m = [("autocomplete.developerMode", dev.into()), ("autocomplete.devCompletionsFolder", d.into())];
-            Settings::from_map(m.into_iter().map(|(k, v): (&str, serde_json::Value)| (k.to_string(), v)).collect())
+            let m = [
+                ("autocomplete.developerMode", dev.into()),
+                ("autocomplete.devCompletionsFolder", d.into()),
+            ];
+            Settings::from_map(
+                m.into_iter()
+                    .map(|(k, v): (&str, serde_json::Value)| (k.to_string(), v))
+                    .collect(),
+            )
         };
         let home = crate::settings::user_home().unwrap();
-        assert_eq!(dev_folder(&s(true, "~/code/build")), Some(home.join("code").join("build")));
+        assert_eq!(
+            dev_folder(&s(true, "~/code/build")),
+            Some(home.join("code").join("build"))
+        );
         assert_eq!(dev_folder(&s(true, "~")), Some(home));
-        assert_eq!(dev_folder(&s(true, "~user/x")), Some(PathBuf::from("~user/x")), "only a whole `~` component");
-        assert_eq!(dev_folder(&s(true, "/abs/dev")), Some(PathBuf::from("/abs/dev")));
+        assert_eq!(
+            dev_folder(&s(true, "~user/x")),
+            Some(PathBuf::from("~user/x")),
+            "only a whole `~` component"
+        );
+        assert_eq!(
+            dev_folder(&s(true, "/abs/dev")),
+            Some(PathBuf::from("/abs/dev"))
+        );
         assert_eq!(dev_folder(&s(false, "/abs/dev")), None);
         assert_eq!(dev_folder(&s(true, "")), None);
     }

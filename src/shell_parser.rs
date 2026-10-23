@@ -31,7 +31,11 @@ pub struct CommandInfo {
 /// Parse `buffer_before_cursor` and return the command containing the end of it (SPEC §6.1.3), with aliases
 /// expanded (SPEC §6.1.6). `None` when there is no command at the cursor (e.g. `ls |`, empty, only spaces).
 /// Token offsets are relative to `CommandInfo::text`.
-pub fn current_command(buffer_before_cursor: &str, shell: Shell, aliases: &HashMap<String, String>) -> Option<CommandInfo> {
+pub fn current_command(
+    buffer_before_cursor: &str,
+    shell: Shell,
+    aliases: &HashMap<String, String>,
+) -> Option<CommandInfo> {
     let p = P::new(buffer_before_cursor, shell);
     let tree = p.parse();
     let mut cmd = p.command_info(descendant_at(&tree, buffer_before_cursor.len())?);
@@ -39,11 +43,16 @@ pub fn current_command(buffer_before_cursor: &str, shell: Shell, aliases: &HashM
     let mut used: Vec<String> = Vec::new();
     while cmd.tokens.len() > 1 {
         let name = cmd.tokens[0].text.clone();
-        let Some(value) = aliases.get(&name).filter(|v| !v.is_empty()) else { break };
+        let Some(value) = aliases.get(&name).filter(|v| !v.is_empty()) else {
+            break;
+        };
         if used.contains(&name) {
             break;
         }
-        let value = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')).unwrap_or(value);
+        let value = value
+            .strip_prefix('\'')
+            .and_then(|v| v.strip_suffix('\''))
+            .unwrap_or(value);
         if let Some(expanded) = substitute_token(&cmd, 0, value, shell) {
             cmd = expanded;
         }
@@ -57,7 +66,10 @@ pub fn parse_aliases(text: &str, shell: Shell) -> HashMap<String, String> {
     let sep = if shell == Shell::Fish { ' ' } else { '=' };
     text.lines()
         .filter_map(|line| {
-            let line = line.strip_prefix("alias").and_then(|r| r.strip_prefix(char::is_whitespace)).unwrap_or(line);
+            let line = line
+                .strip_prefix("alias")
+                .and_then(|r| r.strip_prefix(char::is_whitespace))
+                .unwrap_or(line);
             let (key, value) = line.split_once(sep)?;
             let value = value.strip_prefix('\'').unwrap_or(value);
             let value = value.strip_suffix('\'').unwrap_or(value);
@@ -70,12 +82,24 @@ pub fn parse_aliases(text: &str, shell: Shell) -> HashMap<String, String> {
 /// Re-tokenize `command` with the token at `index` replaced by `replacement` (parserDirectives.alias, SPEC §6.4).
 /// `None` unless the result is exactly one plain command (so `|`, `&&`, `;` in `replacement` fail). Tokens that
 /// come from `replacement` keep the replaced token's `raw` (what is on screen).
-pub fn substitute_token(command: &CommandInfo, index: usize, replacement: &str, shell: Shell) -> Option<CommandInfo> {
+pub fn substitute_token(
+    command: &CommandInfo,
+    index: usize,
+    replacement: &str,
+    shell: Shell,
+) -> Option<CommandInfo> {
     let tok = command.tokens.get(index)?;
-    let text = format!("{}{}{}", command.text.get(..tok.start)?, replacement, command.text.get(tok.end..)?);
+    let text = format!(
+        "{}{}{}",
+        command.text.get(..tok.start)?,
+        replacement,
+        command.text.get(tok.end..)?
+    );
     let p = P::new(&text, shell);
     let tree = p.parse();
-    let [node] = tree.children.as_slice() else { return None };
+    let [node] = tree.children.as_slice() else {
+        return None;
+    };
     if node.kind != Kind::Command {
         return None;
     }
@@ -129,7 +153,13 @@ struct Node {
 
 impl Node {
     fn new(kind: Kind, start: usize, end: usize, complete: bool, children: Vec<Node>) -> Node {
-        Node { kind, start, end, complete, children }
+        Node {
+            kind,
+            start,
+            end,
+            complete,
+            children,
+        }
     }
 }
 
@@ -138,13 +168,20 @@ fn descendant_at(node: &Node, index: usize) -> Option<&Node> {
     if node.start > index || index > node.end {
         return None;
     }
-    node.children.iter().find_map(|c| descendant_at(c, index)).or((node.kind == Kind::Command).then_some(node))
+    node.children
+        .iter()
+        .find_map(|c| descendant_at(c, index))
+        .or((node.kind == Kind::Command).then_some(node))
 }
 
 /// `a op b` → `kind(a, b)`, flattening a right-hand side of the same kind (`reduceStatements`).
 fn reduce(lhs: Node, rhs: Node, kind: Kind) -> Node {
     let (start, end, complete) = (lhs.start, rhs.end, lhs.complete && rhs.complete);
-    let children = if rhs.kind == kind { std::iter::once(lhs).chain(rhs.children).collect() } else { vec![lhs, rhs] };
+    let children = if rhs.kind == kind {
+        std::iter::once(lhs).chain(rhs.children).collect()
+    } else {
+        vec![lhs, rhs]
+    };
     Node::new(kind, start, end, complete, children)
 }
 
@@ -162,7 +199,12 @@ struct P<'a> {
 impl<'a> P<'a> {
     fn new(src: &'a str, shell: Shell) -> P<'a> {
         let pwsh = shell == Shell::Pwsh;
-        P { src, s: src.as_bytes(), esc: if pwsh { b'`' } else { b'\\' }, pwsh }
+        P {
+            src,
+            s: src.as_bytes(),
+            esc: if pwsh { b'`' } else { b'\\' },
+            pwsh,
+        }
     }
 
     fn text(&self, n: &Node) -> &'a str {
@@ -220,7 +262,9 @@ impl<'a> P<'a> {
                 (Some(b'('), Some(b'(')) => Some(self.literal(Kind::Arith, i, 3, b"))")),
                 (Some(b'('), _) => Some(self.cmd_subst(i)),
                 (Some(b'{'), _) => Some(self.literal(Kind::Expansion, i, 2, b"}")),
-                (Some(b'\''), _) if !in_string && !self.pwsh => Some(self.literal(Kind::AnsiC, i, 2, b"'")),
+                (Some(b'\''), _) if !in_string && !self.pwsh => {
+                    Some(self.literal(Kind::AnsiC, i, 2, b"'"))
+                }
                 _ => self.simple_expansion(i, terms),
             },
             b'`' if !self.pwsh => Some(self.cmd_subst(i)),
@@ -238,16 +282,32 @@ impl<'a> P<'a> {
         }
         match (i + 1..s.len()).find(|&j| b"\t \n$\\".contains(&s[j]) || terms.contains(&s[j])) {
             Some(j) if j == i + 1 => None,
-            end => Some(Node::new(Kind::SimpleExp, i, end.unwrap_or(s.len()), true, vec![])),
+            end => Some(Node::new(
+                Kind::SimpleExp,
+                i,
+                end.unwrap_or(s.len()),
+                true,
+                vec![],
+            )),
         }
     }
 
     /// `$(…)` or `` `…` ``: nested statements until the closing char.
     fn cmd_subst(&self, i: usize) -> Node {
-        let (from, close) = if self.s[i] == b'`' { (i + 1, b'`') } else { (i + 2, b')') };
+        let (from, close) = if self.s[i] == b'`' {
+            (i + 1, b'`')
+        } else {
+            (i + 2, b')')
+        };
         let (children, term) = self.statements(from, Some(close), false);
         let end = term.map_or(self.s.len(), |t| t + 1);
-        Node::new(Kind::CmdSubst, i, end, term.is_some() && !children.is_empty(), children)
+        Node::new(
+            Kind::CmdSubst,
+            i,
+            end,
+            term.is_some() && !children.is_empty(),
+            children,
+        )
     }
 
     /// `parseLiteral`: quoted strings and `${…}`/`$((…))`; unterminated → `complete=false`, extends to EOF.
@@ -257,7 +317,10 @@ impl<'a> P<'a> {
         let mut children = Vec::new();
         let mut j = i + open;
         while j < s.len() {
-            if let Some(c) = nested.then(|| self.child_at(j, kind == Kind::Str, close)).flatten() {
+            if let Some(c) = nested
+                .then(|| self.child_at(j, kind == Kind::Str, close))
+                .flatten()
+            {
                 j = c.end;
                 children.push(c);
             } else if s[j] == self.esc && kind != Kind::RawStr {
@@ -279,12 +342,23 @@ impl<'a> P<'a> {
                 arg.push(Node::new(Kind::Word, ws, end, true, vec![]));
             }
         }
-        fn end_argument(out: &mut Vec<Node>, arg: &mut Vec<Node>, word: &mut Option<usize>, end: usize) {
+        fn end_argument(
+            out: &mut Vec<Node>,
+            arg: &mut Vec<Node>,
+            word: &mut Option<usize>,
+            end: usize,
+        ) {
             end_word(arg, word, end);
             if arg.len() > 1 {
                 let last = &arg[arg.len() - 1];
                 let (start, end, complete) = (arg[0].start, last.end, last.complete);
-                out.push(Node::new(Kind::Concatenation, start, end, complete, std::mem::take(arg)));
+                out.push(Node::new(
+                    Kind::Concatenation,
+                    start,
+                    end,
+                    complete,
+                    std::mem::take(arg),
+                ));
             } else {
                 out.append(arg);
             }
@@ -325,13 +399,22 @@ impl<'a> P<'a> {
         let start = self.next_word(idx).unwrap_or(idx);
         let (children, end) = self.words(start, terminal);
         let has = !children.is_empty();
-        Node::new(Kind::Command, start, if has { end } else { self.s.len() }, has, children)
+        Node::new(
+            Kind::Command,
+            start,
+            if has { end } else { self.s.len() },
+            has,
+            children,
+        )
     }
 
     /// `=` index if `^[\w\[\]]+\+?=` matches at `i`.
     fn assignment_eq(&self, i: usize) -> Option<usize> {
         let s = self.s;
-        let n = s[i..].iter().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'[' | b']')).count();
+        let n = s[i..]
+            .iter()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'[' | b']'))
+            .count();
         let j = i + n + usize::from(s.get(i + n) == Some(&b'+'));
         (n > 0 && s.get(j) == Some(&b'=')).then_some(j)
     }
@@ -340,8 +423,12 @@ impl<'a> P<'a> {
         let mut out = Vec::new();
         let mut last = idx;
         while last < self.s.len() {
-            let Some(start) = self.next_word(last) else { break };
-            let Some(eq) = self.assignment_eq(start) else { break };
+            let Some(start) = self.next_word(last) else {
+                break;
+            };
+            let Some(eq) = self.assignment_eq(start) else {
+                break;
+            };
             let (children, end) = self.words(eq + 1, Some(b' '));
             // SPEC D23 fix: an empty value (`FOO= cmd`) is a complete empty assignment (Kiro throws).
             let complete = children.last().is_none_or(|c| c.complete);
@@ -354,7 +441,9 @@ impl<'a> P<'a> {
     /// `FOO=1 BAR=2 cmd …` → assignment_list (with the command if one follows), else a plain command.
     fn assignment_list_or_command(&self, start: usize, terminal: Option<u8>) -> Node {
         let mut children = self.assignments(start);
-        let Some(last) = children.last() else { return self.command(start, terminal) };
+        let Some(last) = children.last() else {
+            return self.command(start, terminal);
+        };
         let (mut end, complete) = (last.end, last.complete);
         let op = self.next_word(end).and_then(|j| self.op(j));
         if op.is_none() && complete && end != self.s.len() {
@@ -372,17 +461,30 @@ impl<'a> P<'a> {
         let lhs = match s.get(i) {
             Some(&c @ (b'{' | b'(')) => {
                 let compound = c == b'{';
-                let (children, term) = self.statements(i + 1, Some(if compound { b'}' } else { b')' }), compound);
+                let (children, term) =
+                    self.statements(i + 1, Some(if compound { b'}' } else { b')' }), compound);
                 let end = match term {
                     Some(t) => t + 1,
                     None => children.last().map_or(s.len(), |c| c.end),
                 };
-                let kind = if compound { Kind::Compound } else { Kind::Subshell };
-                Node::new(kind, i, end, term.is_some() && !children.is_empty(), children)
+                let kind = if compound {
+                    Kind::Compound
+                } else {
+                    Kind::Subshell
+                };
+                Node::new(
+                    kind,
+                    i,
+                    end,
+                    term.is_some() && !children.is_empty(),
+                    children,
+                )
             }
             _ => self.assignment_list_or_command(i, terminal),
         };
-        let Some(op_i) = self.next_word(lhs.end) else { return lhs };
+        let Some(op_i) = self.next_word(lhs.end) else {
+            return lhs;
+        };
         let op = match self.op(op_i) {
             Some(op) if !matches!(op, b";" | b"&" | b"&;") => op,
             _ => return lhs,
@@ -403,7 +505,12 @@ impl<'a> P<'a> {
 
     /// Statements separated by `; & &;` until EOF or `terminal` (returned as its index). `must_terminate` (`{`):
     /// `terminal` only counts right after a separator.
-    fn statements(&self, idx: usize, terminal: Option<u8>, must_terminate: bool) -> (Vec<Node>, Option<usize>) {
+    fn statements(
+        &self,
+        idx: usize,
+        terminal: Option<u8>,
+        must_terminate: bool,
+    ) -> (Vec<Node>, Option<usize>) {
         let s = self.s;
         let mut out = Vec::new();
         let mut i = idx;
@@ -436,7 +543,13 @@ impl<'a> P<'a> {
     }
 
     fn parse(&self) -> Node {
-        Node::new(Kind::Program, 0, self.s.len(), true, self.statements(0, None, false).0)
+        Node::new(
+            Kind::Program,
+            0,
+            self.s.len(),
+            true,
+            self.statements(0, None, false).0,
+        )
     }
 
     /// `convertCommandNodeToCommand`, offsets relative to the command text.
@@ -454,9 +567,18 @@ impl<'a> P<'a> {
             .collect();
         // Trailing empty token ("typed a space, completing a new argument"). The `1` is absolute, as in qac.
         if cmd.children.last().map_or(1, |c| c.end) < cmd.end && text.ends_with(' ') {
-            tokens.push(Token { text: String::new(), raw: String::new(), start: text.len(), end: text.len() });
+            tokens.push(Token {
+                text: String::new(),
+                raw: String::new(),
+                start: text.len(),
+                end: text.len(),
+            });
         }
-        CommandInfo { tokens, original_text: text.clone(), text }
+        CommandInfo {
+            tokens,
+            original_text: text.clone(),
+            text,
+        }
     }
 }
 
@@ -465,12 +587,17 @@ mod tests {
     use super::*;
 
     fn cmd(buf: &str, shell: Shell, aliases: &[(&str, &str)]) -> Option<CommandInfo> {
-        let map = aliases.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let map = aliases
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         current_command(buf, shell, &map)
     }
 
     fn toks_in(buf: &str, shell: Shell, aliases: &[(&str, &str)]) -> Vec<String> {
-        cmd(buf, shell, aliases).map(|c| c.tokens.into_iter().map(|t| t.text).collect()).unwrap_or_default()
+        cmd(buf, shell, aliases)
+            .map(|c| c.tokens.into_iter().map(|t| t.text).collect())
+            .unwrap_or_default()
     }
 
     fn toks(buf: &str) -> Vec<String> {
@@ -539,19 +666,34 @@ mod tests {
         let p = P::new("a \"b c", Shell::Bash);
         let t = p.parse();
         let s = &t.children[0].children[1];
-        assert_eq!((s.kind, s.complete, p.inner(s).as_str()), (Kind::Str, false, "b c"));
+        assert_eq!(
+            (s.kind, s.complete, p.inner(s).as_str()),
+            (Kind::Str, false, "b c")
+        );
         let p = P::new("a 'b c", Shell::Bash);
         let t = p.parse();
         let s = &t.children[0].children[1];
-        assert_eq!((s.kind, s.complete, p.inner(s).as_str()), (Kind::RawStr, false, "b c"));
+        assert_eq!(
+            (s.kind, s.complete, p.inner(s).as_str()),
+            (Kind::RawStr, false, "b c")
+        );
         let p = P::new("a $'b c", Shell::Bash);
         let t = p.parse();
         let s = &t.children[0].children[1];
-        assert_eq!((s.kind, s.complete, p.inner(s).as_str()), (Kind::AnsiC, false, "b c"));
+        assert_eq!(
+            (s.kind, s.complete, p.inner(s).as_str()),
+            (Kind::AnsiC, false, "b c")
+        );
         let c = cmd("cat 'my fi", Shell::Bash, &[]).unwrap();
-        assert_eq!((c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()), ("my fi", "'my fi"));
+        assert_eq!(
+            (c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()),
+            ("my fi", "'my fi")
+        );
         let c = cmd("cat \"a b\"", Shell::Bash, &[]).unwrap();
-        assert_eq!((c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()), ("a b", "\"a b\""));
+        assert_eq!(
+            (c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()),
+            ("a b", "\"a b\"")
+        );
         // An escaped quote does not terminate a string; a trailing `\` in an open string is dropped.
         assert_eq!(toks("echo \"a\\\" b"), ["echo", "a\" b"]);
         assert_eq!(toks("echo \"a b\\"), ["echo", "a b"]);
@@ -562,12 +704,18 @@ mod tests {
         // Word: every `\x` is `x`; a lone trailing `\` is dropped.
         assert_eq!(toks("echo a\\ b\\$c\\\\d\\"), ["echo", "a b$c\\d"]);
         // String: only `\$ \` \" \\ \newline` drop the backslash.
-        assert_eq!(toks("echo \"a\\$b\\`c\\\"d\\\\e\\f\""), ["echo", "a$b`c\"d\\e\\f"]);
+        assert_eq!(
+            toks("echo \"a\\$b\\`c\\\"d\\\\e\\f\""),
+            ["echo", "a$b`c\"d\\e\\f"]
+        );
         // Raw and ANSI-C strings are verbatim.
         assert_eq!(toks("echo 'a\\b' $'c\\'d'"), ["echo", "a\\b", "c\\'d"]);
         // A word that starts with an escape keeps it in `raw` (fix, SPEC D22).
         let c = cmd("cd \\ fo", Shell::Bash, &[]).unwrap();
-        assert_eq!((c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()), (" fo", "\\ fo"));
+        assert_eq!(
+            (c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()),
+            (" fo", "\\ fo")
+        );
         let c = cmd("cd my\\ di", Shell::Bash, &[]).unwrap();
         assert_eq!(c.tokens[1].raw, "my\\ di");
     }
@@ -576,7 +724,10 @@ mod tests {
     fn concatenation() {
         let c = cmd("cmd --foo=\"a b\"c", Shell::Bash, &[]).unwrap();
         assert_eq!(c.tokens.len(), 2);
-        assert_eq!((c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()), ("--foo=a bc", "--foo=\"a b\"c"));
+        assert_eq!(
+            (c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()),
+            ("--foo=a bc", "--foo=\"a b\"c")
+        );
         assert_eq!(toks("a $'b''c'd$$$e${f}\"g\""), ["a", "bcd$$$e${f}g"]);
         let t = tree("a b\"c");
         let arg = &t.children[0].children[1];
@@ -589,7 +740,10 @@ mod tests {
         assert_eq!(toks("echo `git ch"), ["git", "ch"]);
         assert_eq!(toks("echo \"$(git ch"), ["git", "ch"]);
         assert_eq!(toks("x=$(git ch"), ["git", "ch"]);
-        assert_eq!(toks("echo $(git log) foo "), ["echo", "$(git log)", "foo", ""]);
+        assert_eq!(
+            toks("echo $(git log) foo "),
+            ["echo", "$(git log)", "foo", ""]
+        );
         assert_eq!(toks("echo $((1+2)) "), ["echo", "$((1+2))", ""]);
         assert_eq!(toks("{ a; git "), ["git", ""]);
         assert_eq!(toks("(a) | b && git c"), ["git", "c"]);
@@ -600,10 +754,17 @@ mod tests {
 
     #[test]
     fn statement_structure() {
-        let kinds = |src: &str| -> Vec<Kind> { tree(src).children.iter().map(|c| c.kind).collect() };
+        let kinds =
+            |src: &str| -> Vec<Kind> { tree(src).children.iter().map(|c| c.kind).collect() };
         assert_eq!(kinds("a | b && c"), [Kind::List]);
-        assert_eq!(tree("a | b && c").children[0].children[0].kind, Kind::Pipeline);
-        assert_eq!(tree("a && b | c").children[0].children[1].kind, Kind::Pipeline);
+        assert_eq!(
+            tree("a | b && c").children[0].children[0].kind,
+            Kind::Pipeline
+        );
+        assert_eq!(
+            tree("a && b | c").children[0].children[1].kind,
+            Kind::Pipeline
+        );
         assert_eq!(tree("a && b || c").children[0].children.len(), 3);
         assert_eq!(kinds("a; b"), [Kind::Command, Kind::Command]);
         assert_eq!(kinds("{ a; b; }"), [Kind::Compound]);
@@ -613,7 +774,10 @@ mod tests {
         // Cursor inside an earlier command.
         let t = tree("git co && ls -l");
         assert_eq!(descendant_at(&t, 3).map(|n| (n.start, n.end)), Some((0, 7)));
-        assert_eq!(descendant_at(&t, 15).map(|n| (n.start, n.end)), Some((10, 15)));
+        assert_eq!(
+            descendant_at(&t, 15).map(|n| (n.start, n.end)),
+            Some((10, 15))
+        );
     }
 
     #[test]
@@ -628,7 +792,10 @@ mod tests {
 
     #[test]
     fn multibyte_and_no_panics() {
-        assert_eq!(toks("echo héllo\\ wörld 日本 "), ["echo", "héllo wörld", "日本", ""]);
+        assert_eq!(
+            toks("echo héllo\\ wörld 日本 "),
+            ["echo", "héllo wörld", "日本", ""]
+        );
         assert_eq!(toks("cd \\é"), ["cd", "é"]);
         let nasty = [
             "a \"é$(b `c 'd\\é ${e} $((f)) $'g\\é' | h && i; (j) {k; l;} M=é\\ n o\\",
@@ -650,30 +817,63 @@ mod tests {
         let aliases = [("woman", "man"), ("quote", "'q'"), ("g", "git")];
         assert_eq!(toks_in("git co ", Shell::Bash, &aliases), ["git", "co", ""]);
         assert_eq!(toks_in("woman ", Shell::Bash, &[]), ["woman", ""]);
-        assert_eq!(toks_in("another string ", Shell::Bash, &aliases), ["another", "string", ""]);
+        assert_eq!(
+            toks_in("another string ", Shell::Bash, &aliases),
+            ["another", "string", ""]
+        );
         assert_eq!(toks_in("woman", Shell::Bash, &aliases), ["woman"]);
         assert_eq!(toks_in("woman ", Shell::Bash, &aliases), ["man", ""]);
-        assert_eq!(toks_in("man woman ", Shell::Bash, &aliases), ["man", "woman", ""]);
+        assert_eq!(
+            toks_in("man woman ", Shell::Bash, &aliases),
+            ["man", "woman", ""]
+        );
         assert_eq!(toks_in("quote ", Shell::Bash, &aliases), ["q", ""]);
     }
 
     #[test]
     fn aliases_expansion() {
-        let aliases =
-            [("g", "git"), ("ll", "ls -l"), ("ls", "ls -G"), ("lg", "ls | grep"), ("x", "a && b"), ("y", "a; b")];
+        let aliases = [
+            ("g", "git"),
+            ("ll", "ls -l"),
+            ("ls", "ls -G"),
+            ("lg", "ls | grep"),
+            ("x", "a && b"),
+            ("y", "a; b"),
+        ];
         let c = cmd("g co ", Shell::Bash, &aliases).unwrap();
         assert_eq!(c.text, "git co ");
         assert_eq!(c.original_text, "g co "); // pre-expansion text for the menu (alias-command-text-hides-menu)
         let raws: Vec<_> = c.tokens.iter().map(|t| t.raw.as_str()).collect();
         assert_eq!(raws, ["g", "co", ""]);
         let ll = cmd("ll ", Shell::Bash, &aliases).unwrap();
-        assert_eq!((ll.text.as_str(), ll.original_text.as_str()), ("ls -G -l ", "ll "));
-        assert_eq!(cmd("echo | g ch", Shell::Bash, &aliases).unwrap().original_text, "g ch");
+        assert_eq!(
+            (ll.text.as_str(), ll.original_text.as_str()),
+            ("ls -G -l ", "ll ")
+        );
+        assert_eq!(
+            cmd("echo | g ch", Shell::Bash, &aliases)
+                .unwrap()
+                .original_text,
+            "g ch"
+        );
         // Multi-word alias: every alias token keeps the alias' raw; later tokens map 1:1.
         let c = cmd("ll foo ", Shell::Bash, &aliases).unwrap();
-        let pairs: Vec<_> = c.tokens.iter().map(|t| (t.text.as_str(), t.raw.as_str())).collect();
+        let pairs: Vec<_> = c
+            .tokens
+            .iter()
+            .map(|t| (t.text.as_str(), t.raw.as_str()))
+            .collect();
         // ll → ls -l → ls -G -l
-        assert_eq!(pairs, [("ls", "ll"), ("-G", "ll"), ("-l", "ll"), ("foo", "foo"), ("", "")]);
+        assert_eq!(
+            pairs,
+            [
+                ("ls", "ll"),
+                ("-G", "ll"),
+                ("-l", "ll"),
+                ("foo", "foo"),
+                ("", "")
+            ]
+        );
         // Self-reference expands once.
         assert_eq!(toks_in("ls x", Shell::Bash, &aliases), ["ls", "-G", "x"]);
         // Aliases with `|`, `&&`, `;` are not expanded.
@@ -686,16 +886,31 @@ mod tests {
 
     #[test]
     fn parse_aliases_formats() {
-        let bash = parse_aliases("alias g='git'\nalias ll='ls -l'\nalias e='a=b'\nalias bad\n\n", Shell::Bash);
-        let want: HashMap<String, String> =
-            [("g", "git"), ("ll", "ls -l"), ("e", "a=b")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let bash = parse_aliases(
+            "alias g='git'\nalias ll='ls -l'\nalias e='a=b'\nalias bad\n\n",
+            Shell::Bash,
+        );
+        let want: HashMap<String, String> = [("g", "git"), ("ll", "ls -l"), ("e", "a=b")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         assert_eq!(bash, want);
         let zsh = parse_aliases("g=git\r\nll='ls -l'\ne='a=b'\n", Shell::Zsh);
         assert_eq!(zsh, want);
-        let fish = parse_aliases("alias g git\nalias ll 'ls -l'\nalias e 'a=b'\n", Shell::Fish);
+        let fish = parse_aliases(
+            "alias g git\nalias ll 'ls -l'\nalias e 'a=b'\n",
+            Shell::Fish,
+        );
         assert_eq!(fish, want);
         let parsed = parse_aliases("alias woman=man\n", Shell::Bash);
-        assert_eq!(toks_in("woman ", Shell::Bash, &[("woman", parsed["woman"].as_str())]), ["man", ""]);
+        assert_eq!(
+            toks_in(
+                "woman ",
+                Shell::Bash,
+                &[("woman", parsed["woman"].as_str())]
+            ),
+            ["man", ""]
+        );
     }
 
     #[test]
@@ -703,8 +918,15 @@ mod tests {
         let c = cmd("git co -b ", Shell::Bash, &[]).unwrap();
         let s = substitute_token(&c, 1, "checkout", Shell::Bash).unwrap();
         assert_eq!(s.text, "git checkout -b ");
-        let pairs: Vec<_> = s.tokens.iter().map(|t| (t.text.as_str(), t.raw.as_str())).collect();
-        assert_eq!(pairs, [("git", "git"), ("checkout", "co"), ("-b", "-b"), ("", "")]);
+        let pairs: Vec<_> = s
+            .tokens
+            .iter()
+            .map(|t| (t.text.as_str(), t.raw.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [("git", "git"), ("checkout", "co"), ("-b", "-b"), ("", "")]
+        );
         let s = substitute_token(&c, 1, "commit -m", Shell::Bash).unwrap();
         let texts: Vec<_> = s.tokens.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(texts, ["git", "commit", "-m", "-b", ""]);
@@ -758,12 +980,18 @@ mod tests {
         fn mine(p: &P, n: &Node) -> Value {
             let children: Vec<Value> = n.children.iter().map(|c| mine(p, c)).collect();
             // D22 fix: a word starting with an escape starts at it; qac starts right after it.
-            let start = n.start + usize::from(n.kind == Kind::Word && p.s.get(n.start) == Some(&b'\\'));
+            let start =
+                n.start + usize::from(n.kind == Kind::Word && p.s.get(n.start) == Some(&b'\\'));
             json!({"type": name(n.kind), "startIndex": start, "endIndex": n.end, "complete": n.complete,
                    "innerText": p.inner(n), "children": children})
         }
         fn project(v: &Value) -> Value {
-            let children: Vec<Value> = v["children"].as_array().unwrap().iter().map(project).collect();
+            let children: Vec<Value> = v["children"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(project)
+                .collect();
             json!({"type": v["type"], "startIndex": v["startIndex"], "endIndex": v["endIndex"],
                    "complete": v["complete"], "innerText": v["innerText"], "children": children})
         }
@@ -771,7 +999,10 @@ mod tests {
             text.split("\n\n")
                 .map(|c| {
                     let (title, body) = c.split_once('\n').unwrap();
-                    (title.trim_start_matches(['#', '/']).trim().to_string(), body.trim().to_string())
+                    (
+                        title.trim_start_matches(['#', '/']).trim().to_string(),
+                        body.trim().to_string(),
+                    )
                 })
                 .collect()
         }
@@ -807,7 +1038,9 @@ mod tests {
                 let want = project(&serde_json::from_str(&expected[&case]).unwrap());
                 let got = mine(&p, &p.parse());
                 if got != want {
-                    failures.push(format!("{fixture}/{case} {src:?}\n got: {got}\nwant: {want}"));
+                    failures.push(format!(
+                        "{fixture}/{case} {src:?}\n got: {got}\nwant: {want}"
+                    ));
                 }
             }
         }

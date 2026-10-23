@@ -14,7 +14,10 @@ use crate::shell_parser;
 use crate::spec::{Arg, Generator, Script, StrOrFn, Strategy, Suggestion, Trigger};
 use crate::specs::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
-use crate::types::{now_ms, ArgInfo, Completion, EngineMsg, GenKey, HistoryEntry, Item, ItemType, Msg, Phase, Request, SessionCtx, Shell};
+use crate::types::{
+    now_ms, ArgInfo, Completion, EngineMsg, GenKey, HistoryEntry, Item, ItemType, Msg, Phase,
+    Request, SessionCtx, Shell,
+};
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -41,13 +44,15 @@ pub type Recency = HashMap<String, HashMap<String, u64>>;
 pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
     let (etx, erx) = mpsc::channel();
     let inner = etx.clone();
-    let spawned = std::thread::Builder::new().name("engine".into()).spawn(move || {
-        // QuickJS is !Send: the runtime is created on this thread.
-        match Js::new(erx, inner, settings.clone()) {
-            Ok(mut js) => Engine::new(tx, settings).run(&mut js),
-            Err(e) => logger::error(&format!("engine: js host: {e:#}")),
-        }
-    });
+    let spawned = std::thread::Builder::new()
+        .name("engine".into())
+        .spawn(move || {
+            // QuickJS is !Send: the runtime is created on this thread.
+            match Js::new(erx, inner, settings.clone()) {
+                Ok(mut js) => Engine::new(tx, settings).run(&mut js),
+                Err(e) => logger::error(&format!("engine: js host: {e:#}")),
+            }
+        });
     if let Err(e) = spawned {
         logger::error(&format!("engine: spawn: {e}"));
     }
@@ -71,7 +76,12 @@ pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
         return Ok(());
     }
     let mut store = Store::load(path)?;
-    let mut merged: Recency = store.map.get(RECENCY_KEY).cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+    let mut merged: Recency = store
+        .map
+        .get(RECENCY_KEY)
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
     for (cmd, names) in rec {
         let m = merged.entry(cmd.clone()).or_default();
         for (name, &ts) in names {
@@ -79,7 +89,9 @@ pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
             *e = (*e).max(ts);
         }
     }
-    store.map.insert(RECENCY_KEY.into(), serde_json::to_value(merged)?);
+    store
+        .map
+        .insert(RECENCY_KEY.into(), serde_json::to_value(merged)?);
     store.save()
 }
 
@@ -96,7 +108,9 @@ fn gen_key(arg: &Rc<Arg>, idx: usize) -> GenKey {
 
 /// `filepaths` / `folders` templates behave like the bundled `filepaths()` helper (trigger, query term).
 fn is_path_template(g: &Generator) -> bool {
-    g.template.iter().any(|t| t == "filepaths" || t == "folders")
+    g.template
+        .iter()
+        .any(|t| t == "filepaths" || t == "folders")
 }
 
 /// JS truthiness of a callback result.
@@ -112,18 +126,34 @@ fn truthy(v: &Value) -> bool {
 
 fn env_var(env: &HashMap<String, String>, key: &str) -> Option<String> {
     env.get(key)
-        .or_else(|| if cfg!(windows) { env.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v) } else { None })
+        .or_else(|| {
+            if cfg!(windows) {
+                env.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                    .map(|(_, v)| v)
+            } else {
+                None
+            }
+        })
         .cloned()
 }
 
 /// `autocomplete.scriptTimeout` (5000 ms; Windows 20000).
 fn script_timeout(settings: &Settings) -> u64 {
-    settings.f64("autocomplete.scriptTimeout", if cfg!(windows) { 20000.0 } else { 5000.0 }).max(0.0) as u64
+    settings
+        .f64(
+            "autocomplete.scriptTimeout",
+            if cfg!(windows) { 20000.0 } else { 5000.0 },
+        )
+        .max(0.0) as u64
 }
 
 /// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
 fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
-    inline::llm_history(entries, settings.i64("inline.historyCount", 49).max(0) as usize)
+    inline::llm_history(
+        entries,
+        settings.i64("inline.historyCount", 49).max(0) as usize,
+    )
 }
 
 /// Script value → exec input JSON (SPEC §6.6.3); `None` for falsy values. A legacy string runs as `sh -c`, the
@@ -132,7 +162,9 @@ fn script_exec_input(v: Value, cwd: &str) -> Option<Value> {
     let cwd = json!(cwd);
     Some(match v {
         Value::Array(a) if !a.is_empty() => json!({"command": a[0], "args": a[1..], "cwd": cwd}),
-        Value::String(s) if !s.is_empty() => json!({"command": "sh", "args": ["-c", s], "cwd": cwd}), // none in 2.692.3
+        Value::String(s) if !s.is_empty() => {
+            json!({"command": "sh", "args": ["-c", s], "cwd": cwd})
+        } // none in 2.692.3
         Value::Object(o) => {
             let mut m = serde_json::Map::new();
             m.insert("cwd".into(), cwd);
@@ -156,16 +188,26 @@ fn script_string(s: &str, is_dangerous: bool) -> Suggestion {
 
 /// Suggestion objects (custom / filterTemplateSuggestions results).
 fn json_items(v: &Value) -> Vec<Suggestion> {
-    v.as_array().map(|a| a.iter().filter_map(crate::spec::suggestion_from_json).collect()).unwrap_or_default()
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(crate::spec::suggestion_from_json)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `postProcess` result: drop falsy items and objects without a name; strings become arg rows.
 fn post_process_items(v: &Value, is_dangerous: bool) -> Vec<Suggestion> {
-    let Some(a) = v.as_array() else { return Vec::new() };
+    let Some(a) = v.as_array() else {
+        return Vec::new();
+    };
     a.iter()
         .filter_map(|x| match x {
             Value::String(s) if !s.is_empty() => Some(script_string(s, is_dangerous)),
-            Value::Object(o) if o.get("name").is_some_and(truthy) => crate::spec::suggestion_from_json(x),
+            Value::Object(o) if o.get("name").is_some_and(truthy) => {
+                crate::spec::suggestion_from_json(x)
+            }
             _ => None,
         })
         .collect()
@@ -263,14 +305,28 @@ struct Engine {
 
 impl Engine {
     fn new(tx: Sender<Msg>, settings: Settings) -> Engine {
-        let index = crate::specs::ensure_extracted().and_then(|_| SpecIndex::load()).unwrap_or_else(|e| {
-            logger::error(&format!("engine: specs: {e:#}"));
-            SpecIndex::default()
-        });
-        Engine::with(tx, settings, index, History::load(), crate::settings::state_path().ok())
+        let index = crate::specs::ensure_extracted()
+            .and_then(|_| SpecIndex::load())
+            .unwrap_or_else(|e| {
+                logger::error(&format!("engine: specs: {e:#}"));
+                SpecIndex::default()
+            });
+        Engine::with(
+            tx,
+            settings,
+            index,
+            History::load(),
+            crate::settings::state_path().ok(),
+        )
     }
 
-    fn with(tx: Sender<Msg>, settings: Settings, index: SpecIndex, history: History, state_path: Option<PathBuf>) -> Engine {
+    fn with(
+        tx: Sender<Msg>,
+        settings: Settings,
+        index: SpecIndex,
+        history: History,
+        state_path: Option<PathBuf>,
+    ) -> Engine {
         let recency = state_path.as_deref().map(load_recency).unwrap_or_default();
         Engine {
             tx,
@@ -347,7 +403,12 @@ impl Engine {
                 self.cur = None;
             }
             EngineMsg::RecordInsert { cmd, name } => self.record(cmd, name),
-            EngineMsg::Llm { req, buffer, cwd, shell } => self.llm(req, buffer, cwd, shell),
+            EngineMsg::Llm {
+                req,
+                buffer,
+                cwd,
+                shell,
+            } => self.llm(req, buffer, cwd, shell),
             EngineMsg::Settings(s) => {
                 js.set_settings(s.clone());
                 self.settings = s;
@@ -389,7 +450,10 @@ impl Engine {
             };
             self.aliases = Some((shell, map));
         }
-        self.aliases.as_ref().map(|(_, m)| m.clone()).unwrap_or_default()
+        self.aliases
+            .as_ref()
+            .map(|(_, m)| m.clone())
+            .unwrap_or_default()
     }
 
     // -----------------------------------------------------------------------------------------------------
@@ -399,7 +463,12 @@ impl Engine {
     fn compute(&mut self, req: &Request, js: &mut Js) -> Option<Completion> {
         let cursor = req.cursor.min(req.buffer.len());
         // SPEC §6.1.5 mid-word guard
-        if !req.buffer.is_char_boundary(cursor) || req.buffer[cursor..].chars().next().is_some_and(|c| !c.is_whitespace()) {
+        if !req.buffer.is_char_boundary(cursor)
+            || req.buffer[cursor..]
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_whitespace())
+        {
             return Some(self.error(req, cursor, false));
         }
         let before = &req.buffer[..cursor];
@@ -407,8 +476,18 @@ impl Engine {
         let Some(cmd) = shell_parser::current_command(before, req.shell, &aliases) else {
             return Some(self.error(req, cursor, true));
         };
-        let env = if self.session.env.is_empty() { &self.wrapper_env } else { &self.session.env };
-        let pctx = ParseCtx { cwd: &req.cwd, settings: &self.settings, env, shell: req.shell, index: &self.index };
+        let env = if self.session.env.is_empty() {
+            &self.wrapper_env
+        } else {
+            &self.session.env
+        };
+        let pctx = ParseCtx {
+            cwd: &req.cwd,
+            settings: &self.settings,
+            env,
+            shell: req.shell,
+            index: &self.index,
+        };
         let pr = match self.parser.parse(&cmd, &pctx, js) {
             Ok(pr) => pr,
             Err(ParseError::Aborted) => return None,
@@ -418,12 +497,17 @@ impl Engine {
             }
         };
         let arg = pr.current_arg.clone();
-        let arg_key = hash2(arg.as_ref().map_or(0, |a| Rc::as_ptr(a) as usize), Rc::as_ptr(&pr.completion) as usize);
+        let arg_key = hash2(
+            arg.as_ref().map_or(0, |a| Rc::as_ptr(a) as usize),
+            Rc::as_ptr(&pr.completion) as usize,
+        );
         if arg_key != self.last_arg_key {
             self.user_fuzzy = self.settings.bool("autocomplete.fuzzySearch", false);
             self.last_arg_key = arg_key;
         }
-        let strategy = arg.as_ref().map_or(pr.completion.filter_strategy, |a| a.filter_strategy);
+        let strategy = arg
+            .as_ref()
+            .map_or(pr.completion.filter_strategy, |a| a.filter_strategy);
         let fuzzy = match strategy {
             Strategy::Prefix => false,
             Strategy::Fuzzy => true,
@@ -438,15 +522,37 @@ impl Engine {
         };
         let (path, pathext) = (env_var(env, "PATH"), env_var(env, "PATHEXT"));
         let queries = self.queries(&pr, req.shell, js)?;
-        let tokens = pr.tokens.get(pr.command_index..).unwrap_or_default().to_vec();
+        let tokens = pr
+            .tokens
+            .get(pr.command_index..)
+            .unwrap_or_default()
+            .to_vec();
         let triggered = self.update_slots(&pr, &ctx, &tokens, js)?;
-        let first = if pr.first_token && self.settings.bool("autocomplete.firstTokenCompletion", false) {
+        let first = if pr.first_token
+            && self
+                .settings
+                .bool("autocomplete.firstTokenCompletion", false)
+        {
             self.first_token_items(&aliases, path, pathext)
         } else {
             Vec::new()
         };
-        let prefix = before.strip_suffix(pr.raw_last_token.as_str()).unwrap_or(before).to_string();
-        self.cur = Some(Current { req: req.clone(), cursor, pr, cmd_text: cmd.original_text, arg_key, fuzzy, queries, triggered, first, prefix });
+        let prefix = before
+            .strip_suffix(pr.raw_last_token.as_str())
+            .unwrap_or(before)
+            .to_string();
+        self.cur = Some(Current {
+            req: req.clone(),
+            cursor,
+            pr,
+            cmd_text: cmd.original_text,
+            arg_key,
+            fuzzy,
+            queries,
+            triggered,
+            first,
+            prefix,
+        });
         Some(self.reply(Phase::Parse))
     }
 
@@ -463,16 +569,25 @@ impl Engine {
 
     /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
     fn queries(&self, pr: &ParseResult, shell: Shell, js: &mut Js) -> Option<Vec<Query>> {
-        let Some(arg) = &pr.current_arg else { return Some(Vec::new()) };
+        let Some(arg) = &pr.current_arg else {
+            return Some(Vec::new());
+        };
         let mut out = Vec::with_capacity(arg.generators.len());
         for g in &arg.generators {
             out.push(if is_path_template(g) {
-                Query::Path { backslash: shell == Shell::Pwsh }
+                Query::Path {
+                    backslash: shell == Shell::Pwsh,
+                }
             } else {
                 match &g.get_query_term {
                     None => Query::Term,
                     Some(StrOrFn::Str(s)) => Query::Str(s.clone()),
-                    Some(StrOrFn::Fn(f)) => match js.call(*f, vec![JsArg::Json(json!(pr.search_term))], None, SYNC_CALL) {
+                    Some(StrOrFn::Fn(f)) => match js.call(
+                        *f,
+                        vec![JsArg::Json(json!(pr.search_term))],
+                        None,
+                        SYNC_CALL,
+                    ) {
                         Ok(Value::String(s)) => Query::Value(s),
                         Err(JsError::Aborted) => return None,
                         _ => Query::Value(pr.search_term.clone()), // error → search term
@@ -484,7 +599,13 @@ impl Engine {
     }
 
     /// SPEC §6.6.1: decide triggers (no mutation until every JS trigger answered), then start runs.
-    fn update_slots(&mut self, pr: &ParseResult, ctx: &GenCtx, tokens: &[String], js: &mut Js) -> Option<Vec<GenKey>> {
+    fn update_slots(
+        &mut self,
+        pr: &ParseResult,
+        ctx: &GenCtx,
+        tokens: &[String],
+        js: &mut Js,
+    ) -> Option<Vec<GenKey>> {
         let arg = pr.current_arg.clone();
         let same = match (&arg, &self.slot_arg) {
             (Some(a), Some(b)) => Rc::ptr_eq(a, b),
@@ -501,7 +622,12 @@ impl Engine {
             } else {
                 match &g.trigger {
                     None => arg.as_ref().is_some_and(|a| a.debounce.is_some()),
-                    Some(Trigger::Fn(f)) => match js.call(*f, vec![JsArg::Json(json!(new)), JsArg::Json(json!(old))], None, SYNC_CALL) {
+                    Some(Trigger::Fn(f)) => match js.call(
+                        *f,
+                        vec![JsArg::Json(json!(new)), JsArg::Json(json!(old))],
+                        None,
+                        SYNC_CALL,
+                    ) {
                         Ok(v) => truthy(&v),
                         Err(JsError::Aborted) => return None,
                         Err(_) => true, // a throwing trigger counts as a trigger
@@ -518,10 +644,21 @@ impl Engine {
         };
         if !same {
             // ponytail: results are not carried over to a different arg (qac keeps them while loading)
-            self.slots = (0..gens.len()).map(|i| Slot { key: gen_key(arg, i), result: Vec::new(), loading: false, gen_id: 0 }).collect();
+            self.slots = (0..gens.len())
+                .map(|i| Slot {
+                    key: gen_key(arg, i),
+                    result: Vec::new(),
+                    loading: false,
+                    gen_id: 0,
+                })
+                .collect();
             self.slot_arg = Some(arg.clone());
         }
-        let help = if gens.iter().any(|g| g.template.iter().any(|t| t == "help")) { suggest::help_items(pr) } else { Vec::new() };
+        let help = if gens.iter().any(|g| g.template.iter().any(|t| t == "help")) {
+            suggest::help_items(pr)
+        } else {
+            Vec::new()
+        };
         let floor = script_timeout(&self.settings);
         let mut triggered = Vec::new();
         for (i, fire) in fire.into_iter().enumerate() {
@@ -535,7 +672,8 @@ impl Engine {
             triggered.push(slot.key);
             let debounce = arg.debounce.map(|ms| if ms > 0 { ms } else { 200 });
             // ponytail: one deadline for the whole run (custom generators may exec several times)
-            let budget = debounce.unwrap_or(0) + 2 * floor.max(gens[i].script_timeout.unwrap_or(0)) + 1000;
+            let budget =
+                debounce.unwrap_or(0) + 2 * floor.max(gens[i].script_timeout.unwrap_or(0)) + 1000;
             let mut run = Run {
                 slot: i,
                 gen_id: self.next_gen,
@@ -566,7 +704,9 @@ impl Engine {
     // Generator runs (SPEC §6.6.2–6.6.5)
 
     fn is_current(&self, run: &Run) -> bool {
-        self.slots.get(run.slot).is_some_and(|s| s.gen_id == run.gen_id)
+        self.slots
+            .get(run.slot)
+            .is_some_and(|s| s.gen_id == run.gen_id)
     }
 
     /// Record an outcome; returns whether a current slot changed.
@@ -603,13 +743,22 @@ impl Engine {
             let mut items = Vec::new();
             let files = g.template.iter().any(|t| t == "filepaths");
             if is_path_template(g) && !run.ctx.cwd.is_empty() {
-                let dir = suggest::inserted_directory(&run.ctx.cwd, &run.ctx.search_term, &run.ctx.env, run.ctx.shell == Shell::Pwsh.name());
+                let dir = suggest::inserted_directory(
+                    &run.ctx.cwd,
+                    &run.ctx.search_term,
+                    &run.ctx.env,
+                    run.ctx.shell == Shell::Pwsh.name(),
+                );
                 items = suggest::list_dir(&dir, files, run.ctx.is_dangerous);
             }
             items.extend(run.help.iter().cloned()); // `history` template: [] (F6)
             return match g.filter_template_suggestions {
                 Some(f) => {
-                    run.task = js.start_call(f, vec![JsArg::Json(suggest::template_json(&items))], Some(&run.ctx));
+                    run.task = js.start_call(
+                        f,
+                        vec![JsArg::Json(suggest::template_json(&items))],
+                        Some(&run.ctx),
+                    );
                     run.step = Step::Filter;
                     Outcome::Pending
                 }
@@ -622,7 +771,8 @@ impl Engine {
         if let Some(script) = &g.script {
             return match script {
                 Script::Fn(f) => {
-                    run.task = js.start_call(*f, vec![JsArg::Json(json!(run.tokens))], Some(&run.ctx));
+                    run.task =
+                        js.start_call(*f, vec![JsArg::Json(json!(run.tokens))], Some(&run.ctx));
                     run.step = Step::Script;
                     Outcome::Pending
                 }
@@ -631,18 +781,40 @@ impl Engine {
                 Script::Object(o) => self.script_input(run, g, o.clone(), js),
             };
         }
-        let Some(custom) = g.custom else { return Outcome::Done(Vec::new()) };
-        let key = g.cache.as_ref().map(|c| suggest::cache_key(c, &run.ctx.cwd, c.cache_key.clone().unwrap_or_else(|| run.tokens.join(" "))));
-        let args = vec![JsArg::Json(json!(run.tokens)), JsArg::Exec, JsArg::Json(gen_context_json(&run.ctx))];
+        let Some(custom) = g.custom else {
+            return Outcome::Done(Vec::new());
+        };
+        let key = g.cache.as_ref().map(|c| {
+            suggest::cache_key(
+                c,
+                &run.ctx.cwd,
+                c.cache_key.clone().unwrap_or_else(|| run.tokens.join(" ")),
+            )
+        });
+        let args = vec![
+            JsArg::Json(json!(run.tokens)),
+            JsArg::Exec,
+            JsArg::Json(gen_context_json(&run.ctx)),
+        ];
         let ctx = run.ctx.clone();
-        match self.fetch(run, g, key, Step::Custom, js, move |js| js.start_call(custom, args, Some(&ctx))) {
+        match self.fetch(run, g, key, Step::Custom, js, move |js| {
+            js.start_call(custom, args, Some(&ctx))
+        }) {
             Ok(v) => self.custom_result(run, g, v, js),
             Err(o) => o,
         }
     }
 
     /// Cached fetch (D10): a value now (`Ok`), or a started/shared task (`Err(Pending)`).
-    fn fetch(&mut self, run: &mut Run, g: &Generator, key: Option<String>, step: Step, js: &mut Js, start: impl FnOnce(&mut Js) -> TaskId) -> Result<Value, Outcome> {
+    fn fetch(
+        &mut self,
+        run: &mut Run,
+        g: &Generator,
+        key: Option<String>,
+        step: Step,
+        js: &mut Js,
+        start: impl FnOnce(&mut Js) -> TaskId,
+    ) -> Result<Value, Outcome> {
         let (Some(cfg), Some(key)) = (&g.cache, key) else {
             run.task = start(js);
             run.step = step;
@@ -679,7 +851,9 @@ impl Engine {
 
     /// SPEC §6.6.3: script value → exec input → (cached) exec.
     fn script_input(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut Js) -> Outcome {
-        let Some(mut input) = script_exec_input(v, &run.ctx.cwd) else { return Outcome::Done(Vec::new()) }; // falsy → []
+        let Some(mut input) = script_exec_input(v, &run.ctx.cwd) else {
+            return Outcome::Done(Vec::new());
+        }; // falsy → []
         let key_src = input.to_string();
         let timeout = script_timeout(&self.settings)
             .max(g.script_timeout.unwrap_or(0))
@@ -689,9 +863,14 @@ impl Engine {
             Ok(i) => i,
             Err(e) => return Outcome::Fail(format!("bad script input: {e}")),
         };
-        let key = g.cache.as_ref().map(|c| suggest::cache_key(c, &run.ctx.cwd, c.cache_key.clone().unwrap_or(key_src)));
+        let key = g
+            .cache
+            .as_ref()
+            .map(|c| suggest::cache_key(c, &run.ctx.cwd, c.cache_key.clone().unwrap_or(key_src)));
         let ctx = run.ctx.clone();
-        match self.fetch(run, g, key, Step::Exec, js, move |js| js.start_exec(exec, &ctx)) {
+        match self.fetch(run, g, key, Step::Exec, js, move |js| {
+            js.start_exec(exec, &ctx)
+        }) {
             Ok(v) => self.exec_output(run, g, &v, js),
             Err(o) => o,
         }
@@ -705,17 +884,30 @@ impl Engine {
             if t.is_empty() {
                 return Outcome::Done(Vec::new());
             }
-            return Outcome::Done(t.split(sep.as_str()).map(|s| script_string(s, run.ctx.is_dangerous)).collect());
+            return Outcome::Done(
+                t.split(sep.as_str())
+                    .map(|s| script_string(s, run.ctx.is_dangerous))
+                    .collect(),
+            );
         }
-        let Some(pp) = g.post_process else { return Outcome::Done(Vec::new()) };
-        run.task = js.start_call(pp, vec![JsArg::Json(json!(stdout)), JsArg::Json(json!(run.tokens))], Some(&run.ctx));
+        let Some(pp) = g.post_process else {
+            return Outcome::Done(Vec::new());
+        };
+        run.task = js.start_call(
+            pp,
+            vec![JsArg::Json(json!(stdout)), JsArg::Json(json!(run.tokens))],
+            Some(&run.ctx),
+        );
         run.step = Step::PostProcess;
         Outcome::Pending
     }
 
     /// Custom result; `filterTemplateSuggestions` applies when the first item has a `context`.
     fn custom_result(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut Js) -> Outcome {
-        let templated = v.as_array().and_then(|a| a.first()).is_some_and(|x| x.get("context").is_some());
+        let templated = v
+            .as_array()
+            .and_then(|a| a.first())
+            .is_some_and(|x| x.get("context").is_some());
         match g.filter_template_suggestions {
             Some(f) if templated => {
                 run.task = js.start_call(f, vec![JsArg::Json(v)], Some(&run.ctx));
@@ -760,7 +952,12 @@ impl Engine {
         let mut tasks: Vec<TaskId> = self.runs.iter().map(|r| r.task).collect();
         tasks.sort_unstable();
         tasks.dedup();
-        let deadline = self.runs.iter().map(|r| r.deadline).min().map_or(Instant::now() + SLICE, |d| d.min(Instant::now() + SLICE));
+        let deadline = self
+            .runs
+            .iter()
+            .map(|r| r.deadline)
+            .min()
+            .map_or(Instant::now() + SLICE, |d| d.min(Instant::now() + SLICE));
         let results = match js.wait(&tasks, deadline) {
             Ok(r) => r,
             Err(JsError::Aborted) => return, // a newer request is queued
@@ -770,10 +967,12 @@ impl Engine {
         let mut runs = std::mem::take(&mut self.runs);
         for (task, res) in tasks.iter().zip(results) {
             let Some(res) = res else { continue };
-            let (mine, rest): (Vec<Run>, Vec<Run>) = runs.into_iter().partition(|r| r.task == *task);
+            let (mine, rest): (Vec<Run>, Vec<Run>) =
+                runs.into_iter().partition(|r| r.task == *task);
             runs = rest;
             // the owner (stores into the cache) goes first so sharers see a consistent cache
-            let (owners, sharers): (Vec<Run>, Vec<Run>) = mine.into_iter().partition(|r| r.store.is_some());
+            let (owners, sharers): (Vec<Run>, Vec<Run>) =
+                mine.into_iter().partition(|r| r.store.is_some());
             for mut run in owners.into_iter().chain(sharers) {
                 let o = self.advance(&mut run, res.clone(), js);
                 changed |= self.settle(run, o);
@@ -781,7 +980,8 @@ impl Engine {
             js.forget(&[*task]);
         }
         let now = Instant::now();
-        let (expired, alive): (Vec<Run>, Vec<Run>) = runs.into_iter().partition(|r| now >= r.deadline);
+        let (expired, alive): (Vec<Run>, Vec<Run>) =
+            runs.into_iter().partition(|r| now >= r.deadline);
         self.runs.extend(alive);
         for mut run in expired {
             if let Some(k) = run.store.take() {
@@ -793,20 +993,32 @@ impl Engine {
             changed |= self.settle(run, Outcome::Fail("timed out".into()));
         }
         if changed && self.cur.is_some() {
-            let _ = self.tx.send(Msg::Completion(Box::new(self.reply(Phase::Generators))));
+            let _ = self
+                .tx
+                .send(Msg::Completion(Box::new(self.reply(Phase::Generators))));
         }
     }
 
     // -----------------------------------------------------------------------------------------------------
     // Replies
 
-    fn first_token_items(&mut self, aliases: &HashMap<String, String>, path: Option<String>, pathext: Option<String>) -> Vec<Sugg> {
+    fn first_token_items(
+        &mut self,
+        aliases: &HashMap<String, String>,
+        path: Option<String>,
+        pathext: Option<String>,
+    ) -> Vec<Sugg> {
         if let Some((at, items)) = &self.first_token_cache {
             if at.elapsed() < FIRST_TOKEN_TTL {
                 return items.clone();
             }
         }
-        let items = suggest::first_token_items(&self.index.completions, aliases, path.as_deref(), pathext.as_deref());
+        let items = suggest::first_token_items(
+            &self.index.completions,
+            aliases,
+            path.as_deref(),
+            pathext.as_deref(),
+        );
         self.first_token_cache = Some((Instant::now(), items.clone()));
         items
     }
@@ -822,7 +1034,12 @@ impl Engine {
                 .slots
                 .iter()
                 .zip(&cur.queries)
-                .map(|(sl, q)| GenView { key: sl.key, query: q.clone(), loading: sl.loading, items: &sl.result })
+                .map(|(sl, q)| GenView {
+                    key: sl.key,
+                    query: q.clone(),
+                    loading: sl.loading,
+                    items: &sl.result,
+                })
                 .collect();
             suggest::assemble(pr, &views)
         };
@@ -833,7 +1050,8 @@ impl Engine {
         }
         let fo = FilterOpts {
             fuzzy: cur.fuzzy,
-            auto_exec_hidden: s.bool("autocomplete.hideAutoExecuteSuggestion", false) || s.bool("autocomplete.onlyShowOnTab", false),
+            auto_exec_hidden: s.bool("autocomplete.hideAutoExecuteSuggestion", false)
+                || s.bool("autocomplete.onlyShowOnTab", false),
             exec_after_space: s.bool("autocomplete.immediatelyExecuteAfterSpace", false),
             run_dangerous: s.bool("autocomplete.immediatelyRunDangerousCommands", false),
             suggest_current_token: pr
@@ -846,7 +1064,10 @@ impl Engine {
         let use_recency = s.string("autocomplete.sortMethod") != Some("alphabetical");
         let ranked = {
             let rec = self.recency.lock().ok();
-            let map = rec.as_ref().filter(|_| use_recency).and_then(|r| r.get(cmd));
+            let map = rec
+                .as_ref()
+                .filter(|_| use_recency)
+                .and_then(|r| r.get(cmd));
             suggest::rank(list, &pr.search_term, map, &fo)
         };
         let ic = InsCtx {
@@ -857,7 +1078,10 @@ impl Engine {
             prefer_verbose: s.bool("autocomplete.preferVerboseSuggestions", false),
             insert_space: s.bool("autocomplete.insertSpaceAutomatically", true),
         };
-        let items: Vec<Item> = ranked.into_iter().map(|(x, p)| suggest::to_item(x, p, &ic)).collect();
+        let items: Vec<Item> = ranked
+            .into_iter()
+            .map(|(x, p)| suggest::to_item(x, p, &ic))
+            .collect();
         let ghost = self.ghost(&cur.req, cur.cursor, Some(&items));
         Completion {
             req: cur.req.id,
@@ -874,7 +1098,11 @@ impl Engine {
                 description: a.description.clone().unwrap_or_default(),
             }),
             search_term: pr.search_term.clone(),
-            triggered_generators: if phase == Phase::Parse { cur.triggered.clone() } else { Vec::new() },
+            triggered_generators: if phase == Phase::Parse {
+                cur.triggered.clone()
+            } else {
+                Vec::new()
+            },
             items,
             loading: self.slots.iter().any(|s| s.loading),
             ghost,
@@ -884,7 +1112,10 @@ impl Engine {
 
     /// Local inline ghost (SPEC §6.11). Also computed for parse-error replies (commands without a spec).
     fn ghost(&self, req: &Request, cursor: usize, items: Option<&[Item]>) -> Option<String> {
-        if !self.settings.bool("inline.enabled", true) || req.buffer.is_empty() || cursor != req.buffer.len() {
+        if !self.settings.bool("inline.enabled", true)
+            || req.buffer.is_empty()
+            || cursor != req.buffer.len()
+        {
             return None;
         }
         let history = || inline::history_ghost(self.history.entries(), &req.buffer);
@@ -906,20 +1137,24 @@ impl Engine {
         if let Ok(mut r) = self.recency.lock() {
             r.entry(cmd).or_default().insert(name, now_ms());
         }
-        let Some(path) = self.state_path.clone() else { return };
+        let Some(path) = self.state_path.clone() else {
+            return;
+        };
         if self.saving.swap(true, SeqCst) {
             return; // a save is already scheduled; it writes the latest map
         }
         let (rec, saving) = (self.recency.clone(), self.saving.clone());
         // ponytail: throttled to one write per second (first insert + 1 s), not a trailing debounce
-        let spawned = std::thread::Builder::new().name("recency".into()).spawn(move || {
-            std::thread::sleep(Duration::from_secs(1));
-            saving.store(false, SeqCst);
-            let snapshot = rec.lock().map(|r| r.clone()).unwrap_or_default();
-            if let Err(e) = save_recency(&path, &snapshot) {
-                logger::warn(&format!("engine: saving recency: {e:#}"));
-            }
-        });
+        let spawned = std::thread::Builder::new()
+            .name("recency".into())
+            .spawn(move || {
+                std::thread::sleep(Duration::from_secs(1));
+                saving.store(false, SeqCst);
+                let snapshot = rec.lock().map(|r| r.clone()).unwrap_or_default();
+                if let Err(e) = save_recency(&path, &snapshot) {
+                    logger::warn(&format!("engine: saving recency: {e:#}"));
+                }
+            });
         if spawned.is_err() {
             self.saving.store(false, SeqCst);
             self.save_recency_now();
@@ -927,7 +1162,9 @@ impl Engine {
     }
 
     fn save_recency_now(&self) {
-        let (Some(path), Ok(rec)) = (&self.state_path, self.recency.lock()) else { return };
+        let (Some(path), Ok(rec)) = (&self.state_path, self.recency.lock()) else {
+            return;
+        };
         if let Err(e) = save_recency(path, &rec) {
             logger::warn(&format!("engine: saving recency: {e:#}"));
         }
@@ -940,19 +1177,24 @@ impl Engine {
             return;
         };
         if let Some(text) = self.ghost_cache.lock().ok().and_then(|c| c.lookup(&buffer)) {
-            let _ = tx.send(Msg::Ghost { req, text: Some(text) });
+            let _ = tx.send(Msg::Ghost {
+                req,
+                text: Some(text),
+            });
             return;
         }
         let history = llm_history(&self.settings, self.history.entries());
         let env = self.env().clone();
         let cache = self.ghost_cache.clone();
-        let spawned = std::thread::Builder::new().name("llm".into()).spawn(move || {
-            let text = inline::llm_complete(&profile, &buffer, &cwd, shell, &history, &env);
-            if let (Some(t), Ok(mut c)) = (&text, cache.lock()) {
-                c.insert(&[format!("{buffer}{t}")]);
-            }
-            let _ = tx.send(Msg::Ghost { req, text });
-        });
+        let spawned = std::thread::Builder::new()
+            .name("llm".into())
+            .spawn(move || {
+                let text = inline::llm_complete(&profile, &buffer, &cwd, shell, &history, &env);
+                if let (Some(t), Ok(mut c)) = (&text, cache.lock()) {
+                    c.insert(&[format!("{buffer}{t}")]);
+                }
+                let _ = tx.send(Msg::Ghost { req, text });
+            });
         if let Err(e) = spawned {
             logger::warn(&format!("engine: llm worker: {e}"));
         }
@@ -965,16 +1207,27 @@ mod tests {
 
     #[test]
     fn recency_round_trip_keeps_other_keys() {
-        let dir = std::env::temp_dir().join(format!("tabsmith-engine-{}-{}", std::process::id(), now_ms()));
+        let dir = std::env::temp_dir().join(format!(
+            "tabsmith-engine-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("state.json");
         std::fs::write(&path, r#"{"doctor.prompt-restart-terminal": true}"#).unwrap();
         assert!(load_recency(&path).is_empty());
-        let rec: Recency = [("git".to_string(), [("checkout".to_string(), 1_700_000_000_000u64)].into())].into();
+        let rec: Recency = [(
+            "git".to_string(),
+            [("checkout".to_string(), 1_700_000_000_000u64)].into(),
+        )]
+        .into();
         save_recency(&path, &rec).unwrap();
         assert_eq!(load_recency(&path), rec);
         let store = Store::load(&path).unwrap();
-        assert_eq!(store.map.get("doctor.prompt-restart-terminal"), Some(&json!(true)));
+        assert_eq!(
+            store.map.get("doctor.prompt-restart-terminal"),
+            Some(&json!(true))
+        );
         assert!(load_recency(&dir.join("missing.json")).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
         // R4-3: a purged data root is not recreated by a running session.
@@ -988,21 +1241,40 @@ mod tests {
         let dir = crate::specs::testutil::TmpDir::new("recency");
         let path = dir.path().join("state.json");
         std::fs::write(&path, "{}").unwrap();
-        let one = |cmd: &str, name: &str, ts: u64| -> Recency { [(cmd.to_string(), [(name.to_string(), ts)].into())].into() };
+        let one = |cmd: &str, name: &str, ts: u64| -> Recency {
+            [(cmd.to_string(), [(name.to_string(), ts)].into())].into()
+        };
         save_recency(&path, &one("git", "checkout", 5)).unwrap();
         save_recency(&path, &one("git", "status", 2)).unwrap();
         save_recency(&path, &one("git", "checkout", 3)).unwrap(); // older than disk: newest wins
         let got = load_recency(&path);
-        assert_eq!(got["git"], [("checkout".to_string(), 5u64), ("status".to_string(), 2)].into());
+        assert_eq!(
+            got["git"],
+            [("checkout".to_string(), 5u64), ("status".to_string(), 2)].into()
+        );
     }
 
     #[test]
     fn llm_history_honours_history_count() {
         // llm-history-count-ignored: only the last `inline.historyCount` usable entries leave the machine
-        let e = |c: &str| HistoryEntry { command: c.into(), exit_code: Some(0), ..Default::default() };
+        let e = |c: &str| HistoryEntry {
+            command: c.into(),
+            exit_code: Some(0),
+            ..Default::default()
+        };
         let entries: Vec<HistoryEntry> = (0..100).map(|i| e(&format!("echo {i}"))).collect();
-        let with = |v: Value| Settings::from_map(json!({ "inline.historyCount": v }).as_object().unwrap().clone());
-        let got: Vec<String> = llm_history(&with(json!(2)), &entries).into_iter().map(|h| h.command).collect();
+        let with = |v: Value| {
+            Settings::from_map(
+                json!({ "inline.historyCount": v })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+        };
+        let got: Vec<String> = llm_history(&with(json!(2)), &entries)
+            .into_iter()
+            .map(|h| h.command)
+            .collect();
         assert_eq!(got, ["echo 98", "echo 99"]);
         assert!(llm_history(&with(json!(0)), &entries).is_empty());
         assert_eq!(llm_history(&Settings::default(), &entries).len(), 49);
@@ -1011,23 +1283,42 @@ mod tests {
     #[test]
     fn legacy_string_script_runs_through_sh_c() {
         // win-legacy-script-cmd: same `sh -c` form as `executeShellCommand(string)` on every platform
-        assert_eq!(script_exec_input(json!("git log --format=\"%h %s\""), "/w"), Some(json!({"command": "sh", "args": ["-c", "git log --format=\"%h %s\""], "cwd": "/w"})));
-        assert_eq!(script_exec_input(json!(["git", "branch"]), "/w"), Some(json!({"command": "git", "args": ["branch"], "cwd": "/w"})));
-        assert_eq!(script_exec_input(json!({"command": "ls", "cwd": "/x"}), "/w"), Some(json!({"command": "ls", "cwd": "/x"})));
+        assert_eq!(
+            script_exec_input(json!("git log --format=\"%h %s\""), "/w"),
+            Some(
+                json!({"command": "sh", "args": ["-c", "git log --format=\"%h %s\""], "cwd": "/w"})
+            )
+        );
+        assert_eq!(
+            script_exec_input(json!(["git", "branch"]), "/w"),
+            Some(json!({"command": "git", "args": ["branch"], "cwd": "/w"}))
+        );
+        assert_eq!(
+            script_exec_input(json!({"command": "ls", "cwd": "/x"}), "/w"),
+            Some(json!({"command": "ls", "cwd": "/x"}))
+        );
         assert_eq!(script_exec_input(json!(""), "/w"), None);
         assert_eq!(script_exec_input(json!([]), "/w"), None);
     }
 
     #[test]
     fn js_truthiness() {
-        assert!(!truthy(&json!(null)) && !truthy(&json!(false)) && !truthy(&json!(0)) && !truthy(&json!("")));
-        assert!(truthy(&json!(1)) && truthy(&json!("x")) && truthy(&json!([])) && truthy(&json!({})));
+        assert!(
+            !truthy(&json!(null))
+                && !truthy(&json!(false))
+                && !truthy(&json!(0))
+                && !truthy(&json!(""))
+        );
+        assert!(
+            truthy(&json!(1)) && truthy(&json!("x")) && truthy(&json!([])) && truthy(&json!({}))
+        );
     }
 
     #[test]
     fn post_process_filtering() {
         // strings become arg rows carrying isDangerous; falsy entries and nameless objects are dropped
-        let items = post_process_items(&json!(["a", "", null, 0, {"description": "no name"}]), true);
+        let items =
+            post_process_items(&json!(["a", "", null, 0, {"description": "no name"}]), true);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].names, ["a"]);
         assert_eq!(items[0].insert_value.as_deref(), Some("a"));
@@ -1040,13 +1331,29 @@ mod tests {
         // first-token-cache-ignores-session-update: `alias zzal=…` at this prompt shows `zzal` at the next one
         let dir = crate::specs::testutil::TmpDir::new("engine-session");
         let (tx, _rx) = std::sync::mpsc::channel();
-        let mut e = Engine::with(tx, Settings::default(), SpecIndex::default(), History::load_from(dir.path().join("h.jsonl")), None);
+        let mut e = Engine::with(
+            tx,
+            Settings::default(),
+            SpecIndex::default(),
+            History::load_from(dir.path().join("h.jsonl")),
+            None,
+        );
         let (jtx, jrx) = std::sync::mpsc::channel();
         let mut js = Js::new(jrx, jtx, Settings::default()).unwrap();
         assert!(e.first_token_items(&HashMap::new(), None, None).is_empty());
-        assert!(e.handle(EngineMsg::Session(SessionCtx::default()), &mut None, &mut js));
+        assert!(e.handle(
+            EngineMsg::Session(SessionCtx::default()),
+            &mut None,
+            &mut js
+        ));
         let aliases = HashMap::from([("zzal".to_string(), "git status".to_string())]);
-        assert_eq!(e.first_token_items(&aliases, None, None).iter().map(|s| s.names[0].as_str()).collect::<Vec<_>>(), ["zzal"]);
+        assert_eq!(
+            e.first_token_items(&aliases, None, None)
+                .iter()
+                .map(|s| s.names[0].as_str())
+                .collect::<Vec<_>>(),
+            ["zzal"]
+        );
     }
 
     #[test]

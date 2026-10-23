@@ -16,14 +16,28 @@ fn cmd(s: &str) -> CommandInfo {
     let mut pos = 0;
     for w in s.split(' ') {
         if !w.is_empty() {
-            tokens.push(Token { text: w.into(), raw: w.into(), start: pos, end: pos + w.len() });
+            tokens.push(Token {
+                text: w.into(),
+                raw: w.into(),
+                start: pos,
+                end: pos + w.len(),
+            });
         }
         pos += w.len() + 1;
     }
     if s.ends_with(' ') {
-        tokens.push(Token { text: String::new(), raw: String::new(), start: s.len(), end: s.len() });
+        tokens.push(Token {
+            text: String::new(),
+            raw: String::new(),
+            start: s.len(),
+            end: s.len(),
+        });
     }
-    CommandInfo { tokens, text: s.into(), original_text: s.into() }
+    CommandInfo {
+        tokens,
+        text: s.into(),
+        original_text: s.into(),
+    }
 }
 
 fn spec(v: Value) -> Rc<Subcommand> {
@@ -31,7 +45,10 @@ fn spec(v: Value) -> Rc<Subcommand> {
 }
 
 fn fixture(name: &str) -> Rc<Subcommand> {
-    let path = format!("{}/tests/fixtures/parser/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    let path = format!(
+        "{}/tests/fixtures/parser/{name}.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
     spec(serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap())
 }
 
@@ -68,7 +85,13 @@ struct Mock {
 
 impl Mock {
     fn with(specs: &[(&str, &Rc<Subcommand>)]) -> Mock {
-        Mock { specs: specs.iter().map(|(k, v)| (k.to_string(), (*v).clone())).collect(), ..Default::default() }
+        Mock {
+            specs: specs
+                .iter()
+                .map(|(k, v)| (k.to_string(), (*v).clone()))
+                .collect(),
+            ..Default::default()
+        }
     }
 }
 
@@ -107,7 +130,14 @@ fn run(mock: &mut Mock, buf: &str) -> Result<ParseResult, ParseError> {
 #[test]
 fn qac_parse_arguments_table() {
     let c = fixture("cmd_spec");
-    let (man, oas, pnf, ompa, var, opt) = (sub(&c, "man"), sub(&c, "oas"), sub(&c, "pnf"), sub(&c, "ompa"), sub(&c, "var"), sub(&c, "opt"));
+    let (man, oas, pnf, ompa, var, opt) = (
+        sub(&c, "man"),
+        sub(&c, "oas"),
+        sub(&c, "pnf"),
+        sub(&c, "ompa"),
+        sub(&c, "var"),
+        sub(&c, "opt"),
+    );
     // (buffer, flags, completion, current_arg, search_term)
     type Row<'a> = (&'a str, u8, &'a Rc<Subcommand>, Option<Rc<Arg>>, &'a str);
     #[rustfmt::skip]
@@ -197,10 +227,20 @@ fn qac_parse_arguments_table() {
         ("cmd -oarg", A, &c, oarg(&c, "-o"), "arg"),
     ];
     for (buf, fl, comp, arg, term) in rows {
-        let r = run(&mut Mock::with(&[("cmd", &c)]), buf).unwrap_or_else(|e| panic!("{buf:?}: {e:?}"));
+        let r =
+            run(&mut Mock::with(&[("cmd", &c)]), buf).unwrap_or_else(|e| panic!("{buf:?}: {e:?}"));
         assert_eq!((flags(&r), r.search_term.as_str()), (fl, term), "{buf:?}");
-        assert!(Rc::ptr_eq(&r.completion, comp), "{buf:?}: completion {:?}", r.completion.names);
-        assert_eq!(ptr(&r.current_arg), ptr(&arg), "{buf:?}: current_arg {:?}", r.current_arg);
+        assert!(
+            Rc::ptr_eq(&r.completion, comp),
+            "{buf:?}: completion {:?}",
+            r.completion.names
+        );
+        assert_eq!(
+            ptr(&r.current_arg),
+            ptr(&arg),
+            "{buf:?}: current_arg {:?}",
+            r.current_arg
+        );
     }
 }
 
@@ -211,15 +251,39 @@ fn result_fields() {
     let r = run(&mut m, "cmd man -on").unwrap();
     assert_eq!(r.option_chain.as_deref(), Some("-on"));
     assert_eq!(r.passed_options.len(), 1); // `-o`; the letter being typed stays suggestable
-    assert_eq!(r.annotations.last().unwrap().parts, [(AnnKind::Option, "-o".into()), (AnnKind::Option, "n".into())]);
+    assert_eq!(
+        r.annotations.last().unwrap().parts,
+        [
+            (AnnKind::Option, "-o".into()),
+            (AnnKind::Option, "n".into())
+        ]
+    );
     assert_eq!(run(&mut m, "cmd man -oarg").unwrap().option_chain, None);
     let r = run(&mut m, "cmd man -m x ").unwrap();
-    assert_eq!(r.path.iter().map(|s| s.names[0].as_str()).collect::<Vec<_>>(), ["cmd", "man"]);
-    assert_eq!((r.spec_name.as_str(), r.command_index, r.first_token), ("cmd", 0, false));
+    assert_eq!(
+        r.path
+            .iter()
+            .map(|s| s.names[0].as_str())
+            .collect::<Vec<_>>(),
+        ["cmd", "man"]
+    );
+    assert_eq!(
+        (r.spec_name.as_str(), r.command_index, r.first_token),
+        ("cmd", 0, false)
+    );
     assert_eq!(r.tokens, ["cmd", "man", "-m", "x", ""]);
     assert_eq!(r.passed_options[0].names, ["-m", "--man"]);
     let kinds: Vec<AnnKind> = r.annotations.iter().map(|a| a.kind).collect();
-    assert_eq!(kinds, [AnnKind::Subcommand, AnnKind::Subcommand, AnnKind::Option, AnnKind::OptionArg, AnnKind::SubcommandArg]);
+    assert_eq!(
+        kinds,
+        [
+            AnnKind::Subcommand,
+            AnnKind::Subcommand,
+            AnnKind::Option,
+            AnnKind::OptionArg,
+            AnnKind::SubcommandArg
+        ]
+    );
 }
 
 #[test]
@@ -229,34 +293,60 @@ fn exceptions_and_first_token() {
     assert!(run(&mut m, "").is_err());
     let r = run(&mut m, "cmd").unwrap();
     assert!(r.first_token && r.current_arg.is_none() && m.loads.is_empty());
-    assert_eq!((r.search_term.as_str(), r.raw_last_token.as_str()), ("cmd", "cmd"));
-    assert!(matches!(run(&mut m, "cmd notASubcommand "), Err(ParseError::NoSuggestions(_))));
+    assert_eq!(
+        (r.search_term.as_str(), r.raw_last_token.as_str()),
+        ("cmd", "cmd")
+    );
+    assert!(matches!(
+        run(&mut m, "cmd notASubcommand "),
+        Err(ParseError::NoSuggestions(_))
+    ));
     assert!(run(&mut m, "unknown x").is_err());
 }
 
 #[test]
 fn single_token_paths() {
-    let dotslash = spec(json!({"name": "dotslash", "args": {"template": ["filepaths", "folders"]}}));
+    let dotslash =
+        spec(json!({"name": "dotslash", "args": {"template": ["filepaths", "folders"]}}));
     let mut m = Mock::with(&[("dotslash", &dotslash), ("php/bin-console", &dotslash)]);
     let r = run(&mut m, "./test").unwrap();
     assert!(!r.first_token && Rc::ptr_eq(&r.completion, &dotslash));
     assert_eq!(ptr(&r.current_arg), ptr(&pos(&dotslash, 0)));
     run(&mut m, "bin/console").unwrap();
-    assert_eq!(m.loads, [SpecLocation::Global { name: "dotslash".into() }, SpecLocation::Global { name: "php/bin-console".into() }]);
+    assert_eq!(
+        m.loads,
+        [
+            SpecLocation::Global {
+                name: "dotslash".into()
+            },
+            SpecLocation::Global {
+                name: "php/bin-console".into()
+            }
+        ]
+    );
 }
 
 #[test]
 fn relative_path_first_token_loads_local_spec() {
     let mut m = Mock::default();
     assert!(run(&mut m, "./dir/test ").is_err());
-    assert_eq!(m.loads, [SpecLocation::Local { dir: "/cwd/dir/".into(), name: "test".into() }]);
+    assert_eq!(
+        m.loads,
+        [SpecLocation::Local {
+            dir: "/cwd/dir/".into(),
+            name: "test".into()
+        }]
+    );
 }
 
 #[test]
 fn load_spec_and_is_module() {
     let c = fixture("cmd_spec");
     let to_load = spec(json!({"name": "specToLoad", "args": [{}]}));
-    for (buf, name) in [("cmd loadSpec ", "loadSpecName"), ("cmd module moduleName ", "python/moduleName")] {
+    for (buf, name) in [
+        ("cmd loadSpec ", "loadSpecName"),
+        ("cmd module moduleName ", "python/moduleName"),
+    ] {
         let mut m = Mock::with(&[("cmd", &c), (name, &to_load)]);
         let r = run(&mut m, buf).unwrap();
         assert_eq!(m.loads.len(), 2);
@@ -270,17 +360,36 @@ fn load_spec_and_is_module() {
 #[test]
 fn recursive_load_spec() {
     let c = fixture("cmd_spec");
-    let (nested, nested2) = (sub(&c, "recursiveLoadSpecNested"), sub(&c, "recursiveLoadSpecNestedNested"));
-    let specs = [("cmd", &c), ("recursiveLoadSpecNested", &nested), ("recursiveLoadSpecNestedNested", &nested2)];
+    let (nested, nested2) = (
+        sub(&c, "recursiveLoadSpecNested"),
+        sub(&c, "recursiveLoadSpecNestedNested"),
+    );
+    let specs = [
+        ("cmd", &c),
+        ("recursiveLoadSpecNested", &nested),
+        ("recursiveLoadSpecNestedNested", &nested2),
+    ];
 
     let mut m = Mock::with(&specs);
     let r = run(&mut m, "cmd recursiveLoadSpec nestedSubcommand ").unwrap();
-    assert_eq!((m.loads.len(), flags(&r), r.annotations.len(), r.command_index), (3, ANY, 2, 2));
+    assert_eq!(
+        (
+            m.loads.len(),
+            flags(&r),
+            r.annotations.len(),
+            r.command_index
+        ),
+        (3, ANY, 2, 2)
+    );
     assert!(Rc::ptr_eq(&r.completion, &nested2));
     assert_eq!(r.spec_name, "recursiveLoadSpecNestedNested");
 
     let mut m = Mock::with(&specs);
-    let r = run(&mut m, "cmd recursiveLoadSpec nestedSubcommand doubleNestedSubcommand ").unwrap();
+    let r = run(
+        &mut m,
+        "cmd recursiveLoadSpec nestedSubcommand doubleNestedSubcommand ",
+    )
+    .unwrap();
     let double = sub(&nested2, "doubleNestedSubcommand");
     assert_eq!((m.loads.len(), flags(&r), r.annotations.len()), (3, ANY, 3));
     assert!(Rc::ptr_eq(&r.completion, &double));
@@ -298,7 +407,15 @@ fn is_command_recursion() {
 
     let mut m = Mock::with(&[("cmd", &c), ("sudo", &sudo)]);
     let r = run(&mut m, "cmd sudo sudo sudo sudo ").unwrap();
-    assert_eq!((m.loads.len(), flags(&r), r.annotations.len(), r.command_index), (4, ANY, 2, 4));
+    assert_eq!(
+        (
+            m.loads.len(),
+            flags(&r),
+            r.annotations.len(),
+            r.command_index
+        ),
+        (4, ANY, 2, 4)
+    );
     assert_eq!(r.search_term, "");
     assert!(Rc::ptr_eq(&r.completion, &sudo));
     assert_eq!(ptr(&r.current_arg), ptr(&pos(&sudo, 0)));
@@ -310,7 +427,14 @@ fn sudo_git_command_index() {
     let mut m = Mock::with(&[("sudo", &sudo), ("git", &git)]);
     m.fns.insert(7, Box::new(|_| Ok(json!({"name": "git"}))));
     let r = run(&mut m, "sudo -u root git ch").unwrap();
-    assert_eq!((r.command_index, r.spec_name.as_str(), r.search_term.as_str()), (3, "git", "ch"));
+    assert_eq!(
+        (
+            r.command_index,
+            r.spec_name.as_str(),
+            r.search_term.as_str()
+        ),
+        (3, "git", "ch")
+    );
     assert_eq!(r.tokens[r.command_index..], ["git", "ch"]);
     assert!(r.completion.names == ["git"] && r.suggest_subcommands); // a generateSpec merge makes a new level
 }
@@ -341,7 +465,9 @@ fn generate_spec_merge() {
     assert_eq!((flags(&r), r.search_term.as_str()), (ANY, ""));
     let comp = &r.completion;
     assert_eq!(comp.names, ["generateSpec"]);
-    assert!(["these", "are", "generated", "subcommands"].iter().all(|n| comp.sub_index.contains_key(*n)));
+    assert!(["these", "are", "generated", "subcommands"]
+        .iter()
+        .all(|n| comp.sub_index.contains_key(*n)));
     assert!(comp.opt_index.contains_key("--anOpt") && comp.opt_index.contains_key("--genOpt"));
     assert_eq!(comp.args.len(), 1);
     assert_eq!(ptr(&r.current_arg), ptr(&pos(comp, 0)));
@@ -356,18 +482,25 @@ fn generate_spec_merge() {
 
 #[test]
 fn generate_spec_cache_key() {
-    let root = spec(json!({"name": "g", "generateSpec": {"$fn": 1}, "generateSpecCacheKey": {"$fn": 2}}));
+    let root =
+        spec(json!({"name": "g", "generateSpec": {"$fn": 1}, "generateSpecCacheKey": {"$fn": 2}}));
     let count = Rc::new(RefCell::new(0));
     let mut m = Mock::with(&[("g", &root)]);
     let n = count.clone();
-    m.fns.insert(1, Box::new(move |_| {
-        *n.borrow_mut() += 1;
-        Ok(json!({"name": "g", "subcommands": [{"name": "gen"}]}))
-    }));
-    m.fns.insert(2, Box::new(|args| {
-        assert_eq!(json_arg(args, 0)["tokens"][0], "g");
-        Ok(json!("k"))
-    }));
+    m.fns.insert(
+        1,
+        Box::new(move |_| {
+            *n.borrow_mut() += 1;
+            Ok(json!({"name": "g", "subcommands": [{"name": "gen"}]}))
+        }),
+    );
+    m.fns.insert(
+        2,
+        Box::new(|args| {
+            assert_eq!(json_arg(args, 0)["tokens"][0], "g");
+            Ok(json!("k"))
+        }),
+    );
     let mut caches = ParseCaches::default();
     for buf in ["g gen x", "g gen y", "g other "] {
         let _ = caches.parse(&cmd(buf), Path::new("/cwd"), false, &mut m);
@@ -407,7 +540,14 @@ fn is_repeatable() {
         "args": {"name": "file", "isOptional": true, "isVariadic": true}
     }));
     let mut m = Mock::with(&[("x", &x)]);
-    let kinds = |m: &mut Mock, buf: &str| run(m, buf).unwrap().annotations.iter().map(|a| a.kind).collect::<Vec<_>>();
+    let kinds = |m: &mut Mock, buf: &str| {
+        run(m, buf)
+            .unwrap()
+            .annotations
+            .iter()
+            .map(|a| a.kind)
+            .collect::<Vec<_>>()
+    };
     use AnnKind::{Option as Op, OptionArg as OA, Subcommand as Sc, SubcommandArg as SA};
     assert_eq!(kinds(&mut m, "x -f -f"), [Sc, Op, SA]);
     assert_eq!(kinds(&mut m, "x -v -v -v"), [Sc, Op, Op, Op]);
@@ -455,15 +595,21 @@ fn git_alias_directive() {
     let git = fixture("git_min");
     let mut m = Mock::with(&[("git", &git)]);
     m.fns.insert(7, Box::new(|_| Ok(json!({"name": "git"}))));
-    m.fns.insert(8, Box::new(|args| match json_arg(args, 0).as_str() {
-        Some("co") => Ok(json!("checkout\n")),
-        Some("cm") => Ok(json!("commit -m")),
-        _ => Err(no("no alias")),
-    }));
+    m.fns.insert(
+        8,
+        Box::new(|args| match json_arg(args, 0).as_str() {
+            Some("co") => Ok(json!("checkout\n")),
+            Some("cm") => Ok(json!("commit -m")),
+            _ => Err(no("no alias")),
+        }),
+    );
     let r = run(&mut m, "git co ").unwrap();
     assert_eq!(r.tokens, ["git", "checkout", ""]);
     assert!(Rc::ptr_eq(&r.completion, &sub(&git, "checkout")));
-    assert_eq!(r.current_arg.unwrap().name.as_deref(), Some("branch, file, tag or commit"));
+    assert_eq!(
+        r.current_arg.unwrap().name.as_deref(),
+        Some("branch, file, tag or commit")
+    );
 
     let r = run(&mut m, "git cm msg").unwrap();
     assert_eq!(r.tokens, ["git", "commit", "-m", "msg"]);
@@ -477,12 +623,23 @@ fn prefix_cache() {
     let mut m = Mock::with(&[("cmd", &c)]);
     let mut caches = ParseCaches::default();
     let cwd = Path::new("/cwd");
-    caches.parse(&cmd("cmd man -m x"), cwd, false, &mut m).unwrap();
-    let r = caches.parse(&cmd("cmd man -m xyz"), cwd, false, &mut m).unwrap();
+    caches
+        .parse(&cmd("cmd man -m x"), cwd, false, &mut m)
+        .unwrap();
+    let r = caches
+        .parse(&cmd("cmd man -m xyz"), cwd, false, &mut m)
+        .unwrap();
     assert_eq!(m.loads.len(), 1);
-    assert_eq!((r.search_term.as_str(), r.tokens.last().unwrap().as_str()), ("xyz", "xyz"));
-    caches.parse(&cmd("cmd man -m xyz"), Path::new("/other"), false, &mut m).unwrap();
-    caches.parse(&cmd("cmd man -m xyz"), cwd, true, &mut m).unwrap(); // dev mode: no cache
+    assert_eq!(
+        (r.search_term.as_str(), r.tokens.last().unwrap().as_str()),
+        ("xyz", "xyz")
+    );
+    caches
+        .parse(&cmd("cmd man -m xyz"), Path::new("/other"), false, &mut m)
+        .unwrap();
+    caches
+        .parse(&cmd("cmd man -m xyz"), cwd, true, &mut m)
+        .unwrap(); // dev mode: no cache
     assert_eq!(m.loads.len(), 3);
 }
 
@@ -497,20 +654,44 @@ fn load_spec_cycle_is_an_error() {
 fn spec_location_table() {
     let cwd = Path::new("test_cwd");
     let g = |n: &str| SpecLocation::Global { name: n.into() };
-    let l = |d: &str, n: &str| SpecLocation::Local { dir: d.into(), name: n.into() };
+    let l = |d: &str, n: &str| SpecLocation::Local {
+        dir: d.into(),
+        name: n.into(),
+    };
     assert_eq!(spec_location("git", cwd, None), g("git"));
-    assert_eq!(spec_location("@withfig/autocomplete-tools", cwd, Some(false)), g("@withfig/autocomplete-tools"));
-    assert_eq!(spec_location("@withfig/autocomplete-tools", cwd, None), l("test_cwd/@withfig/", "autocomplete-tools"));
+    assert_eq!(
+        spec_location("@withfig/autocomplete-tools", cwd, Some(false)),
+        g("@withfig/autocomplete-tools")
+    );
+    assert_eq!(
+        spec_location("@withfig/autocomplete-tools", cwd, None),
+        l("test_cwd/@withfig/", "autocomplete-tools")
+    );
     assert_eq!(spec_location("./test", cwd, None), l("test_cwd/", "test"));
     assert_eq!(spec_location("~/test", cwd, None), l("~/", "test"));
     assert_eq!(spec_location("/test", cwd, None), l("/", "test"));
     assert_eq!(spec_location("/dir/test", cwd, None), l("/dir/", "test"));
     assert_eq!(spec_location("~/dir/test", cwd, None), l("~/dir/", "test"));
-    assert_eq!(spec_location("./dir/test", cwd, None), l("test_cwd/dir/", "test"));
-    assert_eq!(spec_location("bin/console", cwd, None), g("php/bin-console"));
-    assert_eq!(spec_location("vendor/bin/console", cwd, None), g("php/bin-console"));
-    assert_eq!(spec_location("./run.sh", cwd, Some(false)), l("test_cwd/", "run.sh"));
-    assert_eq!(spec_location("script", cwd, Some(true)), l("test_cwd", "script"));
+    assert_eq!(
+        spec_location("./dir/test", cwd, None),
+        l("test_cwd/dir/", "test")
+    );
+    assert_eq!(
+        spec_location("bin/console", cwd, None),
+        g("php/bin-console")
+    );
+    assert_eq!(
+        spec_location("vendor/bin/console", cwd, None),
+        g("php/bin-console")
+    );
+    assert_eq!(
+        spec_location("./run.sh", cwd, Some(false)),
+        l("test_cwd/", "run.sh")
+    );
+    assert_eq!(
+        spec_location("script", cwd, Some(true)),
+        l("test_cwd", "script")
+    );
 }
 
 #[test]
@@ -530,12 +711,21 @@ fn diff_merge() {
     let out = merge_subcommand(&base, &diff);
     assert_eq!(out["description"], "new");
     // diff items first (merged, new), then untouched base items; `remove` drops the match
-    assert_eq!(out["subcommands"], json!([{"name": "bb", "description": "B2"}, {"name": "new"}, {"name": "a", "description": "A"}]));
+    assert_eq!(
+        out["subcommands"],
+        json!([{"name": "bb", "description": "B2"}, {"name": "new"}, {"name": "a", "description": "A"}])
+    );
     // merge_args indexes after filtering: "second" lands on x1, "z" on p0 (quirk kept)
-    assert_eq!(out["options"], json!([{"name": "--x", "args": [{"name": "x1", "description": "second"}]}, {"name": "--y"}]));
+    assert_eq!(
+        out["options"],
+        json!([{"name": "--x", "args": [{"name": "x1", "description": "second"}]}, {"name": "--y"}])
+    );
     assert_eq!(out["args"], json!([{"name": "p0", "description": "z"}]));
     assert_eq!(merge_subcommand(&base, &Value::Null), base);
-    assert_eq!(merge_subcommand(&base, &json!({"subcommands": []}))["subcommands"], base["subcommands"]);
+    assert_eq!(
+        merge_subcommand(&base, &json!({"subcommands": []}))["subcommands"],
+        base["subcommands"]
+    );
 }
 
 #[test]
@@ -547,26 +737,47 @@ fn version_pick() {
         "8.2.0": {"description": "eight-two", "subcommands": [{"name": "x"}]}
     });
     let diffs = diffs.as_object().unwrap();
-    let desc = |t: Option<&str>| apply_versions(base.clone(), diffs, t)["description"].as_str().unwrap().to_string();
+    let desc = |t: Option<&str>| {
+        apply_versions(base.clone(), diffs, t)["description"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
     assert_eq!(desc(Some("8.10.0")), "eight-ten"); // semver order, not string order
     assert_eq!(desc(Some("8.5.0")), "eight-two");
     assert_eq!(desc(None), "nine");
     assert_eq!(desc(Some("1.0.0")), "base");
     assert_eq!(desc(Some("garbage")), "nine");
-    assert_eq!(apply_versions(base.clone(), diffs, Some("8.10.0"))["subcommands"], json!([{"name": "x"}]));
+    assert_eq!(
+        apply_versions(base.clone(), diffs, Some("8.10.0"))["subcommands"],
+        json!([{"name": "x"}])
+    );
 }
 
 #[test]
 fn semver_helpers() {
     assert_eq!(semver_clean("1.2.3\n").as_deref(), Some("1.2.3"));
     assert_eq!(semver_clean(" =v1.2.3 ").as_deref(), Some("1.2.3"));
-    assert_eq!(semver_clean("1.2.3-beta.1+build.5").as_deref(), Some("1.2.3-beta.1"));
-    for bad in ["heroku/8.1.0 darwin-x64", "1.2", "01.2.3", "1.2.3.4", "", "git version 2.39.0"] {
+    assert_eq!(
+        semver_clean("1.2.3-beta.1+build.5").as_deref(),
+        Some("1.2.3-beta.1")
+    );
+    for bad in [
+        "heroku/8.1.0 darwin-x64",
+        "1.2",
+        "01.2.3",
+        "1.2.3.4",
+        "",
+        "git version 2.39.0",
+    ] {
         assert_eq!(semver_clean(bad), None, "{bad:?}");
     }
     assert_eq!(semver_cmp("1.10.0", "1.9.0"), Ordering::Greater);
     assert_eq!(semver_cmp("1.0.0-alpha", "1.0.0"), Ordering::Less);
-    assert_eq!(semver_cmp("1.0.0-alpha.1", "1.0.0-alpha.beta"), Ordering::Less);
+    assert_eq!(
+        semver_cmp("1.0.0-alpha.1", "1.0.0-alpha.beta"),
+        Ordering::Less
+    );
     assert_eq!(semver_cmp("1.0.0-2", "1.0.0-10"), Ordering::Less);
     assert_eq!(semver_cmp("1.0.0-alpha", "1.0.0-alpha.1"), Ordering::Less);
     assert_eq!(semver_cmp("2.53.0", "2.53.0"), Ordering::Equal);
@@ -574,13 +785,25 @@ fn semver_helpers() {
 
 #[test]
 fn cached_nested_state_keeps_this_commands_prefix() {
-    let wrapper = |n: &str| spec(json!({"name": n, "args": {"name": "command", "isCommand": true}}));
-    let (sudo, doas, inner) = (wrapper("sudo"), wrapper("doas"), spec(json!({"name": "inner", "subcommands": [{"name": "ch"}]})));
+    let wrapper =
+        |n: &str| spec(json!({"name": n, "args": {"name": "command", "isCommand": true}}));
+    let (sudo, doas, inner) = (
+        wrapper("sudo"),
+        wrapper("doas"),
+        spec(json!({"name": "inner", "subcommands": [{"name": "ch"}]})),
+    );
     let mut m = Mock::with(&[("sudo", &sudo), ("doas", &doas), ("inner", &inner)]);
     let mut caches = ParseCaches::default();
-    caches.parse(&cmd("sudo inner c"), Path::new("/cwd"), false, &mut m).unwrap();
-    let r = caches.parse(&cmd("doas inner c"), Path::new("/cwd"), false, &mut m).unwrap();
-    assert_eq!((r.tokens.join(" "), r.command_index), ("doas inner c".to_string(), 1));
+    caches
+        .parse(&cmd("sudo inner c"), Path::new("/cwd"), false, &mut m)
+        .unwrap();
+    let r = caches
+        .parse(&cmd("doas inner c"), Path::new("/cwd"), false, &mut m)
+        .unwrap();
+    assert_eq!(
+        (r.tokens.join(" "), r.command_index),
+        ("doas inner c".to_string(), 1)
+    );
     assert_eq!(m.loads.len(), 3); // sudo, inner, doas: the nested prefix came from the cache
 }
 
@@ -608,8 +831,12 @@ fn first_token_spec_identity_is_stable() {
     // first-token-identity-churn: one Rc for every first-token parse, so the engine's arg key does not change
     let mut m = Mock::default();
     let mut caches = ParseCaches::default();
-    let a = caches.parse(&cmd("g"), Path::new("/cwd"), false, &mut m).unwrap();
-    let b = caches.parse(&cmd("gi"), Path::new("/cwd"), false, &mut m).unwrap();
+    let a = caches
+        .parse(&cmd("g"), Path::new("/cwd"), false, &mut m)
+        .unwrap();
+    let b = caches
+        .parse(&cmd("gi"), Path::new("/cwd"), false, &mut m)
+        .unwrap();
     assert!(a.first_token && Rc::ptr_eq(&a.completion, &b.completion));
 }
 
@@ -625,12 +852,27 @@ fn cli_version_detection_survives_an_aborted_parse() {
     std::fs::write(&p, src).unwrap();
     let exports = js.load_module(&p).unwrap();
     let (generator, mut inflight) = (GenCtx::default(), HashMap::new());
-    let req = Request { id: 1, buffer: "az ".into(), cursor: 3, cwd: "/".into(), shell: Shell::Zsh, history_mode: false };
+    let req = Request {
+        id: 1,
+        buffer: "az ".into(),
+        cursor: 3,
+        cwd: "/".into(),
+        shell: Shell::Zsh,
+        history_mode: false,
+    };
     tx.send(EngineMsg::Complete(req)).unwrap();
-    assert!(matches!(cli_version(&exports, "az", &mut js, &generator, &mut inflight), Err(ParseError::Aborted)));
+    assert!(matches!(
+        cli_version(&exports, "az", &mut js, &generator, &mut inflight),
+        Err(ParseError::Aborted)
+    ));
     assert_eq!(inflight.len(), 1);
     assert!(matches!(js.next_msg(), Some(EngineMsg::Complete(_))));
-    assert_eq!(cli_version(&exports, "az", &mut js, &generator, &mut inflight).unwrap().as_deref(), Some("1.0.0"));
+    assert_eq!(
+        cli_version(&exports, "az", &mut js, &generator, &mut inflight)
+            .unwrap()
+            .as_deref(),
+        Some("1.0.0")
+    );
     assert!(inflight.is_empty());
 }
 
@@ -642,11 +884,29 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
     let dir = crate::specs::testutil::TmpDir::new("devid");
     let build = dir.path().join(".fig").join("autocomplete").join("build");
     std::fs::create_dir_all(&build).unwrap();
-    std::fs::write(build.join("mk.js"), r#"var s={name:"mk",args:{name:"t"}};export{s as default};"#).unwrap();
-    let settings = Settings::from_map(json!({"autocomplete.developerMode": true}).as_object().unwrap().clone());
+    std::fs::write(
+        build.join("mk.js"),
+        r#"var s={name:"mk",args:{name:"t"}};export{s as default};"#,
+    )
+    .unwrap();
+    let settings = Settings::from_map(
+        json!({"autocomplete.developerMode": true})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
     let (env, index) = (HashMap::new(), SpecIndex::default());
-    let ctx = ParseCtx { cwd: dir.path(), settings: &settings, env: &env, shell: Shell::Zsh, index: &index };
-    let loc = SpecLocation::Local { dir: dir.path().to_path_buf(), name: "mk".into() };
+    let ctx = ParseCtx {
+        cwd: dir.path(),
+        settings: &settings,
+        env: &env,
+        shell: Shell::Zsh,
+        index: &index,
+    };
+    let loc = SpecLocation::Local {
+        dir: dir.path().to_path_buf(),
+        name: "mk".into(),
+    };
     let mut p = Parser::new();
     let a = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
     let b = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
@@ -655,7 +915,11 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
     let c = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
     assert!(Rc::ptr_eq(&a, &b) && Rc::ptr_eq(&a, &c) && Rc::ptr_eq(&first, &p.caches.first));
     // an edited spec still reloads in developer mode
-    std::fs::write(build.join("mk.js"), r#"var s={name:"mk",args:{name:"target"}};export{s as default};"#).unwrap();
+    std::fs::write(
+        build.join("mk.js"),
+        r#"var s={name:"mk",args:{name:"target"}};export{s as default};"#,
+    )
+    .unwrap();
     let d = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
     assert_eq!(d.args[0].name.as_deref(), Some("target"));
 }

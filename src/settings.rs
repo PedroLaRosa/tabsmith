@@ -56,7 +56,10 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Map::new(),
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
-        Ok(Store { path: path.to_path_buf(), map })
+        Ok(Store {
+            path: path.to_path_buf(),
+            map,
+        })
     }
 
     pub fn load_settings() -> Result<Store> {
@@ -83,7 +86,8 @@ impl Store {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
         }
-        std::fs::rename(&tmp, &target).with_context(|| format!("writing {}", self.path.display()))?;
+        std::fs::rename(&tmp, &target)
+            .with_context(|| format!("writing {}", self.path.display()))?;
         Ok(())
     }
 }
@@ -131,13 +135,22 @@ impl Settings {
     pub fn str_list(&self, key: &str) -> Vec<String> {
         self.get(key)
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
     /// Keys with the given prefix, prefix stripped (e.g. `autocomplete.keybindings.`).
-    pub fn with_prefix<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = (&'a str, &'a Value)> + 'a {
-        self.0.iter().filter_map(move |(k, v)| k.strip_prefix(prefix).map(|rest| (rest, v)))
+    pub fn with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a Value)> + 'a {
+        self.0
+            .iter()
+            .filter_map(move |(k, v)| k.strip_prefix(prefix).map(|rest| (rest, v)))
     }
 }
 
@@ -149,13 +162,28 @@ pub struct CatalogEntry {
     pub description: &'static str,
 }
 
-const fn entry(key: &'static str, ty: &'static str, default: &'static str, description: &'static str) -> CatalogEntry {
-    CatalogEntry { key, ty, default, description }
+const fn entry(
+    key: &'static str,
+    ty: &'static str,
+    default: &'static str,
+    description: &'static str,
+) -> CatalogEntry {
+    CatalogEntry {
+        key,
+        ty,
+        default,
+        description,
+    }
 }
 
 /// `default` is a JSON literal, or empty when the key has none (templates like `<name>`).
 static CATALOG: &[CatalogEntry] = &[
-    entry("autocomplete.disable", "bool", "false", "Never show the dropdown (ghost text unaffected)"),
+    entry(
+        "autocomplete.disable",
+        "bool",
+        "false",
+        "Never show the dropdown (ghost text unaffected)",
+    ),
     entry(
         "autocomplete.insertSpaceAutomatically",
         "bool",
@@ -168,22 +196,42 @@ static CATALOG: &[CatalogEntry] = &[
         "false",
         "With an empty search term, prepend an \"Immediately execute\" row",
     ),
-    entry("autocomplete.scrollWrapAround", "bool", "false", "Up/Down wrap around the list"),
+    entry(
+        "autocomplete.scrollWrapAround",
+        "bool",
+        "false",
+        "Up/Down wrap around the list",
+    ),
     entry(
         "autocomplete.alwaysSuggestCurrentToken",
         "bool",
         "false",
         "Prepend a row that executes the typed token",
     ),
-    entry("autocomplete.fuzzySearch", "bool", "false", "Fuzzy instead of prefix filtering"),
+    entry(
+        "autocomplete.fuzzySearch",
+        "bool",
+        "false",
+        "Fuzzy instead of prefix filtering",
+    ),
     entry(
         "autocomplete.preferVerboseSuggestions",
         "bool",
         "false",
         "Insert the longest alias of an option/subcommand (--message over -m)",
     ),
-    entry("autocomplete.onlyShowOnTab", "bool", "false", "Never auto-open the menu; Tab opens it"),
-    entry("autocomplete.disableForCommands", "string[]", "[]", "Commands that never get completions"),
+    entry(
+        "autocomplete.onlyShowOnTab",
+        "bool",
+        "false",
+        "Never auto-open the menu; Tab opens it",
+    ),
+    entry(
+        "autocomplete.disableForCommands",
+        "string[]",
+        "[]",
+        "Commands that never get completions",
+    ),
     entry(
         "autocomplete.sortMethod",
         "\"most recent\"|\"alphabetical\"",
@@ -202,27 +250,72 @@ static CATALOG: &[CatalogEntry] = &[
         "false",
         "Allow the execute row for dangerous exact matches",
     ),
-    entry("autocomplete.firstTokenCompletion", "bool", "false", "Complete the command name itself"),
-    entry("autocomplete.hideAutoExecuteSuggestion", "bool", "false", "Never show execute rows"),
+    entry(
+        "autocomplete.firstTokenCompletion",
+        "bool",
+        "false",
+        "Complete the command name itself",
+    ),
+    entry(
+        "autocomplete.hideAutoExecuteSuggestion",
+        "bool",
+        "false",
+        "Never show execute rows",
+    ),
     entry(
         "autocomplete.navigateToHistory",
         "bool",
         "false",
         "Up on the first row toggles history mode instead of hiding",
     ),
-    entry("autocomplete.alwaysShowDescription", "bool", "false", "Keep the description pop-out open"),
-    entry("autocomplete.theme", "string", "\"dark\"", "dark, light, system, or a file stem in ~/.tabsmith/themes"),
-    entry("autocomplete.width", "number (columns)", "40", "Menu width, clamped to the terminal width"),
-    entry("autocomplete.height", "number (rows)", "7", "Max visible list rows"),
+    entry(
+        "autocomplete.alwaysShowDescription",
+        "bool",
+        "false",
+        "Keep the description pop-out open",
+    ),
+    entry(
+        "autocomplete.theme",
+        "string",
+        "\"dark\"",
+        "dark, light, system, or a file stem in ~/.tabsmith/themes",
+    ),
+    entry(
+        "autocomplete.width",
+        "number (columns)",
+        "40",
+        "Menu width, clamped to the terminal width",
+    ),
+    entry(
+        "autocomplete.height",
+        "number (rows)",
+        "7",
+        "Max visible list rows",
+    ),
     entry(
         "autocomplete.developerMode",
         "bool",
         "false",
         "Load specs from devCompletionsFolder first; disable spec caches",
     ),
-    entry("autocomplete.devCompletionsFolder", "string|null", "null", "Dev spec folder"),
-    entry("autocomplete.keybindings.<keystroke>", "string", "", "Action id or \"ignore\""),
-    entry("beta.history.mode", "\"off\"|\"history_only\"|\"show\"", "\"off\"", "History rows in the dropdown"),
+    entry(
+        "autocomplete.devCompletionsFolder",
+        "string|null",
+        "null",
+        "Dev spec folder",
+    ),
+    entry(
+        "autocomplete.keybindings.<keystroke>",
+        "string",
+        "",
+        "Action id or \"ignore\"",
+    ),
+    entry(
+        "beta.history.mode",
+        "\"off\"|\"history_only\"|\"show\"",
+        "\"off\"",
+        "History rows in the dropdown",
+    ),
     entry("inline.enabled", "bool", "true", "Ghost text on/off"),
     entry(
         "inline.source",
@@ -236,8 +329,18 @@ static CATALOG: &[CatalogEntry] = &[
         "",
         "LLM profile {provider, model, base_url?, api_key_env?, max_tokens?, effort?}",
     ),
-    entry("inline.debounceMs", "number", "300", "Quiet time before an LLM request (ms)"),
-    entry("inline.historyCount", "number", "49", "History lines sent to the LLM"),
+    entry(
+        "inline.debounceMs",
+        "number",
+        "300",
+        "Quiet time before an LLM request (ms)",
+    ),
+    entry(
+        "inline.historyCount",
+        "number",
+        "49",
+        "History lines sent to the LLM",
+    ),
 ];
 
 /// Every documented setting (SPEC §3.3).
@@ -276,7 +379,10 @@ mod tests {
     fn wildcard() {
         assert!(wildcard_match("autocomplete.theme", "autocomplete.theme"));
         assert!(!wildcard_match("autocomplete.theme", "autocomplete.themes"));
-        assert!(wildcard_match("autocomplete.*", "autocomplete.keybindings.control+r"));
+        assert!(wildcard_match(
+            "autocomplete.*",
+            "autocomplete.keybindings.control+r"
+        ));
         assert!(!wildcard_match("autocomplete.*", "inline.enabled"));
         assert!(wildcard_match("*", ""));
         assert!(wildcard_match("inline.?nabled", "inline.enabled"));
@@ -289,7 +395,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn save_keeps_a_symlinked_file() {
-        let dir = std::env::temp_dir().join(format!("tabsmith-settings-symlink-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("tabsmith-settings-symlink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("dots")).unwrap();
         std::fs::write(dir.join("dots/settings.json"), "{\"a\":1}").unwrap();
@@ -298,14 +405,29 @@ mod tests {
         let mut s = Store::load(&link).unwrap();
         s.map.insert("b".into(), 2.into());
         s.save().unwrap();
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
-        assert_eq!(Store::load(&dir.join("dots/settings.json")).unwrap().map.len(), 2);
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            Store::load(&dir.join("dots/settings.json"))
+                .unwrap()
+                .map
+                .len(),
+            2
+        );
         // A plain (or missing) file is still written in place.
-        let plain = Store { path: dir.join("state.json"), map: Map::new() };
+        let plain = Store {
+            path: dir.join("state.json"),
+            map: Map::new(),
+        };
         plain.save().unwrap();
         assert!(dir.join("state.json").is_file());
         // The settings commands create a missing data root (only running sessions must not, R4-3).
-        let fresh = Store { path: dir.join("new/settings.json"), map: Map::new() };
+        let fresh = Store {
+            path: dir.join("new/settings.json"),
+            map: Map::new(),
+        };
         fresh.save().unwrap();
         assert!(dir.join("new/settings.json").is_file());
         let _ = std::fs::remove_dir_all(dir);
@@ -319,9 +441,19 @@ mod tests {
         keys.dedup();
         assert_eq!(keys.len(), n);
         for e in catalog() {
-            assert!(e.default.is_empty() || serde_json::from_str::<Value>(e.default).is_ok(), "{}", e.key);
+            assert!(
+                e.default.is_empty() || serde_json::from_str::<Value>(e.default).is_ok(),
+                "{}",
+                e.key
+            );
         }
-        for k in ["autocomplete.theme", "autocomplete.height", "beta.history.mode", "inline.source", "inline.historyCount"] {
+        for k in [
+            "autocomplete.theme",
+            "autocomplete.height",
+            "beta.history.mode",
+            "inline.source",
+            "inline.historyCount",
+        ] {
             assert!(catalog().iter().any(|e| e.key == k), "{k}");
         }
     }
