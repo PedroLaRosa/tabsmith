@@ -687,8 +687,8 @@ impl Session {
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
     fn refresh(&mut self) {
-        // A block not starting on a prompt row is a widget's inline TUI (live UI only: pre_exec still scrapes after
-        // a transient prompt, which is redrawn without markers).
+        // Off the command line the cursor is in a widget's inline TUI (fzf, fish's pager; see Tracker::extract). Live
+        // UI only: pre_exec still scrapes after a transient prompt, which is redrawn without markers.
         let new = if self.alt() { None } else { self.tracker.extract(&self.term).filter(|e| e.at_prompt) };
         if !self.unechoed.is_empty() {
             let base = self.lock.as_ref().map(|l| l.2.as_str()).or(self.cur.as_ref().map(|e| e.buffer.as_str()));
@@ -809,6 +809,9 @@ impl Session {
 
     fn suppressed(&self) -> bool {
         !self.tracker.at_prompt()
+            // The cursor is off the command line (an inline TUI's rows: fzf, fish's pager): a menu for the line
+            // stays hidden and keeps its hands off the keys.
+            || self.cur.is_none()
             || self.resize_at.is_some()
             || self.repaint
             || self.tracker.filter.in_string()
@@ -886,7 +889,8 @@ impl Session {
             let key = ev.key;
             // Two or more printable keys in one read are a paste (pwsh has no bracketed paste) or typeahead the menu
             // was not computed for: the rest of the read reaches the shell as is.
-            let prompt = !self.tracker.preexec && !self.alt() && typed < 2;
+            // Off the command line (an inline TUI's rows) keys belong to the TUI, as on the alternate screen.
+            let prompt = !self.tracker.preexec && !self.alt() && self.cur.is_some() && typed < 2;
             // A logically shown menu acts on keys only while the render guards let it be seen.
             let shown = prompt && self.menu.intercepting(&self.settings);
             let intercepting = shown && self.drawable();
@@ -929,7 +933,8 @@ impl Session {
                             fwd.extend_from_slice(&chunk[ev.bytes.clone()]);
                             typed += usize::from(matches!(key.code, KeyCode::Char(_)) && key.mods == Mods::default());
                             self.note_forwarded(&key);
-                            if is_ctrl(&key, 'c') || is_ctrl(&key, 'd') {
+                            // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
+                            if is_ctrl(&key, 'c') || is_ctrl(&key, 'd') || key.code == KeyCode::Enter {
                                 self.menu.error_reset();
                                 redraw = true;
                             }
@@ -981,12 +986,15 @@ impl Session {
         let cur = self.basis().unwrap_or_else(|| ib.clone());
         fwd.extend(insertion_bytes(ins, &ib, &cur));
         self.unechoed.clear();
+        let expected = expected_buffer(ins, &ib, at);
         if ins.execute {
-            self.tracker.submitted = None; // the line is whatever the shell shows once the insertion applied
+            // As for Enter: preferred over a scrape with a transient prompt in front of the line; pre_exec still
+            // reads a line the shell rewrote from the screen.
+            self.tracker.submitted = Some(expected.clone());
         }
         let before = self.cur.as_ref().map_or_else(|| ib.clone(), |e| e.buffer.clone());
         let now = Instant::now();
-        self.lock = Some((now + INSERT_LOCK, now + LOCK_CAP, expected_buffer(ins, &ib, at), before));
+        self.lock = Some((now + INSERT_LOCK, now + LOCK_CAP, expected, before));
         if let Some((cmd, name)) = record {
             let _ = self.engine.send(EngineMsg::RecordInsert { cmd, name });
         }
@@ -1720,8 +1728,8 @@ mod tests {
         s.sink.clear();
         s.on_output(b"\x1bP+q");
         assert!(s.sink.ends_with(b"\x1bP+q"), "{:?}", String::from_utf8_lossy(&s.sink));
-        s.on_input(b"\r");
-        assert_eq!(sent(&pty), b"\r");
+        s.on_input(b"\x1b[D");
+        assert_eq!(sent(&pty), b"\x1b[D");
         s.on_output(b"696e\x1b\\");
         assert!(s.sink.ends_with(b"\x1b[?2026l"), "frame back after ST");
     }
@@ -1885,15 +1893,38 @@ mod tests {
         prompt(&mut s, "echo !");
         s.on_input(b"!\r");
         assert_eq!(s.tracker.submitted.as_deref(), Some("echo !!"));
-        // An insertion that executes: the tracker scrapes the applied line instead.
+        // transient-prompt-execute-insertion-pollutes-history: an insertion that executes (the ↪ row) records the line
+        // it builds, not the transient prompt (p10k, oh-my-posh) redrawn without markers in front of it.
         let (mut s, _) = session("{}");
+        let (tx, rx) = mpsc::channel();
+        s.engine = tx;
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         s.tracker.submitted = Some("stale".into());
         let fx = s.menu.handle(Action::InsertSelectedAndExecute, &s.settings);
         let Some(Effect::Insert { ins, .. }) = fx.into_iter().next() else { panic!("no insertion") };
         s.insert(&ins, None, &mut Vec::new());
-        assert_eq!(s.tracker.submitted, None);
+        assert_eq!(s.tracker.submitted.as_deref(), Some("git cherry-pick"));
+        let run = format!("\r\x1b[K\u{276f} git cherry-pick\r\n\x1b]697;OSCLock={SID}\x07\x1b]697;PreExec\x07x\r\n");
+        s.on_output(format!("{run}\x1b]697;OSCUnlock={SID}\x07").as_bytes());
+        prompt(&mut s, "");
+        let done: Vec<_> = rx.try_iter().filter_map(|m| if let EngineMsg::CommandFinished(h) = m { Some(h.command) } else { None }).collect();
+        assert_eq!(done, ["git cherry-pick"]);
+    }
+
+    #[test]
+    fn enter_clears_the_menu_before_the_line_runs() {
+        // enter-redraws-stale-menu-below-line: the newline echo must not re-anchor the menu one row below the line.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "echo one");
+        reply(&mut s, vec![], None);
+        assert!(s.menu.shown(&s.settings) && !s.menu.intercepting(&s.settings), "the argument hint row");
+        s.on_input(b"\r");
+        assert_eq!(sent(&pty), b"\r");
+        assert!(!s.menu.shown(&s.settings));
+        s.sink.clear();
+        s.on_output(b"\r\n");
+        assert!(!String::from_utf8_lossy(&s.sink).contains("path"), "{:?}", String::from_utf8_lossy(&s.sink));
     }
 
     #[test]
@@ -1920,6 +1951,23 @@ mod tests {
         // fzf exits; the widget redraws the prompt and the line.
         s.on_output(format!("\r\x1b[J\x1b[A\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch").as_bytes());
         assert_eq!(s.sent.as_ref().map(|(b, _)| b.as_str()), Some("git ch"));
+        // R4-7: Ctrl-T after typed text, with the line's menu open: hidden over fzf, and fzf gets the keys.
+        let (mut s, pty) = session("{}");
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), Some("eckout"));
+        s.sink.clear();
+        s.on_output(b"\r\n  1/2\r\n> rea");
+        assert!(s.menu.intercepting(&s.settings) && !s.drawable());
+        assert!(!String::from_utf8_lossy(&s.sink).contains("checkout"), "{:?}", String::from_utf8_lossy(&s.sink));
+        s.on_input(b"\x1b[B\r\x1b[C");
+        assert_eq!(sent(&pty), b"\x1b[B\r\x1b[C");
+        // Nor does a hidden menu's show-on-Tab take fzf's Tab.
+        let (mut s, pty) = session(r#"{"autocomplete.onlyShowOnTab": true}"#);
+        prompt(&mut s, "git ch");
+        reply(&mut s, subs("ch"), None);
+        s.on_output(b"\r\n  1/2\r\n> rea");
+        s.on_input(b"\t");
+        assert_eq!(sent(&pty), b"\t");
     }
 
     #[test]

@@ -64,8 +64,12 @@ pub fn load_recency(path: &Path) -> Recency {
 }
 
 /// Read-modify-write `autocomplete.recency` into a state file (other keys kept). Merged with what is on disk
-/// (newest timestamp wins), so concurrent sessions keep each other's entries.
+/// (newest timestamp wins), so concurrent sessions keep each other's entries. Skipped when the data root is gone
+/// (`uninstall --purge` while this session runs): Store::save would recreate it.
 pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
+    if !path.parent().is_some_and(Path::is_dir) {
+        return Ok(());
+    }
     let mut store = Store::load(path)?;
     let mut merged: Recency = store.map.get(RECENCY_KEY).cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     for (cmd, names) in rec {
@@ -973,6 +977,9 @@ mod tests {
         assert_eq!(store.map.get("doctor.prompt-restart-terminal"), Some(&json!(true)));
         assert!(load_recency(&dir.join("missing.json")).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+        // R4-3: a purged data root is not recreated by a running session.
+        save_recency(&path, &rec).unwrap();
+        assert!(!dir.exists());
     }
 
     #[test]
