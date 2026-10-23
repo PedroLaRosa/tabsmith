@@ -304,6 +304,10 @@ mod tests {
         let plain = Store { path: dir.join("state.json"), map: Map::new() };
         plain.save().unwrap();
         assert!(dir.join("state.json").is_file());
+        // The settings commands create a missing data root (only running sessions must not, R4-3).
+        let fresh = Store { path: dir.join("new/settings.json"), map: Map::new() };
+        fresh.save().unwrap();
+        assert!(dir.join("new/settings.json").is_file());
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -409,8 +409,8 @@ pub struct Extracted {
     pub cursor: usize,
     /// The shell already draws its own suggestion after the cursor (SPEC §8.1).
     pub shell_ghost: bool,
-    /// The block around the cursor starts on a prompt row: false for an inline TUI a zle widget draws below the
-    /// prompt (fzf `--height`), whose cells carry the open cycle's tag too.
+    /// The cursor is on the command line (see `extract`): false on the rows an inline TUI draws below it (fzf
+    /// `--height`, fish's pager search field), whose cells carry the open cycle's tag too.
     pub at_prompt: bool,
 }
 
@@ -424,6 +424,8 @@ pub struct Tracker {
     pub preexec: bool,
     /// Current command cycle `n` (None before the first NewCmd).
     pub cycle: Option<u64>,
+    /// The last NewCmd came at column 0 (a prompt ending in a newline): its line has no prompt cell.
+    line_col0: bool,
     pub cwd: Option<PathBuf>,
     pub shell: Option<Shell>,
     pub shell_name: Option<String>,
@@ -467,6 +469,7 @@ impl Tracker {
             has_seen_prompt: false,
             preexec: false,
             cycle: None,
+            line_col0: false,
             cwd: None,
             shell,
             shell_name: shell.map(|s| s.name().to_string()),
@@ -592,11 +595,8 @@ impl Tracker {
         self.preexec = false;
         self.no_history = false;
         tag(model, Some(format!("tabsmith:c{n}")));
-        // A redraw of the prompt alone keeps the line's cells after it (bash readline: CUF over a vi-mode switch,
-        // DCH at the end of an i-search): they are this cycle's text now.
-        if let Some(o) = redraw {
-            retag_redraw(model, &format!("tabsmith:c{o}"));
-        }
+        mark_line_start(model, redraw.map(|o| format!("tabsmith:c{o}")).as_deref());
+        self.line_col0 = model.grid().cursor.point.column.0 == 0;
         // The prompt finishes this shell's command (and those of nested shells that exited under it); a nested
         // shell's first prompt leaves the outer command running.
         let exit = self.exit_code.take();
@@ -696,10 +696,27 @@ impl Tracker {
             end += 1;
         }
 
-        // ponytail: an empty PS1, or a prompt more than 100 rows up, reads as not at the prompt; recording the
-        // NewCmd row with scroll tracking (Kiro's cmd_cursor) is the upgrade. A widget TUI drawn after typed text
-        // (`vim ` + Ctrl-T) still joins the prompt row's block.
-        let mut e = Extracted { at_prompt: row(start).iter().any(|c| has(c, TAG_PROMPT)), ..Extracted::default() };
+        // At the prompt = the cursor's line (rows joined by auto-wrap) starts on a prompt: a prompt cell (PS1's last
+        // line, PS2, a prompt drawn without markers: NewCmd tags it) or PSReadLine's ContinuationPrompt. A NewCmd at
+        // column 0 (PS1 ending in a newline) leaves its line no prompt cell: there, a prompt row right above and
+        // nothing of this cycle drawn below (an inline TUI's query row can sit on that very row: fzf Ctrl-T, reverse
+        // layout, from an empty line). An inline TUI's rows below the line (fzf --height, fish's pager search field)
+        // are none of these; the buffer walk above still joins them, for pre_exec's scrape (a transient prompt is
+        // redrawn without markers).
+        // ponytail: continuation lines without a prompt (zle Alt-Enter, fish), an empty PS1, a markerless prompt
+        // ending in a newline, and a newline-ended PS1's line while zsh lists completions below it read as not at
+        // the prompt; recording the NewCmd row with scroll tracking (Kiro's cmd_cursor) is the upgrade.
+        let mut top = cl;
+        while top > grid.topmost_line().0 && cl - top < 100 && wraps(top - 1) {
+            top -= 1;
+        }
+        let prompt_row = |r: i32| row(r).iter().any(|c| has(c, TAG_PROMPT));
+        let cont = self.pwsh_cont.chars().count();
+        let below = end < grid.bottommost_line().0 && tagged(end + 1);
+        let at_prompt = (top..=cl).any(prompt_row)
+            || (pwsh && cont > 0 && row(top).iter().take(cont).map(|c| c.c).eq(self.pwsh_cont.chars()))
+            || (self.line_col0 && top > grid.topmost_line().0 && prompt_row(top - 1) && !below);
+        let mut e = Extracted { at_prompt, ..Extracted::default() };
         let mut cursor = None;
         let (mut pad, mut line_has_cmd) = (0, false);
         // Blanks between command cells and the cursor are buffer text (zsh skips them with CUF on a redraw).
@@ -824,10 +841,12 @@ fn tag(model: &mut Model, uri: Option<String>) {
     model.set_hyperlink(uri.map(|uri| Hyperlink { id: None, uri }));
 }
 
-/// A redraw at the cursor: cells tagged `from` at and after it (its line and wrap continuations) get the cursor
-/// template's tag; before it on its row they are prompt (readline redraws only a multi-line prompt's last line,
-/// without its StartPrompt).
-fn retag_redraw(model: &mut Model, from: &str) {
+/// NewCmd at the cursor: the line starts here. Before it on its row is prompt: untagged cells too (a prompt drawn
+/// without markers: pwsh re-wraps a foreign prompt at ReadLine) and, on a redraw, the open cycle's (`from`; readline
+/// redraws only a multi-line prompt's last line, without its StartPrompt). A redraw of the prompt alone keeps the
+/// line's cells after it (bash readline: CUF over a vi-mode switch, DCH at the end of an i-search): `from` cells at
+/// and after the cursor (its line and wrap continuations) get the cursor template's tag.
+fn mark_line_start(model: &mut Model, from: Option<&str>) {
     let prompt = Some(alacritty_terminal::term::cell::Hyperlink::new(None::<String>, TAG_PROMPT.into()));
     let link = model.grid().cursor.template.hyperlink();
     let (cols, bottom) = (model.grid().columns(), model.grid().bottommost_line());
@@ -836,11 +855,15 @@ fn retag_redraw(model: &mut Model, from: &str) {
         let row = &mut model.grid_mut()[line];
         for c in 0..cols {
             let cell = &mut row[Column(c)];
-            if cell.hyperlink().is_some_and(|h| h.uri() == from) {
-                cell.set_hyperlink(if c < split { prompt.clone() } else { link.clone() });
+            let old = cell.hyperlink();
+            let ours = from.is_some_and(|f| old.as_ref().is_some_and(|h| h.uri() == f));
+            if c < split && (ours || old.is_none()) {
+                cell.set_hyperlink(prompt.clone());
+            } else if ours {
+                cell.set_hyperlink(link.clone());
             }
         }
-        if line >= bottom || !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+        if from.is_none() || line >= bottom || !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
             break;
         }
         (line, split) = (line + 1, 0);
@@ -1179,6 +1202,67 @@ mod tests {
         // A finished command's cells are not taken over by the next prompt.
         feed(&mut t, &mut m, &format!("\r\n{}{}", osc("PreExec"), prompt("$ ")));
         assert_eq!(buf(&t, &m), (String::new(), 0));
+    }
+
+    #[test]
+    fn at_prompt_only_on_the_command_line() {
+        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
+        let (mut t, mut m) = setup(40, 12, Shell::Zsh);
+        // R4-7: fzf Ctrl-T after typed text draws its query row below the line (no wrap, no prompt).
+        feed(&mut t, &mut m, &format!("{}cat \r\n  3/3\r\n> read", prompt("% ")));
+        assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
+        // fzf exits; the widget redraws the prompt and the line.
+        feed(&mut t, &mut m, &format!("\r\x1b[2A\x1b[J{}cat readme.md", prompt("% ")));
+        assert_eq!(at(&t, &m), Some(("cat readme.md".into(), true)));
+        // fish-ctrl-r-pager-hijacked: the history pager's search field below the line.
+        let (mut t, mut m) = setup(40, 12, Shell::Fish);
+        feed(&mut t, &mut m, &format!("{}git s\r\nsearch: git s\x1b[s\r\n\u{25ba} git status --short\x1b[u", prompt("> ")));
+        assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
+        // A long line wrapped onto the next rows is still the line; so is a PS2 row.
+        let (mut t, mut m) = setup(20, 8, Shell::Bash);
+        feed(&mut t, &mut m, &format!("{}abcdefghijklmnopqrstuvwxyz0123456789", prompt("$ ")));
+        assert_eq!(at(&t, &m).map(|e| e.1), Some(true));
+        feed(&mut t, &mut m, &format!("\r\n{SP}> {EP}b"));
+        assert_eq!(at(&t, &m).map(|e| e.1), Some(true));
+        // pwsh: PSReadLine's ContinuationPrompt (drawn after EndPrompt) starts a line of the command too.
+        let (mut t, mut m) = setup(40, 8, Shell::Pwsh);
+        feed(&mut t, &mut m, &format!("{}ls |\r\n>> git ch", prompt("PS> ")));
+        assert_eq!(at(&t, &m), Some(("ls |\ngit ch".into(), true)));
+    }
+
+    #[test]
+    fn prompt_ending_in_a_newline_is_at_the_prompt() {
+        // r4-newline-terminated-prompt-no-menu: PS1 ends in `\n`, so the line's row holds no prompt cell.
+        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
+        let (mut t, mut m) = setup(20, 12, Shell::Zsh);
+        // The prompt's own line wraps too.
+        feed(&mut t, &mut m, &format!("{SP}~/a/very/long/path/here\r\n{EP}{}git ch", nc()));
+        assert_eq!(at(&t, &m), Some(("git ch".into(), true)));
+        // fzf (default layout) from an empty line starts on the line's row: its query row is not the line.
+        feed(&mut t, &mut m, &format!("\r\n{}{SP}~\r\n{EP}{}  a.txt\r\n  b.txt\r\n  2/2\r\n> rea", osc("PreExec"), nc()));
+        assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
+        // After typed text it starts below the line.
+        feed(&mut t, &mut m, &format!("\r\x1b[4A\x1b[J{SP}~\r\n{EP}{}cat \r\n> rea", nc()));
+        assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
+        // Reverse layout (fzf's Ctrl-T default) from an empty line: the query row is the line's own row.
+        feed(&mut t, &mut m, &format!("\r\x1b[2A\x1b[J{SP}~\r\n{EP}{}\x1b[s\r\n  2/2\r\n  a.txt\x1b[u  rea", nc()));
+        assert_eq!(at(&t, &m).map(|e| e.1), Some(false));
+        // fzf exits (clearing its rows); the line is back.
+        feed(&mut t, &mut m, &format!("\r\x1b[J\x1b[A{SP}~\r\n{EP}{}cat a.txt", nc()));
+        assert_eq!(at(&t, &m), Some(("cat a.txt".into(), true)));
+    }
+
+    #[test]
+    fn prompt_drawn_without_markers_is_at_the_prompt() {
+        // R4-1: pwsh re-wraps a foreign prompt at ReadLine and sends NewCmd without StartPrompt/EndPrompt.
+        let (mut t, mut m) = setup(40, 8, Shell::Pwsh);
+        feed(&mut t, &mut m, &format!("{}PS top> {}{}git ch", osc("PreExec"), osc(&format!("OSCUnlock={SID}")), nc()));
+        let e = t.extract(&m).unwrap();
+        assert_eq!((e.buffer.as_str(), e.cursor, e.at_prompt), ("git ch", 6, true));
+        // The same after a command ran.
+        feed(&mut t, &mut m, &format!("\r\n{}{}out\r\nPS top> {}{}ls", osc(&format!("OSCLock={SID}")), osc("PreExec"), osc(&format!("OSCUnlock={SID}")), nc()));
+        let e = t.extract(&m).unwrap();
+        assert_eq!((e.buffer.as_str(), e.at_prompt), ("ls", true));
     }
 
     #[test]
