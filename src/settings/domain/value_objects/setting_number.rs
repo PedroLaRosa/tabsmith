@@ -2,7 +2,7 @@
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SettingNumber(Representation);
 
-/// serde_json's `PosInt`, `NegInt` and `Float`.
+/// serde_json's `PosInt`, `NegInt` and `Float`: `Negative` is below zero only, a finite `Float` only.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Representation {
     Unsigned(u64),
