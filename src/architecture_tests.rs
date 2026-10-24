@@ -154,9 +154,11 @@ fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
     !ALLOWED_EXTERNAL_CRATES.contains(&root) && external_crates.iter().any(|name| name == root)
 }
 
-/// Another module's use cases and adapters are reached only through bootstrap.
+/// Another module's use cases and adapters are reached only through bootstrap. The shared kernel is open to every
+/// module; rules 1-2 still keep its infrastructure out of domain and application files.
 fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| match path.as_slice() {
+        ["crate", "shared", ..] => false,
         ["crate", module, "infrastructure", ..] => *module != own_module,
         ["crate", module, "application", rest @ ..] => {
             *module != own_module && rest.iter().any(|segment| segment.ends_with("_use_case"))
@@ -438,6 +440,35 @@ mod tests {
         let found = violations_in("shared/infrastructure/json_document_store.rs", source);
 
         assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_not_flag_a_modules_infrastructure_that_uses_the_shared_infrastructure() {
+        let source = "use crate::shared::infrastructure::json_document_store::JsonDocumentStore;\n\
+                      crate::shared::infrastructure::logger::warn(\"unknown key\");\n";
+
+        let found = violations_in("settings/infrastructure/json_file_settings_repository.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_flag_a_domain_or_application_file_that_uses_the_shared_infrastructure() {
+        let domain = "use crate::shared::infrastructure::atomic_file::AtomicFile;\n";
+        let application = "use crate::shared::infrastructure::logger;\n";
+
+        let found = [
+            violations_in("settings/domain/settings.rs", domain),
+            violations_in("settings/application/set_setting_use_case.rs", application),
+        ];
+
+        assert_eq!(
+            found,
+            [
+                vec![Violation { line: 1, rule: Rule::DomainLayer }],
+                vec![Violation { line: 1, rule: Rule::ApplicationLayer }],
+            ]
+        );
     }
 
     #[test]
