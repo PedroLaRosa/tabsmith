@@ -7,7 +7,11 @@ use crate::render::{FrameInput, Renderer, Theme};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
 };
+use crate::settings::domain::repositories::settings_repository::SettingsRepository;
+use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
+use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
 use crate::settings::Settings;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::tracker::{Event, Extracted, Tracker};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::types::{
@@ -346,7 +350,7 @@ struct Session {
     /// Kept across stdin reads: a bracketed paste split over several reads stays one opaque unit (SPEC §7.2.1).
     decoder: keys::Decoder,
     settings: Settings,
-    settings_path: Option<PathBuf>,
+    settings_repository: Box<dyn SettingsRepository>,
     settings_mtime: Option<SystemTime>,
     session_path: Option<PathBuf>,
     session_mtime: Option<SystemTime>,
@@ -401,7 +405,9 @@ impl Session {
         let program = argv
             .first()
             .context("no shell to run (set SHELL or pass --shell)")?;
-        let settings = crate::settings::load_or_defaults();
+        let settings_repository: Box<dyn SettingsRepository> =
+            Box::new(JsonFileSettingsRepository::new(data_directory_from_env()));
+        let settings = load_or_defaults(&*settings_repository);
         let (m, lf_to_ind) = sys::enter()?;
         *modes = Some(m);
         let (cols, rows) = crossterm::terminal::size().context("terminal size")?;
@@ -515,7 +521,6 @@ impl Session {
             let _ = writer.send(typeahead);
         }
 
-        let settings_path = crate::settings::settings_path().ok();
         let session_path = SessionCtx::path(&sid).ok();
         Ok(Session {
             rx,
@@ -530,8 +535,8 @@ impl Session {
             renderer,
             keymap,
             decoder: keys::Decoder::default(),
-            settings_mtime: mtime(&settings_path),
-            settings_path,
+            settings_mtime: settings_repository.last_modified(),
+            settings_repository,
             settings,
             session_mtime: None,
             session_path,
@@ -1270,12 +1275,12 @@ impl Session {
                 let _ = self.engine.send(EngineMsg::Session(ctx));
             }
         }
-        let m = mtime(&self.settings_path);
+        let m = self.settings_repository.last_modified();
         if m == self.settings_mtime {
             return false;
         }
         self.settings_mtime = m;
-        self.settings = crate::settings::load_or_defaults();
+        self.settings = load_or_defaults(&*self.settings_repository);
         self.keymap = Keymap::from_settings(&self.settings);
         self.renderer
             .set_theme(Theme::from_settings(&self.settings, self.terminal_bg));
@@ -1773,6 +1778,7 @@ mod tests {
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
 
     use crate::menu::tests::{comp, item, settings};
+    use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::types::{Item, ItemType};
     use alacritty_terminal::event::VoidListener;
 
@@ -1806,7 +1812,7 @@ mod tests {
             keymap: Keymap::from_settings(&settings),
             decoder: keys::Decoder::default(),
             settings,
-            settings_path: None,
+            settings_repository: Box::new(InMemorySettingsRepository::default()),
             settings_mtime: None,
             session_path: None,
             session_mtime: None,
