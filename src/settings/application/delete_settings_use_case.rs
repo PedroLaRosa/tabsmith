@@ -41,7 +41,9 @@ impl DeleteSettingsUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
+    use crate::settings::domain::repositories::settings_repository::{
+        InMemorySettingsRepository, UnreadableSettingsRepository,
+    };
     use crate::settings::domain::value_objects::setting_number::SettingNumber;
     use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::settings::domain::value_objects::settings::Settings;
@@ -105,6 +107,36 @@ mod tests {
         assert!(
             matches!(&result, Err(SettingsError::NoMatchingSettings(pattern)) if pattern == "nope*")
                 && !announced
+        );
+    }
+
+    /// The command prints `Removing ...` before it saves, so the message shows even when the save then fails.
+    #[test]
+    fn should_announce_the_keys_while_they_are_still_saved() {
+        let repository = three_settings();
+        let use_case = DeleteSettingsUseCase::new(repository.clone());
+        let mut still_saved = false;
+
+        use_case
+            .execute("inline.enabled", |_| {
+                still_saved = repository.load().unwrap().get("inline.enabled").is_some()
+            })
+            .unwrap();
+
+        assert!(still_saved);
+    }
+
+    /// `settings -d KEY` on a corrupted settings.json refuses instead of overwriting it.
+    #[test]
+    fn should_not_save_over_settings_that_cannot_be_loaded() {
+        let repository = Rc::new(UnreadableSettingsRepository::default());
+        let use_case = DeleteSettingsUseCase::new(repository.clone());
+
+        let result = use_case.execute("*", |_| {});
+
+        assert_eq!(
+            (result.is_err(), repository.save_attempted()),
+            (true, false)
         );
     }
 }
