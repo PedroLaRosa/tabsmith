@@ -433,4 +433,20 @@ mod tests {
             ]
         );
     }
+
+    /// The pty hands its snapshot to the engine thread; saving a change must not alter that copy.
+    #[test]
+    fn should_leave_the_snapshot_it_was_built_from_unchanged() {
+        let settings = settings_with(&[(INLINE_SOURCE, SettingValue::Text("history".to_string()))]);
+        let shared = settings.clone();
+
+        let _updated = settings
+            .with(AUTOCOMPLETE_THEME, SettingValue::Text("light".to_string()))
+            .without(INLINE_SOURCE);
+
+        assert_eq!(
+            shared.entries().collect::<Vec<_>>(),
+            [(INLINE_SOURCE, &SettingValue::Text("history".to_string()))]
+        );
+    }
 }
