@@ -2,12 +2,15 @@ use crate::settings::domain::settings_error::SettingsError;
 use crate::settings::domain::value_objects::settings::Settings;
 #[cfg(test)]
 use std::cell::RefCell;
+use std::time::SystemTime;
 
 /// Where the user's settings are kept.
 pub(crate) trait SettingsRepository {
     /// The saved settings; none saved yet is empty settings.
     fn load(&self) -> Result<Settings, SettingsError>;
     fn save(&self, settings: &Settings) -> Result<(), SettingsError>;
+    /// When the saved settings last changed; `None` while there are none, so removing them counts as a change.
+    fn last_modified(&self) -> Option<SystemTime>;
 }
 
 /// Settings kept in memory, for tests.
@@ -26,6 +29,10 @@ impl SettingsRepository for InMemorySettingsRepository {
     fn save(&self, settings: &Settings) -> Result<(), SettingsError> {
         *self.stored.borrow_mut() = settings.clone();
         Ok(())
+    }
+
+    fn last_modified(&self) -> Option<SystemTime> {
+        None
     }
 }
 
@@ -51,5 +58,15 @@ mod tests {
         repository.save(&saved).unwrap();
 
         assert_eq!(repository.load().unwrap(), saved);
+    }
+
+    /// The pty compares this time to decide to reload; nothing saved yet reads as no time at all.
+    #[test]
+    fn should_have_no_modification_time_before_any_settings_were_saved() {
+        let repository = InMemorySettingsRepository::default();
+
+        let modified = repository.last_modified();
+
+        assert_eq!(modified, None);
     }
 }
