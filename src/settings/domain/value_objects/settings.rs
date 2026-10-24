@@ -33,9 +33,11 @@ impl Settings {
             .or_else(|| catalog_default_string(key))
     }
 
+    /// The user's integer (a float such as `10.0` is none), else the catalog default; `0` when the catalog has none.
     pub(crate) fn i64(&self, key: &str) -> i64 {
         self.get(key)
             .and_then(SettingValue::as_i64)
+            .or_else(|| catalog_default(key))
             .unwrap_or_default()
     }
 }
@@ -154,5 +156,16 @@ mod tests {
         let count = settings.i64(INLINE_HISTORY_COUNT);
 
         assert_eq!(count, 2);
+    }
+
+    /// `inline.historyCount: 10.0` sends 49 history lines: a float is no integer.
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_an_integer_written_as_a_float() {
+        let ten = SettingNumber::from_f64(10.0).unwrap();
+        let settings = settings_with(&[(INLINE_HISTORY_COUNT, SettingValue::Number(ten))]);
+
+        let count = settings.i64(INLINE_HISTORY_COUNT);
+
+        assert_eq!(count, 49);
     }
 }
