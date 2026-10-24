@@ -1,7 +1,7 @@
 use crate::settings::domain::settings_error::SettingsError;
 use crate::settings::domain::value_objects::settings::Settings;
 #[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::SystemTime;
 
 /// Where the user's settings are kept.
@@ -18,6 +18,7 @@ pub(crate) trait SettingsRepository {
 #[derive(Default)]
 pub(crate) struct InMemorySettingsRepository {
     stored: RefCell<Settings>,
+    saved_at: Cell<Option<SystemTime>>,
 }
 
 #[cfg(test)]
@@ -28,11 +29,12 @@ impl SettingsRepository for InMemorySettingsRepository {
 
     fn save(&self, settings: &Settings) -> Result<(), SettingsError> {
         *self.stored.borrow_mut() = settings.clone();
+        self.saved_at.set(Some(SystemTime::now()));
         Ok(())
     }
 
     fn last_modified(&self) -> Option<SystemTime> {
-        None
+        self.saved_at.get()
     }
 }
 
@@ -68,5 +70,14 @@ mod tests {
         let modified = repository.last_modified();
 
         assert_eq!(modified, None);
+    }
+
+    #[test]
+    fn should_have_a_modification_time_once_settings_were_saved() {
+        let repository = InMemorySettingsRepository::default();
+
+        repository.save(&Settings::default()).unwrap();
+
+        assert!(repository.last_modified().is_some());
     }
 }
