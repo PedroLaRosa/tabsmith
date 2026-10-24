@@ -40,6 +40,12 @@ impl Settings {
             .or_else(|| catalog_default(key))
             .unwrap_or_default()
     }
+
+    pub(crate) fn f64(&self, key: &str) -> f64 {
+        self.get(key)
+            .and_then(SettingValue::as_f64)
+            .unwrap_or_default()
+    }
 }
 
 /// ponytail: the catalog's string literals hold no escapes, so dropping the quotes is the JSON string.
@@ -186,5 +192,16 @@ mod tests {
         let debounce = settings.i64(INLINE_DEBOUNCE_MS);
 
         assert_eq!(debounce, 300);
+    }
+
+    /// `settings autocomplete.height 5` stores the integer 5, which the menu reads as 5 rows.
+    #[test]
+    fn should_read_an_integer_the_user_set_as_a_float() {
+        let five = SettingNumber::from(5u64);
+        let settings = settings_with(&[(AUTOCOMPLETE_HEIGHT, SettingValue::Number(five))]);
+
+        let height = settings.f64(AUTOCOMPLETE_HEIGHT);
+
+        assert_eq!(height, 5.0);
     }
 }
