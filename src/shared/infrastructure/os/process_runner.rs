@@ -25,3 +25,45 @@ pub(crate) fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Resul
     }
     Ok(out)
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+
+    #[test]
+    fn should_report_a_program_still_running_at_the_timeout_as_timed_out() {
+        let mut sleep = Command::new("sleep");
+        sleep.arg("5");
+
+        let error = output_with_timeout(&mut sleep, Duration::ZERO)
+            .context("could not ask pwsh for $PROFILE")
+            .unwrap_err();
+
+        assert_eq!(format!("{error:#}"), "could not ask pwsh for $PROFILE: timed out after 0s");
+    }
+
+    #[test]
+    fn should_report_a_program_that_cannot_start_as_the_bare_io_error() {
+        let mut missing = Command::new("tabsmith-test-no-such-program");
+
+        let error = output_with_timeout(&mut missing, Duration::from_secs(5))
+            .context("could not ask pwsh for $PROFILE")
+            .unwrap_err();
+
+        assert_eq!(
+            format!("{error:#}"),
+            "could not ask pwsh for $PROFILE: No such file or directory (os error 2)"
+        );
+    }
+
+    #[test]
+    fn should_return_what_the_program_printed() {
+        let mut echo = Command::new("echo");
+        echo.arg("hi");
+
+        let out = output_with_timeout(&mut echo, Duration::from_secs(5)).unwrap();
+
+        assert_eq!(out, "hi\n");
+    }
+}
