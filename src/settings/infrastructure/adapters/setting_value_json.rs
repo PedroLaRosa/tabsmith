@@ -48,7 +48,13 @@ pub(crate) fn setting_value_to_json(value: &SettingValue) -> Value {
         SettingValue::Bool(value) => Value::Bool(*value),
         SettingValue::Number(number) => json_number(number),
         SettingValue::Text(text) => Value::String(text.clone()),
-        SettingValue::List(_) | SettingValue::Object(_) => todo!(),
+        SettingValue::List(items) => Value::Array(items.iter().map(setting_value_to_json).collect()),
+        SettingValue::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), setting_value_to_json(value)))
+                .collect(),
+        ),
     }
 }
 
@@ -200,5 +206,16 @@ mod tests {
         let json: Vec<_> = values.iter().map(setting_value_to_json).collect();
 
         assert_eq!(json, [json!(null), json!(true), json!("dark")]);
+    }
+
+    /// An `inline.profiles.<name>` object is saved with every member, nested lists included.
+    #[test]
+    fn should_write_setting_lists_and_objects_as_json_all_the_way_down() {
+        let json = json!({"model": "m", "max_tokens": 64, "tags": ["a", 1.5, {"x": null}]});
+        let value = setting_value_from_json(json.clone());
+
+        let written = setting_value_to_json(&value);
+
+        assert_eq!(written, json);
     }
 }
