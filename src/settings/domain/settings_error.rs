@@ -26,10 +26,9 @@ impl fmt::Display for SettingsError {
 impl std::error::Error for SettingsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            // Display already is the storage error: continue with its own cause so nothing prints twice.
-            SettingsError::Storage(error) => error.source(),
+            // Display already is the storage or editor error: continue with its own cause so nothing prints twice.
+            SettingsError::Storage(error) | SettingsError::Editor(error) => error.source(),
             SettingsError::NoMatchingSettings(_) => None,
-            SettingsError::Editor(_) => None,
         }
     }
 }
@@ -121,5 +120,15 @@ mod tests {
         let text = error.to_string();
 
         assert_eq!(text, "could not launch the editor");
+    }
+
+    /// `{:#}` prints "could not launch the editor: <io error>", as the command's anyhow context did.
+    #[test]
+    fn should_continue_with_the_causes_of_the_editor_error() {
+        let error = SettingsError::Editor(Box::new(LaunchFailure(not_found())));
+
+        let cause = error.source().map(ToString::to_string);
+
+        assert_eq!(cause.as_deref(), Some("No such file or directory"));
     }
 }
