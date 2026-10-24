@@ -1,5 +1,6 @@
 //! Architecture fitness test (plan section 1): every registered module keeps the hexagonal layer rules.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -89,12 +90,15 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let test_file = path.ends_with("/tests.rs");
     let mut open_braces = Vec::new();
     let mut test_only_item = TestOnlyItem::default();
+    let mut imported_names = ImportedNames::default();
     let mut found = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let code = without_line_comment(line);
         test_only_item.open_at(code, open_braces.len());
         let paths = paths_in(code, &mut open_braces);
         let production = !test_only_item.holds(code, open_braces.len()) && !test_file;
+        imported_names.record(&paths);
+        let resolved = imported_names.resolve(&paths);
         let checks = [
             (
                 Rule::DomainLayer,
@@ -106,7 +110,8 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
             ),
             (
                 Rule::ModuleBoundary,
-                production && (crosses_module_boundary(module, &paths) || reaches_the_composition_root(layer, &paths)),
+                production
+                    && (crosses_module_boundary(module, &resolved) || reaches_the_composition_root(layer, &resolved)),
             ),
             (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(&paths)),
         ];
@@ -153,6 +158,32 @@ impl TestOnlyItem {
             self.depth = None;
         }
         true
+    }
+}
+
+/// The names that `use` brings in for crate paths, so `history::infrastructure::..` after
+/// `use crate::history::{self, ..}` reads as `crate::history::infrastructure::..`.
+#[derive(Default)]
+struct ImportedNames<'a> {
+    full_paths: HashMap<&'a str, Vec<&'a str>>,
+}
+
+impl<'a> ImportedNames<'a> {
+    fn record(&mut self, paths: &[Vec<&'a str>]) {
+        for path in paths.iter().filter(|path| path.first() == Some(&"crate")) {
+            if let Some(full_path) = path.strip_suffix(&["self"]) {
+                self.full_paths.insert(full_path[full_path.len() - 1], full_path.to_vec());
+            }
+        }
+    }
+
+    /// `paths` with an imported name at the start replaced by the crate path it stands for.
+    fn resolve(&self, paths: &[Vec<&'a str>]) -> Vec<Vec<&'a str>> {
+        let resolve = |path: &Vec<&'a str>| match self.full_paths.get(path[0]) {
+            Some(full_path) => full_path.iter().chain(&path[1..]).copied().collect(),
+            None => path.clone(),
+        };
+        paths.iter().map(resolve).collect()
     }
 }
 
@@ -506,6 +537,16 @@ mod tests {
         let found = violations_in("shell_integration/infrastructure/shell_integration_module.rs", source);
 
         assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+    }
+
+    #[test]
+    fn should_flag_another_modules_infrastructure_reached_through_its_module_imported_as_self() {
+        let source = "use crate::history::{self, domain::history_entry::HistoryEntry};\n\
+                      let repo = history::infrastructure::jsonl_history_repository::JsonlHistoryRepository::new(p);\n";
+
+        let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
     }
 
     #[test]
