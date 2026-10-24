@@ -25,7 +25,7 @@ impl Rule {
                 "domain uses application, infrastructure, bootstrap, an external crate, println!/eprintln! or the logger"
             }
             Rule::ApplicationLayer => "application uses infrastructure, bootstrap or an external crate",
-            Rule::ModuleBoundary => "uses another module's use case or infrastructure",
+            Rule::ModuleBoundary => "uses another module's use case or infrastructure, or bootstrap",
             Rule::SharedKernel => "shared uses a crate module other than shared",
         }
     }
@@ -102,7 +102,10 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
                 Rule::ApplicationLayer,
                 production && layer == Some("application") && breaks_application_layer(&paths, external_crates),
             ),
-            (Rule::ModuleBoundary, production && crosses_module_boundary(module, &paths)),
+            (
+                Rule::ModuleBoundary,
+                production && (crosses_module_boundary(module, &paths) || reaches_the_composition_root(layer, &paths)),
+            ),
             (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(&paths)),
         ];
         let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
@@ -189,9 +192,18 @@ fn breaks_domain_layer(code: &str, paths: &[Vec<&str>], external_crates: &[Strin
 fn breaks_application_layer(paths: &[Vec<&str>], external_crates: &[String]) -> bool {
     paths.iter().any(|path| {
         path.contains(&"infrastructure")
-            || path.starts_with(&["crate", "bootstrap"])
+            || is_the_composition_root(path)
             || is_forbidden_external_crate(path[0], external_crates)
     })
+}
+
+/// Nothing depends on bootstrap (plan section 2). Rules 1-2 already report it from domain and application files.
+fn reaches_the_composition_root(layer: Option<&str>, paths: &[Vec<&str>]) -> bool {
+    !matches!(layer, Some("domain" | "application")) && paths.iter().any(|path| is_the_composition_root(path))
+}
+
+fn is_the_composition_root(path: &[&str]) -> bool {
+    path.starts_with(&["crate", "bootstrap"])
 }
 
 fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
@@ -588,6 +600,16 @@ mod tests {
                 vec![Violation { line: 1, rule: Rule::SharedKernel }],
             ]
         );
+    }
+
+    #[test]
+    fn should_flag_an_infrastructure_file_that_uses_the_composition_root() {
+        let source = "use crate::shared::infrastructure::logger;\n\
+                      let help = <crate::bootstrap::cli::Cli as clap::Parser>::try_parse_from([\"tabsmith\"]);\n";
+
+        let found = violations_in("settings/infrastructure/cli/settings_command.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
     }
 
     #[test]
