@@ -32,6 +32,12 @@ impl Settings {
             .and_then(SettingValue::as_str)
             .or_else(|| catalog_default_string(key))
     }
+
+    pub(crate) fn i64(&self, key: &str) -> i64 {
+        self.get(key)
+            .and_then(SettingValue::as_i64)
+            .unwrap_or_default()
+    }
 }
 
 /// ponytail: the catalog's string literals hold no escapes, so dropping the quotes is the JSON string.
@@ -138,5 +144,15 @@ mod tests {
         let folder = settings.string(AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER);
 
         assert_eq!(folder, None);
+    }
+
+    #[test]
+    fn should_read_an_integer_the_user_set() {
+        let two = SettingNumber::from(2u64);
+        let settings = settings_with(&[(INLINE_HISTORY_COUNT, SettingValue::Number(two))]);
+
+        let count = settings.i64(INLINE_HISTORY_COUNT);
+
+        assert_eq!(count, 2);
     }
 }
