@@ -82,13 +82,13 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let module = components.next().unwrap_or_default();
     let layer = components.next();
     let mut open_braces = Vec::new();
-    let mut in_test_code = false;
+    let mut test_only_item = TestOnlyItem::default();
     let mut found = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let code = line.find("//").map_or(line, |comment| &line[..comment]);
-        in_test_code |= is_test_only_attribute(code);
-        let production = !in_test_code;
+        test_only_item.open_at(code, open_braces.len());
         let paths = paths_in(code, &mut open_braces);
+        let production = !test_only_item.holds(code, open_braces.len());
         let checks = [
             (
                 Rule::DomainLayer,
@@ -105,6 +105,37 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
         found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
     }
     found
+}
+
+/// The `#[cfg(test)]` item being read: from its attribute to the `;` that ends a bodyless item or the brace that
+/// closes its body.
+#[derive(Default)]
+struct TestOnlyItem {
+    /// Brace depth at the attribute; `None` outside a test-only item.
+    depth: Option<usize>,
+    has_body: bool,
+}
+
+impl TestOnlyItem {
+    /// Before the line's braces are read: a test-only attribute opens an item at the current brace depth.
+    fn open_at(&mut self, code: &str, depth: usize) {
+        if self.depth.is_none() && is_test_only_attribute(code) {
+            *self = TestOnlyItem { depth: Some(depth), has_body: false };
+        }
+    }
+
+    /// After the line's braces are read: whether the line belongs to the item. Its last line closes it.
+    fn holds(&mut self, code: &str, depth: usize) -> bool {
+        let Some(start) = self.depth else {
+            return false;
+        };
+        self.has_body |= code.contains('{');
+        let ends = if self.has_body { depth <= start } else { code.trim_end().ends_with(';') };
+        if ends {
+            self.depth = None;
+        }
+        true
+    }
 }
 
 /// `#[cfg(test)]` or `#[cfg(all(test, ..))]`: the item it marks is compiled only for tests.
@@ -493,6 +524,33 @@ mod tests {
         let found = violations_in("settings/domain/settings.rs", source);
 
         assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_apply_the_layer_rules_again_once_a_test_only_item_ends() {
+        let source = "#[cfg(test)]\n\
+                      use serde_json::json;\n\
+                      use serde::Serialize;\n\
+                      #[cfg(all(test, unix))]\n\
+                      fn fixture() -> Value { serde_json::json!({}) }\n\
+                      let text = serde_json::to_string(&value);\n\
+                      #[cfg(test)]\n\
+                      #[derive(Default)]\n\
+                      struct Recorder {\n    \
+                      seen: Vec<serde_json::Value>,\n\
+                      }\n\
+                      println!(\"{text}\");\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 3, rule: Rule::DomainLayer },
+                Violation { line: 6, rule: Rule::DomainLayer },
+                Violation { line: 12, rule: Rule::DomainLayer },
+            ]
+        );
     }
 
     #[test]
