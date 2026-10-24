@@ -1,4 +1,5 @@
 //! Tiny file logger (SPEC §3.1 logs/). Never writes to the terminal from inside `_ pty`.
+use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 
@@ -32,8 +33,8 @@ fn parse_level(s: &str) -> Option<Level> {
 }
 
 /// `name` = log file stem (`cli` or `pty`); `verbose` = count of `-v`; `stderr` mirrors records when `-v` was given;
-/// `data_root` = the data directory, `None` when it cannot be resolved (then there is no log file).
-pub(crate) fn init(name: &str, verbose: u8, stderr: bool, data_root: Option<std::path::PathBuf>) {
+/// `data_directory` holds the logs dir; without a known root there is no log file.
+pub(crate) fn init(name: &str, verbose: u8, stderr: bool, data_directory: &DataDirectory) {
     let level = match verbose {
         0 => std::env::var("TABSMITH_LOG_LEVEL")
             .ok()
@@ -44,7 +45,10 @@ pub(crate) fn init(name: &str, verbose: u8, stderr: bool, data_root: Option<std:
         3 => Level::Debug,
         _ => Level::Trace,
     };
-    let file = data_root.and_then(|home| open_log(&home.join("logs"), name));
+    let file = data_directory
+        .logs_dir()
+        .ok()
+        .and_then(|dir| open_log(&dir, name));
     let session = std::env::var("TABSMITH_SESSION_ID").unwrap_or_else(|_| "-".into());
     let _ = LOGGER.set(Logger {
         file: file.map(Mutex::new),

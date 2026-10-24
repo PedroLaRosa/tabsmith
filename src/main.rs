@@ -28,6 +28,7 @@ mod types;
 
 use bootstrap::cli::Cli;
 use clap::Parser;
+use shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use shared::infrastructure::logger;
 
 fn main() {
@@ -37,7 +38,7 @@ fn main() {
         if is_pty { "pty" } else { "cli" },
         cli.verbose(),
         !is_pty,
-        settings::home().ok(),
+        &data_directory_from_env(),
     );
 
     let result = bootstrap::cli::run(cli);
