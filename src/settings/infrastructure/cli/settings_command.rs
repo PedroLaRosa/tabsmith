@@ -64,7 +64,8 @@ pub(crate) fn run_settings_command(
     module.data_directory.settings_file()?;
     match args.cmd {
         Some(SettingsCmd::Open) => {
-            return Ok(if module.open_settings_file.execute()? { 0 } else { 1 })
+            let exited_successfully = module.open_settings_file.execute()?;
+            return Ok(if exited_successfully { 0 } else { 1 });
         }
         Some(SettingsCmd::List { all, format }) => {
             let map = settings_to_json(&module.list_settings.execute()?);
@@ -76,7 +77,8 @@ pub(crate) fn run_settings_command(
             return Ok(0);
         }
         Some(SettingsCmd::All { format }) => {
-            emit(&render_list(&settings_to_json(&module.list_settings.execute()?), format));
+            let map = settings_to_json(&module.list_settings.execute()?);
+            emit(&render_list(&map, format));
             return Ok(0);
         }
         None => {}
@@ -96,7 +98,8 @@ pub(crate) fn run_settings_command(
             bail!("the argument '--delete' cannot be used with '[VALUE]'\n Usage: tabsmith settings --delete {key}")
         }
         (None, false) => {
-            let value = module.get_setting.execute(&key)?.map(|v| setting_value_to_json(&v));
+            let value = module.get_setting.execute(&key)?;
+            let value = value.as_ref().map(setting_value_to_json);
             println!("{}", render_get(&key, value.as_ref(), args.format)?)
         }
         (Some(value), false) => {
