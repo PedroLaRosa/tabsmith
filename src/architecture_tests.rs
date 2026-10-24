@@ -38,7 +38,12 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
                         .any(|name| code.contains(&format!("{name}::")))
             }
             Rule::ApplicationLayer => {
-                code.contains("::infrastructure") || code.contains("crate::bootstrap")
+                code.contains("::infrastructure")
+                    || code.contains("crate::bootstrap")
+                    || external_crates
+                        .iter()
+                        .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
+                        .any(|name| code.contains(&format!("{name}::")))
             }
         })
         .map(|(index, _)| Violation { line: index + 1, rule })
@@ -149,6 +154,23 @@ mod tests {
             found,
             vec![
                 Violation { line: 2, rule: Rule::ApplicationLayer },
+                Violation { line: 3, rule: Rule::ApplicationLayer },
+            ]
+        );
+    }
+
+    #[test]
+    fn should_flag_an_application_file_that_uses_an_external_crate_other_than_unicode_width() {
+        let source = "use anyhow::Result;\n\
+                      use unicode_width::UnicodeWidthStr;\n\
+                      let value = serde_json::json!({});\n";
+
+        let found = violations_in("settings/application/set_setting_use_case.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 1, rule: Rule::ApplicationLayer },
                 Violation { line: 3, rule: Rule::ApplicationLayer },
             ]
         );
