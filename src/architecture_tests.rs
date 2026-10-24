@@ -80,10 +80,11 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let mut components = path.split('/');
     let module = components.next().unwrap_or_default();
     let layer = components.next();
+    let mut open_braces = Vec::new();
     let mut found = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let code = line.find("//").map_or(line, |comment| &line[..comment]);
-        let paths = paths_in(code);
+        let paths = paths_in(code, &mut open_braces);
         let checks = [
             (
                 Rule::DomainLayer,
@@ -102,13 +103,33 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     found
 }
 
-/// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`.
-fn paths_in(code: &str) -> Vec<Vec<&str>> {
-    code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
-        .filter(|chunk| chunk.contains("::"))
-        .map(|chunk| chunk.split("::").filter(|segment| !segment.is_empty()).collect::<Vec<_>>())
-        .filter(|path| !path.is_empty())
-        .collect()
+/// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`. A member of
+/// a `use a::{..}` group gets the `a` prefix. `open_braces` holds each open brace's prefix across lines (empty for
+/// a block).
+fn paths_in<'a>(code: &'a str, open_braces: &mut Vec<Vec<&'a str>>) -> Vec<Vec<&'a str>> {
+    let mut paths = Vec::new();
+    for piece in code.split_inclusive(|c: char| !is_path_char(c)) {
+        let chunk = piece.trim_end_matches(|c: char| !is_path_char(c));
+        let segments: Vec<&str> = chunk.split("::").filter(|segment| !segment.is_empty()).collect();
+        if piece.ends_with("::{") {
+            open_braces.push(segments);
+            continue;
+        }
+        let in_use_group = open_braces.iter().any(|prefix| !prefix.is_empty());
+        if !segments.is_empty() && (chunk.contains("::") || in_use_group) {
+            paths.push(open_braces.concat().into_iter().chain(segments).collect());
+        }
+        if piece.ends_with('{') {
+            open_braces.push(Vec::new());
+        } else if piece.ends_with('}') {
+            open_braces.pop();
+        }
+    }
+    paths
+}
+
+fn is_path_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == ':'
 }
 
 /// The domain is std plus unicode-width: no other layer, no composition root, no external crate, no output.
@@ -250,6 +271,20 @@ mod tests {
         let found = violations_in("settings/domain/settings.rs", source);
 
         assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_read_each_member_of_a_use_group_under_the_group_prefix() {
+        let source = "use crate::{\n    \
+                      shared::domain::value_objects::shell::Shell,\n    \
+                      settings::domain::settings::Settings,\n\
+                      };\n\
+                      fn render(shell: Shell) {\n\
+                      }\n";
+
+        let found = violations_in("shared/infrastructure/json_document_store.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 3, rule: Rule::SharedKernel }]);
     }
 
     #[test]
