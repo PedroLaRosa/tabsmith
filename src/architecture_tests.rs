@@ -26,28 +26,32 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
         .map(|line| line.find("//").map_or(line, |comment| &line[..comment]))
         .enumerate()
         .filter(|(_, code)| match rule {
-            Rule::DomainLayer => {
-                code.contains("::application")
-                    || code.contains("::infrastructure")
-                    || code.contains("crate::bootstrap")
-                    || code.contains("println!")
-                    || code.contains("logger::")
-                    || external_crates
-                        .iter()
-                        .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
-                        .any(|name| code.contains(&format!("{name}::")))
-            }
-            Rule::ApplicationLayer => {
-                code.contains("::infrastructure")
-                    || code.contains("crate::bootstrap")
-                    || external_crates
-                        .iter()
-                        .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
-                        .any(|name| code.contains(&format!("{name}::")))
-            }
+            Rule::DomainLayer => breaks_domain_layer(code, external_crates),
+            Rule::ApplicationLayer => breaks_application_layer(code, external_crates),
         })
         .map(|(index, _)| Violation { line: index + 1, rule })
         .collect()
+}
+
+/// The domain is std plus unicode-width: no other layer, no composition root, no external crate, no output.
+fn breaks_domain_layer(code: &str, external_crates: &[String]) -> bool {
+    breaks_application_layer(code, external_crates)
+        || code.contains("::application")
+        || code.contains("println!")
+        || code.contains("logger::")
+}
+
+fn breaks_application_layer(code: &str, external_crates: &[String]) -> bool {
+    code.contains("::infrastructure")
+        || code.contains("crate::bootstrap")
+        || uses_forbidden_external_crate(code, external_crates)
+}
+
+fn uses_forbidden_external_crate(code: &str, external_crates: &[String]) -> bool {
+    external_crates
+        .iter()
+        .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
+        .any(|name| code.contains(&format!("{name}::")))
 }
 
 mod tests {
