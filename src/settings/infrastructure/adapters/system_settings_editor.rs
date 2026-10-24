@@ -85,4 +85,16 @@ mod tests {
 
         assert_eq!(text, "The EDITOR environment variable is not set");
     }
+
+    /// `settings open` prints with `{:#}` what its `.context("could not launch the editor")` printed.
+    #[test]
+    fn should_say_that_the_editor_could_not_be_launched_then_why() {
+        let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
+        let error = SettingsError::Editor(Box::new(EditorError::Launch(not_found())));
+
+        let text = format!("{:#}", anyhow::Error::new(error));
+
+        let with_context = anyhow::Error::new(not_found()).context("could not launch the editor");
+        assert_eq!(text, format!("{with_context:#}"));
+    }
 }
