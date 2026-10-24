@@ -186,9 +186,120 @@ fn render_list_all(
 mod tests {
     use super::*;
     use crate::settings::domain::services::settings_catalog;
+    use crate::settings::infrastructure::settings_module::build_settings_module;
+    use crate::shared::application::ports::clock::FixedClock;
+    use crate::shared::domain::value_objects::data_directory::DataDirectory;
+    use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use std::cell::Cell;
+    use std::sync::Arc;
 
     fn map(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    fn module_over(data_directory: DataDirectory) -> SettingsModule {
+        build_settings_module(&SharedDependencies {
+            data_directory,
+            clock: Arc::new(FixedClock::new(0)),
+        })
+    }
+
+    fn without_home() -> SettingsModule {
+        module_over(DataDirectory::new(None, None))
+    }
+
+    fn settings_args(key: Option<&str>, value: Option<&str>, delete: bool) -> SettingsArgs {
+        SettingsArgs {
+            cmd: None,
+            key: key.map(String::from),
+            value: value.map(String::from),
+            delete,
+            format: OutputFormat::default(),
+        }
+    }
+
+    /// The bare `settings` and `settings -d` lines of the Phase 0 capture: no home fails them before anything else.
+    #[test]
+    fn should_report_the_unknown_home_for_a_bare_settings_without_printing_the_help() {
+        let help_printed = Cell::new(false);
+
+        let error = run_settings_command(settings_args(None, None, false), &without_home(), || {
+            help_printed.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            (format!("{error:#}"), help_printed.get()),
+            (
+                "could not determine the home directory (set HOME or TABSMITH_HOME)".to_string(),
+                false
+            )
+        );
+    }
+
+    #[test]
+    fn should_report_the_unknown_home_ahead_of_a_delete_with_no_key() {
+        let module = without_home();
+
+        let error =
+            run_settings_command(settings_args(None, None, true), &module, || Ok(())).unwrap_err();
+
+        assert_eq!(
+            format!("{error:#}"),
+            "could not determine the home directory (set HOME or TABSMITH_HOME)"
+        );
+    }
+
+    #[test]
+    fn should_print_the_settings_help_for_a_bare_settings() {
+        let temp_dir = TempDir::new("settings-command-help");
+        let module = module_over(DataDirectory::new(Some(temp_dir.path().to_path_buf()), None));
+        let help_printed = Cell::new(false);
+
+        let exit_code = run_settings_command(settings_args(None, None, false), &module, || {
+            help_printed.set(true);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!((exit_code, help_printed.get()), (0, true));
+    }
+
+    #[test]
+    fn should_refuse_a_value_given_with_delete() {
+        let temp_dir = TempDir::new("settings-command-value-with-delete");
+        let module = module_over(DataDirectory::new(Some(temp_dir.path().to_path_buf()), None));
+
+        let error =
+            run_settings_command(settings_args(Some("k"), Some("v"), true), &module, || Ok(()))
+                .unwrap_err();
+
+        assert_eq!(
+            format!("{error:#}"),
+            "the argument '--delete' cannot be used with '[VALUE]'\n Usage: tabsmith settings --delete k"
+        );
+    }
+
+    #[test]
+    fn should_report_a_corrupted_settings_file_ahead_of_a_value_given_with_delete() {
+        let temp_dir = TempDir::new("settings-command-conflict");
+        let path = temp_dir.path().join("settings.json");
+        std::fs::write(&path, "{oops").unwrap();
+        let module = module_over(DataDirectory::new(Some(temp_dir.path().to_path_buf()), None));
+
+        let error =
+            run_settings_command(settings_args(Some("k"), Some("v"), true), &module, || Ok(()))
+                .unwrap_err();
+
+        assert_eq!(
+            format!("{error:#}"),
+            format!(
+                "{} is corrupted: key must be a string at line 1 column 2",
+                path.display()
+            )
+        );
     }
 
     #[test]
