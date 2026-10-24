@@ -1,5 +1,9 @@
 pub(crate) trait Clock {
     fn now_ms(&self) -> u64;
+
+    fn now_secs(&self) -> u64 {
+        self.now_ms() / 1000
+    }
 }
 
 #[cfg(test)]
@@ -32,5 +36,14 @@ mod tests {
         let now = clock.now_ms();
 
         assert_eq!(now, 1_700_000_123_456);
+    }
+
+    #[test]
+    fn should_report_whole_wall_clock_seconds_dropping_the_milliseconds() {
+        let clock = FixedClock::new(1_700_000_123_999);
+
+        let now = clock.now_secs();
+
+        assert_eq!(now, 1_700_000_123);
     }
 }
