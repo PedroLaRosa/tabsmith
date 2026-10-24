@@ -82,26 +82,35 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let module = components.next().unwrap_or_default();
     let layer = components.next();
     let mut open_braces = Vec::new();
+    let mut in_test_code = false;
     let mut found = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let code = line.find("//").map_or(line, |comment| &line[..comment]);
+        in_test_code |= is_test_only_attribute(code);
+        let production = !in_test_code;
         let paths = paths_in(code, &mut open_braces);
         let checks = [
             (
                 Rule::DomainLayer,
-                layer == Some("domain") && breaks_domain_layer(code, &paths, external_crates),
+                production && layer == Some("domain") && breaks_domain_layer(code, &paths, external_crates),
             ),
             (
                 Rule::ApplicationLayer,
-                layer == Some("application") && breaks_application_layer(&paths, external_crates),
+                production && layer == Some("application") && breaks_application_layer(&paths, external_crates),
             ),
-            (Rule::ModuleBoundary, crosses_module_boundary(module, &paths)),
+            (Rule::ModuleBoundary, production && crosses_module_boundary(module, &paths)),
             (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(&paths)),
         ];
         let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
         found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
     }
     found
+}
+
+/// `#[cfg(test)]` or `#[cfg(all(test, ..))]`: the item it marks is compiled only for tests.
+fn is_test_only_attribute(code: &str) -> bool {
+    let code = code.trim_start();
+    code.starts_with("#[cfg(test)]") || code.starts_with("#[cfg(all(test,")
 }
 
 /// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`. A member of
@@ -469,6 +478,21 @@ mod tests {
                 vec![Violation { line: 1, rule: Rule::ApplicationLayer }],
             ]
         );
+    }
+
+    #[test]
+    fn should_not_apply_the_layer_rules_inside_a_test_only_item() {
+        let source = "pub(crate) fn width(text: &str) -> usize { text.len() }\n\
+                      #[cfg(test)]\n\
+                      mod tests {\n    \
+                      use serde_json::json;\n    \
+                      use crate::completion::infrastructure::spec_loader::SpecLoader;\n    \
+                      fn fixture() { println!(\"{}\", json!({})); }\n\
+                      }\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(found, vec![]);
     }
 
     #[test]
