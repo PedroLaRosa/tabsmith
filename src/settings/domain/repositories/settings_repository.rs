@@ -38,6 +38,37 @@ impl SettingsRepository for InMemorySettingsRepository {
     }
 }
 
+/// Settings that can never be loaded, like a corrupted settings.json, for tests. It remembers whether a save was
+/// tried, so a test can tell the file would have been overwritten.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct UnreadableSettingsRepository {
+    save_attempted: Cell<bool>,
+}
+
+#[cfg(test)]
+impl UnreadableSettingsRepository {
+    pub(crate) fn save_attempted(&self) -> bool {
+        self.save_attempted.get()
+    }
+}
+
+#[cfg(test)]
+impl SettingsRepository for UnreadableSettingsRepository {
+    fn load(&self) -> Result<Settings, SettingsError> {
+        Err(SettingsError::Storage("settings.json is corrupted".into()))
+    }
+
+    fn save(&self, _settings: &Settings) -> Result<(), SettingsError> {
+        self.save_attempted.set(true);
+        Ok(())
+    }
+
+    fn last_modified(&self) -> Option<SystemTime> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
