@@ -1,9 +1,13 @@
+use std::time::Instant;
+
 pub(crate) trait Clock {
     fn now_ms(&self) -> u64;
 
     fn now_secs(&self) -> u64 {
         self.now_ms() / 1000
     }
+
+    fn now_instant(&self) -> Instant;
 }
 
 #[cfg(test)]
@@ -22,6 +26,10 @@ impl FixedClock {
 impl Clock for FixedClock {
     fn now_ms(&self) -> u64 {
         self.now_ms
+    }
+
+    fn now_instant(&self) -> Instant {
+        unimplemented!()
     }
 }
 
