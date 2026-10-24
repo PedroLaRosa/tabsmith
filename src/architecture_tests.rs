@@ -116,8 +116,10 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     found
 }
 
-/// The `#[cfg(test)]` item being read: from its attribute to the `;` that ends a bodyless item or the brace that
-/// closes its body.
+/// The `#[cfg(test)]` item being read: from its attribute to the brace that closes its body, or, for a bodyless item
+/// (a field, a variant, a match arm, a statement), to its `;` or `,` or the brace that closes the block around it.
+// ponytail: a test-only fn with a multi-line `where` clause ends at the clause's first `,`; skip `where` clauses
+// here if one ever shows up.
 #[derive(Default)]
 struct TestOnlyItem {
     /// Brace depth at the attribute; `None` outside a test-only item.
@@ -170,9 +172,9 @@ fn is_test_only_attribute(code: &str) -> bool {
 /// a `use a::{..}` group gets the `a` prefix, and the name right after `use` is a path even without `::`.
 /// `open_braces` holds each open brace's prefix across lines (empty for a block).
 // ponytail: a line scanner, not a Rust parser. String literals are read as code (a `//` in one cuts the line unless
-// it follows `:`, and an unpaired brace in one shifts the use-group and test-only item tracking), only `//` comments
-// are skipped, and `super::`-relative paths are not resolved. Switch to a real parser if a false hit or a miss ever
-// shows up.
+// it follows `:`, and an unpaired brace or bracket in one shifts the use-group and test-only item tracking), only
+// `//` comments are skipped, and `super::`-relative paths are not resolved. Switch to a real parser if a false hit or
+// a miss ever shows up.
 fn paths_in<'a>(code: &'a str, open_braces: &mut Vec<Vec<&'a str>>) -> Vec<Vec<&'a str>> {
     let mut paths = Vec::new();
     let mut previous_word = "";
