@@ -22,6 +22,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `SettingKeyPattern` | VO | Wildcard pattern (`*`, `?`) for bulk delete. | `wildcard_match` |
 | `SettingDefinition` | VO | Catalog entry: key, type, default, description. | `CatalogEntry` |
 | `SettingsCatalog` | Domain service | The 28 definitions and the single source of defaults. | `CATALOG` + duplicated call-site defaults |
+| `SettingsEditor` | Port | Opens the settings file in the user's editor, waits, and tells whether the editor exited successfully. | `cli::open_settings` (its editor launch) |
 
 ## history
 | Term | Kind | Meaning | Replaces |
