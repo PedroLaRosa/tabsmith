@@ -44,6 +44,10 @@ impl DataDirectory {
     pub(crate) fn themes_dir(&self) -> Result<PathBuf, SharedError> {
         Ok(self.root()?.join("themes"))
     }
+
+    pub(crate) fn shell_dir(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("shell"))
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +136,14 @@ mod tests {
         let path = data_directory.themes_dir();
 
         assert_eq!(path, Ok(PathBuf::from("/data/themes")));
+    }
+
+    #[test]
+    fn should_put_the_shell_scripts_directory_under_the_root() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let path = data_directory.shell_dir();
+
+        assert_eq!(path, Ok(PathBuf::from("/data/shell")));
     }
 }
