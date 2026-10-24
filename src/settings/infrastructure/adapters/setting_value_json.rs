@@ -41,6 +41,22 @@ fn setting_number(number: &serde_json::Number) -> SettingNumber {
         .expect("a serde_json number is an integer or a finite float")
 }
 
+/// A setting value as the serde_json value it was read from: integers stay integers, floats stay floats.
+pub(crate) fn setting_value_to_json(value: &SettingValue) -> Value {
+    match value {
+        SettingValue::Number(number) => json_number(number),
+        SettingValue::Null
+        | SettingValue::Bool(_)
+        | SettingValue::Text(_)
+        | SettingValue::List(_)
+        | SettingValue::Object(_) => todo!(),
+    }
+}
+
+fn json_number(number: &SettingNumber) -> Value {
+    Value::from(number.as_u64().unwrap())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +153,15 @@ mod tests {
             ),
             (5.0, false)
         );
+    }
+
+    /// `settings autocomplete.height 5` writes `5` back to settings.json, not `5.0`.
+    #[test]
+    fn should_write_an_integer_setting_value_as_a_json_integer() {
+        let value = SettingValue::Number(SettingNumber::from(5u64));
+
+        let json = setting_value_to_json(&value);
+
+        assert_eq!(json, json!(5));
     }
 }
