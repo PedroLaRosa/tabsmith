@@ -9,7 +9,7 @@
 //! `Persistent`, nothing can outlive the runtime). Callbacks start with `__ts.start(task, fnId, args, ctx)` and
 //! report back through `__ts_done`.
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_SCRIPT_TIMEOUT;
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::logger;
 use crate::spec::FnId;
 use crate::types::{EngineMsg, ExecOutput};

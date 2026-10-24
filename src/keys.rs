@@ -1,6 +1,6 @@
 //! Stdin key decoding, keystroke grammar and the keybinding table (SPEC §7.2.1–7.2.3).
 //! OWNER: ui agent. Used by the wrapper (pty.rs) to decide interception.
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

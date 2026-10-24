@@ -6,7 +6,7 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_NAVIGATE_TO_HISTORY, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
     AUTOCOMPLETE_SCROLL_WRAP_AROUND,
 };
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::types::{ArgInfo, Completion, GenKey, Insertion, Item, ItemType, Phase};
 use std::time::{Duration, Instant};
 

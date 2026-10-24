@@ -2,7 +2,7 @@
 //! OWNER: cli agent.
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
 use crate::integrations::When;
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_THEME, INLINE_ENABLED, INLINE_SOURCE,

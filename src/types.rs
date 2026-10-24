@@ -1,5 +1,5 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;

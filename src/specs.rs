@@ -3,7 +3,7 @@
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER,
 };
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use anyhow::Context;
 use std::collections::HashSet;

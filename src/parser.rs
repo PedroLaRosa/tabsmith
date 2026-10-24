@@ -4,7 +4,7 @@ use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE_FOR_COMMANDS,
 };
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::shell_parser::CommandInfo;
 use crate::spec::{
     normalise, Arg, Directives, FnId, LoadSpec, Opt, Repeat, SpecLocation, StrOrFn, Subcommand,

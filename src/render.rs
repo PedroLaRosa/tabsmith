@@ -3,7 +3,7 @@
 use crate::icons::{self, Graphics, Image};
 use crate::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::{AUTOCOMPLETE_THEME, AUTOCOMPLETE_WIDTH};
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::types::{Item, ItemType, Model};
 use alacritty_terminal::grid::{Dimensions, Row};

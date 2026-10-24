@@ -10,7 +10,7 @@ use crate::settings::domain::services::settings_catalog::{
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::tracker::{Event, Extracted, Tracker};
 use crate::shared::domain::value_objects::shell::Shell;

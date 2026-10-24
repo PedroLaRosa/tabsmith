@@ -3,7 +3,7 @@
 //! doctor (profile checks).
 use crate::settings::domain::services::settings_catalog::INLINE_SOURCE;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::shared::infrastructure::logger;

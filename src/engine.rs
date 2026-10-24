@@ -18,7 +18,7 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS, AUTOCOMPLETE_SCRIPT_TIMEOUT, AUTOCOMPLETE_SORT_METHOD,
     BETA_HISTORY_MODE, INLINE_ENABLED, INLINE_HISTORY_COUNT,
 };
-use crate::settings::Settings;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shell_parser;
 use crate::spec::{Arg, Generator, Script, StrOrFn, Strategy, Suggestion, Trigger};
