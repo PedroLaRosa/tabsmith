@@ -66,8 +66,13 @@ const MISPLACED_FILE: &str =
 /// The files of `module` that the layer rules, which read the layer from the folder name, would never check. The
 /// plan's layout keeps a module in `src/<module>/`, with only `mod.rs` outside a layer folder.
 fn misplaced_files(src: &Path, module: &str) -> Vec<String> {
+    let folder = src.join(module);
     let root_file = src.join(format!("{module}.rs"));
-    root_file.exists().then(|| relative_path(src, &root_file)).into_iter().collect()
+    let beside_the_layers = rust_files(&folder)
+        .into_iter()
+        .filter(|file| file.parent() == Some(folder.as_path()) && !file.ends_with("mod.rs"));
+    let misplaced = root_file.exists().then_some(root_file).into_iter().chain(beside_the_layers);
+    misplaced.map(|file| relative_path(src, &file)).collect()
 }
 
 fn rust_files(dir: &Path) -> Vec<PathBuf> {
@@ -887,5 +892,14 @@ mod tests {
         let misplaced = misplaced_files(src.path(), "settings");
 
         assert_eq!(misplaced, ["settings.rs"]);
+    }
+
+    #[test]
+    fn should_flag_a_file_directly_under_the_module_folder_other_than_mod_rs() {
+        let src = source_tree(&["settings/mod.rs", "settings/helpers.rs", "settings/domain/settings.rs"]);
+
+        let misplaced = misplaced_files(src.path(), "settings");
+
+        assert_eq!(misplaced, ["settings/helpers.rs"]);
     }
 }
