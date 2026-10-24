@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 fn data_directory_from(env: impl Fn(&str) -> Option<OsString>) -> DataDirectory {
-    DataDirectory::new(root_from(&env), None)
+    DataDirectory::new(root_from(&env), settings_file_from(&env))
 }
 
 /// `TABSMITH_HOME`, else `$HOME/.tabsmith` (Unix) / `%USERPROFILE%\.tabsmith` (Windows).
@@ -15,6 +15,12 @@ fn root_from(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         .or_else(|| env("HOME"))
         .filter(|h| !h.is_empty())?;
     Some(PathBuf::from(base).join(".tabsmith"))
+}
+
+fn settings_file_from(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    env("TABSMITH_SETTINGS_PATH")
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -40,5 +46,17 @@ mod tests {
         let data_directory = data_directory_from(env);
 
         assert_eq!(data_directory.root(), Ok(PathBuf::from("/data")));
+    }
+
+    #[test]
+    fn should_move_the_settings_file_to_tabsmith_settings_path_even_without_a_home_directory() {
+        let env = env_with(&[("TABSMITH_SETTINGS_PATH", "/elsewhere/s.json")]);
+
+        let data_directory = data_directory_from(env);
+
+        assert_eq!(
+            data_directory.settings_file(),
+            Ok(PathBuf::from("/elsewhere/s.json"))
+        );
     }
 }
