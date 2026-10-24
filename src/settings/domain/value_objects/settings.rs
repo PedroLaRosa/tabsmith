@@ -307,4 +307,24 @@ mod tests {
 
         assert_eq!(bindings, [("control+r", &ignore), ("tab", &ignore)]);
     }
+
+    /// `settings inline.profiles. '{..}'` shows up as a profile with an empty name.
+    #[test]
+    fn should_give_a_key_equal_to_the_prefix_as_the_empty_key() {
+        let settings = settings_with(&[("inline.profiles.", SettingValue::Null)]);
+
+        let profiles: Vec<_> = settings.with_prefix("inline.profiles.").collect();
+
+        assert_eq!(profiles, [("", &SettingValue::Null)]);
+    }
+
+    /// The catalog's `inline.profiles.<name>` row documents the template; it is no profile.
+    #[test]
+    fn should_give_no_catalog_template_row_under_a_prefix() {
+        let settings = Settings::default();
+
+        let profiles = settings.with_prefix("inline.profiles.").count();
+
+        assert_eq!(profiles, 0);
+    }
 }
