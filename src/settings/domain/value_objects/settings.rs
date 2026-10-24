@@ -215,4 +215,28 @@ mod tests {
 
         assert_eq!(height, 7.0);
     }
+
+    /// The engine reads `autocomplete.scriptTimeout` as a float and the JS runtime as an integer, so `7500.0`
+    /// is 7500 ms for one and the default for the other.
+    #[test]
+    fn should_read_a_float_as_a_number_but_fall_back_to_the_default_when_read_as_an_integer() {
+        let timeout = SettingNumber::from_f64(7500.0).unwrap();
+        let settings = settings_with(&[(AUTOCOMPLETE_SCRIPT_TIMEOUT, SettingValue::Number(timeout))]);
+
+        let read = (
+            settings.f64(AUTOCOMPLETE_SCRIPT_TIMEOUT),
+            settings.i64(AUTOCOMPLETE_SCRIPT_TIMEOUT),
+        );
+
+        assert_eq!(read, (7500.0, if cfg!(windows) { 20000 } else { 5000 }));
+    }
+
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_a_number_of_the_wrong_type() {
+        let settings = settings_with(&[(AUTOCOMPLETE_WIDTH, SettingValue::Text("60".to_string()))]);
+
+        let width = settings.f64(AUTOCOMPLETE_WIDTH);
+
+        assert_eq!(width, 40.0);
+    }
 }
