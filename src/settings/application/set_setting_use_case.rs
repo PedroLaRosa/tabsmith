@@ -1,5 +1,6 @@
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::settings_error::SettingsError;
+use crate::settings::domain::value_objects::setting_key::SettingKey;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use std::rc::Rc;
 
@@ -13,8 +14,12 @@ impl SetSettingUseCase {
         SetSettingUseCase { settings }
     }
 
-    pub(crate) fn execute(&self, key: &str, value: SettingValue) -> Result<(), SettingsError> {
-        let updated = self.settings.load()?.with(key, value);
+    pub(crate) fn execute(
+        &self,
+        key: &SettingKey,
+        value: SettingValue,
+    ) -> Result<(), SettingsError> {
+        let updated = self.settings.load()?.with(key.as_str(), value);
         self.settings.save(&updated)
     }
 }
@@ -35,7 +40,7 @@ mod tests {
 
         use_case
             .execute(
-                "autocomplete.height",
+                &SettingKey::new("autocomplete.height"),
                 SettingValue::Number(SettingNumber::from(10u64)),
             )
             .unwrap();
@@ -53,7 +58,7 @@ mod tests {
         let use_case = SetSettingUseCase::new(repository.clone());
 
         use_case
-            .execute("", SettingValue::Text("v".to_string()))
+            .execute(&SettingKey::new(""), SettingValue::Text("v".to_string()))
             .unwrap();
 
         assert_eq!(
@@ -71,7 +76,7 @@ mod tests {
 
         use_case
             .execute(
-                "autocomplete.theme",
+                &SettingKey::new("autocomplete.theme"),
                 SettingValue::Text("light".to_string()),
             )
             .unwrap();
@@ -88,7 +93,7 @@ mod tests {
         let repository = Rc::new(UnreadableSettingsRepository::default());
         let use_case = SetSettingUseCase::new(repository.clone());
 
-        let result = use_case.execute("autocomplete.height", SettingValue::Null);
+        let result = use_case.execute(&SettingKey::new("autocomplete.height"), SettingValue::Null);
 
         assert_eq!(
             (result.is_err(), repository.save_attempted()),

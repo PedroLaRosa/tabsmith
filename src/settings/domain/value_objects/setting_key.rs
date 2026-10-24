@@ -1,4 +1,4 @@
-/// Dotted key such as `autocomplete.height`.
+/// Dotted key such as `autocomplete.height`. Not validated: the empty key is a key too (D1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SettingKey(String);
 

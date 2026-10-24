@@ -1,5 +1,6 @@
 //! `tabsmith settings`: its clap arguments, the handler and the presenters (SPEC §2.3).
 use crate::settings::domain::value_objects::setting_definition::SettingDefinition;
+use crate::settings::domain::value_objects::setting_key::SettingKey;
 use crate::settings::infrastructure::adapters::setting_value_json::{
     parse_value, setting_value_from_json, setting_value_to_json, settings_to_json,
 };
@@ -91,20 +92,21 @@ pub(crate) fn run_settings_command(
         print_root_help()?;
         return Ok(0);
     };
+    let setting_key = SettingKey::new(&key);
     match (args.value, args.delete) {
         (Some(_), true) => {
             // Loaded first, as always: settings that cannot be loaded are reported ahead of the conflict.
-            module.get_setting.execute(&key)?;
+            module.get_setting.execute(&setting_key)?;
             bail!("the argument '--delete' cannot be used with '[VALUE]'\n Usage: tabsmith settings --delete {key}")
         }
         (None, false) => {
-            let value = module.get_setting.execute(&key)?;
+            let value = module.get_setting.execute(&setting_key)?;
             let value = value.as_ref().map(setting_value_to_json);
             println!("{}", render_get(&key, value.as_ref(), args.format)?)
         }
         (Some(value), false) => {
             let value = setting_value_from_json(parse_value(&value));
-            module.set_setting.execute(&key, value)?;
+            module.set_setting.execute(&setting_key, value)?;
         }
         (None, true) => {
             // Printed before the save, as always, so the list shows even when saving fails.
