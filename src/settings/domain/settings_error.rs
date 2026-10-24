@@ -15,7 +15,14 @@ impl fmt::Display for SettingsError {
     }
 }
 
-impl std::error::Error for SettingsError {}
+impl std::error::Error for SettingsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            // Display already is the storage error: continue with its own cause so nothing prints twice.
+            SettingsError::Storage(error) => error.source(),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -56,5 +63,15 @@ mod tests {
         let text = error.to_string();
 
         assert_eq!(text, "/data/settings.json is corrupted");
+    }
+
+    /// `{:#}` prints each cause once: "<path> is corrupted: expected value at line 1 column 1".
+    #[test]
+    fn should_continue_with_the_causes_of_the_storage_error() {
+        let error = SettingsError::Storage(Box::new(CorruptedFile(ParserCause)));
+
+        let cause = error.source().map(ToString::to_string);
+
+        assert_eq!(cause.as_deref(), Some("expected value at line 1 column 1"));
     }
 }
