@@ -7,6 +7,7 @@ const ALLOWED_EXTERNAL_CRATES: &[&str] = &["unicode_width"];
 enum Rule {
     DomainLayer,
     ApplicationLayer,
+    ModuleBoundary,
 }
 
 #[derive(Debug, PartialEq)]
@@ -16,21 +17,24 @@ struct Violation {
 }
 
 fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Violation> {
-    let rule = match path.split('/').nth(1) {
-        Some("domain") => Rule::DomainLayer,
-        Some("application") => Rule::ApplicationLayer,
-        _ => return Vec::new(),
-    };
-    source
-        .lines()
-        .map(|line| line.find("//").map_or(line, |comment| &line[..comment]))
-        .enumerate()
-        .filter(|(_, code)| match rule {
-            Rule::DomainLayer => breaks_domain_layer(code, external_crates),
-            Rule::ApplicationLayer => breaks_application_layer(code, external_crates),
-        })
-        .map(|(index, _)| Violation { line: index + 1, rule })
-        .collect()
+    let mut components = path.split('/');
+    let module = components.next().unwrap_or_default();
+    let layer = components.next();
+    let mut found = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        let code = line.find("//").map_or(line, |comment| &line[..comment]);
+        let checks = [
+            (Rule::DomainLayer, layer == Some("domain") && breaks_domain_layer(code, external_crates)),
+            (
+                Rule::ApplicationLayer,
+                layer == Some("application") && breaks_application_layer(code, external_crates),
+            ),
+            (Rule::ModuleBoundary, crosses_module_boundary(module, code)),
+        ];
+        let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
+        found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
+    }
+    found
 }
 
 /// The domain is std plus unicode-width: no other layer, no composition root, no external crate, no output.
@@ -45,6 +49,20 @@ fn breaks_application_layer(code: &str, external_crates: &[String]) -> bool {
     code.contains("::infrastructure")
         || code.contains("crate::bootstrap")
         || uses_forbidden_external_crate(code, external_crates)
+}
+
+/// Another module's use cases and adapters are reached only through bootstrap.
+fn crosses_module_boundary(own_module: &str, code: &str) -> bool {
+    code.match_indices("crate::").any(|(at, prefix)| {
+        let mut segments = code[at + prefix.len()..].split("::");
+        let module = segments.next();
+        let reached = match segments.next() {
+            Some("infrastructure") => true,
+            Some("application") => segments.any(|segment| segment.ends_with("_use_case")),
+            _ => false,
+        };
+        module != Some(own_module) && reached
+    })
 }
 
 fn uses_forbidden_external_crate(code: &str, external_crates: &[String]) -> bool {
@@ -176,6 +194,23 @@ mod tests {
             vec![
                 Violation { line: 1, rule: Rule::ApplicationLayer },
                 Violation { line: 3, rule: Rule::ApplicationLayer },
+            ]
+        );
+    }
+
+    #[test]
+    fn should_flag_a_file_that_uses_another_modules_use_case_or_infrastructure() {
+        let source = "use crate::completion::domain::suggestion::Suggestion;\n\
+                      use crate::completion::application::rank_suggestions_use_case::RankSuggestionsUseCase;\n\
+                      let history = crate::history::infrastructure::jsonl_history_repository::open(path);\n";
+
+        let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 2, rule: Rule::ModuleBoundary },
+                Violation { line: 3, rule: Rule::ModuleBoundary },
             ]
         );
     }
