@@ -56,7 +56,9 @@ pub(crate) fn setting_value_to_json(value: &SettingValue) -> Value {
         SettingValue::Bool(value) => Value::Bool(*value),
         SettingValue::Number(number) => json_number(number),
         SettingValue::Text(text) => Value::String(text.clone()),
-        SettingValue::List(items) => Value::Array(items.iter().map(setting_value_to_json).collect()),
+        SettingValue::List(items) => {
+            Value::Array(items.iter().map(setting_value_to_json).collect())
+        }
         SettingValue::Object(fields) => Value::Object(
             fields
                 .iter()
@@ -254,7 +256,8 @@ mod tests {
         };
         let original = serde_json::to_string_pretty(&map).unwrap();
 
-        let written = serde_json::to_string_pretty(&settings_to_json(&settings_from_json(map))).unwrap();
+        let written =
+            serde_json::to_string_pretty(&settings_to_json(&settings_from_json(map))).unwrap();
 
         assert_eq!(written, original);
     }

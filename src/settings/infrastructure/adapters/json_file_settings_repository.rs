@@ -56,7 +56,10 @@ mod tests {
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     fn repository_in(temp_dir: &TempDir) -> JsonFileSettingsRepository {
-        JsonFileSettingsRepository::new(DataDirectory::new(Some(temp_dir.path().to_path_buf()), None))
+        JsonFileSettingsRepository::new(DataDirectory::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+        ))
     }
 
     #[test]
@@ -75,8 +78,14 @@ mod tests {
         let temp_dir = TempDir::new("settings-save");
         let repository = repository_in(&temp_dir);
         let settings = Settings::default()
-            .with("autocomplete.theme", SettingValue::Text("light".to_string()))
-            .with("autocomplete.height", SettingValue::Number(SettingNumber::from(5u64)));
+            .with(
+                "autocomplete.theme",
+                SettingValue::Text("light".to_string()),
+            )
+            .with(
+                "autocomplete.height",
+                SettingValue::Number(SettingNumber::from(5u64)),
+            );
 
         repository.save(&settings).unwrap();
 
@@ -97,5 +106,144 @@ mod tests {
         let modified = repository.last_modified();
 
         assert_eq!(modified, std::fs::metadata(&path).unwrap().modified().ok());
+    }
+
+    #[test]
+    fn should_load_the_settings_the_settings_file_holds() {
+        let temp_dir = TempDir::new("settings-load");
+        let repository = repository_in(&temp_dir);
+        std::fs::write(
+            temp_dir.path().join("settings.json"),
+            r#"{"autocomplete.height": 5}"#,
+        )
+        .unwrap();
+
+        let settings = repository.load().unwrap();
+
+        assert_eq!(
+            settings.get("autocomplete.height"),
+            Some(&SettingValue::Number(SettingNumber::from(5u64)))
+        );
+    }
+
+    /// The settings commands refuse to overwrite a file the user is still editing.
+    #[test]
+    fn should_refuse_a_corrupted_settings_file_with_the_message_the_settings_commands_print() {
+        let temp_dir = TempDir::new("settings-corrupted");
+        let repository = repository_in(&temp_dir);
+        let path = temp_dir.path().join("settings.json");
+        std::fs::write(&path, "{oops").unwrap();
+
+        let error = repository.load().unwrap_err();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!(
+                "{} is corrupted: key must be a string at line 1 column 2",
+                path.display()
+            )
+        );
+    }
+
+    #[test]
+    fn should_refuse_a_settings_file_that_is_not_a_json_object() {
+        let temp_dir = TempDir::new("settings-not-object");
+        let repository = repository_in(&temp_dir);
+        let path = temp_dir.path().join("settings.json");
+        std::fs::write(&path, "[1]").unwrap();
+
+        let error = repository.load().unwrap_err();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!("{} is corrupted (not a JSON object)", path.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_report_a_settings_file_it_cannot_read_with_the_path_it_was_reading() {
+        let temp_dir = TempDir::new("settings-unreadable");
+        let repository = repository_in(&temp_dir);
+        let path = temp_dir.path().join("settings.json");
+        std::fs::create_dir(&path).unwrap();
+
+        let error = repository.load().unwrap_err();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!("reading {}: Is a directory (os error 21)", path.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_report_a_failed_save_as_writing_the_settings_file() {
+        let temp_dir = TempDir::new("settings-unwritable");
+        let repository = repository_in(&temp_dir);
+        let path = temp_dir.path().join("settings.json");
+        std::fs::create_dir(&path).unwrap();
+
+        let error = repository.save(&Settings::default()).unwrap_err();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!("writing {}: Is a directory (os error 21)", path.display())
+        );
+    }
+
+    #[test]
+    fn should_fail_to_load_or_save_without_a_home_directory_with_the_original_message() {
+        let repository = JsonFileSettingsRepository::new(DataDirectory::new(None, None));
+
+        let errors = [
+            repository.load().map(|_| ()).unwrap_err(),
+            repository.save(&Settings::default()).unwrap_err(),
+        ];
+
+        assert_eq!(
+            errors.map(|error| format!("{:#}", anyhow::Error::from(error))),
+            ["could not determine the home directory (set HOME or TABSMITH_HOME)"; 2]
+        );
+    }
+
+    /// `TABSMITH_SETTINGS_PATH` keeps the settings commands working without a home directory.
+    #[test]
+    fn should_save_and_load_the_overriding_settings_file_without_a_home_directory() {
+        let temp_dir = TempDir::new("settings-override");
+        let path = temp_dir.path().join("override/s.json");
+        let repository =
+            JsonFileSettingsRepository::new(DataDirectory::new(None, Some(path.clone())));
+        let settings = Settings::default().with(
+            "autocomplete.height",
+            SettingValue::Number(SettingNumber::from(6u64)),
+        );
+
+        repository.save(&settings).unwrap();
+
+        assert_eq!(
+            (repository.load().unwrap(), path.is_file()),
+            (settings, true)
+        );
+    }
+
+    /// Deleting settings.json while the pty runs is a change, so it reloads the defaults.
+    #[test]
+    fn should_have_no_modification_time_for_a_missing_settings_file() {
+        let temp_dir = TempDir::new("settings-mtime-missing");
+        let repository = repository_in(&temp_dir);
+
+        let modified = repository.last_modified();
+
+        assert_eq!(modified, None);
+    }
+
+    #[test]
+    fn should_have_no_modification_time_without_a_home_directory() {
+        let repository = JsonFileSettingsRepository::new(DataDirectory::new(None, None));
+
+        let modified = repository.last_modified();
+
+        assert_eq!(modified, None);
     }
 }

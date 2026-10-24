@@ -55,7 +55,10 @@ mod tests {
     #[test]
     fn should_load_the_settings_it_last_saved() {
         let repository = InMemorySettingsRepository::default();
-        let saved = Settings::default().with("autocomplete.theme", SettingValue::Text("light".to_string()));
+        let saved = Settings::default().with(
+            "autocomplete.theme",
+            SettingValue::Text("light".to_string()),
+        );
 
         repository.save(&saved).unwrap();
 
