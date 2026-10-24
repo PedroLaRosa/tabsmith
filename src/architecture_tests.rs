@@ -68,13 +68,25 @@ const MISPLACED_FILE: &str =
 // ponytail: that `mod.rs` gets rules 3-4 only, since it is meant to hold just the layer declarations; flag any other
 // line in it if code ever lands there.
 fn misplaced_files(src: &Path, module: &str) -> Vec<String> {
-    let folder = src.join(module);
     let root_file = src.join(format!("{module}.rs"));
-    let beside_the_layers = rust_files(&folder)
-        .into_iter()
-        .filter(|file| file.parent() == Some(folder.as_path()) && !file.ends_with("mod.rs"));
-    let misplaced = root_file.exists().then_some(root_file).into_iter().chain(beside_the_layers);
-    misplaced.map(|file| relative_path(src, &file)).collect()
+    let module_files = rust_files(&src.join(module));
+    let misplaced = root_file.exists().then_some(root_file).into_iter().chain(module_files);
+    misplaced
+        .map(|file| relative_path(src, &file))
+        .filter(|path| !in_the_module_layout(path))
+        .collect()
+}
+
+const LAYERS: &[&str] = &["domain", "application", "infrastructure"];
+
+/// `path` (relative to `src`) is `<module>/mod.rs` or a file somewhere inside `<module>/<layer>/`.
+fn in_the_module_layout(path: &str) -> bool {
+    let mut parts = path.split('/').skip(1);
+    match (parts.next(), parts.next()) {
+        (Some("mod.rs"), None) => true,
+        (Some(folder), Some(_)) => LAYERS.contains(&folder),
+        _ => false,
+    }
 }
 
 fn rust_files(dir: &Path) -> Vec<PathBuf> {
@@ -913,6 +925,21 @@ mod tests {
         let misplaced = misplaced_files(src.path(), "settings");
 
         assert_eq!(misplaced, ["settings/domain.rs"]);
+    }
+
+    /// A misspelled layer or a folder that is no layer at all would get rules 3-4 only.
+    #[test]
+    fn should_flag_a_file_in_a_module_folder_that_is_not_a_layer() {
+        let src = source_tree(&[
+            "settings/mod.rs",
+            "settings/model/leak.rs",
+            "settings/aplication/leak.rs",
+            "settings/domain/mod.rs",
+        ]);
+
+        let misplaced = misplaced_files(src.path(), "settings");
+
+        assert_eq!(misplaced, ["settings/aplication/leak.rs", "settings/model/leak.rs"]);
     }
 
     #[test]
