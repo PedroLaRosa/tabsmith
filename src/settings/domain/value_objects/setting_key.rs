@@ -24,4 +24,14 @@ mod tests {
 
         assert_eq!(text, "autocomplete.height");
     }
+
+    /// `tabsmith settings "" v` stores the key "" and `settings ""` reports it missing, so the key is not validated.
+    #[test]
+    fn should_accept_the_empty_key_the_settings_command_stores_today() {
+        let key = SettingKey::new("");
+
+        let text = key.as_str();
+
+        assert_eq!(text, "");
+    }
 }
