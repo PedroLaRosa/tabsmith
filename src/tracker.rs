@@ -95,8 +95,12 @@ impl Splitter {
                 self.state = State::Esc;
                 self.step(b, bytes, pieces);
             }
-            // Ended as tmux ends it: only ST, not BEL.
+            // Ended as tmux ends it: ST, not BEL; CAN/SUB cancel it.
             State::Name if b == 0x1b => self.state = State::NameEsc,
+            State::Name if matches!(b, 0x18 | 0x1a) => {
+                self.name.push(b);
+                self.end_name(bytes, pieces);
+            }
             State::Name => self.name.push(b),
             State::NameEsc if b == b'\\' => {
                 self.name.extend_from_slice(b"\x1b\\");
@@ -1168,6 +1172,14 @@ mod tests {
                 Piece::Bytes(b"\x1b[31mB\x1b[0mC".to_vec())
             ]
         );
+    }
+
+    #[test]
+    fn splitter_cancels_a_window_name_at_can_or_sub_like_tmux() {
+        // tmux drops the name and prints what follows: `DE` on screen.
+        let p = split_all(&[b"D\x1bkfoo\x18E", b"\x1bkbar\x1aF"]);
+
+        assert_eq!(bytes_of(&p), b"DEF");
     }
 
     #[test]
