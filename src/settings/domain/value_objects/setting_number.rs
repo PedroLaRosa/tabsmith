@@ -17,7 +17,7 @@ impl From<u64> for SettingNumber {
 impl SettingNumber {
     pub(crate) fn as_i64(&self) -> Option<i64> {
         match self.0 {
-            Representation::Unsigned(number) => Some(number as i64),
+            Representation::Unsigned(number) => i64::try_from(number).ok(),
         }
     }
 
@@ -45,5 +45,14 @@ mod tests {
         let read = (number.as_i64(), number.as_u64(), number.as_f64());
 
         assert_eq!(read, (Some(12), Some(12), Some(12.0)));
+    }
+
+    #[test]
+    fn should_not_read_an_integer_above_the_i64_range_as_an_i64() {
+        let number = SettingNumber::from(i64::MAX as u64 + 1);
+
+        let read = number.as_i64();
+
+        assert_eq!(read, None);
     }
 }
