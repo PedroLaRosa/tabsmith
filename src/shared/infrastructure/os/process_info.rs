@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::shared::infrastructure::os::executable_path_error::ExecutablePathError;
 
 /// Unix euid 0.
 pub(crate) fn is_root() -> bool {
@@ -22,11 +22,8 @@ pub(crate) fn is_console(handle: std::os::windows::io::RawHandle) -> bool {
 }
 
 /// Absolute path of the running tabsmith binary.
-pub(crate) fn exe_path() -> Result<String> {
-    Ok(std::env::current_exe()
-        .context("could not locate the tabsmith executable")?
-        .to_string_lossy()
-        .into_owned())
+pub(crate) fn exe_path() -> Result<String, ExecutablePathError> {
+    Ok(std::env::current_exe()?.to_string_lossy().into_owned())
 }
 
 /// Executable path of the parent process (SPEC §2.11 `_ get-shell`).
