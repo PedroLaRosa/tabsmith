@@ -113,10 +113,8 @@ impl Splitter {
 
     fn end_name(&mut self, bytes: &mut Vec<u8>, pieces: &mut Vec<Piece>) {
         self.state = State::Ground;
-        if !bytes.is_empty() {
-            pieces.push(Piece::Bytes(std::mem::take(bytes)));
-        }
-        pieces.push(Piece::WindowName(std::mem::take(&mut self.name)));
+        let name = std::mem::take(&mut self.name);
+        emit(Piece::WindowName(name), bytes, pieces);
     }
 
     /// Emit the collected OSC prefix as plain bytes.
@@ -129,12 +127,8 @@ impl Splitter {
     fn finish(&mut self, terminator: &[u8], bytes: &mut Vec<u8>, pieces: &mut Vec<Piece>) {
         self.state = State::Ground;
         if self.osc.starts_with(b"697;") {
-            if !bytes.is_empty() {
-                pieces.push(Piece::Bytes(std::mem::take(bytes)));
-            }
-            pieces.push(Piece::Marker(
-                String::from_utf8_lossy(&self.osc[4..]).into_owned(),
-            ));
+            let marker = String::from_utf8_lossy(&self.osc[4..]).into_owned();
+            emit(Piece::Marker(marker), bytes, pieces);
             self.osc.clear();
         } else {
             bytes.extend_from_slice(b"\x1b]");
@@ -142,6 +136,14 @@ impl Splitter {
             bytes.extend_from_slice(terminator);
         }
     }
+}
+
+/// `piece` at the current byte offset: the plain bytes collected before it go first.
+fn emit(piece: Piece, bytes: &mut Vec<u8>, pieces: &mut Vec<Piece>) {
+    if !bytes.is_empty() {
+        pieces.push(Piece::Bytes(std::mem::take(bytes)));
+    }
+    pieces.push(piece);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -568,8 +570,8 @@ impl Tracker {
         }
     }
 
-    /// One PTY batch (SPEC §4.5): markers handled at their byte offset, everything else fed to the model and
-    /// appended (filtered) to `out` for the real terminal.
+    /// One PTY batch (SPEC §4.5): markers handled at their byte offset, window names appended (filtered) to `out`
+    /// only, everything else fed to the model and appended (filtered) to `out` for the real terminal.
     pub fn feed(&mut self, model: &mut Model, batch: &[u8], out: &mut Vec<u8>) {
         for piece in self.splitter.feed(batch) {
             match piece {
