@@ -738,3 +738,38 @@ Done when `shared` is registered in the architecture test and the build has no c
   8. `exit` code is propagated.
   9. `tabsmith doctor` passes.
 - **End:** push the branch and let the CI matrix (ubuntu, macos, windows) run. Ask the user before pushing.
+
+---
+
+## 9. Implementation decisions
+
+Taken while implementing, after a read-only pass over every legacy file found places where the plan is silent or
+where following it literally would change behaviour. They bind every phase.
+
+- **D1 Behaviour beats the plan's letter.** Where a "dedupe" or "unify" would change behaviour, both variants stay
+  explicit and the deviation is recorded. Known cases: `which` vs `js::find_exe` (exec bit, PATHEXT order, relative
+  names), the two `script_timeout`s (f64 in the engine, i64 in js), the strict CLI theme parser vs the lenient
+  renderer one, doctor's terminal check vs `LaunchPolicy`, `disableForCommands` (checked on every spec load, not
+  once per request), the two generatorContext builders (process-env fallback), doctor's install fix vs
+  `ReinstallIntegrations`, and the three atomic writes (`AtomicFile` has three methods, one per old helper).
+- **D2 Fitness test scope.** The layer rules govern production code: `#[cfg(test)]` items and sibling `tests.rs`
+  files are exempt from rules 1-3, so tests keep their fixtures and may wire real adapters. Every module may use the
+  shared kernel, including `shared::infrastructure` from its own infrastructure. A module's infrastructure may not
+  reach `crate::bootstrap`.
+- **D3 Lazy data directory.** `DataDirectory` carries a deferred "no home" error that its accessors return, so
+  commands that work without `HOME` today (`init`, `_ should-launch`, `_ get-shell`, help, `version`, `completion`,
+  `settings` with only `TABSMITH_SETTINGS_PATH`, the `_ pty` fallback) keep working, and the others fail at the same
+  moment with the same message.
+- **D4 clap identifiers are frozen** (variants, fields, attributes, doc comments, aliases, order). Clap types that
+  span modules (`DebugCmd`) live in `bootstrap/cli.rs`.
+- **D5** Code that moves into domain/application and logs today returns the text to its infrastructure caller, which
+  logs it with the same text, level and condition.
+- **D6** A test that mixes two modules is split; the half in the module the plan assigns keeps the name, the other is
+  `<name>_<aspect>`, and together they assert at least what the original did.
+- **D7** Items used only by tests get `#[cfg(test)]` instead of being deleted in Phase 11.
+- **D8** Catch-all arms on domain enums become explicit arms with the same mapping.
+- **D9** Tests that name their own module path (self re-exec with `--exact`) get that string updated when they move.
+
+Phase 1 notes: `anyhow` is gone from shared infrastructure (typed errors whose `{:#}` chain prints the old text);
+`shell_serde` was dropped because nothing (de)serialises a `Shell`; the one remaining module cycle is the legacy
+`cli.rs` → `bootstrap::cli::Cli` back-edge for the `settings --help` fallback, removed in Phase 2.
