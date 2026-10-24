@@ -206,6 +206,14 @@ pub(crate) fn catalog() -> &'static [SettingDefinition] {
     CATALOG
 }
 
+/// The raw JSON default literal `settings list --all` shows for `key`.
+pub(crate) fn default(key: &str) -> Option<&'static str> {
+    CATALOG
+        .iter()
+        .find(|definition| definition.key() == key)
+        .map(SettingDefinition::default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +242,14 @@ mod tests {
         ] {
             assert!(catalog().iter().any(|e| e.key() == k), "{k}");
         }
+    }
+
+    #[test]
+    fn should_give_the_default_literal_of_a_documented_key() {
+        let key = AUTOCOMPLETE_SORT_METHOD;
+
+        let literal = default(key);
+
+        assert_eq!(literal, Some("\"most recent\""));
     }
 }
