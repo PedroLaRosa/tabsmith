@@ -168,4 +168,23 @@ mod tests {
 
         assert_eq!(count, 49);
     }
+
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_an_integer_the_user_did_not_set() {
+        let settings = Settings::default();
+
+        let debounce = settings.i64(INLINE_DEBOUNCE_MS);
+
+        assert_eq!(debounce, 300);
+    }
+
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_an_integer_above_the_i64_range() {
+        let huge = SettingNumber::from(i64::MAX as u64 + 1);
+        let settings = settings_with(&[(INLINE_DEBOUNCE_MS, SettingValue::Number(huge))]);
+
+        let debounce = settings.i64(INLINE_DEBOUNCE_MS);
+
+        assert_eq!(debounce, 300);
+    }
 }
