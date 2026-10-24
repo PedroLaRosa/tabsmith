@@ -5,7 +5,7 @@ use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::atomic_file::AtomicFile;
 use crate::shared::infrastructure::atomic_file_error::AtomicFileError;
-use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::os::executable_lookup::which;
@@ -367,7 +367,7 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn from_env() -> Result<Ctx> {
-        let home = crate::settings::user_home()?;
+        let home = user_home_from_env()?;
         let var = |k: &str| {
             std::env::var_os(k)
                 .filter(|v| !v.is_empty())

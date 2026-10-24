@@ -11,7 +11,7 @@ use crate::settings::domain::repositories::settings_repository::SettingsReposito
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
 use crate::settings::Settings;
-use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::tracker::{Event, Extracted, Tracker};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::types::{
@@ -470,7 +470,7 @@ impl Session {
         let cwd = std::env::current_dir()
             .ok()
             .filter(|d| d.is_dir())
-            .or_else(|| crate::settings::user_home().ok());
+            .or_else(|| user_home_from_env().ok());
         if let Some(cwd) = cwd {
             cb.cwd(cwd);
         }

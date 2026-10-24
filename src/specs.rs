@@ -4,6 +4,7 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER,
 };
 use crate::settings::Settings;
+use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use anyhow::Context;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -193,7 +194,7 @@ fn dev_folder(settings: &Settings) -> Option<PathBuf> {
     }
     Some(match Path::new(d).strip_prefix("~") {
         Ok(rest) => {
-            crate::settings::user_home().map_or_else(|_| PathBuf::from(d), |h| h.join(rest))
+            user_home_from_env().map_or_else(|_| PathBuf::from(d), |h| h.join(rest))
         }
         Err(_) => PathBuf::from(d),
     })
@@ -460,7 +461,7 @@ mod tests {
                     .collect(),
             )
         };
-        let home = crate::settings::user_home().unwrap();
+        let home = user_home_from_env().unwrap();
         assert_eq!(
             dev_folder(&s(true, "~/code/build")),
             Some(home.join("code").join("build"))

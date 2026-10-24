@@ -5,6 +5,7 @@ use crate::settings::domain::services::settings_catalog::INLINE_SOURCE;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;
 use crate::types::{HistoryEntry, Item, ItemType};
 use serde_json::{json, Value};
@@ -592,7 +593,7 @@ fn expand(arg: &str, env: &HashMap<String, String>) -> Option<String> {
             .or_else(|| env.get("USERPROFILE"))
             .cloned()
             .or_else(|| {
-                crate::settings::user_home()
+                user_home_from_env()
                     .ok()
                     .map(|p| p.to_string_lossy().into_owned())
             })?;

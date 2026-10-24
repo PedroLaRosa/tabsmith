@@ -8,22 +8,13 @@ pub(crate) use crate::settings::domain::value_objects::settings::Settings;
 
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::PathBuf;
 
 /// `TABSMITH_HOME`, else `$HOME/.tabsmith` (Unix) / `%USERPROFILE%\.tabsmith` (Windows).
 /// Delegates to [`data_directory_from_env`] until every caller uses `DataDirectory` (deleted in Phase 11).
 pub fn home() -> Result<PathBuf> {
     Ok(data_directory_from_env().root()?)
-}
-
-/// The user's home directory (not the tabsmith dir).
-pub fn user_home() -> Result<PathBuf> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .or_else(|| std::env::var_os("HOME"))
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .context("could not determine the home directory")
 }
 
 /// Delegates to [`data_directory_from_env`] until every caller uses `DataDirectory` (deleted in Phase 11).

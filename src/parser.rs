@@ -11,6 +11,7 @@ use crate::spec::{
 };
 use crate::specs::SpecIndex;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;
 use serde_json::{Map, Value};
 use std::cmp::Ordering;
@@ -327,7 +328,7 @@ fn spec_file(loc: &SpecLocation, ctx: &ParseCtx) -> Option<PathBuf> {
         SpecLocation::Global { name } => crate::specs::resolve(name, ctx.settings, ctx.index),
         SpecLocation::Local { dir, name } => {
             let dir = match dir.strip_prefix("~") {
-                Ok(rest) => crate::settings::user_home().ok()?.join(rest),
+                Ok(rest) => user_home_from_env().ok()?.join(rest),
                 Err(_) => dir.clone(),
             };
             let build = dir.join(".fig").join("autocomplete").join("build");

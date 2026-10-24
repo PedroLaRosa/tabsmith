@@ -1,3 +1,4 @@
+use crate::shared::domain::shared_error::SharedError;
 use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -6,6 +7,15 @@ use std::path::PathBuf;
 /// `USERPROFILE`). Never fails: an unknown home surfaces from the paths that need it.
 pub(crate) fn data_directory_from_env() -> DataDirectory {
     data_directory_from(|name| std::env::var_os(name))
+}
+
+/// The user's home directory (not the tabsmith dir).
+pub(crate) fn user_home_from_env() -> Result<PathBuf, SharedError> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .or_else(|| std::env::var_os("HOME"))
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+        .ok_or(SharedError::UserHomeNotFound)
 }
 
 fn data_directory_from(env: impl Fn(&str) -> Option<OsString>) -> DataDirectory {
@@ -32,7 +42,6 @@ fn settings_file_from(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::domain::shared_error::SharedError;
 
     fn env_with(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
         let vars: Vec<(String, OsString)> = vars
