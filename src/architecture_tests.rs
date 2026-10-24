@@ -84,6 +84,21 @@ fn uses_forbidden_external_crate(code: &str, external_crates: &[String]) -> bool
         .any(|name| code.contains(&format!("{name}::")))
 }
 
+/// Crate names (`-` read as `_`) from `[dependencies]` and every `[target.*.dependencies]` table.
+fn external_crates(cargo_toml: &str) -> Vec<String> {
+    let mut in_dependency_table = false;
+    let mut names = Vec::new();
+    for line in cargo_toml.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_dependency_table = line == "[dependencies]"
+                || (line.starts_with("[target.") && line.ends_with(".dependencies]"));
+        } else if let Some((name, _)) = line.split_once('=').filter(|_| in_dependency_table) {
+            names.push(name.trim().replace('-', "_"));
+        }
+    }
+    names
+}
+
 mod tests {
     use super::*;
 
@@ -242,6 +257,21 @@ mod tests {
                 Violation { line: 3, rule: Rule::SharedKernel },
             ]
         );
+    }
+
+    #[test]
+    fn should_read_external_crate_names_from_every_dependency_table() {
+        let cargo_toml = "[package]\nname = \"tabsmith\"\n\n\
+                          [features]\ndefault = [\"embed-specs\"]\n\n\
+                          [dependencies]\nanyhow = \"1\"\nunicode-width = \"0.2\"\n\n\
+                          [target.'cfg(unix)'.dependencies]\nsignal-hook = \"0.3\"\n\n\
+                          [target.'cfg(windows)'.dependencies]\n\
+                          windows-sys = { version = \"0.59\", features = [\"Win32_Foundation\"] }\n\n\
+                          [profile.release]\nlto = true\n";
+
+        let names = external_crates(cargo_toml);
+
+        assert_eq!(names, ["anyhow", "unicode_width", "signal_hook", "windows_sys"]);
     }
 
     #[test]
