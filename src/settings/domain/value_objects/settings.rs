@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 /// Immutable snapshot of the user's settings, cheap to clone and shared across threads.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub(crate) struct Settings(Arc<BTreeMap<String, SettingValue>>);
 
 impl Settings {
