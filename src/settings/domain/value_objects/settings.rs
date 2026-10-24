@@ -75,4 +75,14 @@ mod tests {
 
         assert!(enabled);
     }
+
+    /// `settings inline.enabled '"false"'` stores text, which leaves ghost text on.
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_a_bool_of_the_wrong_type() {
+        let settings = settings_with(&[(INLINE_ENABLED, SettingValue::Text("false".to_string()))]);
+
+        let enabled = settings.bool(INLINE_ENABLED);
+
+        assert!(enabled);
+    }
 }
