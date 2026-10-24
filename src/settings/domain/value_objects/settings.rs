@@ -64,6 +64,11 @@ impl Settings {
             .unwrap_or_default()
     }
 
+    /// Every key the user set with its value, in key order.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&str, &SettingValue)> {
+        self.0.iter().map(|(key, value)| (key.as_str(), value))
+    }
+
     /// The user's keys with the given prefix, prefix stripped, in key order (e.g. `autocomplete.keybindings.`).
     pub(crate) fn with_prefix<'a>(
         &'a self,
@@ -408,5 +413,24 @@ mod tests {
         let updated = settings.without(INLINE_SOURCE);
 
         assert_eq!(updated.get(INLINE_SOURCE), None);
+    }
+
+    /// settings.json is written from these entries, keys sorted as serde_json writes them.
+    #[test]
+    fn should_give_every_entry_it_holds_in_key_order() {
+        let settings = settings_with(&[
+            (INLINE_ENABLED, SettingValue::Bool(false)),
+            (AUTOCOMPLETE_THEME, SettingValue::Text("light".to_string())),
+        ]);
+
+        let entries: Vec<_> = settings.entries().collect();
+
+        assert_eq!(
+            entries,
+            [
+                (AUTOCOMPLETE_THEME, &SettingValue::Text("light".to_string())),
+                (INLINE_ENABLED, &SettingValue::Bool(false)),
+            ]
+        );
     }
 }
