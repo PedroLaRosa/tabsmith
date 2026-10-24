@@ -1,6 +1,7 @@
 use std::fmt;
 
-/// Why the settings could not be loaded or saved.
+/// Why a settings command failed: the settings could not be loaded or saved, a delete matched nothing, or the
+/// settings file could not be opened in an editor.
 #[derive(Debug)]
 pub(crate) enum SettingsError {
     /// The settings file could not be located, read, parsed or written. Shown as the storage's own error.
@@ -14,11 +15,10 @@ pub(crate) enum SettingsError {
 impl fmt::Display for SettingsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SettingsError::Storage(error) => write!(f, "{error}"),
+            SettingsError::Storage(error) | SettingsError::Editor(error) => write!(f, "{error}"),
             SettingsError::NoMatchingSettings(pattern) => {
                 write!(f, "No settings found matching {pattern}")
             }
-            SettingsError::Editor(error) => write!(f, "{error}"),
         }
     }
 }
