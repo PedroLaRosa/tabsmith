@@ -77,10 +77,14 @@ fn relative_path(src: &Path, file: &Path) -> String {
 }
 
 /// The rules `source` breaks, line by line; `path` is relative to `src` and `/`-separated (`<module>/<layer>/..`).
+/// Test-only code keeps the shared kernel rule only.
 fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Violation> {
     let mut components = path.split('/');
     let module = components.next().unwrap_or_default();
     let layer = components.next();
+    // ponytail: a `tests.rs` file is taken to be the body of a `#[cfg(test)] mod tests;` (the plan's sibling test
+    // file); read the parent's declaration if a production file is ever named `tests.rs`.
+    let test_file = path.ends_with("/tests.rs");
     let mut open_braces = Vec::new();
     let mut test_only_item = TestOnlyItem::default();
     let mut found = Vec::new();
@@ -88,7 +92,7 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
         let code = line.find("//").map_or(line, |comment| &line[..comment]);
         test_only_item.open_at(code, open_braces.len());
         let paths = paths_in(code, &mut open_braces);
-        let production = !test_only_item.holds(code, open_braces.len());
+        let production = !test_only_item.holds(code, open_braces.len()) && !test_file;
         let checks = [
             (
                 Rule::DomainLayer,
@@ -549,6 +553,39 @@ mod tests {
                 Violation { line: 3, rule: Rule::DomainLayer },
                 Violation { line: 6, rule: Rule::DomainLayer },
                 Violation { line: 12, rule: Rule::DomainLayer },
+            ]
+        );
+    }
+
+    #[test]
+    fn should_not_apply_the_layer_rules_to_the_sibling_tests_file_of_a_test_module() {
+        let source = "use super::*;\n\
+                      use serde_json::json;\n\
+                      use crate::settings::infrastructure::json_file_settings_repository::JsonFileSettingsRepository;\n";
+
+        let found = violations_in("settings/domain/settings/tests.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_keep_the_shared_kernel_rule_in_test_only_code() {
+        let module = "#[cfg(test)]\n\
+                      mod tests {\n    \
+                      use crate::settings::Settings;\n\
+                      }\n";
+        let tests_file = "use crate::integrations::Ctx;\n";
+
+        let found = [
+            violations_in("shared/infrastructure/json_document_store.rs", module),
+            violations_in("shared/infrastructure/json_document_store/tests.rs", tests_file),
+        ];
+
+        assert_eq!(
+            found,
+            [
+                vec![Violation { line: 3, rule: Rule::SharedKernel }],
+                vec![Violation { line: 1, rule: Rule::SharedKernel }],
             ]
         );
     }
