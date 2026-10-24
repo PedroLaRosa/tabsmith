@@ -238,4 +238,19 @@ mod tests {
 
         assert_eq!(written, map);
     }
+
+    /// Loading and saving settings.json must not rewrite a single number, however it was spelled.
+    #[test]
+    fn should_write_back_exactly_the_settings_file_text_it_read() {
+        let text = r#"{"a": 18446744073709551615, "b": -9223372036854775808, "c": -0, "d": 1e3,
+            "e": 0.1, "f": 1.7976931348623157e308, "g": [0, -1, 2.5e-7], "h": {"z": "\u00e9", "a": ""}}"#;
+        let Value::Object(map) = serde_json::from_str::<Value>(text).unwrap() else {
+            unreachable!()
+        };
+        let original = serde_json::to_string_pretty(&map).unwrap();
+
+        let written = serde_json::to_string_pretty(&settings_to_json(&settings_from_json(map))).unwrap();
+
+        assert_eq!(written, original);
+    }
 }
