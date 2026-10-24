@@ -13,12 +13,16 @@ pub(crate) trait Clock {
 #[cfg(test)]
 pub(crate) struct FixedClock {
     now_ms: u64,
+    now_instant: Instant,
 }
 
 #[cfg(test)]
 impl FixedClock {
     pub(crate) fn new(now_ms: u64) -> Self {
-        FixedClock { now_ms }
+        FixedClock {
+            now_ms,
+            now_instant: Instant::now(),
+        }
     }
 }
 
@@ -29,7 +33,7 @@ impl Clock for FixedClock {
     }
 
     fn now_instant(&self) -> Instant {
-        unimplemented!()
+        self.now_instant
     }
 }
 
@@ -53,5 +57,16 @@ mod tests {
         let now = clock.now_secs();
 
         assert_eq!(now, 1_700_000_123);
+    }
+
+    #[test]
+    fn should_keep_its_monotonic_instant_still_while_real_time_passes() {
+        let clock = FixedClock::new(0);
+        let first = clock.now_instant();
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = clock.now_instant();
+
+        assert_eq!(first, second);
     }
 }
