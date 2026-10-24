@@ -56,6 +56,10 @@ impl DataDirectory {
     pub(crate) fn specs_dir(&self) -> Result<PathBuf, SharedError> {
         Ok(self.root()?.join("specs"))
     }
+
+    pub(crate) fn user_specs_dir(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("specs").join("user"))
+    }
 }
 
 #[cfg(test)]
@@ -171,5 +175,14 @@ mod tests {
         let path = data_directory.specs_dir();
 
         assert_eq!(path, Ok(PathBuf::from("/data/specs")));
+    }
+
+    #[test]
+    fn should_put_the_user_specs_directory_inside_the_specs_directory() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let path = data_directory.user_specs_dir();
+
+        assert_eq!(path, Ok(PathBuf::from("/data/specs/user")));
     }
 }
