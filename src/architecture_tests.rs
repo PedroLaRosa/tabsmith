@@ -22,7 +22,7 @@ impl Rule {
     fn description(self) -> &'static str {
         match self {
             Rule::DomainLayer => {
-                "domain uses application, infrastructure, bootstrap, an external crate, println!/eprintln! or logger::"
+                "domain uses application, infrastructure, bootstrap, an external crate, println!/eprintln! or the logger"
             }
             Rule::ApplicationLayer => "application uses infrastructure, bootstrap or an external crate",
             Rule::ModuleBoundary => "uses another module's use case or infrastructure",
@@ -76,6 +76,7 @@ fn relative_path(src: &Path, file: &Path) -> String {
     components.join("/")
 }
 
+/// The rules `source` breaks, line by line; `path` is relative to `src` and `/`-separated (`<module>/<layer>/..`).
 fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Violation> {
     let mut components = path.split('/');
     let module = components.next().unwrap_or_default();
@@ -106,6 +107,8 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
 /// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`. A member of
 /// a `use a::{..}` group gets the `a` prefix. `open_braces` holds each open brace's prefix across lines (empty for
 /// a block).
+// ponytail: a line scanner, not a Rust parser. String literals are read as code, only `//` comments are skipped,
+// and `super::`-relative paths are not resolved. Switch to a real parser if a false hit or a miss ever shows up.
 fn paths_in<'a>(code: &'a str, open_braces: &mut Vec<Vec<&'a str>>) -> Vec<Vec<&'a str>> {
     let mut paths = Vec::new();
     for piece in code.split_inclusive(|c: char| !is_path_char(c)) {
