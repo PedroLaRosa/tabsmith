@@ -101,8 +101,11 @@ fn rename_failure(path: &Path) -> impl FnOnce(std::io::Error) -> AtomicFileError
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
+    #[cfg(unix)]
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    #[cfg(unix)]
     use serde_json::Map;
 
     /// The write_private half of the `_ pre-cmd` run file scenario (the SessionCtx round trip stays in
