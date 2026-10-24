@@ -1,3 +1,5 @@
+pub(crate) mod atomic_file;
+pub(crate) mod atomic_file_error;
 pub(crate) mod data_directory_from_env;
 pub(crate) mod logger;
 pub(crate) mod os;

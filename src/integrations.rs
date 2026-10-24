@@ -1583,10 +1583,11 @@ mod tests {
         );
     }
 
+    /// The file modes and the purge guard of this scenario are asserted in shared atomic_file.rs
+    /// (`integrations_pre_cmd_file`); this half keeps the SessionCtx round trip.
     #[cfg(unix)]
     #[test]
-    fn integrations_pre_cmd_file() {
-        use std::os::unix::fs::PermissionsExt;
+    fn integrations_pre_cmd_file_session_ctx() {
         let temp_dir = TempDir::new("precmd");
         let dir = temp_dir.path().to_path_buf();
         let path = dir.join("run").join("abc123.json");
@@ -1601,21 +1602,6 @@ mod tests {
             (back.env["A"].as_str(), back.alias.as_deref(), back.ts),
             ("1", Some("ll='ls -l'"), 7)
         );
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        assert_eq!(
-            std::fs::metadata(dir.join("run"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
-        // A purged data root stays gone: a running session's next prompt does not recreate it.
-        assert!(write_private(&dir.join("purged").join("run").join("abc123.json"), b"{}").is_err());
-        assert!(!dir.join("purged").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 
