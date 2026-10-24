@@ -58,6 +58,17 @@ impl SettingValue {
         }
     }
 
+    pub(crate) fn as_object(&self) -> Option<&BTreeMap<String, SettingValue>> {
+        match self {
+            SettingValue::Object(fields) => Some(fields),
+            SettingValue::Null
+            | SettingValue::Bool(_)
+            | SettingValue::Number(_)
+            | SettingValue::Text(_)
+            | SettingValue::List(_) => None,
+        }
+    }
+
     fn as_number(&self) -> Option<&SettingNumber> {
         match self {
             SettingValue::Number(number) => Some(number),
@@ -164,5 +175,16 @@ mod tests {
         let read = value.as_list();
 
         assert_eq!(read, Some(items.as_slice()));
+    }
+
+    /// An `inline.profiles.<name>` object.
+    #[test]
+    fn should_read_an_object_value_as_its_fields() {
+        let fields = BTreeMap::from([("model".to_string(), SettingValue::Text("m".to_string()))]);
+        let value = SettingValue::Object(fields.clone());
+
+        let read = value.as_object();
+
+        assert_eq!(read, Some(&fields));
     }
 }
