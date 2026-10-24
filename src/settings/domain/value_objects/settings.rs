@@ -329,4 +329,49 @@ mod tests {
 
         assert_eq!(profiles, 0);
     }
+
+    /// The getters read the catalog's literals without serde_json, so they must agree with serde_json's reading:
+    /// a literal with an escape, a fraction or a non-empty list would show up here.
+    #[test]
+    fn should_read_every_catalog_default_the_way_serde_json_reads_its_literal() {
+        let settings = Settings::default();
+        let read_by_serde_json = |literal: &str| {
+            let json: serde_json::Value = serde_json::from_str(literal).unwrap();
+            let strings: Vec<String> = json
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (
+                json.as_bool().unwrap_or_default(),
+                json.as_str().map(String::from),
+                json.as_i64().unwrap_or_default(),
+                json.as_f64().unwrap_or_default(),
+                strings,
+            )
+        };
+
+        let mismatches: Vec<_> = catalog()
+            .iter()
+            .filter(|definition| !definition.default().is_empty())
+            .filter(|definition| {
+                let key = definition.key();
+                let read = (
+                    settings.bool(key),
+                    settings.string(key).map(String::from),
+                    settings.i64(key),
+                    settings.f64(key),
+                    settings.str_list(key),
+                );
+                read != read_by_serde_json(definition.default())
+            })
+            .map(|definition| definition.key())
+            .collect();
+
+        assert!(mismatches.is_empty(), "{mismatches:?}");
+    }
 }
