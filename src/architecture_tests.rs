@@ -55,8 +55,7 @@ fn breaks_application_layer(code: &str, external_crates: &[String]) -> bool {
 
 /// Another module's use cases and adapters are reached only through bootstrap.
 fn crosses_module_boundary(own_module: &str, code: &str) -> bool {
-    code.match_indices("crate::").any(|(at, prefix)| {
-        let mut segments = code[at + prefix.len()..].split("::");
+    crate_paths(code).any(|mut segments| {
         let module = segments.next();
         let reached = match segments.next() {
             Some("infrastructure") => true,
@@ -69,10 +68,13 @@ fn crosses_module_boundary(own_module: &str, code: &str) -> bool {
 
 /// The kernel never imports a feature or legacy module.
 fn leaves_the_shared_kernel(code: &str) -> bool {
-    code.match_indices("crate::").any(|(at, prefix)| {
-        let module = code[at + prefix.len()..].split("::").next();
-        module != Some("shared")
-    })
+    crate_paths(code).any(|mut segments| segments.next() != Some("shared"))
+}
+
+/// The `::`-separated segments after each `crate::` in `code`.
+fn crate_paths(code: &str) -> impl Iterator<Item = std::str::Split<'_, &str>> {
+    code.match_indices("crate::")
+        .map(move |(at, prefix)| code[at + prefix.len()..].split("::"))
 }
 
 fn uses_forbidden_external_crate(code: &str, external_crates: &[String]) -> bool {
