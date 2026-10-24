@@ -101,7 +101,15 @@ impl Splitter {
                 self.name.push(b);
                 self.end_name(bytes, pieces);
             }
-            State::Name => self.name.push(b),
+            State::Name => {
+                self.name.push(b);
+                if self.name.len() > OSC_MAX {
+                    // Still a name for tmux, so still not for the model. ponytail: a frame may now land inside it;
+                    // nothing names a window this long.
+                    let name = std::mem::take(&mut self.name);
+                    emit(Piece::WindowName(name), bytes, pieces);
+                }
+            }
             State::NameEsc if b == b'\\' => {
                 self.name.extend_from_slice(b"\x1b\\");
                 self.end_name(bytes, pieces);
@@ -1180,6 +1188,18 @@ mod tests {
         let p = split_all(&[b"D\x1bkfoo\x18E", b"\x1bkbar\x1aF"]);
 
         assert_eq!(bytes_of(&p), b"DEF");
+    }
+
+    #[test]
+    fn splitter_flushes_huge_window_name_to_the_terminal_only() {
+        let mut s = Splitter::default();
+        let mut big = b"\x1bk".to_vec();
+        big.extend(std::iter::repeat_n(b'x', OSC_MAX + 10));
+
+        let p = s.feed(&big);
+
+        assert!(bytes_of(&p).is_empty());
+        assert!(matches!(&p[..], [Piece::WindowName(n)] if n.len() > OSC_MAX));
     }
 
     #[test]
