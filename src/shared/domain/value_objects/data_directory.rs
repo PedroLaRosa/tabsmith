@@ -48,6 +48,10 @@ impl DataDirectory {
     pub(crate) fn shell_dir(&self) -> Result<PathBuf, SharedError> {
         Ok(self.root()?.join("shell"))
     }
+
+    pub(crate) fn backups_dir(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("backups"))
+    }
 }
 
 #[cfg(test)]
@@ -145,5 +149,14 @@ mod tests {
         let path = data_directory.shell_dir();
 
         assert_eq!(path, Ok(PathBuf::from("/data/shell")));
+    }
+
+    #[test]
+    fn should_put_the_backups_directory_under_the_root() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let path = data_directory.backups_dir();
+
+        assert_eq!(path, Ok(PathBuf::from("/data/backups")));
     }
 }
