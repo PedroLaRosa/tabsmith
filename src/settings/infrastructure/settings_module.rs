@@ -7,20 +7,28 @@ use crate::settings::application::set_setting_use_case::SetSettingUseCase;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::adapters::system_settings_editor::SystemSettingsEditor;
+use crate::shared::domain::shared_error::SharedError;
 use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 /// The settings use cases over settings.json (or the file `TABSMITH_SETTINGS_PATH` names) and the system editor.
 pub(crate) struct SettingsModule {
-    /// Where the settings file is: the settings command locates it before anything else.
-    pub(crate) data_directory: DataDirectory,
+    data_directory: DataDirectory,
     pub(crate) get_setting: GetSettingUseCase,
     pub(crate) set_setting: SetSettingUseCase,
     pub(crate) delete_settings: DeleteSettingsUseCase,
     pub(crate) list_settings: ListSettingsUseCase,
     pub(crate) list_setting_definitions: ListSettingDefinitionsUseCase,
     pub(crate) open_settings_file: OpenSettingsFileUseCase,
+}
+
+impl SettingsModule {
+    /// Where the settings file is, or the "no home" error: the settings command locates it before anything else.
+    pub(crate) fn locate_settings_file(&self) -> Result<PathBuf, SharedError> {
+        self.data_directory.settings_file()
+    }
 }
 
 pub(crate) fn build_settings_module(dependencies: &SharedDependencies) -> SettingsModule {

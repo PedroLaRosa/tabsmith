@@ -61,7 +61,7 @@ pub(crate) fn run_settings_command(
     print_root_help: impl FnOnce() -> Result<()>,
 ) -> Result<i32> {
     // Located before anything else, as always: with no home and no TABSMITH_SETTINGS_PATH every form fails here.
-    module.data_directory.settings_file()?;
+    module.locate_settings_file()?;
     match args.cmd {
         Some(SettingsCmd::Open) => {
             let exited_successfully = module.open_settings_file.execute()?;
