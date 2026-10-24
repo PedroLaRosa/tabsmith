@@ -83,14 +83,18 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let mut found = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let code = line.find("//").map_or(line, |comment| &line[..comment]);
+        let paths = paths_in(code);
         let checks = [
-            (Rule::DomainLayer, layer == Some("domain") && breaks_domain_layer(code, external_crates)),
+            (
+                Rule::DomainLayer,
+                layer == Some("domain") && breaks_domain_layer(code, &paths, external_crates),
+            ),
             (
                 Rule::ApplicationLayer,
-                layer == Some("application") && breaks_application_layer(code, external_crates),
+                layer == Some("application") && breaks_application_layer(&paths, external_crates),
             ),
-            (Rule::ModuleBoundary, crosses_module_boundary(module, code)),
-            (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(code)),
+            (Rule::ModuleBoundary, crosses_module_boundary(module, &paths)),
+            (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(&paths)),
         ];
         let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
         found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
@@ -98,49 +102,48 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     found
 }
 
-/// The domain is std plus unicode-width: no other layer, no composition root, no external crate, no output.
-fn breaks_domain_layer(code: &str, external_crates: &[String]) -> bool {
-    breaks_application_layer(code, external_crates)
-        || code.contains("::application")
-        || code.contains("println!")
-        || code.contains("logger::")
+/// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`.
+fn paths_in(code: &str) -> Vec<Vec<&str>> {
+    code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+        .filter(|chunk| chunk.contains("::"))
+        .map(|chunk| chunk.split("::").filter(|segment| !segment.is_empty()).collect::<Vec<_>>())
+        .filter(|path| !path.is_empty())
+        .collect()
 }
 
-fn breaks_application_layer(code: &str, external_crates: &[String]) -> bool {
-    code.contains("::infrastructure")
-        || code.contains("crate::bootstrap")
-        || uses_forbidden_external_crate(code, external_crates)
+/// The domain is std plus unicode-width: no other layer, no composition root, no external crate, no output.
+fn breaks_domain_layer(code: &str, paths: &[Vec<&str>], external_crates: &[String]) -> bool {
+    code.contains("println!")
+        || breaks_application_layer(paths, external_crates)
+        || paths.iter().any(|path| path.contains(&"application") || path.contains(&"logger"))
+}
+
+fn breaks_application_layer(paths: &[Vec<&str>], external_crates: &[String]) -> bool {
+    paths.iter().any(|path| {
+        path.contains(&"infrastructure")
+            || path.starts_with(&["crate", "bootstrap"])
+            || is_forbidden_external_crate(path[0], external_crates)
+    })
+}
+
+fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
+    !ALLOWED_EXTERNAL_CRATES.contains(&root) && external_crates.iter().any(|name| name == root)
 }
 
 /// Another module's use cases and adapters are reached only through bootstrap.
-fn crosses_module_boundary(own_module: &str, code: &str) -> bool {
-    crate_paths(code).any(|mut segments| {
-        let module = segments.next();
-        let reached = match segments.next() {
-            Some("infrastructure") => true,
-            Some("application") => segments.any(|segment| segment.ends_with("_use_case")),
-            _ => false,
-        };
-        module != Some(own_module) && reached
+fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
+    paths.iter().any(|path| match path.as_slice() {
+        ["crate", module, "infrastructure", ..] => *module != own_module,
+        ["crate", module, "application", rest @ ..] => {
+            *module != own_module && rest.iter().any(|segment| segment.ends_with("_use_case"))
+        }
+        _ => false,
     })
 }
 
 /// The kernel never imports a feature or legacy module.
-fn leaves_the_shared_kernel(code: &str) -> bool {
-    crate_paths(code).any(|mut segments| segments.next() != Some("shared"))
-}
-
-/// The `::`-separated segments after each `crate::` in `code`.
-fn crate_paths(code: &str) -> impl Iterator<Item = std::str::Split<'_, &str>> {
-    code.match_indices("crate::")
-        .map(move |(at, prefix)| code[at + prefix.len()..].split("::"))
-}
-
-fn uses_forbidden_external_crate(code: &str, external_crates: &[String]) -> bool {
-    external_crates
-        .iter()
-        .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
-        .any(|name| code.contains(&format!("{name}::")))
+fn leaves_the_shared_kernel(paths: &[Vec<&str>]) -> bool {
+    paths.iter().any(|path| matches!(path.as_slice(), ["crate", module, ..] if *module != "shared"))
 }
 
 /// Crate names (`-` read as `_`) from `[dependencies]` and every `[target.*.dependencies]` table.
@@ -243,6 +246,18 @@ mod tests {
         let source = "//! Built by crate::bootstrap, printed with println!.\n\
                       /// Same rules as crate::settings::application::set_setting_use_case.\n\
                       let width = text.len(); // serde::Serialize would leak here\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_match_whole_path_segments_only() {
+        let source = "use crate::settings::domain::application_state::ApplicationState;\n\
+                      let text = my_serde::to_text(&state);\n\
+                      let probe = crate::bootstrapping::Probe;\n\
+                      let name = event_logger::name();\n";
 
         let found = violations_in("settings/domain/settings.rs", source);
 
