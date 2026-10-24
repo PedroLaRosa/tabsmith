@@ -41,9 +41,11 @@ impl Settings {
             .unwrap_or_default()
     }
 
+    /// The user's number (integers too), else the catalog default; `0.0` when the catalog has none.
     pub(crate) fn f64(&self, key: &str) -> f64 {
         self.get(key)
             .and_then(SettingValue::as_f64)
+            .or_else(|| catalog_default(key))
             .unwrap_or_default()
     }
 }
@@ -203,5 +205,14 @@ mod tests {
         let height = settings.f64(AUTOCOMPLETE_HEIGHT);
 
         assert_eq!(height, 5.0);
+    }
+
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_a_number_the_user_did_not_set() {
+        let settings = Settings::default();
+
+        let height = settings.f64(AUTOCOMPLETE_HEIGHT);
+
+        assert_eq!(height, 7.0);
     }
 }
