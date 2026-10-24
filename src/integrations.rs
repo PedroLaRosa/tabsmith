@@ -319,7 +319,7 @@ pub fn pre_cmd(alias: Option<String>) -> anyhow::Result<i32> {
         ts: now_ms(),
     };
     let path = SessionCtx::path(&sid)?;
-    write_private(&path, serde_json::to_string(&ctx)?.as_bytes())?;
+    AtomicFile::new(&path).write_private(serde_json::to_string(&ctx)?.as_bytes())?;
     prune_run_files(path.parent().context("no parent directory")?);
     Ok(0)
 }
@@ -337,11 +337,6 @@ fn prune_run_files(dir: &Path) {
             let _ = std::fs::remove_file(e.path());
         }
     }
-}
-
-/// See [`AtomicFile::write_private`]. Callers switch to it in Phase 4.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    Ok(AtomicFile::new(path).write_private(bytes)?)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1566,7 +1561,7 @@ mod tests {
             alias: Some("ll='ls -l'".into()),
             ts: 7,
         };
-        write_private(&path, serde_json::to_string(&ctx).unwrap().as_bytes()).unwrap();
+        AtomicFile::new(&path).write_private(serde_json::to_string(&ctx).unwrap().as_bytes()).unwrap();
         let back = SessionCtx::load(&path).unwrap();
         assert_eq!(
             (back.env["A"].as_str(), back.alias.as_deref(), back.ts),
