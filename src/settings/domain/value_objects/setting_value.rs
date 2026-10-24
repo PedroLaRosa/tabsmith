@@ -34,6 +34,29 @@ impl SettingValue {
             | SettingValue::Object(_) => None,
         }
     }
+
+    pub(crate) fn as_i64(&self) -> Option<i64> {
+        self.as_number()?.as_i64()
+    }
+
+    pub(crate) fn as_u64(&self) -> Option<u64> {
+        self.as_number()?.as_u64()
+    }
+
+    pub(crate) fn as_f64(&self) -> Option<f64> {
+        self.as_number()?.as_f64()
+    }
+
+    fn as_number(&self) -> Option<&SettingNumber> {
+        match self {
+            SettingValue::Number(number) => Some(number),
+            SettingValue::Null
+            | SettingValue::Bool(_)
+            | SettingValue::Text(_)
+            | SettingValue::List(_)
+            | SettingValue::Object(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -109,5 +132,16 @@ mod tests {
         let read = value.as_str();
 
         assert_eq!(read, Some("dark"));
+    }
+
+    /// `inline.historyCount: 10.0` is no i64 and `inline.profiles.*.max_tokens: -1` is no u64.
+    #[test]
+    fn should_read_a_number_value_the_way_its_setting_number_reads() {
+        let number = SettingNumber::from(-3i64);
+        let value = SettingValue::Number(number);
+
+        let read = (value.as_i64(), value.as_u64(), value.as_f64());
+
+        assert_eq!(read, (number.as_i64(), number.as_u64(), number.as_f64()));
     }
 }
