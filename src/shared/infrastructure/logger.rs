@@ -3,7 +3,7 @@ use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Level {
+pub(crate) enum Level {
     Error = 1,
     Warn,
     Info,
@@ -31,8 +31,9 @@ fn parse_level(s: &str) -> Option<Level> {
     })
 }
 
-/// `name` = log file stem (`cli` or `pty`); `verbose` = count of `-v`; `stderr` mirrors records when `-v` was given.
-pub fn init(name: &str, verbose: u8, stderr: bool) {
+/// `name` = log file stem (`cli` or `pty`); `verbose` = count of `-v`; `stderr` mirrors records when `-v` was given;
+/// `data_root` = the data directory, `None` when it cannot be resolved (then there is no log file).
+pub(crate) fn init(name: &str, verbose: u8, stderr: bool, data_root: Option<std::path::PathBuf>) {
     let level = match verbose {
         0 => std::env::var("TABSMITH_LOG_LEVEL")
             .ok()
@@ -43,9 +44,7 @@ pub fn init(name: &str, verbose: u8, stderr: bool) {
         3 => Level::Debug,
         _ => Level::Trace,
     };
-    let file = crate::settings::home()
-        .ok()
-        .and_then(|home| open_log(&home.join("logs"), name));
+    let file = data_root.and_then(|home| open_log(&home.join("logs"), name));
     let session = std::env::var("TABSMITH_SESSION_ID").unwrap_or_else(|_| "-".into());
     let _ = LOGGER.set(Logger {
         file: file.map(Mutex::new),
@@ -81,11 +80,11 @@ fn open_log(dir: &std::path::Path, name: &str) -> Option<std::fs::File> {
     Some(file)
 }
 
-pub fn enabled(level: Level) -> bool {
+pub(crate) fn enabled(level: Level) -> bool {
     LOGGER.get().is_some_and(|l| level <= l.level)
 }
 
-pub fn log(level: Level, msg: &str) {
+pub(crate) fn log(level: Level, msg: &str) {
     let Some(l) = LOGGER.get() else { return };
     if level > l.level {
         return;
@@ -105,32 +104,31 @@ pub fn log(level: Level, msg: &str) {
     }
 }
 
-pub fn error(msg: &str) {
+pub(crate) fn error(msg: &str) {
     log(Level::Error, msg)
 }
-pub fn warn(msg: &str) {
+pub(crate) fn warn(msg: &str) {
     log(Level::Warn, msg)
 }
-pub fn info(msg: &str) {
+pub(crate) fn info(msg: &str) {
     log(Level::Info, msg)
 }
-pub fn debug(msg: &str) {
+pub(crate) fn debug(msg: &str) {
     log(Level::Debug, msg)
 }
-pub fn trace(msg: &str) {
+pub(crate) fn trace(msg: &str) {
     log(Level::Trace, msg)
 }
 
 #[cfg(all(test, unix))]
 mod tests {
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn log_files_are_private() {
-        let dir = std::env::temp_dir()
-            .join(format!("tabsmith-logger-{}", std::process::id()))
-            .join("logs");
-        let _ = std::fs::remove_dir_all(&dir);
+        let temp_dir = TempDir::new("logger");
+        let dir = temp_dir.path().join("logs");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(dir.join("old.log"), "x\n").unwrap();

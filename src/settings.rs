@@ -1,4 +1,5 @@
 //! Paths, the flat-JSON settings/state store, typed getters and the settings catalog (SPEC §3).
+use crate::shared::infrastructure::logger;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -102,7 +103,7 @@ impl Settings {
         match Store::load_settings() {
             Ok(s) => Settings(Arc::new(s.map)),
             Err(e) => {
-                crate::logger::warn(&format!("settings: {e:#}"));
+                logger::warn(&format!("settings: {e:#}"));
                 Settings::default()
             }
         }
@@ -395,9 +396,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn save_keeps_a_symlinked_file() {
-        let dir =
-            std::env::temp_dir().join(format!("tabsmith-settings-symlink-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let temp_dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("settings-symlink");
+        let dir = temp_dir.path().to_path_buf();
         std::fs::create_dir_all(dir.join("dots")).unwrap();
         std::fs::write(dir.join("dots/settings.json"), "{\"a\":1}").unwrap();
         let link = dir.join("settings.json");

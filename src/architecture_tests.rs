@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 /// Modules that follow the hexagonal layout; each phase registers the module it finishes. `bootstrap` is the
 /// composition root and is never registered.
-const REGISTERED_MODULES: &[&str] = &[];
+const REGISTERED_MODULES: &[&str] = &["shared"];
 
 /// External crates the inner layers may use. std, core and alloc are not in Cargo.toml, so they are never flagged.
 const ALLOWED_EXTERNAL_CRATES: &[&str] = &["unicode_width"];

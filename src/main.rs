@@ -13,7 +13,6 @@ mod inline;
 mod integrations;
 mod js;
 mod keys;
-mod logger;
 mod menu;
 mod parser;
 mod pty;
@@ -29,11 +28,17 @@ mod types;
 
 use bootstrap::cli::Cli;
 use clap::Parser;
+use shared::infrastructure::logger;
 
 fn main() {
     let cli = Cli::parse();
     let is_pty = cli.runs_pty();
-    logger::init(if is_pty { "pty" } else { "cli" }, cli.verbose(), !is_pty);
+    logger::init(
+        if is_pty { "pty" } else { "cli" },
+        cli.verbose(),
+        !is_pty,
+        settings::home().ok(),
+    );
 
     let result = bootstrap::cli::run(cli);
 

@@ -1,7 +1,7 @@
 //! `tabsmith _ pty`: the PTY wrapper session (SPEC §4.3–4.5, §7.2.4, §7.3, §7.6, §8).
 //! OWNER: wrapper agent.
 use crate::keys::{self, Action, Binding, Key, KeyCode, Keymap, Mods};
-use crate::logger;
+use crate::shared::infrastructure::logger;
 use crate::menu::{Effect, Menu};
 use crate::render::{FrameInput, Renderer, Theme};
 use crate::settings::Settings;

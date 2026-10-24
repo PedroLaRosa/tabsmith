@@ -1,9 +1,10 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
-use crate::integrations::{
-    self, output_with_timeout, which, Ctx, Integration, IntegrationError, When,
-};
+use crate::integrations::{self, Ctx, Integration, IntegrationError, When};
 use crate::settings::{Settings, Store};
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::os::executable_lookup::which;
+use crate::shared::infrastructure::os::process_info;
+use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::types::now_secs;
 use clap::Args;
@@ -156,7 +157,7 @@ impl Run {
 }
 
 pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
-    if integrations::is_root() {
+    if process_info::is_root() {
         eprintln!(
             "{}",
             epaint("1;31", "Running doctor as root is not supported.")
@@ -173,7 +174,7 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
         }
     }
     let ctx = Ctx::from_env()?;
-    let parent = integrations::parent_exe();
+    let parent = process_info::parent_exe();
     let current = parent.as_deref().and_then(Shell::from_name);
     let mut r = Run {
         all: args.all,
@@ -437,8 +438,8 @@ fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
     {
         v.push(check("Windows Console Check", Kind::Normal, || {
             use std::os::windows::io::AsRawHandle;
-            if integrations::is_console(std::io::stdin().as_raw_handle())
-                && integrations::is_console(std::io::stdout().as_raw_handle())
+            if process_info::is_console(std::io::stdin().as_raw_handle())
+                && process_info::is_console(std::io::stdout().as_raw_handle())
             {
                 return Outcome::Ok;
             }
@@ -754,6 +755,7 @@ fn restore_cursor_on_ctrl_c() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use std::cell::Cell;
 
     fn run(all: bool, strict: bool) -> Run {
@@ -817,9 +819,8 @@ mod tests {
     /// setup: its orphaned script files are no longer checked.
     #[test]
     fn doctor_script_bins_skip_orphans() {
-        let dir =
-            std::env::temp_dir().join(format!("tabsmith-doctor-orphans-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let temp_dir = TempDir::new("doctor-orphans");
+        let dir = temp_dir.path().to_path_buf();
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(home.join(".bash_profile"), "").unwrap();

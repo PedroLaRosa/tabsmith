@@ -7,7 +7,7 @@
 //! finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, History, Source};
 use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId, TaskResult};
-use crate::logger;
+use crate::shared::infrastructure::logger;
 use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
 use crate::settings::{Settings, Store};
 use crate::shell_parser;
@@ -1205,15 +1205,12 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     #[test]
     fn recency_round_trip_keeps_other_keys() {
-        let dir = std::env::temp_dir().join(format!(
-            "tabsmith-engine-{}-{}",
-            std::process::id(),
-            now_ms()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let temp_dir = TempDir::new("engine");
+        let dir = temp_dir.path().to_path_buf();
         let path = dir.join("state.json");
         std::fs::write(&path, r#"{"doctor.prompt-restart-terminal": true}"#).unwrap();
         assert!(load_recency(&path).is_empty());
@@ -1239,7 +1236,7 @@ mod tests {
     #[test]
     fn recency_save_merges_other_sessions() {
         // recency-cross-session-overwrite: two sessions loaded the same file; neither drops the other's entry
-        let dir = crate::specs::testutil::TmpDir::new("recency");
+        let dir = TempDir::new("recency");
         let path = dir.path().join("state.json");
         std::fs::write(&path, "{}").unwrap();
         let one = |cmd: &str, name: &str, ts: u64| -> Recency {
@@ -1330,7 +1327,7 @@ mod tests {
     #[test]
     fn session_update_refreshes_first_token_items() {
         // first-token-cache-ignores-session-update: `alias zzal=…` at this prompt shows `zzal` at the next one
-        let dir = crate::specs::testutil::TmpDir::new("engine-session");
+        let dir = TempDir::new("engine-session");
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut e = Engine::with(
             tx,

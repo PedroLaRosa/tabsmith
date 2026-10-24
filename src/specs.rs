@@ -216,46 +216,16 @@ pub(crate) fn resolve_in(name: &str, roots: &[PathBuf], index: &SpecIndex) -> Op
     })
 }
 
-/// Test helpers shared with `js` tests: unique temp dirs and partial extraction of the real bundle.
-#[cfg(test)]
+/// Test helpers shared with `js` tests: partial extraction of the real bundle into temp dirs.
+#[cfg(all(test, feature = "embed-specs"))]
 pub(crate) mod testutil {
-    use std::path::{Path, PathBuf};
-
-    /// A unique temp dir, removed on drop.
-    pub struct TmpDir(pub PathBuf);
-
-    impl TmpDir {
-        pub fn new(tag: &str) -> TmpDir {
-            use std::sync::atomic::{AtomicU32, Ordering};
-            static N: AtomicU32 = AtomicU32::new(0);
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let p = std::env::temp_dir().join(format!(
-                "tabsmith-test-{tag}-{}-{nanos}-{}",
-                std::process::id(),
-                N.fetch_add(1, Ordering::Relaxed)
-            ));
-            std::fs::create_dir_all(&p).unwrap();
-            TmpDir(p)
-        }
-
-        pub fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TmpDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use std::path::Path;
 
     /// Unpack only `files` (paths inside the bundle, e.g. `git.js`) of the embedded archive into a temp dir.
     #[cfg(feature = "embed-specs")]
-    pub fn bundle_subset(files: &[&str]) -> TmpDir {
-        let dir = TmpDir::new("bundle");
+    pub fn bundle_subset(files: &[&str]) -> TempDir {
+        let dir = TempDir::new("bundle");
         let mut ar = tar::Archive::new(zstd::Decoder::new(super::ARCHIVE).unwrap());
         for entry in ar.entries().unwrap() {
             let mut entry = entry.unwrap();
@@ -270,8 +240,8 @@ pub(crate) mod testutil {
 
     /// The whole embedded bundle, extracted with the production code path into `<tmp>/x/`.
     #[cfg(feature = "embed-specs")]
-    pub fn full_bundle() -> TmpDir {
-        let root = TmpDir::new("bundle-all");
+    pub fn full_bundle() -> TempDir {
+        let root = TempDir::new("bundle-all");
         super::extract_to(super::ARCHIVE, root.path(), "x").unwrap();
         root
     }
@@ -279,7 +249,7 @@ pub(crate) mod testutil {
 
 #[cfg(test)]
 mod tests {
-    use super::testutil::TmpDir;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use super::*;
 
     fn tar_zst(files: &[(&str, &str)]) -> Vec<u8> {
@@ -296,7 +266,7 @@ mod tests {
 
     #[test]
     fn extract_renames_and_removes_other_versions() {
-        let root = TmpDir::new("extract");
+        let root = TempDir::new("extract");
         std::fs::create_dir_all(root.path().join("0.9.0")).unwrap();
         last_used(&root.path().join("0.9.0"), Duration::from_secs(8 * 86400));
         std::fs::create_dir_all(root.path().join("user")).unwrap();
@@ -348,7 +318,7 @@ mod tests {
     /// A version an older, still-running binary uses is kept; one unused for a week goes.
     #[test]
     fn extract_keeps_versions_in_use() {
-        let root = TmpDir::new("extract-live");
+        let root = TempDir::new("extract-live");
         for d in ["0.8.0", "0.9.0", "dev", "notes.tmp-1"] {
             std::fs::create_dir_all(root.path().join(d)).unwrap();
         }
@@ -365,7 +335,7 @@ mod tests {
     /// The temp dir of an extraction that died is removed; a live extractor's (recent) one is kept.
     #[test]
     fn extract_removes_abandoned_temp_dirs() {
-        let root = TmpDir::new("extract-tmp");
+        let root = TempDir::new("extract-tmp");
         for d in ["1.0.0.tmp-99999", "1.0.0.tmp-11111"] {
             std::fs::create_dir_all(root.path().join(d)).unwrap();
         }
@@ -379,15 +349,15 @@ mod tests {
 
     #[test]
     fn extract_error_cleans_temp() {
-        let root = TmpDir::new("extract-bad");
+        let root = TempDir::new("extract-bad");
         assert!(extract_to(b"not zstd", root.path(), "1.0.0").is_err());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 
     #[test]
     fn index_merges_user_stems() {
-        let bundle = TmpDir::new("index");
-        let user = TmpDir::new("index-user");
+        let bundle = TempDir::new("index");
+        let user = TempDir::new("index-user");
         std::fs::write(
             bundle.path().join("index.json"),
             r#"{"completions":["git","az"],"diffVersionedCompletions":["az"]}"#,
@@ -411,7 +381,7 @@ mod tests {
 
     #[test]
     fn resolve_order() {
-        let t = TmpDir::new("resolve");
+        let t = TempDir::new("resolve");
         let (dev, user, bundle) = (
             t.path().join("dev"),
             t.path().join("user"),
@@ -463,7 +433,7 @@ mod tests {
         let stem = format!("tabsmith-drive-rel-{}", std::process::id());
         let planted = cwd.join(format!("{stem}.js"));
         std::fs::write(&planted, "").unwrap();
-        let root = TmpDir::new("drive");
+        let root = TempDir::new("drive");
         let r = resolve_in(
             &format!("{drive}:{stem}"),
             &[root.path().to_path_buf()],

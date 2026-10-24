@@ -3,16 +3,22 @@
 //! OWNER: integrations agent. Shell scripts live in `shell/` and are embedded with `include_str!`.
 use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::logger;
+use crate::shared::infrastructure::os::executable_lookup::which;
+#[cfg(windows)]
+use crate::shared::infrastructure::os::process_info::is_console;
+use crate::shared::infrastructure::os::process_info::{exe_path, is_root, parent_exe};
+use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use std::collections::HashMap;
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum ShellArg {
@@ -120,150 +126,6 @@ pub struct UninstallArgs {
 // ---------------------------------------------------------------------------------------------------------------
 // Small shared helpers (also used by doctor)
 
-/// Unix euid 0.
-pub fn is_root() -> bool {
-    #[cfg(unix)]
-    {
-        // SAFETY: geteuid has no preconditions.
-        unsafe { libc::geteuid() == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
-}
-
-/// `GetConsoleMode` succeeds on `handle`.
-#[cfg(windows)]
-pub fn is_console(handle: std::os::windows::io::RawHandle) -> bool {
-    let mut mode = 0;
-    // SAFETY: plain query on a handle we own for the process lifetime; `mode` is a valid out pointer.
-    unsafe { windows_sys::Win32::System::Console::GetConsoleMode(handle as _, &mut mode) != 0 }
-}
-
-/// First `name` executable on PATH (Windows: tries PATHEXT extensions).
-pub fn which(name: &str) -> Option<PathBuf> {
-    let exts: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into())
-            .split(';')
-            .map(String::from)
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|dir| {
-        exts.iter()
-            .map(|e| dir.join(format!("{name}{e}")))
-            .find(|p| p.is_file())
-    })
-}
-
-/// Run `cmd` (stdin null, stderr ignored) and return its stdout; killed after `timeout`.
-pub fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<String> {
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let start = Instant::now();
-    while child.try_wait()?.is_none() {
-        if start.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("timed out after {}s", timeout.as_secs());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let mut out = String::new();
-    if let Some(mut s) = child.stdout.take() {
-        s.read_to_string(&mut out)?;
-    }
-    Ok(out)
-}
-
-/// Absolute path of the running tabsmith binary.
-pub fn exe_path() -> Result<String> {
-    Ok(std::env::current_exe()
-        .context("could not locate the tabsmith executable")?
-        .to_string_lossy()
-        .into_owned())
-}
-
-/// Executable path of the parent process (SPEC §2.11 `_ get-shell`).
-pub fn parent_exe() -> Option<String> {
-    #[cfg(target_os = "linux")]
-    {
-        // SAFETY: getppid has no preconditions.
-        let ppid = unsafe { libc::getppid() };
-        std::fs::read_link(format!("/proc/{ppid}/exe"))
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // SAFETY: getppid has no preconditions; proc_pidpath writes at most `buf.len()` bytes into `buf`.
-        let ppid = unsafe { libc::getppid() };
-        let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-        let n = unsafe { libc::proc_pidpath(ppid, buf.as_mut_ptr().cast(), buf.len() as u32) };
-        (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
-    }
-    #[cfg(windows)]
-    {
-        windows_parent_exe()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        None
-    }
-}
-
-/// Parent PID from a Toolhelp32 process snapshot, then its full image path.
-/// ponytail: Windows never re-parents, so a parent that already exited may have had its PID reused.
-#[cfg(windows)]
-fn windows_parent_exe() -> Option<String> {
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
-    use windows_sys::Win32::System::Threading::{
-        GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-    // SAFETY: plain Win32 calls; `entry.dwSize` is set as Process32FirstW requires, `buf`/`len` describe a valid
-    // buffer, and every handle opened here is closed before returning.
-    unsafe {
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snap == INVALID_HANDLE_VALUE {
-            return None;
-        }
-        let me = GetCurrentProcessId();
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        let mut found = None;
-        let mut ok = Process32FirstW(snap, &mut entry) != 0;
-        while ok {
-            if entry.th32ProcessID == me {
-                found = Some(entry.th32ParentProcessID);
-                break;
-            }
-            ok = Process32NextW(snap, &mut entry) != 0;
-        }
-        CloseHandle(snap);
-        let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, found?);
-        if proc.is_null() {
-            return None;
-        }
-        let mut buf = vec![0u16; 32768];
-        let mut len = buf.len() as u32;
-        let ok =
-            QueryFullProcessImageNameW(proc, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0;
-        CloseHandle(proc);
-        ok.then(|| String::from_utf16_lossy(&buf[..len as usize]))
-    }
-}
-
 /// Mark that existing terminals need a restart (state `doctor.prompt-restart-terminal`, printed by doctor).
 pub fn mark_restart() {
     if let Ok(mut s) = crate::settings::Store::load_state() {
@@ -286,7 +148,7 @@ const POST_PS1: &str = include_str!("../shell/post.ps1");
 
 pub fn init_cmd(args: InitArgs) -> anyhow::Result<i32> {
     if let Some(rc) = &args.rcfile {
-        crate::logger::debug(&format!(
+        logger::debug(&format!(
             "init {:?} {} --rcfile {rc}",
             args.shell,
             args.when.name()
@@ -1244,6 +1106,7 @@ fn uninstall_all(ctx: &Ctx, shells: &[Shell], purge: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     const ALL: [(Shell, When); 8] = [
         (Shell::Bash, When::Pre),
@@ -1255,17 +1118,6 @@ mod tests {
         (Shell::Pwsh, When::Pre),
         (Shell::Pwsh, When::Post),
     ];
-
-    /// A fresh, unique temp dir (never the real home).
-    fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "tabsmith-integrations-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
 
     fn ctx(dir: &Path) -> Ctx {
         let home = dir.join("home");
@@ -1361,7 +1213,8 @@ mod tests {
 
     #[test]
     fn integrations_init_syntax() {
-        let dir = tmp("syntax");
+        let temp_dir = TempDir::new("syntax");
+        let dir = temp_dir.path().to_path_buf();
         for (shell, when) in ALL {
             let f = dir.join(format!("{}_{}", shell.name(), when.name()));
             std::fs::write(&f, snapshot(shell, when)).unwrap();
@@ -1374,7 +1227,8 @@ mod tests {
     /// OSC 697 markers. Skipped per shell when not installed.
     #[test]
     fn integrations_post_scripts_emit_markers() {
-        let dir = tmp("runtime");
+        let temp_dir = TempDir::new("runtime");
+        let dir = temp_dir.path().to_path_buf();
         let cases: [(Shell, &str, &[&str], &str); 3] = [
             (
                 Shell::Bash,
@@ -1445,7 +1299,8 @@ mod tests {
 
     #[test]
     fn integrations_dotfile_install_uninstall() {
-        let dir = tmp("dotfile");
+        let temp_dir = TempDir::new("dotfile");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         std::fs::create_dir_all(&c.home).unwrap();
         let zshrc = c.home.join(".zshrc");
@@ -1506,7 +1361,8 @@ mod tests {
 
     #[test]
     fn integrations_dotfile_detection() {
-        let dir = tmp("detect");
+        let temp_dir = TempDir::new("detect");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         let bashrc = c.home.join(".bashrc");
         let rc = Integration {
@@ -1563,7 +1419,8 @@ mod tests {
 
     #[test]
     fn integrations_enumeration_and_whole_files() {
-        let dir = tmp("enum");
+        let temp_dir = TempDir::new("enum");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         std::fs::create_dir_all(&c.home).unwrap();
         let names = |s| {
@@ -1613,7 +1470,8 @@ mod tests {
 
     #[test]
     fn integrations_install_dotfiles_reports() {
-        let dir = tmp("apply");
+        let temp_dir = TempDir::new("apply");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         assert!(install_dotfiles(&c, &[Shell::Zsh, Shell::Fish]).unwrap());
         assert!(!install_dotfiles(&c, &[Shell::Zsh, Shell::Fish]).unwrap());
@@ -1729,7 +1587,8 @@ mod tests {
     #[test]
     fn integrations_pre_cmd_file() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tmp("precmd");
+        let temp_dir = TempDir::new("precmd");
+        let dir = temp_dir.path().to_path_buf();
         let path = dir.join("run").join("abc123.json");
         let ctx = SessionCtx {
             env: [("A".to_string(), "1".to_string())].into(),
@@ -1771,6 +1630,8 @@ mod tests {
     #[cfg(unix)]
     fn pty_run(argv: &[&str], env: &[(&str, &Path)], ready: &str, input: &str) -> (String, u32) {
         use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::Read;
+        use std::time::Instant;
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -1856,7 +1717,8 @@ mod tests {
         if which("fish").is_none() {
             return;
         }
-        let dir = tmp("fishpty");
+        let temp_dir = TempDir::new("fishpty");
+        let dir = temp_dir.path().to_path_buf();
         let home = dir.join("home");
         let fake = fake_bin(&dir.join("bin dir"));
         let bin = fake.display().to_string();
@@ -1915,7 +1777,8 @@ mod tests {
         if which("bash").is_none() {
             return;
         }
-        let dir = tmp("bashpc");
+        let temp_dir = TempDir::new("bashpc");
+        let dir = temp_dir.path().to_path_buf();
         let f = dir.join("post.bash");
         std::fs::write(&f, snapshot(Shell::Bash, When::Post)).unwrap();
         let script = r#"PS1='$ '; source "$F"; __bp_a() { :; }; __bp_b() { :; }
@@ -1967,7 +1830,8 @@ mod tests {
         if which("pwsh").is_none() {
             return;
         }
-        let dir = tmp("pwshpost");
+        let temp_dir = TempDir::new("pwshpost");
+        let dir = temp_dir.path().to_path_buf();
         let f = dir.join("post.ps1");
         std::fs::write(&f, snapshot(Shell::Pwsh, When::Post)).unwrap();
         let script = format!(
@@ -2005,7 +1869,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn integrations_pwsh_post_status_and_rewrap() {
-        let dir = tmp("pwshstatus");
+        let temp_dir = TempDir::new("pwshstatus");
+        let dir = temp_dir.path().to_path_buf();
         let script = r#"Set-StrictMode -Version Latest
             function Global:prompt { "[$?|$global:LASTEXITCODE]> " }
             function Global:PSConsoleHostReadLine { $s = $?; "line$s" }
@@ -2104,7 +1969,8 @@ mod tests {
         if which("pwsh").is_none() {
             return;
         }
-        let dir = tmp("pwshnohist");
+        let temp_dir = TempDir::new("pwshnohist");
+        let dir = temp_dir.path().to_path_buf();
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let f = dir.join("post.ps1");
@@ -2160,7 +2026,8 @@ mod tests {
         if which("pwsh").is_none() {
             return;
         }
-        let dir = tmp("pwshoem");
+        let temp_dir = TempDir::new("pwshoem");
+        let dir = temp_dir.path().to_path_buf();
         let bin = fake_bin(&dir.join("Jos\u{e9}")).display().to_string();
         std::fs::write(format!("{bin}.pre"), "$Global:__tsGot = 'Jos\u{e9}'\n").unwrap();
         let c = Ctx { bin, ..ctx(&dir) };
@@ -2228,7 +2095,8 @@ mod tests {
     /// puts the pre block after it, is_installed sees through it, a reinstall is a no-op, uninstall keeps it.
     #[test]
     fn integrations_dotfile_bom_stays_first() {
-        let dir = tmp("bom");
+        let temp_dir = TempDir::new("bom");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         let pwsh = &integrations(&c, Shell::Pwsh).unwrap()[0];
         std::fs::create_dir_all(pwsh.path.parent().unwrap()).unwrap();
@@ -2302,7 +2170,8 @@ mod tests {
     /// is wrapped (once) at every prompt.
     #[test]
     fn integrations_zsh_rprompt_wrapped_and_kept() {
-        let dir = tmp("zshrp");
+        let temp_dir = TempDir::new("zshrp");
+        let dir = temp_dir.path().to_path_buf();
         let script = r#"PS1='$ '; RPROMPT='[rp]'; source "$F"
             _ts_precmd; print -r -- "W1=$RPROMPT"; _ts_preexec x; print -r -- "R1=$RPROMPT"
             _ts_precmd; print -r -- "W2=$RPROMPT"; _ts_preexec x; print -r -- "R2=$RPROMPT""#;
@@ -2336,7 +2205,8 @@ mod tests {
     /// _ts_first still runs once per prompt; bash-preexec's __bp_interactive_mode stays last (it arms preexec).
     #[test]
     fn integrations_bash_prompt_command_array_runs_first_once() {
-        let dir = tmp("bashpcarr");
+        let temp_dir = TempDir::new("bashpcarr");
+        let dir = temp_dir.path().to_path_buf();
         let script = r#"PS1='$ '; source "$F"; __bp_precmd_invoke_cmd() { :; }; __bp_interactive_mode() { :; }
             PROMPT_COMMAND=($'__bp_precmd_invoke_cmd\n_ts_first;:;_ts_last' __bp_interactive_mode)
             for _ in 1 2 3; do for c in "${PROMPT_COMMAND[@]}"; do eval "$c"; done; done
@@ -2417,7 +2287,8 @@ mod tests {
             .collect();
         copies.push(Path::new(GHOSTTY).join("shell-integration/bash/bash-preexec.sh"));
         for (i, bp) in copies.iter().filter(|p| p.is_file()).enumerate() {
-            let dir = tmp(&format!("bashpreexec{i}"));
+            let temp_dir = TempDir::new(&format!("bashpreexec{i}"));
+            let dir = temp_dir.path().to_path_buf();
             let (log, out) = (dir.join("hooks.log"), dir.join("pc.out"));
             let q = |p: &Path| quote(Shell::Bash, &p.display().to_string());
             let rc = format!(
@@ -2453,7 +2324,8 @@ mod tests {
         if !Path::new(GHOSTTY).is_dir() {
             return;
         }
-        let dir = tmp("bashghostty");
+        let temp_dir = TempDir::new("bashghostty");
+        let dir = temp_dir.path().to_path_buf();
         let env: &[(&str, &Path)] = &[
             ("GHOSTTY_RESOURCES_DIR", Path::new(GHOSTTY)),
             ("TABSMITH_GHOSTTY_INJECTED", Path::new("1")),
@@ -2475,7 +2347,8 @@ mod tests {
         if !Path::new(VSCODE_BASH).is_file() {
             return;
         }
-        let dir = tmp("bashvscode");
+        let temp_dir = TempDir::new("bashvscode");
+        let dir = temp_dir.path().to_path_buf();
         let code = dir.join("codebin/code");
         std::fs::create_dir_all(code.parent().unwrap()).unwrap();
         std::fs::write(
@@ -2554,7 +2427,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn integrations_fish_prompt_wrappers() {
-        let dir = tmp("fishprompt");
+        let temp_dir = TempDir::new("fishprompt");
+        let dir = temp_dir.path().to_path_buf();
         let bin = fake_bin(&dir.join("bin")).display().to_string();
         let script = r#"function fish_prompt; echo -n 'a\cb \o/ args='"$argv> "; end
             function fish_right_prompt; echo -n RP; end
@@ -2585,7 +2459,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn integrations_no_history_marker() {
-        let dir = tmp("nohist");
+        let temp_dir = TempDir::new("nohist");
+        let dir = temp_dir.path().to_path_buf();
         let bin = fake_bin(&dir.join("bin")).display().to_string();
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
@@ -2659,7 +2534,8 @@ mod tests {
         if which("pwsh").is_none() {
             return;
         }
-        let dir = tmp("pwshpre");
+        let temp_dir = TempDir::new("pwshpre");
+        let dir = temp_dir.path().to_path_buf();
         let home = dir.join("home");
         let bin = fake_bin(&dir.join("bin")).display().to_string();
         let c = Ctx {
@@ -2737,7 +2613,8 @@ mod tests {
         let (Some(theme), Some(_)) = (theme, which("zsh")) else {
             return;
         };
-        let dir = tmp("p10k");
+        let temp_dir = TempDir::new("p10k");
+        let dir = temp_dir.path().to_path_buf();
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let f = dir.join("post.zsh");
@@ -2790,7 +2667,8 @@ mod tests {
         if which("zsh").is_none() {
             return;
         }
-        let dir = tmp("zshtheme");
+        let temp_dir = TempDir::new("zshtheme");
+        let dir = temp_dir.path().to_path_buf();
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let f = dir.join("post.zsh");
@@ -2831,7 +2709,8 @@ mod tests {
     #[test]
     fn integrations_terminal_injected_integration_reloaded() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tmp("injected");
+        let temp_dir = TempDir::new("injected");
+        let dir = temp_dir.path().to_path_buf();
         let d = dir.display().to_string();
         let files = [
             ("ghostty/shell-integration/zsh/ghostty-integration", "print -n GHOSTTY-ZSH; precmd_functions+=(_g)\n"),
@@ -2899,7 +2778,8 @@ mod tests {
     #[test]
     fn integrations_pre_detects_ghostty_injection() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tmp("ghosttypre");
+        let temp_dir = TempDir::new("ghosttypre");
+        let dir = temp_dir.path().to_path_buf();
         let fake = dir.join("fake");
         let got = dir.join("got");
         std::fs::write(
@@ -2964,7 +2844,8 @@ mod tests {
         if which("zsh").is_none() {
             return;
         }
-        let dir = tmp("zshasync");
+        let temp_dir = TempDir::new("zshasync");
+        let dir = temp_dir.path().to_path_buf();
         let f = dir.join("post.zsh");
         std::fs::write(
             &f,
@@ -3007,7 +2888,8 @@ mod tests {
         if which("bash").is_none() {
             return;
         }
-        let dir = tmp("erasedups");
+        let temp_dir = TempDir::new("erasedups");
+        let dir = temp_dir.path().to_path_buf();
         let bin = fake_bin(&dir.join("bin")).display().to_string();
         let f = dir.join("post.bash");
         std::fs::write(&f, init_for(Shell::Bash, When::Post, &bin)).unwrap();
@@ -3058,7 +2940,8 @@ mod tests {
         if !new.is_ok_and(|s| s.success()) {
             return;
         }
-        let dir = tmp("pipestatus");
+        let temp_dir = TempDir::new("pipestatus");
+        let dir = temp_dir.path().to_path_buf();
         let bin = fake_bin(&dir.join("bin")).display().to_string();
         let f = dir.join("post.bash");
         std::fs::write(&f, init_for(Shell::Bash, When::Post, &bin)).unwrap();
@@ -3096,7 +2979,8 @@ mod tests {
     #[test]
     fn integrations_dotfile_write_is_atomic() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tmp("atomic");
+        let temp_dir = TempDir::new("atomic");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         let real = dir.join("dotfiles").join("zshrc");
         std::fs::create_dir_all(real.parent().unwrap()).unwrap();
@@ -3163,7 +3047,8 @@ mod tests {
     /// fails for all of them. With nothing left it reports nothing done.
     #[test]
     fn integrations_uninstall_after_binary_moved() {
-        let dir = tmp("moved");
+        let temp_dir = TempDir::new("moved");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         let shells = [Shell::Bash, Shell::Fish];
         install_dotfiles(&c, &shells).unwrap();
@@ -3193,7 +3078,8 @@ mod tests {
         if is_root() {
             return;
         }
-        let dir = tmp("uninstfail");
+        let temp_dir = TempDir::new("uninstfail");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         install_dotfiles(&c, &[Shell::Zsh]).unwrap();
         let zshrc = c.home.join(".zshrc");
@@ -3211,7 +3097,8 @@ mod tests {
     /// The manual-install lines setup prints are the ones is_installed and uninstall recognise.
     #[test]
     fn integrations_manual_lines_are_recognised() {
-        let dir = tmp("manual");
+        let temp_dir = TempDir::new("manual");
+        let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         std::fs::create_dir_all(&c.home).unwrap();
         let text = manual_text(&c, &[Shell::Bash, Shell::Zsh]);
@@ -3242,7 +3129,8 @@ mod tests {
     /// Run files untouched for a day go (a quick exit can leave one behind); fresh files and directories stay.
     #[test]
     fn integrations_prune_run_files() {
-        let dir = tmp("prune");
+        let temp_dir = TempDir::new("prune");
+        let dir = temp_dir.path().to_path_buf();
         let (old, new, sub) = (
             dir.join("old.json"),
             dir.join("new.json"),

@@ -9,6 +9,7 @@
 //! `Persistent`, nothing can outlive the runtime). Callbacks start with `__ts.start(task, fnId, args, ctx)` and
 //! report back through `__ts_done`.
 use crate::settings::Settings;
+use crate::shared::infrastructure::logger;
 use crate::spec::FnId;
 use crate::types::{EngineMsg, ExecOutput};
 use rquickjs::context::EvalOptions;
@@ -265,7 +266,7 @@ impl Js {
                 g.set(
                     "__ts_log",
                     Function::new(ctx.clone(), |level: String, msg: String| {
-                        crate::logger::debug(&format!("js console.{level}: {msg}"))
+                        logger::debug(&format!("js console.{level}: {msg}"))
                     })?,
                 )?;
                 g.set(
@@ -605,7 +606,7 @@ impl Js {
         });
         self.arm_off();
         if let Err(e) = res {
-            crate::logger::warn(&format!("js settle {id}: {e}"));
+            logger::warn(&format!("js settle {id}: {e}"));
         }
     }
 
@@ -1119,7 +1120,7 @@ pub fn native_ls(dir: &Path) -> ExecOutput {
 mod tests {
     use super::*;
     use crate::spec::fn_id;
-    use crate::specs::testutil::TmpDir;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::shared::domain::value_objects::shell::Shell;
     use crate::types::Request;
 
@@ -1129,7 +1130,7 @@ mod tests {
     }
 
     /// Write a module `name` with `src` into `dir` and load it.
-    fn module(js: &mut Js, dir: &TmpDir, name: &str, src: &str) -> Map<String, Value> {
+    fn module(js: &mut Js, dir: &TempDir, name: &str, src: &str) -> Map<String, Value> {
         let p = dir.path().join(name);
         std::fs::write(&p, src).unwrap();
         js.load_module(&p).unwrap()
@@ -1161,9 +1162,9 @@ mod tests {
 
     /// A temp dir holding executable shell scripts, for hermetic "fake" commands.
     #[cfg(unix)]
-    fn fake_bin(scripts: &[(&str, &str)]) -> TmpDir {
+    fn fake_bin(scripts: &[(&str, &str)]) -> TempDir {
         use std::os::unix::fs::PermissionsExt;
-        let dir = TmpDir::new("bin");
+        let dir = TempDir::new("bin");
         for (name, body) in scripts {
             let p = dir.path().join(name);
             std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -1189,7 +1190,7 @@ mod tests {
     #[test]
     fn loads_hand_written_es_modules() {
         let (mut js, _tx) = js();
-        let dir = TmpDir::new("esm");
+        let dir = TempDir::new("esm");
         let src = "export const sub = { name: \"ok\" };\nconst spec = { name: \"zz\", subcommands: [sub] };\nexport default spec;\n";
         let ns = module(&mut js, &dir, "zz.js", src);
         assert_eq!(
@@ -1218,7 +1219,7 @@ mod tests {
     #[test]
     fn serializes_functions_and_values() {
         let (mut js, _tx) = js();
-        let dir = TmpDir::new("ser");
+        let dir = TempDir::new("ser");
         let ns = module(
             &mut js,
             &dir,
@@ -1343,7 +1344,7 @@ mod tests {
     #[test]
     fn custom_generator_executes_commands() {
         let bin = fake_bin(&[("echo", r#"printf 'fake:%s\n' "$*""#)]);
-        let cwd = TmpDir::new("cwd");
+        let cwd = TempDir::new("cwd");
         let (mut js, _tx) = js();
         let ns = module(
             &mut js,
@@ -1386,7 +1387,7 @@ mod tests {
 
     #[test]
     fn native_ls_and_short_circuits() {
-        let dir = TmpDir::new("ls");
+        let dir = TempDir::new("ls");
         std::fs::write(dir.path().join("a.txt"), "").unwrap();
         std::fs::write(dir.path().join(".hidden"), "").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
@@ -1442,7 +1443,7 @@ mod tests {
 
     #[test]
     fn exec_reports_an_unknown_command_instead_of_stubbing_it() {
-        let empty_path = TmpDir::new("empty-path");
+        let empty_path = TempDir::new("empty-path");
         let ctx = GenCtx {
             env: HashMap::from([("PATH".to_string(), empty_path.path().display().to_string())]),
             ..Default::default()
@@ -1504,7 +1505,7 @@ mod tests {
     #[test]
     fn set_timeout_ordering_and_intl() {
         let (mut js, _tx) = js();
-        let dir = TmpDir::new("timers");
+        let dir = TempDir::new("timers");
         let ns = module(
             &mut js,
             &dir,
@@ -1539,7 +1540,7 @@ mod tests {
     #[test]
     fn interrupt_stops_infinite_loop() {
         let (mut js, _tx) = js();
-        let dir = TmpDir::new("loop");
+        let dir = TempDir::new("loop");
         let ns = module(
             &mut js,
             &dir,
@@ -1574,7 +1575,7 @@ mod tests {
     #[test]
     fn long_callback_survives_short_pump_slices() {
         let (mut js, _tx) = js();
-        let dir = TmpDir::new("slice");
+        let dir = TempDir::new("slice");
         let ns = module(&mut js, &dir, "b.js", "var f=ms=>{const t=Date.now();while(Date.now()-t<ms){}return ms};export{f as default};");
         let f = fn_id(&ns["default"]).unwrap();
         let tasks = [200, 40].map(|ms| js.start_call(f, vec![JsArg::Json(json!(ms))], None));
@@ -1597,7 +1598,7 @@ mod tests {
     #[test]
     fn load_module_reloads_edited_file() {
         let (mut js, _tx) = js();
-        let dir = TmpDir::new("reload");
+        let dir = TempDir::new("reload");
         assert_eq!(
             module(
                 &mut js,
@@ -1690,7 +1691,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn timeout_kills_grandchildren() {
-        let dir = TmpDir::new("tree");
+        let dir = TempDir::new("tree");
         let args = [
             "/C",
             "cmd",

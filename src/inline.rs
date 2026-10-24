@@ -3,6 +3,7 @@
 //! doctor (profile checks).
 use crate::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::logger;
 use crate::types::{HistoryEntry, Item, ItemType};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -28,7 +29,7 @@ impl History {
         match crate::settings::home() {
             Ok(home) => History::load_from(home.join("history.jsonl")),
             Err(e) => {
-                crate::logger::warn(&format!("history: {e:#}"));
+                logger::warn(&format!("history: {e:#}"));
                 History::from_entries(Vec::new())
             }
         }
@@ -81,7 +82,7 @@ impl History {
                 Ok(()) if purged => {}
                 Ok(()) => self.lines += 1,
                 Err(e) => {
-                    crate::logger::warn(&format!("history: appending to {}: {e}", path.display()))
+                    logger::warn(&format!("history: appending to {}: {e}", path.display()))
                 }
             }
         }
@@ -113,7 +114,7 @@ impl History {
         })();
         match res {
             Ok(n) => self.lines = n,
-            Err(e) => crate::logger::warn(&format!("history: compacting {}: {e}", path.display())),
+            Err(e) => logger::warn(&format!("history: compacting {}: {e}", path.display())),
         }
     }
 }
@@ -357,7 +358,7 @@ pub fn llm_complete(
     {
         Ok(v) => v,
         Err(e) => {
-            crate::logger::warn(&format!(
+            logger::warn(&format!(
                 "inline: profile '{}' request to {url} failed: {e}",
                 profile.name
             ));
@@ -627,19 +628,7 @@ fn expand(arg: &str, env: &HashMap<String, String>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::types::Insertion;
-
-    fn tmp_dir(tag: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let d = std::env::temp_dir().join(format!(
-            "tabsmith-inline-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     fn entry(cmd: &str, exit: Option<i32>) -> HistoryEntry {
         HistoryEntry {
@@ -855,7 +844,8 @@ mod tests {
 
     #[test]
     fn cd_validation() {
-        let d = tmp_dir("cd");
+        let temp_dir = TempDir::new("cd");
+        let d = temp_dir.path().to_path_buf();
         std::fs::create_dir_all(d.join("a/b")).unwrap();
         std::fs::create_dir_all(d.join("space in name")).unwrap();
         std::fs::write(d.join("file"), "x").unwrap();
@@ -1061,7 +1051,8 @@ mod tests {
 
     #[test]
     fn history_file_round_trip_and_compaction() {
-        let d = tmp_dir("hist");
+        let temp_dir = TempDir::new("hist");
+        let d = temp_dir.path().to_path_buf();
         let path = d.join("sub/history.jsonl");
         // A missing data root (purged while a session runs) is not recreated; the entry stays in memory only.
         History::load_from(path.clone()).append(entry("gone", Some(0)));

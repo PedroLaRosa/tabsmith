@@ -8,6 +8,7 @@ use crate::spec::{
 };
 use crate::specs::SpecIndex;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::logger;
 use serde_json::{Map, Value};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -1263,7 +1264,7 @@ impl ParseCaches {
                     }
                     Err(ParseError::Aborted) => return Err(ParseError::Aborted),
                     Err(e) => {
-                        crate::logger::warn(&format!("generateSpec ({}): {e:?}", tokens[0])); // spec name only: logs never hold typed text
+                        logger::warn(&format!("generateSpec ({}): {e:?}", tokens[0])); // spec name only: logs never hold typed text
                         return Ok(st);
                     }
                 }

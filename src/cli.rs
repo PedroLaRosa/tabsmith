@@ -845,17 +845,10 @@ fn debug_logs() -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     fn map(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
-    }
-
-    fn tmp_dir(name: &str) -> std::path::PathBuf {
-        let d =
-            std::env::temp_dir().join(format!("tabsmith-cli-test-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
     }
 
     #[test]
@@ -960,7 +953,8 @@ mod tests {
 
     #[test]
     fn theme_list_order() {
-        let d = tmp_dir("themes");
+        let temp_dir = TempDir::new("themes");
+        let d = temp_dir.path().to_path_buf();
         for f in ["zed.json", "alpha.json", "dark.json", "notes.txt"] {
             std::fs::write(d.join(f), "{}").unwrap();
         }
@@ -1071,7 +1065,8 @@ mod tests {
     /// The rc dir is private and fresh, and fish/pwsh load an rc path containing `'` (run when installed).
     #[test]
     fn debug_shell_rc_dir_and_quoting() {
-        let home = tmp_dir("o'brien");
+        let temp_dir = TempDir::new("o'brien");
+        let home = temp_dir.path().to_path_buf();
         let stale = home
             .join("run")
             .join(format!("debug-shell-{}", std::process::id()));
@@ -1096,7 +1091,7 @@ mod tests {
                     0o700
                 );
             }
-            if crate::integrations::which(shell.name()).is_none() {
+            if crate::shared::infrastructure::os::executable_lookup::which(shell.name()).is_none() {
                 continue;
             }
             let load = format!("{}{show}", argv.last().unwrap());
@@ -1140,10 +1135,11 @@ mod tests {
             std::fs::write(marker, format!("{code:?}")).unwrap();
             return;
         }
-        if crate::integrations::which("bash").is_none() {
+        if crate::shared::infrastructure::os::executable_lookup::which("bash").is_none() {
             return;
         }
-        let home = tmp_dir("dbgclose");
+        let temp_dir = TempDir::new("dbgclose");
+        let home = temp_dir.path().to_path_buf();
         let marker = home.join("marker");
         let pair = native_pty_system()
             .openpty(PtySize {

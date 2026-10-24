@@ -1454,6 +1454,7 @@ pub fn first_token_items(
 mod tests {
     use super::*;
     use crate::parser::Annotation;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::spec::Directives;
 
     fn pr_for(comp: Subcommand, search: &str) -> ParseResult {
@@ -2459,19 +2460,10 @@ mod tests {
         assert_eq!((i.delete, i.text.as_str()), (2, "main.rs"));
     }
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "tabsmith-suggest-{tag}-{}-{}",
-            std::process::id(),
-            crate::types::now_ms()
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
     #[test]
     fn list_dir_sorted() {
-        let d = temp_dir("ls");
+        let temp_dir = TempDir::new("ls");
+        let d = temp_dir.path().to_path_buf();
         for f in ["c.txt", "B.txt", ".hidden", ".DS_Store", "a.txt"] {
             std::fs::write(d.join(f), "").unwrap();
         }
@@ -2497,7 +2489,8 @@ mod tests {
     #[cfg(unix)] // Windows file names cannot hold control chars
     #[test]
     fn list_dir_skips_control_char_names() {
-        let d = temp_dir("ctl");
+        let temp_dir = TempDir::new("ctl");
+        let d = temp_dir.path().to_path_buf();
         for f in ["ok", "aa\rtouch${IFS}PWNED\r", "esc\x1b[2J"] {
             std::fs::write(d.join(f), "").unwrap();
         }
@@ -2513,7 +2506,8 @@ mod tests {
     #[test]
     fn first_token_sources() {
         use std::os::unix::fs::PermissionsExt;
-        let d = temp_dir("path");
+        let temp_dir = TempDir::new("path");
+        let d = temp_dir.path().to_path_buf();
         for (f, mode) in [("mytool", 0o755), ("notexec", 0o644), ("git", 0o755)] {
             std::fs::write(d.join(f), "").unwrap();
             std::fs::set_permissions(d.join(f), std::fs::Permissions::from_mode(mode)).unwrap();
