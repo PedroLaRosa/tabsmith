@@ -1,45 +1,9 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
 use crate::settings::Settings;
+use crate::shared::domain::value_objects::shell::Shell;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Shell {
-    Bash,
-    Zsh,
-    Fish,
-    Pwsh,
-}
-
-impl Shell {
-    pub const ALL: [Shell; 4] = [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::Pwsh];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Shell::Bash => "bash",
-            Shell::Zsh => "zsh",
-            Shell::Fish => "fish",
-            Shell::Pwsh => "pwsh",
-        }
-    }
-
-    /// Accepts a name or path: `zsh`, `/bin/zsh`, `-zsh` (login), `pwsh.exe`, `powershell`.
-    pub fn from_name(s: &str) -> Option<Shell> {
-        let base = s.rsplit(['/', '\\']).next().unwrap_or(s);
-        let base = base.trim_start_matches('-');
-        let base = base.strip_suffix(".exe").unwrap_or(base);
-        let base = base.split_whitespace().next().unwrap_or(base); // "zsh (tabsmith)"
-        Some(match base.to_ascii_lowercase().as_str() {
-            "bash" => Shell::Bash,
-            "zsh" => Shell::Zsh,
-            "fish" => Shell::Fish,
-            "pwsh" | "powershell" => Shell::Pwsh,
-            _ => return None,
-        })
-    }
-}
 
 /// Suggestion row type (Fig `type`, plus internal `history` and `auto-execute`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -1120,7 +1120,8 @@ mod tests {
     use super::*;
     use crate::spec::fn_id;
     use crate::specs::testutil::TmpDir;
-    use crate::types::{Request, Shell};
+    use crate::shared::domain::value_objects::shell::Shell;
+    use crate::types::Request;
 
     fn js() -> (Js, Sender<EngineMsg>) {
         let (tx, rx) = mpsc::channel();

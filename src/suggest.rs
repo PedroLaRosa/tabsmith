@@ -4,7 +4,9 @@
 //! resolves function triggers / `getQueryTerm`s and runs generators.
 use crate::parser::{AnnKind, ParseResult};
 use crate::spec::{Arg, CacheCfg, Opt, Repeat, Subcommand, Suggestion, Trigger};
-use crate::types::{GenKey, HistoryEntry, Insertion, Item, ItemType, Shell};
+use crate::shared::domain::services::shell_quoting;
+use crate::shared::domain::value_objects::shell::Shell;
+use crate::types::{GenKey, HistoryEntry, Insertion, Item, ItemType};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -796,8 +798,8 @@ fn escape_posix(s: &str, folder: bool, quote: bool, path: bool, shell: Shell) ->
         }
     }
     match s.strip_suffix('/').filter(|_| folder) {
-        Some(stem) => format!("{}/", crate::integrations::quote(shell, stem)),
-        None => crate::integrations::quote(shell, s),
+        Some(stem) => format!("{}/", shell_quoting::quote(shell, stem)),
+        None => shell_quoting::quote(shell, s),
     }
 }
 
@@ -817,7 +819,7 @@ fn escape_pwsh(s: &str, folder: bool, quote: bool, path: bool) -> String {
             .flat_map(|c| ['`', c].into_iter().skip(usize::from(!special(c))))
             .collect();
     }
-    crate::integrations::quote(Shell::Pwsh, s)
+    shell_quoting::quote(Shell::Pwsh, s)
 }
 
 /// `(char index, char)`.
@@ -856,7 +858,7 @@ fn unquote(raw: &[char], shell: Shell) -> (Vec<At>, Option<(char, usize)>) {
 fn escape_in_quote(s: &str, q: char, shell: Shell) -> String {
     match (q, shell) {
         ('\'', Shell::Pwsh) => {
-            let q = crate::integrations::quote(Shell::Pwsh, s);
+            let q = shell_quoting::quote(Shell::Pwsh, s);
             q[1..q.len() - 1].to_string() // the escaping without the `'…'` around it
         }
         ('\'', Shell::Fish) => s.replace('\\', "\\\\").replace('\'', "\\'"),
@@ -2319,8 +2321,8 @@ mod tests {
             assert_eq!(text(Sugg::new("%1", ItemType::Arg), sh), "%1", "{sh:?}");
         }
         // pwsh-unicode-smart-quote-injection: PowerShell also ends strings at ‘ ’ ‚ ‛ (single) and “ ” „ (double):
-        // they force quoting (integrations::quote escapes them), are backtick-escaped in folders and open `"`
-        let sq = |s: &str| crate::integrations::quote(Shell::Pwsh, s);
+        // they force quoting (shell_quoting::quote escapes them), are backtick-escaped in folders and open `"`
+        let sq = |s: &str| shell_quoting::quote(Shell::Pwsh, s);
         for name in [
             "plain’name.txt",
             "report’;New-Item -Name TS -ItemType File;’.txt",

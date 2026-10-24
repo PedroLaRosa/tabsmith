@@ -2,7 +2,7 @@
 //! OWNER: shell-parser agent.
 //!
 //! Scans bytes: every syntax char is ASCII, so node boundaries always fall on UTF-8 char boundaries.
-use crate::types::Shell;
+use crate::shared::domain::value_objects::shell::Shell;
 use std::collections::HashMap;
 
 /// One argument of the current command.

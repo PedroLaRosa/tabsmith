@@ -2,7 +2,8 @@
 //! §3.5, §6.11). OWNER: inline agent. Used by the engine (sources, LLM worker), the CLI (`inline` command) and
 //! doctor (profile checks).
 use crate::settings::Settings;
-use crate::types::{HistoryEntry, Item, ItemType, Shell};
+use crate::shared::domain::value_objects::shell::Shell;
+use crate::types::{HistoryEntry, Item, ItemType};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Write;

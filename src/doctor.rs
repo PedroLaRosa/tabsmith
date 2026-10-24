@@ -3,7 +3,8 @@ use crate::integrations::{
     self, epaint, output_with_timeout, paint, which, Ctx, Integration, IntegrationError, When,
 };
 use crate::settings::{Settings, Store};
-use crate::types::{now_secs, Shell};
+use crate::shared::domain::value_objects::shell::Shell;
+use crate::types::now_secs;
 use clap::Args;
 use std::io::IsTerminal;
 use std::path::Path;

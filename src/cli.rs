@@ -3,7 +3,8 @@
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
 use crate::integrations::When;
 use crate::settings::{self, Settings, Store};
-use crate::types::Shell;
+use crate::shared::domain::services::shell_quoting;
+use crate::shared::domain::value_objects::shell::Shell;
 use anyhow::{bail, Context, Result};
 use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 use serde::Deserialize;
@@ -842,7 +843,7 @@ fn debug_shell_files(
     });
     std::fs::write(&rc, post)?;
     let rc = rc.display().to_string();
-    let q = |s: &str| crate::integrations::quote(shell, s);
+    let q = |s: &str| shell_quoting::quote(shell, s);
     let mut cmd = vec![exe.to_string()];
     match shell {
         Shell::Bash => cmd.extend(["--noprofile".into(), "--rcfile".into(), rc]),

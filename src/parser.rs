@@ -7,7 +7,7 @@ use crate::spec::{
     normalise, Arg, Directives, FnId, LoadSpec, Opt, Repeat, SpecLocation, StrOrFn, Subcommand,
 };
 use crate::specs::SpecIndex;
-use crate::types::Shell;
+use crate::shared::domain::value_objects::shell::Shell;
 use serde_json::{Map, Value};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};

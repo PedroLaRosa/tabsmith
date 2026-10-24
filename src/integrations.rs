@@ -2,7 +2,9 @@
 //! and the internal `_ should-launch|get-shell|pre-cmd` commands (SPEC §2.6, §2.7, §2.9, §2.11, §5).
 //! OWNER: integrations agent. Shell scripts live in `shell/` and are embedded with `include_str!`.
 use crate::cli::OutputFormat;
-use crate::types::{now_ms, now_secs, SessionCtx, Shell};
+use crate::shared::domain::services::shell_quoting::quote;
+use crate::shared::domain::value_objects::shell::Shell;
+use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use std::collections::HashMap;
@@ -286,27 +288,6 @@ pub fn mark_restart() {
             .insert("doctor.prompt-restart-terminal".into(), true.into());
         let _ = s.save();
     }
-}
-
-/// Single-quote `s` for `shell` (SPEC §5.3): POSIX `'\''`, fish `\'` + `\\`, pwsh `''`.
-pub fn quote(shell: Shell, s: &str) -> String {
-    match shell {
-        Shell::Pwsh => format!("'{}'", pwsh_sq(s)),
-        Shell::Fish => format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'")),
-        Shell::Bash | Shell::Zsh => format!("'{}'", s.replace('\'', r"'\''")),
-    }
-}
-
-/// `s` for inside a pwsh '…' string: every quote PowerShell ends such a string with (`'` and U+2018-U+201B) doubled.
-pub fn pwsh_sq(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| {
-            std::iter::repeat_n(
-                c,
-                1 + usize::from("'\u{2018}\u{2019}\u{201A}\u{201B}".contains(c)),
-            )
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1477,13 +1458,6 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn integrations_quote() {
-        assert_eq!(quote(Shell::Zsh, "/a b/it's"), r"'/a b/it'\''s'");
-        assert_eq!(quote(Shell::Fish, r"/a\it's"), r"'/a\\it\'s'");
-        assert_eq!(quote(Shell::Pwsh, r"C:\it's"), r"'C:\it''s'");
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! OSC 697 splitter, shell-integration marker tracker (cell tagging via injected OSC 8), edit-buffer and cursor
 //! extraction from the model (SPEC §5.1, §5.6), and the filter for bytes sent to the real terminal (SPEC §7.5.4).
 //! OWNER: wrapper agent.
-use crate::types::{now_secs, HistoryEntry, Model, Shell};
+use crate::shared::domain::value_objects::shell::Shell;
+use crate::types::{now_secs, HistoryEntry, Model};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};

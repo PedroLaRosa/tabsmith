@@ -14,9 +14,10 @@ use crate::shell_parser;
 use crate::spec::{Arg, Generator, Script, StrOrFn, Strategy, Suggestion, Trigger};
 use crate::specs::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
+use crate::shared::domain::value_objects::shell::Shell;
 use crate::types::{
     now_ms, ArgInfo, Completion, EngineMsg, GenKey, HistoryEntry, Item, ItemType, Msg, Phase,
-    Request, SessionCtx, Shell,
+    Request, SessionCtx,
 };
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;

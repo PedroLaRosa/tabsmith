@@ -6,8 +6,9 @@ use crate::menu::{Effect, Menu};
 use crate::render::{FrameInput, Renderer, Theme};
 use crate::settings::Settings;
 use crate::tracker::{Event, Extracted, Tracker};
+use crate::shared::domain::value_objects::shell::Shell;
 use crate::types::{
-    Completion, EngineMsg, Insertion, Model, Msg, Phase, Request, SessionCtx, Shell,
+    Completion, EngineMsg, Insertion, Model, Msg, Phase, Request, SessionCtx,
 };
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
