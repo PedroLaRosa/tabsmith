@@ -48,6 +48,21 @@ impl Settings {
             .or_else(|| catalog_default(key))
             .unwrap_or_default()
     }
+
+    /// The strings of the user's list (other items dropped), else empty.
+    /// ponytail: empty is the catalog's only list default (`[]`); parse list literals once another default exists.
+    pub(crate) fn str_list(&self, key: &str) -> Vec<String> {
+        self.get(key)
+            .and_then(SettingValue::as_list)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(SettingValue::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// ponytail: the catalog's string literals hold no escapes, so dropping the quotes is the JSON string.
@@ -238,5 +253,21 @@ mod tests {
         let width = settings.f64(AUTOCOMPLETE_WIDTH);
 
         assert_eq!(width, 40.0);
+    }
+
+    /// `autocomplete.disableForCommands: ["git", 5, "cd"]` disables git and cd and ignores the 5.
+    #[test]
+    fn should_read_the_strings_of_a_list_the_user_set_and_drop_the_rest() {
+        let five = SettingValue::Number(SettingNumber::from(5u64));
+        let commands = SettingValue::List(vec![
+            SettingValue::Text("git".to_string()),
+            five,
+            SettingValue::Text("cd".to_string()),
+        ]);
+        let settings = settings_with(&[(AUTOCOMPLETE_DISABLE_FOR_COMMANDS, commands)]);
+
+        let disabled = settings.str_list(AUTOCOMPLETE_DISABLE_FOR_COMMANDS);
+
+        assert_eq!(disabled, ["git", "cd"]);
     }
 }
