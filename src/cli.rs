@@ -3,6 +3,7 @@
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
 use crate::integrations::When;
 use crate::settings::{self, Settings, Store};
+use crate::settings::domain::value_objects::setting_key_pattern::SettingKeyPattern;
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::output_format::OutputFormat;
@@ -183,8 +184,9 @@ fn render_get(key: &str, value: Option<&Value>, format: OutputFormat) -> Result<
 }
 
 fn matching_keys(map: &Map<String, Value>, pattern: &str) -> Vec<String> {
+    let pattern = SettingKeyPattern::new(pattern);
     map.keys()
-        .filter(|k| settings::wildcard_match(pattern, k))
+        .filter(|k| pattern.matches(k))
         .cloned()
         .collect()
 }

@@ -304,49 +304,9 @@ pub fn catalog() -> &'static [CatalogEntry] {
     CATALOG
 }
 
-/// Wildcard matcher for `settings --delete PATTERN`: `*` any run, `?` one char (backtracks to the last `*`).
-pub fn wildcard_match(pattern: &str, s: &str) -> bool {
-    let (p, s): (Vec<char>, Vec<char>) = (pattern.chars().collect(), s.chars().collect());
-    let (mut pi, mut si, mut star, mut mark) = (0, 0, None, 0);
-    while si < s.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == s[si]) {
-            pi += 1;
-            si += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = Some(pi);
-            mark = si;
-            pi += 1;
-        } else if let Some(st) = star {
-            pi = st + 1;
-            mark += 1;
-            si = mark;
-        } else {
-            return false;
-        }
-    }
-    p[pi..].iter().all(|&c| c == '*')
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn wildcard() {
-        assert!(wildcard_match("autocomplete.theme", "autocomplete.theme"));
-        assert!(!wildcard_match("autocomplete.theme", "autocomplete.themes"));
-        assert!(wildcard_match(
-            "autocomplete.*",
-            "autocomplete.keybindings.control+r"
-        ));
-        assert!(!wildcard_match("autocomplete.*", "inline.enabled"));
-        assert!(wildcard_match("*", ""));
-        assert!(wildcard_match("inline.?nabled", "inline.enabled"));
-        assert!(!wildcard_match("inline.?", "inline."));
-        assert!(wildcard_match("*.width", "autocomplete.width"));
-        assert!(wildcard_match("a*b*c", "a-x-b-y-b-c"));
-        assert!(!wildcard_match("a*b*c", "a-x-b-y-c-d"));
-    }
 
     #[test]
     fn catalog_keys_unique_and_defaults_valid() {
