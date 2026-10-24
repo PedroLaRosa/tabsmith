@@ -1,66 +1,26 @@
-//! Small user-facing commands: settings, theme, inline, diagnostic, debug (SPEC §2.3–2.5, §2.10).
+//! Small user-facing commands: theme, inline, diagnostic, debug (SPEC §2.4–2.5, §2.10).
 //! OWNER: cli agent.
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
 use crate::integrations::When;
-use crate::settings::{self, Settings, Store};
+use crate::settings::{self, Settings};
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_THEME, INLINE_ENABLED, INLINE_SOURCE,
 };
-use crate::settings::domain::value_objects::setting_key_pattern::SettingKeyPattern;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
-use crate::settings::infrastructure::adapters::setting_value_json::{
-    parse_value, setting_value_to_json,
-};
+use crate::settings::infrastructure::adapters::setting_value_json::setting_value_to_json;
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{bold, sgr, stdout_tty};
 use anyhow::{bail, Context, Result};
-use clap::{ArgGroup, Args, Subcommand};
+use clap::{Args, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
-
-#[derive(Args)]
-#[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]
-#[command(group(ArgGroup::new("vals").requires("key").args(["value", "format"])))]
-pub struct SettingsArgs {
-    #[command(subcommand)]
-    pub cmd: Option<SettingsCmd>,
-    /// Key of the setting
-    pub key: Option<String>,
-    /// Value of the setting (JSON, or a plain string)
-    pub value: Option<String>,
-    /// Delete a setting (wildcards * and ? allowed)
-    #[arg(long, short)]
-    pub delete: bool,
-    /// Output format
-    #[arg(long, short, value_enum, default_value_t)]
-    pub format: OutputFormat,
-}
-
-#[derive(Subcommand)]
-pub enum SettingsCmd {
-    /// Open the settings file
-    Open,
-    /// List settings
-    List {
-        /// List all available settings with descriptions
-        #[arg(long)]
-        all: bool,
-        #[arg(long, short, value_enum, default_value_t)]
-        format: OutputFormat,
-    },
-    #[command(hide = true)]
-    All {
-        #[arg(long, short, value_enum, default_value_t)]
-        format: OutputFormat,
-    },
-}
 
 #[derive(Args)]
 pub struct ThemeArgs {
@@ -111,180 +71,9 @@ pub enum DebugCmd {
     Logs,
 }
 
-/// Print `s` + newline unless it is empty (an empty plain list prints nothing).
-fn emit(s: &str) {
-    if !s.is_empty() {
-        println!("{s}");
-    }
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// settings (SPEC §2.3)
-
-pub fn settings(args: SettingsArgs) -> Result<i32> {
-    let path = settings::settings_path()?;
-    match args.cmd {
-        Some(SettingsCmd::Open) => return open_settings(&path),
-        Some(SettingsCmd::List { all, format }) => {
-            let map = Store::load(&path)?.map;
-            emit(&if all {
-                render_list_all(&map, format)
-            } else {
-                render_list(&map, format)
-            });
-            return Ok(0);
-        }
-        Some(SettingsCmd::All { format }) => {
-            emit(&render_list(&Store::load(&path)?.map, format));
-            return Ok(0);
-        }
-        None => {}
-    }
-    let Some(key) = args.key else {
-        if args.delete {
-            bail!("the argument '--delete' requires a <KEY>\n Usage: tabsmith settings --delete <KEY>");
-        }
-        // Same as `tabsmith settings --help`.
-        if let Err(help) =
-            <crate::bootstrap::cli::Cli as clap::Parser>::try_parse_from(["tabsmith", "settings", "--help"])
-        {
-            help.print()?;
-        }
-        return Ok(0);
-    };
-    let mut store = Store::load(&path)?;
-    match (args.value, args.delete) {
-        (Some(_), true) => {
-            bail!("the argument '--delete' cannot be used with '[VALUE]'\n Usage: tabsmith settings --delete {key}")
-        }
-        (None, false) => println!("{}", render_get(&key, store.map.get(&key), args.format)?),
-        (Some(value), false) => {
-            store.map.insert(key, parse_value(&value));
-            store.save()?;
-        }
-        (None, true) => {
-            let keys = matching_keys(&store.map, &key);
-            if keys.is_empty() {
-                bail!("No settings found matching {key}");
-            }
-            println!("{}", removal_message(&keys));
-            for k in &keys {
-                store.map.remove(k);
-            }
-            store.save()?;
-        }
-    }
-    Ok(0)
-}
-
-/// `settings KEY`: plain prints strings raw and other values pretty; json formats print `null` when unset.
-fn render_get(key: &str, value: Option<&Value>, format: OutputFormat) -> Result<String> {
-    Ok(match (value, format) {
-        (None, OutputFormat::Plain) => bail!("No value associated with {key}"),
-        (None, _) => "null".to_string(),
-        (Some(Value::String(s)), OutputFormat::Plain) => s.clone(),
-        (Some(v), OutputFormat::Plain | OutputFormat::JsonPretty) => format!("{v:#}"),
-        (Some(v), OutputFormat::Json) => v.to_string(),
-    })
-}
-
-fn matching_keys(map: &Map<String, Value>, pattern: &str) -> Vec<String> {
-    let pattern = SettingKeyPattern::new(pattern);
-    map.keys()
-        .filter(|k| pattern.matches(k))
-        .cloned()
-        .collect()
-}
-
-fn removal_message(keys: &[String]) -> String {
-    match keys {
-        [one] => format!("Removing {one:?}"),
-        _ => std::iter::once("Removing:".to_string())
-            .chain(keys.iter().map(|k| format!("  - {k}")))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    }
-}
-
-/// `settings list`: configured keys (sorted: serde_json's Map is a BTreeMap).
-fn render_list(map: &Map<String, Value>, format: OutputFormat) -> String {
-    format.render(
-        || {
-            map.iter()
-                .map(|(k, v)| format!("{k} = {v}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        },
-        || Value::Object(map.clone()),
-    )
-}
-
-/// `settings list --all`: every catalog key (SPEC §3.3) with its current value.
-fn render_list_all(map: &Map<String, Value>, format: OutputFormat) -> String {
-    let catalog = settings::catalog();
-    format.render(
-        || {
-            let mut out = String::from("key\ttype\tdefault\tvalue");
-            for e in catalog {
-                let value = map.get(e.key()).map(Value::to_string).unwrap_or_default();
-                out += &format!("\n{}\t{}\t{}\t{value}", e.key(), e.value_type(), e.default());
-            }
-            out
-        },
-        || {
-            catalog
-                .iter()
-                .map(|e| {
-                    json!({
-                        "key": e.key(),
-                        "type": e.value_type(),
-                        "default": serde_json::from_str::<Value>(e.default()).unwrap_or(Value::Null),
-                        "description": e.description(),
-                        "value": map.get(e.key()),
-                    })
-                })
-                .collect()
-        },
-    )
-}
-
 /// settings.json, or the file `TABSMITH_SETTINGS_PATH` names, resolved when a command reads or writes it.
 fn settings_repository() -> JsonFileSettingsRepository {
     JsonFileSettingsRepository::new(data_directory_from_env())
-}
-
-/// `$EDITOR <path>` (waits), else macOS `open -t`, Windows `notepad`.
-fn open_settings(path: &Path) -> Result<i32> {
-    if !path.exists() {
-        Store {
-            path: path.to_path_buf(),
-            map: Map::new(),
-        }
-        .save()?;
-    }
-    let mut cmd = if let Some(editor) = std::env::var("EDITOR")
-        .ok()
-        .filter(|e| !e.trim().is_empty())
-    {
-        // ponytail: whitespace split covers `code --wait`; quoted editor paths with spaces are not supported.
-        let mut parts = editor.split_whitespace();
-        let mut c = std::process::Command::new(parts.next().unwrap_or_default());
-        c.args(parts);
-        c
-    } else if cfg!(target_os = "macos") {
-        let mut c = std::process::Command::new("open");
-        c.arg("-t");
-        c
-    } else if cfg!(windows) {
-        std::process::Command::new("notepad")
-    } else {
-        bail!("The EDITOR environment variable is not set")
-    };
-    let status = cmd
-        .arg(path)
-        .status()
-        .context("could not launch the editor")?;
-    Ok(if status.success() { 0 } else { 1 })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -854,92 +643,6 @@ fn debug_logs() -> Result<i32> {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-
-    fn map(v: Value) -> Map<String, Value> {
-        v.as_object().unwrap().clone()
-    }
-
-    #[test]
-    fn settings_get_formats() {
-        let s = json!("dark");
-        let a = json!(["git", "npm"]);
-        assert_eq!(
-            render_get("k", Some(&s), OutputFormat::Plain).unwrap(),
-            "dark"
-        );
-        assert_eq!(
-            render_get("k", Some(&s), OutputFormat::Json).unwrap(),
-            "\"dark\""
-        );
-        assert_eq!(
-            render_get("k", Some(&a), OutputFormat::Json).unwrap(),
-            "[\"git\",\"npm\"]"
-        );
-        assert_eq!(
-            render_get("k", Some(&a), OutputFormat::Plain).unwrap(),
-            "[\n  \"git\",\n  \"npm\"\n]"
-        );
-        assert_eq!(render_get("k", None, OutputFormat::Json).unwrap(), "null");
-        assert_eq!(
-            render_get("k", None, OutputFormat::Plain)
-                .unwrap_err()
-                .to_string(),
-            "No value associated with k"
-        );
-    }
-
-    /// The message half of `settings_delete_wildcards`; its matching half lives with `DeleteSettingsUseCase`.
-    #[test]
-    fn settings_delete_wildcards_removal_message() {
-        assert_eq!(removal_message(&["a.b".into()]), "Removing \"a.b\"");
-        assert_eq!(
-            removal_message(&["a".into(), "b".into()]),
-            "Removing:\n  - a\n  - b"
-        );
-    }
-
-    #[test]
-    fn settings_list_formats() {
-        let m = map(json!({"b.key": [1], "a.key": "x"}));
-        assert_eq!(
-            render_list(&m, OutputFormat::Plain),
-            "a.key = \"x\"\nb.key = [1]"
-        );
-        assert_eq!(
-            render_list(&m, OutputFormat::Json),
-            r#"{"a.key":"x","b.key":[1]}"#
-        );
-        assert_eq!(render_list(&Map::new(), OutputFormat::Plain), "");
-
-        let m = map(json!({"autocomplete.theme": "light"}));
-        let all = render_list_all(&m, OutputFormat::Plain);
-        let lines: Vec<&str> = all.lines().collect();
-        assert_eq!(lines[0], "key\ttype\tdefault\tvalue");
-        assert_eq!(lines.len(), settings::catalog().len() + 1);
-        assert!(lines.contains(&"autocomplete.theme\tstring\t\"dark\"\t\"light\""));
-        assert!(lines.contains(&"autocomplete.width\tnumber (columns)\t40\t"));
-
-        let v: Value = serde_json::from_str(&render_list_all(&m, OutputFormat::Json)).unwrap();
-        let theme = v
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|e| e["key"] == "autocomplete.theme")
-            .unwrap();
-        assert_eq!(theme["default"], json!("dark"));
-        assert_eq!(theme["value"], json!("light"));
-        assert!(theme["description"].is_string());
-        let width = v
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|e| e["key"] == "autocomplete.width")
-            .unwrap();
-        assert_eq!(
-            (width["default"].clone(), width["value"].clone()),
-            (json!(40), Value::Null)
-        );
-    }
 
     #[test]
     fn theme_list_order() {

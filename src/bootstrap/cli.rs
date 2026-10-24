@@ -1,11 +1,17 @@
 //! Composition root for the command line: the clap root, the dispatch to each command handler, and the
 //! commands that only need the root (`version`, `completion`) plus the error printer.
 
+use crate::settings::infrastructure::cli::settings_command::{run_settings_command, SettingsArgs};
+use crate::settings::infrastructure::settings_module::build_settings_module;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
+use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::terminal_style::epaint;
 use crate::{cli, doctor, integrations, pty};
 use anyhow::Result;
 use clap::{ArgAction, Args, Parser, Subcommand};
 use std::io::Write;
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(
@@ -24,7 +30,7 @@ pub(crate) struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Customize appearance & behavior
-    Settings(cli::SettingsArgs),
+    Settings(SettingsArgs),
     /// Get or set theme
     Theme(cli::ThemeArgs),
     /// Inline shell completions
@@ -101,7 +107,11 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
             use clap::CommandFactory;
             Cli::command().print_help().map(|_| 0).map_err(Into::into)
         }
-        Some(Command::Settings(a)) => cli::settings(a),
+        Some(Command::Settings(a)) => run_settings_command(
+            a,
+            &build_settings_module(&shared_dependencies()),
+            print_settings_help,
+        ),
         Some(Command::Theme(a)) => cli::theme(a),
         Some(Command::Inline(c)) => cli::inline(c),
         Some(Command::Integrations(c)) => integrations::integrations_cmd(c),
@@ -123,6 +133,22 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
             InternalCmd::PreCmd { alias } => integrations::pre_cmd(alias),
         },
     }
+}
+
+/// What every module is built from. Never fails: an unknown home only fails the paths a command asks for.
+fn shared_dependencies() -> SharedDependencies {
+    SharedDependencies {
+        data_directory: data_directory_from_env(),
+        clock: Arc::new(SystemClock),
+    }
+}
+
+/// `tabsmith settings --help` as the root command prints it, with the global `-v`.
+fn print_settings_help() -> Result<()> {
+    if let Err(help) = Cli::try_parse_from(["tabsmith", "settings", "--help"]) {
+        help.print()?;
+    }
+    Ok(())
 }
 
 #[derive(Args)]
