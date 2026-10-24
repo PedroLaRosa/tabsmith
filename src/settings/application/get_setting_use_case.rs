@@ -14,7 +14,8 @@ impl GetSettingUseCase {
         GetSettingUseCase { settings }
     }
 
-    pub(crate) fn execute(&self, key: &SettingKey) -> Result<Option<SettingValue>, SettingsError> {
+    pub(crate) fn execute(&self, key: &str) -> Result<Option<SettingValue>, SettingsError> {
+        let key = SettingKey::new(key);
         Ok(self.settings.load()?.get(key.as_str()).cloned())
     }
 }
@@ -38,9 +39,7 @@ mod tests {
             .unwrap();
         let use_case = GetSettingUseCase::new(repository);
 
-        let value = use_case
-            .execute(&SettingKey::new("autocomplete.theme"))
-            .unwrap();
+        let value = use_case.execute("autocomplete.theme").unwrap();
 
         assert_eq!(value, Some(SettingValue::Text("light".to_string())));
     }
@@ -50,9 +49,7 @@ mod tests {
     fn should_give_no_value_for_an_unset_key_even_when_the_catalog_has_a_default() {
         let use_case = GetSettingUseCase::new(Rc::new(InMemorySettingsRepository::default()));
 
-        let value = use_case
-            .execute(&SettingKey::new("autocomplete.theme"))
-            .unwrap();
+        let value = use_case.execute("autocomplete.theme").unwrap();
 
         assert_eq!(value, None);
     }

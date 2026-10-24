@@ -14,11 +14,8 @@ impl SetSettingUseCase {
         SetSettingUseCase { settings }
     }
 
-    pub(crate) fn execute(
-        &self,
-        key: &SettingKey,
-        value: SettingValue,
-    ) -> Result<(), SettingsError> {
+    pub(crate) fn execute(&self, key: &str, value: SettingValue) -> Result<(), SettingsError> {
+        let key = SettingKey::new(key);
         let updated = self.settings.load()?.with(key.as_str(), value);
         self.settings.save(&updated)
     }
@@ -40,7 +37,7 @@ mod tests {
 
         use_case
             .execute(
-                &SettingKey::new("autocomplete.height"),
+                "autocomplete.height",
                 SettingValue::Number(SettingNumber::from(10u64)),
             )
             .unwrap();
@@ -58,7 +55,7 @@ mod tests {
         let use_case = SetSettingUseCase::new(repository.clone());
 
         use_case
-            .execute(&SettingKey::new(""), SettingValue::Text("v".to_string()))
+            .execute("", SettingValue::Text("v".to_string()))
             .unwrap();
 
         assert_eq!(
@@ -75,10 +72,7 @@ mod tests {
         let use_case = SetSettingUseCase::new(repository.clone());
 
         use_case
-            .execute(
-                &SettingKey::new("autocomplete.theme"),
-                SettingValue::Text("light".to_string()),
-            )
+            .execute("autocomplete.theme", SettingValue::Text("light".to_string()))
             .unwrap();
 
         assert_eq!(
@@ -93,7 +87,7 @@ mod tests {
         let repository = Rc::new(UnreadableSettingsRepository::default());
         let use_case = SetSettingUseCase::new(repository.clone());
 
-        let result = use_case.execute(&SettingKey::new("autocomplete.height"), SettingValue::Null);
+        let result = use_case.execute("autocomplete.height", SettingValue::Null);
 
         assert_eq!(
             (result.is_err(), repository.save_attempted()),

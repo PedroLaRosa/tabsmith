@@ -777,8 +777,9 @@ Phase 1 notes: `anyhow` is gone from shared infrastructure (typed errors whose `
 
 Phase 2 notes: `SettingNumber` holds `SettingValue::Number` as unsigned, negative or float like serde_json's
 `Number`, so a settings.json number keeps its integer or float form. `SettingKey` is not validated (D1: `settings "" v` stores the
-empty key); the get and set use cases take it, while `Settings::{get, with, without}` keep `&str` keys because the
-catalog constants and the legacy callers pass them. `Settings` exposes `entries()` (key-ordered pairs) as its
+empty key); the get and set use cases take the key as `&str` and build the `SettingKey` inside, as the canonical
+shape above does, while `Settings::{get, with, without}` keep `&str` keys because the catalog constants and the legacy
+callers pass them. `Settings` exposes `entries()` (key-ordered pairs) as its
 primitives view in place of `to_primitives()`. `infrastructure/load_or_defaults.rs` gives the pty and doctor the
 defaults plus the old `settings: <error>` warning when settings cannot be loaded; the settings commands stay strict.
 `run_settings_command` takes a `print_root_help` callback from bootstrap, which removed the back-edge above.
