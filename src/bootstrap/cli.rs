@@ -1,10 +1,11 @@
 //! Composition root for the command line: the clap root, the dispatch to each command handler, and the
 //! commands that only need the root (`version`, `completion`) plus the error printer.
 
+use crate::shared::infrastructure::terminal_style::epaint;
 use crate::{cli, doctor, integrations, pty};
 use anyhow::Result;
 use clap::{ArgAction, Args, Parser, Subcommand};
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 
 #[derive(Parser)]
 #[command(
@@ -145,9 +146,5 @@ pub(crate) fn completion(args: CompletionArgs) -> Result<i32> {
 
 /// `error: <msg>` on stderr (`error:` bold red when stderr is a tty).
 pub(crate) fn print_error(err: &anyhow::Error) {
-    if std::io::stderr().is_terminal() {
-        eprintln!("\x1b[1;31merror:\x1b[0m {err:#}");
-    } else {
-        eprintln!("error: {err:#}");
-    }
+    eprintln!("{} {err:#}", epaint("1;31", "error:"));
 }
