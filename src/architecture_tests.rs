@@ -1,5 +1,12 @@
 //! Architecture fitness test (plan section 1): every registered module keeps the hexagonal layer rules.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Modules that follow the hexagonal layout; each phase registers the module it finishes. `bootstrap` is the
+/// composition root and is never registered.
+const REGISTERED_MODULES: &[&str] = &[];
+
 /// External crates the inner layers may use. std, core and alloc are not in Cargo.toml, so they are never flagged.
 const ALLOWED_EXTERNAL_CRATES: &[&str] = &["unicode_width"];
 
@@ -11,10 +18,62 @@ enum Rule {
     SharedKernel,
 }
 
+impl Rule {
+    fn description(self) -> &'static str {
+        match self {
+            Rule::DomainLayer => {
+                "domain uses application, infrastructure, bootstrap, an external crate, println!/eprintln! or logger::"
+            }
+            Rule::ApplicationLayer => "application uses infrastructure, bootstrap or an external crate",
+            Rule::ModuleBoundary => "uses another module's use case or infrastructure",
+            Rule::SharedKernel => "shared uses a crate module other than shared",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct Violation {
     line: usize,
     rule: Rule,
+}
+
+/// One `src/<file>:<line>: <rule>: <code>` entry per violation in the registered modules under `src`.
+fn registered_module_violations(src: &Path, external_crates: &[String]) -> Vec<String> {
+    let mut report = Vec::new();
+    for module in REGISTERED_MODULES {
+        for file in rust_files(&src.join(module)) {
+            let path = relative_path(src, &file);
+            let source = fs::read_to_string(&file).unwrap_or_else(|err| panic!("read {path}: {err}"));
+            let lines: Vec<&str> = source.lines().collect();
+            for Violation { line, rule } in violations(&path, &source, external_crates) {
+                let code = lines[line - 1].trim();
+                report.push(format!("src/{path}:{line}: {}: {code}", rule.description()));
+            }
+        }
+    }
+    report
+}
+
+fn rust_files(dir: &Path) -> Vec<PathBuf> {
+    let entries = fs::read_dir(dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()));
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry.expect("read directory entry").path();
+        if path.is_dir() {
+            files.extend(rust_files(&path));
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    files
+}
+
+/// `file` relative to `src`, `/`-separated on every platform.
+fn relative_path(src: &Path, file: &Path) -> String {
+    let relative = file.strip_prefix(src).expect("file under src");
+    let components: Vec<_> = relative.components().map(|part| part.as_os_str().to_string_lossy()).collect();
+    components.join("/")
 }
 
 fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Violation> {
@@ -105,6 +164,16 @@ mod tests {
     fn violations_in(path: &str, source: &str) -> Vec<Violation> {
         let external_crates = ["anyhow", "serde", "serde_json", "unicode_width"].map(String::from);
         violations(path, source, &external_crates)
+    }
+
+    #[test]
+    fn should_keep_every_registered_module_inside_its_layer_rules() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml");
+
+        let report = registered_module_violations(&root.join("src"), &external_crates(&cargo_toml));
+
+        assert!(report.is_empty(), "architecture rules broken:\n{}", report.join("\n"));
     }
 
     #[test]
