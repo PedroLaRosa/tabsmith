@@ -144,7 +144,8 @@ mod tests {
 
     #[test]
     fn should_read_a_string_the_user_set() {
-        let settings = settings_with(&[(AUTOCOMPLETE_THEME, SettingValue::Text("light".to_string()))]);
+        let settings =
+            settings_with(&[(AUTOCOMPLETE_THEME, SettingValue::Text("light".to_string()))]);
 
         let theme = settings.string(AUTOCOMPLETE_THEME);
 
@@ -246,7 +247,8 @@ mod tests {
     #[test]
     fn should_read_a_float_as_a_number_but_fall_back_to_the_default_when_read_as_an_integer() {
         let timeout = SettingNumber::from_f64(7500.0).unwrap();
-        let settings = settings_with(&[(AUTOCOMPLETE_SCRIPT_TIMEOUT, SettingValue::Number(timeout))]);
+        let settings =
+            settings_with(&[(AUTOCOMPLETE_SCRIPT_TIMEOUT, SettingValue::Number(timeout))]);
 
         let read = (
             settings.f64(AUTOCOMPLETE_SCRIPT_TIMEOUT),
