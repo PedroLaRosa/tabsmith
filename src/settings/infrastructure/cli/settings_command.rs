@@ -15,21 +15,21 @@ use serde_json::{json, Map, Value};
 #[command(group(ArgGroup::new("vals").requires("key").args(["value", "format"])))]
 pub(crate) struct SettingsArgs {
     #[command(subcommand)]
-    pub(crate) cmd: Option<SettingsCmd>,
+    cmd: Option<SettingsCmd>,
     /// Key of the setting
-    pub(crate) key: Option<String>,
+    key: Option<String>,
     /// Value of the setting (JSON, or a plain string)
-    pub(crate) value: Option<String>,
+    value: Option<String>,
     /// Delete a setting (wildcards * and ? allowed)
     #[arg(long, short)]
-    pub(crate) delete: bool,
+    delete: bool,
     /// Output format
     #[arg(long, short, value_enum, default_value_t)]
-    pub(crate) format: OutputFormat,
+    format: OutputFormat,
 }
 
 #[derive(Subcommand)]
-pub(crate) enum SettingsCmd {
+enum SettingsCmd {
     /// Open the settings file
     Open,
     /// List settings
