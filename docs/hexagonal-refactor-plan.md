@@ -1,7 +1,8 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: planned, nothing implemented. Written for a fresh implementation session. Source inventory taken on
-2026-10-24 from `main` @ `4f26859`.
+Status: Phases 0, 1 and 2 are done on branch `refactor/hexagonal-architecture` (gate green at `c7b796e`). Phase 3 is
+prepared but not started. Working notes, tools, the per-file source map and the Phase 3 research are in
+[`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
 
@@ -493,7 +494,7 @@ Implementation session protocol (AGENTS.md):
 - Commit after each step.
 - Work on branch `refactor/hexagonal-architecture`. Never commit on `main`.
 
-### Phase 0: branch and baseline
+### Phase 0: branch and baseline (done)
 1. `git switch -c refactor/hexagonal-architecture`.
 2. Commit this plan and `docs/ubiquitous-language.md` (both written by the planning session) on the branch, if they
    are not committed yet.
@@ -511,7 +512,7 @@ Baseline recorded on 2026-10-24 at `ef807c1` (rustc 1.95.0, macOS):
   get/set/delete/list (plain, json, json-pretty), `theme`, `inline`, `integrations status/install/uninstall` (with the
   written dotfiles and their modes), `completion`, `diagnostic`, `doctor --all`, run in an isolated `HOME`.
 
-### Phase 1: composition root, fitness test, shared kernel
+### Phase 1: composition root, fitness test, shared kernel (done)
 1. Move `main.rs`'s clap root and dispatch, `cli::completion` and `cli::print_error` to `bootstrap/cli.rs`.
    `main.rs` becomes thin.
 2. Add `src/architecture_tests.rs` with an empty module list.
@@ -528,7 +529,10 @@ Baseline recorded on 2026-10-24 at `ef807c1` (rustc 1.95.0, macOS):
 
 Done when `shared` is registered in the architecture test and the build has no cycles.
 
-### Phase 2: settings
+Done at `52dcf85`: `shared` registered; the last cycle (legacy `cli.rs` → `bootstrap` for `settings --help`) went in
+Phase 2.
+
+### Phase 2: settings (done)
 1. Write the VOs test-first: `SettingKey`, `SettingValue`. Move `SettingKeyPattern` (with the wildcard test) and
    `SettingDefinition` + `SettingsCatalog` (with the catalog test).
 2. Build `Settings` with the same getter surface (`bool`, `string`, `i64`, `f64`, `str_list`, `with_prefix`, `get`),
@@ -541,7 +545,10 @@ Done when `shared` is registered in the architecture test and the build has no c
    `cli/settings_command.rs`.
 5. Add `settings_module` and switch the dispatch arm. Switch every `crate::settings::*` import. Delete `settings.rs`.
 
-### Phase 3: history
+Done at `c7b796e`: `settings` registered in the architecture test, `settings.rs` deleted, gate green (512 tests).
+See the Phase 2 notes in section 9.
+
+### Phase 3: history (prepared, not started: [research](hexagonal-refactor/phase-3-history.md))
 1. Make `HistoryEntry` an entity without serde, and give the adapter a `HistoryRecord` struct.
 2. Add `HistoryRepository` + InMemory, and `JsonlHistoryRepository` with `history_file_round_trip_and_compaction`.
 3. Write `RecordCommandUseCase` test-first; blank commands are skipped.
