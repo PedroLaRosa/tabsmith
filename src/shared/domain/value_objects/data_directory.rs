@@ -28,6 +28,10 @@ impl DataDirectory {
     pub(crate) fn state_file(&self) -> Result<PathBuf, SharedError> {
         Ok(self.root()?.join("state.json"))
     }
+
+    pub(crate) fn history_file(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("history.jsonl"))
+    }
 }
 
 #[cfg(test)]
@@ -80,5 +84,14 @@ mod tests {
         let settings_file = data_directory.settings_file();
 
         assert_eq!(settings_file, Ok(PathBuf::from("/elsewhere/s.json")));
+    }
+
+    #[test]
+    fn should_put_the_history_file_under_the_root() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let path = data_directory.history_file();
+
+        assert_eq!(path, Ok(PathBuf::from("/data/history.jsonl")));
     }
 }
