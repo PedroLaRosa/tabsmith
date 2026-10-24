@@ -125,7 +125,9 @@ pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) 
    crate other than `std`/`core`/`alloc`/`unicode_width`, or `println!`/`eprintln!`/`logger::`;
 2. a file in `*/application/` that uses `::infrastructure`, `crate::bootstrap`, or external crates (same allow-list);
 3. a module other than `bootstrap` that references another module's `application::*_use_case` or `::infrastructure`;
-4. `shared/` that references a feature module.
+4. `shared/` that references a feature module;
+5. a registered module with a `src/<module>.rs`, or a file directly in `src/<module>/` other than `mod.rs` (rules 1-2
+   read the layer from the folder name, so such a file would escape them).
 
 It starts with the module list empty, and each phase adds the module it finishes.
 
@@ -221,11 +223,13 @@ application/{get_setting, set_setting, delete_settings, list_settings, list_sett
              open_settings_file}_use_case.rs
 application/ports/settings_editor.rs
 infrastructure/settings_module.rs
-infrastructure/load_or_defaults.rs        the pty's and doctor's lenient load: defaults + the old warning
+infrastructure/load_or_defaults.rs        the legacy pty.rs/doctor.rs lenient load: defaults + the old warning
+                                          (no caller once Phases 9-10 move it into their own infrastructure)
 infrastructure/adapters/{json_file_settings_repository.rs, setting_value_json.rs (SettingValue ↔ serde_json,
                          "JSON else string" parsing), system_settings_editor.rs ← cli::open_settings}
 infrastructure/cli/settings_command.rs    ← cli::{SettingsArgs, SettingsCmd, settings, render_get, render_list,
-                                           render_list_all, removal_message, matching_keys}
+                                           render_list_all, removal_message}
+(cli::matching_keys is inlined into DeleteSettingsUseCase::execute)
 ```
 
 ### history
@@ -645,6 +649,11 @@ Done when `shared` is registered in the architecture test and the build has no c
    - `platform_unix` / `platform_windows`, `terminal_probe` (`probe_replies`), `fallback_shell` and the adapters;
    - the commands `pty_command`, `debug_shell_command` and `key_tester_command`, with their tests from `cli.rs`.
    - The `#[cfg(test)]` panic injection stays at the driver's call site.
+   - The settings repository comes from bootstrap as a trait object (section 2), and the lenient load (at start and
+     on every reload) moves into terminal_session's own infrastructure: on a load error it logs the same warn-level
+     `settings: <error>: <cause>…` text as `settings::infrastructure::load_or_defaults` (D5) and uses
+     `Settings::default()`. Importing
+     `load_or_defaults` or `JsonFileSettingsRepository` from a registered module breaks fitness rule 3.
 7. Delete `pty.rs`. `types::Msg` and `types::Model` are gone.
 
 ### Phase 10: diagnostics
@@ -654,7 +663,9 @@ Done when `shared` is registered in the architecture test and the build has no c
    - `SystemFacts`, `ToolVersion` (with `doctor_version_parsing`), `DoctorCheckCatalog` and `UsernameScrubber`.
    - Write **new** tests for each check evaluated from facts. Only 4 doctor tests exist today.
 2. Add the ports and adapters. The spinner and the SIGINT cursor restore live in `terminal_doctor_reporter`. Add the
-   `CheckFixer` bridge in bootstrap.
+   `CheckFixer` bridge in bootstrap. The settings repository is injected by bootstrap, and diagnostics' own
+   infrastructure does the lenient load the way Phase 9 step 6 says; `settings::infrastructure::load_or_defaults`
+   then has no caller and is deleted.
 3. Write the three use cases. Add the CLI handlers (with `diagnostic_toml`). Delete `doctor.rs` and `cli.rs`.
 
 ### Phase 11: cleanup and documentation
@@ -780,8 +791,15 @@ Phase 2 notes: `SettingNumber` holds `SettingValue::Number` as unsigned, negativ
 empty key); the get and set use cases take the key as `&str` and build the `SettingKey` inside, as the canonical
 shape above does, while `Settings::{get, with, without}` keep `&str` keys because the catalog constants and the legacy
 callers pass them. `Settings` exposes `entries()` (key-ordered pairs) as its
-primitives view in place of `to_primitives()`. `infrastructure/load_or_defaults.rs` gives the pty and doctor the
-defaults plus the old `settings: <error>` warning when settings cannot be loaded; the settings commands stay strict.
+primitives view in place of `to_primitives()`. `infrastructure/load_or_defaults.rs` gives the legacy pty.rs and
+doctor.rs the defaults plus the old `settings: <error>` warning when settings cannot be loaded; the settings commands
+stay strict. It is reachable only while those files are unregistered (Phase 9 step 6 and Phase 10 step 2 replace it).
+`cli::matching_keys` is inlined into `DeleteSettingsUseCase::execute(pattern, announce)`, which hands the matching
+keys to `announce` before it saves, so `Removing …` still prints even when the save then fails;
+`settings_delete_wildcards` is split between that use case and `settings_command.rs` (D6). The render tests moved to
+`settings_command.rs`, but `settings_set_parses_json_or_string` follows `parse_value` into `setting_value_json.rs`.
+`SettingsModule` also holds the `DataDirectory` (private, behind `locate_settings_file()`) so the settings command
+still fails on a missing home before any other step, as `settings::settings_path()?` did.
 `run_settings_command` takes a `print_root_help` callback from bootstrap, which removed the back-edge above.
 `settings::user_home` became `shared::infrastructure::data_directory_from_env::user_home_from_env` with
 `SharedError::UserHomeNotFound` (its plain message, no `TABSMITH_HOME` hint), and the `home`/`settings_path`/
