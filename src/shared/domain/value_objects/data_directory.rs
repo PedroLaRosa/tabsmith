@@ -1,12 +1,17 @@
 use crate::shared::domain::shared_error::SharedError;
 use std::path::PathBuf;
 
+/// tabsmith's home (`~/.tabsmith` or `TABSMITH_HOME`) and every path under it (SPEC §3.1). The root may be unknown
+/// (no home directory): only the paths asked for then fail, so commands that never touch the data directory keep
+/// working without one.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DataDirectory {
     root: Option<PathBuf>,
     settings_file_override: Option<PathBuf>,
 }
 
 impl DataDirectory {
+    /// `root` is `None` when it cannot be determined; `settings_file_override` is a settings file kept outside it.
     pub(crate) fn new(root: Option<PathBuf>, settings_file_override: Option<PathBuf>) -> Self {
         DataDirectory {
             root,
@@ -18,47 +23,58 @@ impl DataDirectory {
         self.root.clone().ok_or(SharedError::HomeDirectoryNotFound)
     }
 
+    /// The override when there is one (it needs no root), else `settings.json` under the root.
     pub(crate) fn settings_file(&self) -> Result<PathBuf, SharedError> {
-        if let Some(path) = &self.settings_file_override {
-            return Ok(path.clone());
+        match &self.settings_file_override {
+            Some(path) => Ok(path.clone()),
+            None => self.under("settings.json"),
         }
-        Ok(self.root()?.join("settings.json"))
     }
 
+    /// Always under the root: the settings override does not move it.
     pub(crate) fn state_file(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("state.json"))
+        self.under("state.json")
     }
 
     pub(crate) fn history_file(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("history.jsonl"))
+        self.under("history.jsonl")
     }
 
+    /// Session context files (`<session id>.json`) and debug-shell rc dirs.
     pub(crate) fn run_dir(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("run"))
+        self.under("run")
     }
 
     pub(crate) fn logs_dir(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("logs"))
+        self.under("logs")
     }
 
     pub(crate) fn themes_dir(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("themes"))
+        self.under("themes")
     }
 
+    /// The dotfile integrations' script files.
     pub(crate) fn shell_dir(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("shell"))
+        self.under("shell")
     }
 
+    /// Copies of rc files taken before an integration rewrites them.
     pub(crate) fn backups_dir(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("backups"))
+        self.under("backups")
     }
 
+    /// The extracted spec bundles, one dir per version, and the user dir.
     pub(crate) fn specs_dir(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("specs"))
+        self.under("specs")
     }
 
+    /// The user's own specs, which override the bundled ones.
     pub(crate) fn user_specs_dir(&self) -> Result<PathBuf, SharedError> {
-        Ok(self.root()?.join("specs").join("user"))
+        Ok(self.specs_dir()?.join("user"))
+    }
+
+    fn under(&self, name: &str) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join(name))
     }
 }
 
