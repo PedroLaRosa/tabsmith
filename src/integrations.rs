@@ -3,6 +3,7 @@
 //! OWNER: integrations agent. Shell scripts live in `shell/` and are embedded with `include_str!`.
 use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::atomic_file::AtomicFile;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::os::executable_lookup::which;
 #[cfg(windows)]
@@ -337,26 +338,9 @@ fn prune_run_files(dir: &Path) {
     }
 }
 
-/// Atomic write (temp + rename); Unix: file 0600, parent dir 0700 (SPEC §2.11). The parent's parent (the data
-/// root) must exist: a running session never recreates a purged `~/.tabsmith`.
+/// See [`AtomicFile::write_private`]. Callers switch to it in Phase 4.
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = path.parent().context("no parent directory")?;
-    match std::fs::create_dir(dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e.into()),
-        _ => {}
-    }
-    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        opts.mode(0o600);
-    }
-    opts.open(&tmp)?.write_all(bytes)?;
-    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    Ok(AtomicFile::new(path).write_private(bytes)?)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
