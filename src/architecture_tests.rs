@@ -139,7 +139,7 @@ impl TestOnlyItem {
             return false;
         };
         self.has_body |= code.contains('{');
-        let ends = if self.has_body { depth <= start } else { code.trim_end().ends_with(';') };
+        let ends = if self.has_body { depth <= start } else { code.trim_end().ends_with([';', ',']) };
         if ends {
             self.depth = None;
         }
@@ -589,6 +589,26 @@ mod tests {
                 Violation { line: 3, rule: Rule::DomainLayer },
                 Violation { line: 6, rule: Rule::DomainLayer },
                 Violation { line: 12, rule: Rule::DomainLayer },
+            ]
+        );
+    }
+
+    #[test]
+    fn should_apply_the_layer_rules_again_after_a_test_only_field() {
+        let source = "pub(crate) struct Settings {\n    \
+                      #[cfg(test)]\n    \
+                      probe: u8,\n    \
+                      cache: serde_json::Value,\n\
+                      }\n\
+                      fn load() -> serde_json::Value { serde_json::Value::Null }\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 4, rule: Rule::DomainLayer },
+                Violation { line: 6, rule: Rule::DomainLayer },
             ]
         );
     }
