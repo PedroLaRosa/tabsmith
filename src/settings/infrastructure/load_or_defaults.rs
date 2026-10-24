@@ -69,4 +69,15 @@ mod tests {
             )
         );
     }
+
+    /// A settings.json saved mid-edit turns the live settings back to the defaults; it does not keep the old ones.
+    #[test]
+    fn should_fall_back_to_the_default_settings_when_they_cannot_be_loaded() {
+        let temp_dir = TempDir::new("settings-lenient");
+        let repository = corrupted_settings_file(&temp_dir);
+
+        let settings = load_or_defaults(&repository);
+
+        assert_eq!(settings, Settings::default());
+    }
 }
