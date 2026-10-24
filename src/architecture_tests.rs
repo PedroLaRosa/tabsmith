@@ -11,7 +11,7 @@ struct Violation {
     rule: Rule,
 }
 
-fn violations(path: &str, source: &str) -> Vec<Violation> {
+fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Violation> {
     if path.split('/').nth(1) != Some("domain") {
         return Vec::new();
     }
@@ -22,6 +22,7 @@ fn violations(path: &str, source: &str) -> Vec<Violation> {
             code.contains("::application")
                 || code.contains("::infrastructure")
                 || code.contains("crate::bootstrap")
+                || external_crates.iter().any(|name| code.contains(&format!("{name}::")))
         })
         .map(|(index, _)| Violation { line: index + 1, rule: Rule::DomainLayer })
         .collect()
@@ -31,7 +32,8 @@ mod tests {
     use super::*;
 
     fn violations_in(path: &str, source: &str) -> Vec<Violation> {
-        violations(path, source)
+        let external_crates = ["anyhow", "serde", "serde_json", "unicode_width"].map(String::from);
+        violations(path, source, &external_crates)
     }
 
     #[test]
@@ -58,6 +60,23 @@ mod tests {
         let found = violations_in("settings/domain/settings.rs", source);
 
         assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
+    }
+
+    #[test]
+    fn should_flag_a_domain_file_that_uses_an_external_crate() {
+        let source = "use serde::Serialize;\n\
+                      let width = text.len();\n\
+                      let text = serde_json::to_string(&value);\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 1, rule: Rule::DomainLayer },
+                Violation { line: 3, rule: Rule::DomainLayer },
+            ]
+        );
     }
 
     #[test]
