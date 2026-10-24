@@ -41,4 +41,14 @@ mod tests {
 
         assert_eq!(value, Some(SettingValue::Text("light".to_string())));
     }
+
+    /// `settings autocomplete.theme` on fresh settings errors instead of printing the catalog's "dark".
+    #[test]
+    fn should_give_no_value_for_an_unset_key_even_when_the_catalog_has_a_default() {
+        let use_case = GetSettingUseCase::new(Rc::new(InMemorySettingsRepository::default()));
+
+        let value = use_case.execute("autocomplete.theme").unwrap();
+
+        assert_eq!(value, None);
+    }
 }
