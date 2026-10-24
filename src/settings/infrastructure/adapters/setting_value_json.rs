@@ -53,11 +53,14 @@ pub(crate) fn setting_value_to_json(value: &SettingValue) -> Value {
     }
 }
 
+/// Back to serde_json's `PosInt`, `NegInt` or `Float`, tried in the order [`setting_number`] read them.
 fn json_number(number: &SettingNumber) -> Value {
-    match number.as_u64() {
-        Some(unsigned) => Value::from(unsigned),
-        None => Value::from(number.as_i64().unwrap()),
-    }
+    number
+        .as_u64()
+        .map(Value::from)
+        .or_else(|| number.as_i64().map(Value::from))
+        .or_else(|| number.as_f64().map(Value::from))
+        .expect("every setting number reads as an f64")
 }
 
 #[cfg(test)]
@@ -175,5 +178,15 @@ mod tests {
         let json = setting_value_to_json(&value);
 
         assert_eq!(json, json!(-3));
+    }
+
+    /// `inline.historyCount: 10.0` is saved as `10.0`, so it keeps falling back to the default.
+    #[test]
+    fn should_write_a_float_setting_number_as_a_json_float_even_when_it_is_whole() {
+        let value = SettingValue::Number(SettingNumber::from_f64(10.0).unwrap());
+
+        let json = setting_value_to_json(&value);
+
+        assert_eq!(json, json!(10.0));
     }
 }
