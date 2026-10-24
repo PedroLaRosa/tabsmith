@@ -14,6 +14,24 @@ impl<'a> AtomicFile<'a> {
         AtomicFile { path }
     }
 
+    /// Written to a temp file then renamed over the symlink target (a symlinked file stays a symlink). Missing
+    /// parent directories are created; Unix mode 0600, best effort (a failed chmod does not fail the write).
+    pub(crate) fn write_document(&self, bytes: &[u8]) -> Result<(), AtomicFileError> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(io_failure(dir))?;
+        }
+        let target = std::fs::canonicalize(self.path).unwrap_or_else(|_| self.path.to_path_buf());
+        let tmp = target.with_extension(format!("tmp-{}", std::process::id()));
+        std::fs::write(&tmp, bytes).map_err(io_failure(self.path))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        std::fs::rename(&tmp, &target).map_err(rename_failure(self.path))?;
+        Ok(())
+    }
+
     /// Atomic write (temp + rename); Unix: file 0600, parent dir 0700 (SPEC §2.11). The parent's parent (the data
     /// root) must exist: a running session never recreates a purged `~/.tabsmith`.
     pub(crate) fn write_private(&self, bytes: &[u8]) -> Result<(), AtomicFileError> {
@@ -83,7 +101,9 @@ fn rename_failure(path: &Path) -> impl FnOnce(std::io::Error) -> AtomicFileError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use serde_json::Map;
 
     /// The write_private half of the `_ pre-cmd` run file scenario (the SessionCtx round trip stays in
     /// integrations.rs as `integrations_pre_cmd_file_session_ctx`). The bytes are that SessionCtx, serialized.
@@ -184,6 +204,46 @@ mod tests {
             std::fs::read_to_string(dir.join("dotfiles/bashrc")).unwrap(),
             contents
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_keeps_a_symlinked_file() {
+        let temp_dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("settings-symlink");
+        let dir = temp_dir.path().to_path_buf();
+        std::fs::create_dir_all(dir.join("dots")).unwrap();
+        std::fs::write(dir.join("dots/settings.json"), "{\"a\":1}").unwrap();
+        let link = dir.join("settings.json");
+        std::os::unix::fs::symlink("dots/settings.json", &link).unwrap();
+        let mut s = JsonDocumentStore::load(&link).unwrap();
+        s.map.insert("b".into(), 2.into());
+        s.save().unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            JsonDocumentStore::load(&dir.join("dots/settings.json"))
+                .unwrap()
+                .map
+                .len(),
+            2
+        );
+        // A plain (or missing) file is still written in place.
+        let plain = JsonDocumentStore {
+            path: dir.join("state.json"),
+            map: Map::new(),
+        };
+        plain.save().unwrap();
+        assert!(dir.join("state.json").is_file());
+        // The settings commands create a missing data root (only running sessions must not, R4-3).
+        let fresh = JsonDocumentStore {
+            path: dir.join("new/settings.json"),
+            map: Map::new(),
+        };
+        fresh.save().unwrap();
+        assert!(dir.join("new/settings.json").is_file());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -387,46 +387,6 @@ mod tests {
         assert!(!wildcard_match("a*b*c", "a-x-b-y-c-d"));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn save_keeps_a_symlinked_file() {
-        let temp_dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("settings-symlink");
-        let dir = temp_dir.path().to_path_buf();
-        std::fs::create_dir_all(dir.join("dots")).unwrap();
-        std::fs::write(dir.join("dots/settings.json"), "{\"a\":1}").unwrap();
-        let link = dir.join("settings.json");
-        std::os::unix::fs::symlink("dots/settings.json", &link).unwrap();
-        let mut s = Store::load(&link).unwrap();
-        s.map.insert("b".into(), 2.into());
-        s.save().unwrap();
-        assert!(std::fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert_eq!(
-            Store::load(&dir.join("dots/settings.json"))
-                .unwrap()
-                .map
-                .len(),
-            2
-        );
-        // A plain (or missing) file is still written in place.
-        let plain = Store {
-            path: dir.join("state.json"),
-            map: Map::new(),
-        };
-        plain.save().unwrap();
-        assert!(dir.join("state.json").is_file());
-        // The settings commands create a missing data root (only running sessions must not, R4-3).
-        let fresh = Store {
-            path: dir.join("new/settings.json"),
-            map: Map::new(),
-        };
-        fresh.save().unwrap();
-        assert!(dir.join("new/settings.json").is_file());
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
     #[test]
     fn catalog_keys_unique_and_defaults_valid() {
         let mut keys: Vec<_> = catalog().iter().map(|e| e.key).collect();

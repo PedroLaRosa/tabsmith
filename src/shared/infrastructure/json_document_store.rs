@@ -1,3 +1,4 @@
+use crate::shared::infrastructure::atomic_file::AtomicFile;
 use crate::shared::infrastructure::json_document_store_error::JsonDocumentStoreError;
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -26,6 +27,17 @@ impl JsonDocumentStore {
             path: path.to_path_buf(),
             map,
         })
+    }
+
+    /// Pretty JSON (keys sorted) plus a trailing newline, written with [`AtomicFile::write_document`] (a symlinked
+    /// file stays a symlink; Unix mode 0600).
+    pub(crate) fn save(&self) -> Result<(), JsonDocumentStoreError> {
+        let mut body = serde_json::to_string_pretty(&Value::Object(self.map.clone()))
+            .map_err(JsonDocumentStoreError::Serialize)?;
+        body.push('\n');
+        AtomicFile::new(&self.path)
+            .write_document(body.as_bytes())
+            .map_err(JsonDocumentStoreError::Write)
     }
 }
 
