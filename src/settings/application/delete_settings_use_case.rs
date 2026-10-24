@@ -13,20 +13,23 @@ impl DeleteSettingsUseCase {
         DeleteSettingsUseCase { settings }
     }
 
-    /// `announce` is told the matching keys, in key order.
+    /// `announce` is told the matching keys, in key order; a pattern that matches none is an error.
     pub(crate) fn execute(
         &self,
         pattern: &str,
         announce: impl FnOnce(&[String]),
     ) -> Result<(), SettingsError> {
         let settings = self.settings.load()?;
-        let pattern = SettingKeyPattern::new(pattern);
+        let key_pattern = SettingKeyPattern::new(pattern);
         let keys: Vec<String> = settings
             .entries()
             .map(|(key, _)| key)
-            .filter(|key| pattern.matches(key))
+            .filter(|key| key_pattern.matches(key))
             .map(String::from)
             .collect();
+        if keys.is_empty() {
+            return Err(SettingsError::NoMatchingSettings(pattern.to_string()));
+        }
         announce(&keys);
         let remaining = keys
             .iter()
@@ -89,5 +92,19 @@ mod tests {
             .map(|(key, _)| key.to_string())
             .collect();
         assert_eq!(remaining, ["inline.enabled"]);
+    }
+
+    /// `settings -d nope.key` fails with `No settings found matching nope.key` before listing any removal.
+    #[test]
+    fn should_refuse_a_pattern_that_matches_no_setting() {
+        let use_case = DeleteSettingsUseCase::new(three_settings());
+        let mut announced = false;
+
+        let result = use_case.execute("nope*", |_| announced = true);
+
+        assert!(
+            matches!(&result, Err(SettingsError::NoMatchingSettings(pattern)) if pattern == "nope*")
+                && !announced
+        );
     }
 }
