@@ -25,6 +25,8 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
             code.contains("::application")
                 || code.contains("::infrastructure")
                 || code.contains("crate::bootstrap")
+                || code.contains("println!")
+                || code.contains("logger::")
                 || external_crates
                     .iter()
                     .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
@@ -81,6 +83,25 @@ mod tests {
             vec![
                 Violation { line: 1, rule: Rule::DomainLayer },
                 Violation { line: 3, rule: Rule::DomainLayer },
+            ]
+        );
+    }
+
+    #[test]
+    fn should_flag_a_domain_file_that_prints_or_logs() {
+        let source = "println!(\"{key}\");\n\
+                      let key = SettingKey::new(text)?;\n\
+                      eprintln!(\"{err}\");\n\
+                      crate::logger::warn(\"unknown key\");\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 1, rule: Rule::DomainLayer },
+                Violation { line: 3, rule: Rule::DomainLayer },
+                Violation { line: 4, rule: Rule::DomainLayer },
             ]
         );
     }
