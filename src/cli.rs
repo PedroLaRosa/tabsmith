@@ -20,7 +20,7 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
-    /// Plain → `plain()`; json → compact; json-pretty → 2-space indent (Kiro `OutputFormat::print`).
+    /// Plain → `plain()`; json → compact; json-pretty → 2-space indent.
     pub fn render(self, plain: impl FnOnce() -> String, json: impl FnOnce() -> Value) -> String {
         match self {
             OutputFormat::Plain => plain(),
@@ -641,7 +641,7 @@ fn diagnostics() -> Vec<Section> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let opt = |v: Option<String>| v.map(|s| Value::String(clean(s))).unwrap_or(Value::Null);
 
-    // ponytail: shell = $SHELL (Kiro uses the parent process); unset on Windows → omitted.
+    // ponytail: shell = $SHELL (not the parent process); unset on Windows → omitted.
     let shell = env("SHELL");
     let shell_version = shell
         .as_ref()
@@ -806,7 +806,7 @@ fn key_tester() -> Result<i32> {
     Ok(0)
 }
 
-/// `_ pty` with only the post integration loaded (Kiro `debug/mod.rs:816-870`).
+/// `_ pty` with only the post integration loaded.
 fn debug_shell(shell: Option<Shell>) -> Result<i32> {
     let env_shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty());
     let shell = match shell {

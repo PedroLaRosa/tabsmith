@@ -556,7 +556,7 @@ impl Engine {
         Some(self.reply(Phase::Parse))
     }
 
-    /// Error reply (menu error-reset). Kiro resets generator state on errors too.
+    /// Error reply (menu error-reset). Generator state is reset on errors too.
     fn error(&mut self, req: &Request, cursor: usize, ghost: bool) -> Completion {
         self.reset_slots();
         self.cur = None;
@@ -643,7 +643,7 @@ impl Engine {
             return Some(Vec::new());
         };
         if !same {
-            // ponytail: results are not carried over to a different arg (qac keeps them while loading)
+            // ponytail: results are not carried over to a different arg (they could be kept while loading)
             self.slots = (0..gens.len())
                 .map(|i| Slot {
                     key: gen_key(arg, i),

@@ -46,7 +46,7 @@ pub fn after_sep(s: &str, backslash: bool) -> usize {
         .map_or(0, |i| i + 1)
 }
 
-/// A suggestion row inside the pipeline (Fig `Suggestion` + qac internal fields), before it becomes an `Item`.
+/// A suggestion row inside the pipeline (Fig `Suggestion` + internal fields), before it becomes an `Item`.
 #[derive(Clone, Debug)]
 pub struct Sugg {
     pub names: Vec<String>,
@@ -55,7 +55,7 @@ pub struct Sugg {
     pub description: Option<String>,
     pub kind: ItemType,
     pub original_kind: Option<ItemType>,
-    /// 0 = unset (Kiro's `priority || 50` treats both alike).
+    /// 0 = unset (`0` and unset are treated alike).
     pub priority: f64,
     pub hidden: bool,
     pub is_dangerous: bool,
@@ -286,7 +286,7 @@ pub fn assemble(pr: &ParseResult, gens: &[GenView]) -> Vec<Sugg> {
     let mut additional: Vec<Sugg> = comp
         .additional_suggestions
         .iter()
-        // untyped rows are not `arg`s: dropped inside an option chain (qac keeps only option/arg types)
+        // untyped rows are not `arg`s: dropped inside an option chain (only option/arg types are kept)
         .filter(|s| chain.is_none() || s.kind.is_some())
         .map(|s| Sugg::from_suggestion(s, comp.is_dangerous, None, Query::Term))
         .collect();
@@ -354,7 +354,7 @@ pub fn history_rows(prefix: &str, entries: &[HistoryEntry]) -> Vec<Sugg> {
         };
         let name = rest.trim_end();
         if name.is_empty() {
-            continue; // ponytail: Kiro keeps an empty-name row; it can only render blank
+            continue; // ponytail: an empty-name row can only render blank
         }
         if name.chars().any(char::is_control) {
             // ponytail: multi-line entry: typing its "\n" runs part of it, stripping it changes the command;
@@ -434,7 +434,7 @@ pub fn update_priorities(list: &mut [Sugg], recency: Option<&HashMap<String, u64
             .copied()
             .filter(|&ms| ms != 0);
         let boost = rec.map_or(0.0, |ms| ms as f64 / 1e13);
-        let mut p = if s.priority == 0.0 { 50.0 } else { s.priority }; // Kiro treats 0 as 50 (kept)
+        let mut p = if s.priority == 0.0 { 50.0 } else { s.priority }; // 0 is treated as unset, i.e. 50
         if s.kind != ItemType::AutoExecute {
             p = p.clamp(0.0, 100.0);
         }
@@ -684,7 +684,7 @@ pub fn filter(list: Vec<Sugg>, search_term: &str, o: &FilterOpts) -> Vec<(Sugg, 
 }
 
 fn same_row(a: &Sugg, b: &Sugg) -> bool {
-    // ponytail: args compared by identity (qac deep-compares); distinct specs never share names anyway
+    // ponytail: args compared by identity (not deep-compared); distinct specs never share names anyway
     a.names == b.names
         && a.insert_value == b.insert_value
         && a.display_name == b.display_name
@@ -780,7 +780,7 @@ fn is_var_ref(s: &str) -> bool {
 }
 
 /// POSIX/fish escaping of a name. `quote`: the user started the token with a quote → keep quoting; `path`: a
-/// file/folder row (its `$` is never a variable). An allow-list, unlike Kiro's `escapeInsertion` deny-list, which
+/// file/folder row (its `$` is never a variable). An allow-list, since a deny-list
 /// misses `$ ` ; { }` and a leading `~`/`=` (SPEC §6.8 D-note).
 fn escape_posix(s: &str, folder: bool, quote: bool, path: bool, shell: Shell) -> String {
     let safe = |c: char| c.is_alphanumeric() || "-_./+,:@%=~".contains(c);
@@ -884,7 +884,7 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
     let q = s.query.of(c.search_term);
     let raw: Vec<char> = c.raw.chars().collect();
     let (logical, open) = unquote(&raw, c.shell);
-    // special (`help` template) rows replace the typed prefix like any other row (Kiro deletes 0 and doubles it)
+    // special (`help` template) rows replace the typed prefix like any other row
     let delete = if s.kind == ItemType::AutoExecute {
         0
     } else if q == c.search_term {
@@ -897,7 +897,7 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
         c.raw[after_sep(c.raw, backslash)..].chars().count()
     } else {
         // function getQueryTerm: delete the raw chars that spell q's logical chars (quotes/escapes included);
-        // otherwise Kiro's approximation (escaped whitespace), never past the token
+        // otherwise an approximation (escaped whitespace), never past the token
         let n = q.chars().count();
         let tail = logical
             .get(logical.len().saturating_sub(n)..)

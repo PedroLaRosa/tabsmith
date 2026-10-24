@@ -1209,7 +1209,7 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-/// Manual install instructions (Kiro `installation.rs` text): the exact lines install writes, so doctor and
+/// Manual install instructions: the exact lines install writes, so doctor and
 /// uninstall recognise them, and their `[ -f … ]` guard keeps a later uninstall from breaking shell startup.
 fn manual_text(ctx: &Ctx, shells: &[Shell]) -> String {
     let rc = |shell, file: &str| Integration {

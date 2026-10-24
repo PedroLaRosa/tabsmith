@@ -593,8 +593,7 @@ impl Renderer {
     }
 }
 
-/// (bold label, description): the selected item's, `file`/`folder`, else the current argument's (Kiro
-/// `Description.tsx:91-102`). Sanitized.
+/// (bold label, description): the selected item's, `file`/`folder`, else the current argument's. Sanitized.
 fn describe(menu: &Menu) -> (String, String) {
     let sel = menu.items().get(menu.selected());
     let own = sel

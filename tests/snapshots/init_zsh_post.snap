@@ -3,7 +3,7 @@ if [[ -n "${ZSH_NAME:-}" && -n "${TABSMITH_SESSION_ID:-}" && -z "${_TS_POST_LOAD
   _TS_POST_LOADED=1
   _ts_osc() { builtin printf '\e]697;%s\a' "$1"; }
   # zsh keeps RPROMPT and RPS1 apart until both are set (`RPROMPT=x` leaves RPS1 unset, and `RPS1=""` then clears
-  # RPROMPT): wrap and restore whichever name is set, RPROMPT first (Kiro).
+  # RPROMPT): wrap and restore whichever name is set, RPROMPT first.
   _ts_restore() {
     if [[ ${_ts_wrapped:-0} == 1 ]]; then
       PS1=$_ts_u1; PS2=$_ts_u2; _ts_wrapped=0

@@ -37,7 +37,7 @@ pub struct Menu {
     vis: Vis,
     items: Vec<Item>,
     selected: usize,
-    /// Kiro `hasChangedIndex`: the user navigated, keep the selection across recomputes.
+    /// The user navigated: keep the selection across recomputes.
     sticky: bool,
     scroll_top: usize,
     /// Generator of the last fully inserted item (re-trigger reopens the menu).
@@ -55,20 +55,20 @@ pub fn max_rows(settings: &Settings) -> usize {
     settings.f64("autocomplete.height", 7.0).max(1.0) as usize
 }
 
-/// Kiro `isBufferDifferenceFromTyping` over `steps` consecutive buffers: `a` is at most `steps` one-char edits from `b`
+/// Over `steps` consecutive buffers: `a` is at most `steps` one-char edits from `b`
 /// (trie distance). With `steps == 1`: one is a prefix of the other and they differ by < 2 chars.
 fn typing(a: &str, b: &str, steps: usize) -> bool {
     let lcp = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
     a.chars().count() + b.chars().count() - 2 * lcp <= steps
 }
 
-/// Kiro compares names, type, insertValue and description; `insert.text` has the typed query stripped, so it is
+/// Compares names, type, insertValue and description; `insert.text` has the typed query stripped, so it is
 /// left out (it changes on every keystroke).
 fn same_item(a: &Item, b: &Item) -> bool {
     a.names == b.names && a.kind == b.kind && a.description == b.description
 }
 
-/// Kiro `isMatchingType` (`../` only matches `../`; file and folder match each other).
+/// Whether the types match (`../` only matches `../`; file and folder match each other).
 fn matching_type(a: &Item, b_first: &str, b_kind: ItemType) -> bool {
     if a.first_name() == "../" {
         return b_first == "../";
@@ -106,7 +106,7 @@ impl Menu {
             None
         };
         if c.phase == Phase::Parse {
-            // After a reset Kiro compares against its initial state: new arg, empty command text.
+            // After a reset the comparison is against the initial state: new arg, empty command text.
             let (has_new_arg, backspaced, large) = match &self.last {
                 None => (true, false, !typing(&c.command_text, "", 1)),
                 Some(l) => {
@@ -154,7 +154,7 @@ impl Menu {
     }
 
     /// Keeps a sticky selection if still listed. While HiddenUntilKeypress nothing is drawn, but the list is still
-    /// replaced: Kiro recomputes when it becomes visible, and show/toggle/Tab must not act on a stale list.
+    /// replaced, so show/toggle/Tab never act on a stale list.
     fn set_items(&mut self, items: Vec<Item>, settings: &Settings) {
         let keep = match self.items.get(self.selected) {
             Some(old) if self.sticky && self.vis == Vis::Visible => {
@@ -178,7 +178,7 @@ impl Menu {
 
     /// Error reset: no items, HiddenUntilKeypress, history mode off (SPEC §7.1).
     pub fn error_reset(&mut self) {
-        // The pop-out is UI state outside Kiro's store: it survives resets.
+        // The pop-out is UI state outside the item store: it survives resets.
         *self = Menu {
             popout: self.popout,
             ..Menu::new()
@@ -374,7 +374,7 @@ impl Menu {
         }]
     }
 
-    /// Kiro `insertCommonPrefix` (`insertion.ts:226-304`); `None` = failure (shake).
+    /// Inserts the common prefix of the listed items; `None` = failure (shake).
     fn common_prefix(&mut self) -> Option<Vec<Effect>> {
         let sel = self.items[self.selected].clone();
         if self.items.len() == 1 {

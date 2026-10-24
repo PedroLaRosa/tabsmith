@@ -92,7 +92,7 @@ impl Store {
     }
 }
 
-/// Immutable settings snapshot shared across threads. Typed getters follow Kiro (wrong type → default).
+/// Immutable settings snapshot shared across threads. Typed getters fall back to the default on a wrong type.
 #[derive(Clone, Default, Debug)]
 pub struct Settings(pub Arc<Map<String, Value>>);
 

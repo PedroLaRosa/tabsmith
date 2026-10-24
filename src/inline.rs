@@ -290,7 +290,7 @@ impl GhostCache {
             self.entries
                 .push((t.clone(), if i == 0 { 0.0 } else { 1.0 }));
         }
-        // ponytail: linear scan instead of Kiro's radix trie, so keep it small (oldest dropped).
+        // ponytail: linear scan instead of a radix trie, so keep it small (oldest dropped).
         self.entries.drain(..self.entries.len().saturating_sub(50));
     }
 
@@ -394,7 +394,7 @@ fn usable(e: &HistoryEntry) -> bool {
     e.exit_code.is_some() && !is_private(&e.command)
 }
 
-/// Kiro `history`-style prompt (SPEC §8.5): usable entries then the buffer, numbered from 1, oldest dropped until
+/// History-style prompt (SPEC §8.5): usable entries then the buffer, numbered from 1, oldest dropped until
 /// ≤ 10 240 bytes. `None` when the buffer is private or alone too long.
 fn history_prompt(history: &[HistoryEntry], buffer: &str) -> Option<String> {
     if is_private(buffer) {
@@ -666,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn kiro_cache_vector() {
+    fn cache_lookup_vector() {
         let mut c = GhostCache::default();
         for (t, p) in [
             ("echo hello, world", 0.5),

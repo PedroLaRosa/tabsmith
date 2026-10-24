@@ -85,7 +85,7 @@ pub struct Generator {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Repeat {
-    /// Absent: may be passed once (suggestions); the parser does not enforce it (qac). Explicit `false` → `Times(1)`.
+    /// Absent: may be passed once (suggestions); the parser does not enforce it. Explicit `false` → `Times(1)`.
     #[default]
     No,
     Times(u32),
@@ -210,7 +210,7 @@ pub struct Subcommand {
 }
 
 impl Subcommand {
-    /// Rebuild `sub_index`/`opt_index` from the lists (later wins; options win over persistent, like qac's
+    /// Rebuild `sub_index`/`opt_index` from the lists (later wins; options win over persistent, as in
     /// `options[t] || persistentOptions[t]`).
     pub fn reindex(&mut self) {
         self.sub_index.clear();
@@ -277,7 +277,7 @@ pub fn load_spec_result(v: &Value) -> Option<LoadSpec> {
     }
 }
 
-/// `{name, type: "global"|"local", path?}`; a local without `path` lives in `~/` (qac `(path || "~/") + name`).
+/// `{name, type: "global"|"local", path?}`; a local without `path` lives in `~/` (`(path || "~/") + name`).
 fn location(v: &Value) -> Option<SpecLocation> {
     let name = s(v, "name")?;
     match v.get("type")?.as_str()? {
@@ -319,7 +319,7 @@ fn subcommand(v: &Value) -> Subcommand {
         sc.directives = Directives {
             flags_posix_noncompliant: b(d, "flagsArePosixNoncompliant"),
             options_must_precede_args: b(d, "optionsMustPrecedeArguments"),
-            // qac builds a Set from it: a string is a set of chars.
+            // The separators form a set: a string is a set of chars.
             option_arg_separators: match d.get("optionArgSeparators") {
                 Some(Value::String(x)) => x.chars().map(String::from).collect(),
                 Some(Value::Array(_)) => strs(d.get("optionArgSeparators")),
@@ -352,7 +352,7 @@ fn option(v: &Value) -> Opt {
         is_persistent: b(v, "isPersistent"),
         is_repeatable: match v.get("isRepeatable") {
             Some(Value::Bool(true)) => Repeat::Unlimited,
-            // Explicit `false` is enforced by the parser in qac (absent is not): same limit as `No` for suggestions.
+            // Explicit `false` is enforced by the parser (absent is not): same limit as `No` for suggestions.
             Some(Value::Bool(false)) => Repeat::Times(1),
             Some(n) if n.is_number() => Repeat::Times(n.as_f64().unwrap_or(1.0) as u32),
             _ => Repeat::No,

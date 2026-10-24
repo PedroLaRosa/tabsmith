@@ -1,6 +1,5 @@
-//! Row icons as Amazon Q's autocomplete draws them: the PNGs in `assets/icons` (from
-//! `crates/fig_desktop/icons/autocomplete` and the `specs.q.us-east-1.amazonaws.com/icons` CDN, Apache-2.0),
-//! resolved like `SuggestionIcon.tsx`. Terminals with the kitty graphics protocol get the pixels; the others get ASCII.
+//! Row icons: the PNGs in `assets/icons` (origin and licence in its README). Terminals with the kitty graphics
+//! protocol get the pixels; the others get ASCII.
 
 use std::fmt::Write;
 
@@ -14,7 +13,7 @@ macro_rules! pngs {
     };
 }
 
-/// Q's `icons.ts` names plus the local-only `database`, `file`, `folder` and `symlink`. Order = image ids (1-based).
+/// Row icon names plus the local-only `database`, `file`, `folder` and `symlink`. Order = image ids (1-based).
 const PNGS: &[(&str, &[u8])] = pngs![
     "alert",
     "android",
@@ -60,7 +59,7 @@ const PNGS: &[(&str, &[u8])] = pngs![
     "yarn",
 ];
 
-/// `template.png` as RGBA8 (32×32), tinted per badge colour like Q's `protocol/icons.rs`.
+/// `template.png` as RGBA8 (32×32), tinted per badge colour.
 const TEMPLATE_RGBA: &[u8] = include_bytes!("../assets/icons/template.rgba");
 
 /// Base64 payload per kitty chunk (a multiple of 4, the protocol's limit).
@@ -82,7 +81,7 @@ pub enum Source {
 pub struct Slot {
     pub text: String,
     pub image: Option<Image>,
-    /// Badge text is drawn white, like Q's `text-white`.
+    /// Badge text is drawn white.
     pub badge: bool,
 }
 
@@ -177,14 +176,14 @@ pub fn color(id: u32) -> String {
     }
 }
 
-/// Q draws a short icon string as text. Only single wide emoji are kept: narrow ones (`⚙️`) have a width that
+/// A short icon string is drawn as text. Only single wide emoji are kept: narrow ones (`⚙️`) have a width that
 /// terminals disagree on, which would tear the frame.
 fn wide_emoji(s: &str) -> Option<String> {
     let e: String = s.chars().filter(|&c| c != '\u{fe0f}').collect();
     (e.chars().count() == 1 && width(&e) == 2).then_some(e)
 }
 
-/// `fig://icon?type=<name>` → that PNG, or the plain template when Q has no such icon (`DEFAULT_ICON`).
+/// `fig://icon?type=<name>` → that PNG, or the plain template when there is no such icon (`DEFAULT_ICON`).
 /// `fig://template?color=<hex>&badge=<text>` → the tinted template with the badge.
 fn spec_image(s: &str) -> Option<Slot> {
     if let Some(q) = s.strip_prefix("fig://icon?") {
@@ -196,7 +195,7 @@ fn spec_image(s: &str) -> Option<Slot> {
     Some(badge_slot(color, param(q, "badge").unwrap_or("")))
 }
 
-/// Q's default icon per row type (`SuggestionIcon.tsx`). History rows keep their 📚 from the history source.
+/// Default icon per row type. History rows keep their 📚 from the history source.
 fn type_image(kind: ItemType) -> Slot {
     match kind {
         ItemType::Subcommand => png_slot("command"),
@@ -234,7 +233,7 @@ fn text(s: &str) -> Slot {
     }
 }
 
-/// Q's PNG for `name`; a name Q does not ship is the plain template.
+/// The PNG for `name`; a name with no PNG is the plain template.
 fn png_slot(name: &str) -> Slot {
     let find = |n: &str| PNGS.iter().position(|(p, _)| *p == n);
     let index = find(name)
@@ -271,7 +270,7 @@ fn badge_slot(color: Option<(u8, u8, u8)>, badge: &str) -> Slot {
     }
 }
 
-/// Q's `scale_u8` per channel: the template's own shading is kept, its colour is multiplied in.
+/// Per-channel scaling: the template's own shading is kept, its colour is multiplied in.
 fn tinted(r: u8, g: u8, b: u8) -> Vec<u8> {
     fn scale(a: u8, b: u8) -> u8 {
         ((a as u16 * b as u16) / 256) as u8
@@ -415,8 +414,8 @@ mod tests {
     }
 
     #[test]
-    fn tint_scales_like_q() {
-        // Q: scale_u8(a, b) = a * b / 256. Alpha is kept.
+    fn tint_multiplies_colour_into_template() {
+        // scale(a, b) = a * b / 256. Alpha is kept.
         let t = tinted(0x34, 0x98, 0xdb);
         assert_eq!(t.len(), 32 * 32 * 4);
         let (r, g, b, a) = (
@@ -450,7 +449,7 @@ mod tests {
             .text,
             "⭐"
         );
-        // A named Q icon is its PNG; an unknown name is the plain template.
+        // A named icon is its PNG; an unknown name is the plain template.
         let s = slot(
             &it(Some("fig://icon?type=git"), ItemType::Subcommand),
             Graphics::Direct,

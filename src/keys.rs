@@ -288,7 +288,7 @@ pub enum Action {
 }
 
 impl Action {
-    /// Kiro action id (`insertSelected`, `selectSuggestion3`, …); an `autocomplete.` prefix is accepted.
+    /// Action id (`insertSelected`, `selectSuggestion3`, …); an `autocomplete.` prefix is accepted.
     pub fn from_id(id: &str) -> Option<Action> {
         use Action::*;
         let id = id.strip_prefix("autocomplete.").unwrap_or(id);
@@ -322,7 +322,7 @@ pub enum Binding {
     Action(Action),
     /// `"ignore"`: never intercept this key.
     Ignore,
-    /// Unknown action id: swallow the key, do nothing (Kiro).
+    /// Unknown action id: swallow the key, do nothing.
     Unknown,
 }
 
@@ -379,7 +379,7 @@ pub fn parse_keystroke(s: &str) -> Option<Key> {
     Some(Key { code, mods })
 }
 
-/// ctrl/alt + ASCII letter match both cases (Kiro registers the opposite case too).
+/// ctrl/alt + ASCII letter match both cases.
 fn normalize(mut k: Key) -> Key {
     if let KeyCode::Char(c) = k.code {
         if (k.mods.ctrl || k.mods.alt) && c.is_ascii_alphabetic() {

@@ -1078,7 +1078,7 @@ mod job {
     }
 }
 
-/// qac `cleanOutput`: lossy UTF-8, `\r\n` → `\n`, drop `ESC[?25h`, strip leading/trailing newlines.
+/// Cleans exec output: lossy UTF-8, `\r\n` → `\n`, drop `ESC[?25h`, strip leading/trailing newlines.
 fn clean(b: &[u8]) -> String {
     String::from_utf8_lossy(b)
         .replace("\r\n", "\n")
@@ -1440,24 +1440,21 @@ mod tests {
     }
 
     #[test]
-    fn exec_runs_other_clis_instead_of_stubbing_them() {
+    fn exec_reports_an_unknown_command_instead_of_stubbing_it() {
         let empty_path = TmpDir::new("empty-path");
         let ctx = GenCtx {
             env: HashMap::from([("PATH".to_string(), empty_path.path().display().to_string())]),
             ..Default::default()
         };
 
-        let results = ["q", "kiro", "kiro-cli"].map(|command| {
-            let input = ExecInput {
-                command: command.into(),
-                ..Default::default()
-            };
-            exec(&input, &ctx, 5000)
-        });
+        let input = ExecInput {
+            command: "no-such-cli".into(),
+            ..Default::default()
+        };
 
-        for result in results {
-            assert!(result.unwrap_err().contains("not found"));
-        }
+        let result = exec(&input, &ctx, 5000);
+
+        assert!(result.unwrap_err().contains("not found"));
     }
 
     #[cfg(unix)]

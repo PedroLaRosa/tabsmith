@@ -1,4 +1,4 @@
-//! Parser tests: qac `parseArguments.test.ts` + `loadSpec.test.ts` ports, loadSpec recursion, aliases, diffs.
+//! Parser tests: parseArguments and loadSpec cases, loadSpec recursion, aliases, diffs.
 use super::*;
 use crate::shell_parser::Token;
 use serde_json::json;
@@ -128,7 +128,7 @@ fn run(mock: &mut Mock, buf: &str) -> Result<ParseResult, ParseError> {
 }
 
 #[test]
-fn qac_parse_arguments_table() {
+fn parse_arguments_table() {
     let c = fixture("cmd_spec");
     let (man, oas, pnf, ompa, var, opt) = (
         sub(&c, "man"),
@@ -551,7 +551,7 @@ fn is_repeatable() {
     use AnnKind::{Option as Op, OptionArg as OA, Subcommand as Sc, SubcommandArg as SA};
     assert_eq!(kinds(&mut m, "x -f -f"), [Sc, Op, SA]);
     assert_eq!(kinds(&mut m, "x -v -v -v"), [Sc, Op, Op, Op]);
-    assert_eq!(kinds(&mut m, "x -q -q"), [Sc, Op, Op]); // absent: unlimited in the parser (qac)
+    assert_eq!(kinds(&mut m, "x -q -q"), [Sc, Op, Op]); // absent: unlimited in the parser
     assert_eq!(kinds(&mut m, "x -c 1 -c 2 -c"), [Sc, Op, OA, Op, OA, SA]);
 }
 

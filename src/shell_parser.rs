@@ -1,4 +1,4 @@
-//! Command-line tokenizer: port of qac `packages/shell-parser` (SPEC §6.1). Pure, no I/O.
+//! Command-line tokenizer (SPEC §6.1). Pure, no I/O.
 //! OWNER: shell-parser agent.
 //!
 //! Scans bytes: every syntax char is ASCII, so node boundaries always fall on UTF-8 char boundaries.
@@ -73,7 +73,7 @@ pub fn parse_aliases(text: &str, shell: Shell) -> HashMap<String, String> {
             let (key, value) = line.split_once(sep)?;
             let value = value.strip_prefix('\'').unwrap_or(value);
             let value = value.strip_suffix('\'').unwrap_or(value);
-            // Empty values never expand in Kiro (falsy lookup), so they are not aliases.
+            // Empty values never expand (falsy lookup), so they are not aliases.
             (!key.is_empty() && !value.is_empty()).then(|| (key.to_string(), value.to_string()))
         })
         .collect()
@@ -381,7 +381,7 @@ impl<'a> P<'a> {
             if s[i] == b' ' || s[i] == b'\t' {
                 end_argument(&mut out, &mut arg, &mut word, i);
             } else {
-                // Fix: qac starts the word after the escape char, so `\ x` had raw ` x` (SPEC D22 needs raw).
+                // The word starts at the escape char, so `\ x` has raw `\ x` (SPEC D22 needs raw).
                 word.get_or_insert(i);
                 if s[i] == self.esc {
                     i += 1;
@@ -430,7 +430,7 @@ impl<'a> P<'a> {
                 break;
             };
             let (children, end) = self.words(eq + 1, Some(b' '));
-            // SPEC D23 fix: an empty value (`FOO= cmd`) is a complete empty assignment (Kiro throws).
+            // SPEC D23: an empty value (`FOO= cmd`) is a complete empty assignment.
             let complete = children.last().is_none_or(|c| c.complete);
             out.push(Node::new(Kind::Assignment, start, end, complete, children));
             last = end;
@@ -565,7 +565,7 @@ impl<'a> P<'a> {
                 end: c.end - cmd.start,
             })
             .collect();
-        // Trailing empty token ("typed a space, completing a new argument"). The `1` is absolute, as in qac.
+        // Trailing empty token ("typed a space, completing a new argument"). The `1` is an absolute offset.
         if cmd.children.last().map_or(1, |c| c.end) < cmd.end && text.ends_with(' ') {
             tokens.push(Token {
                 text: String::new(),
@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(cmd("ls |", Shell::Bash, &[]), None);
         assert_eq!(cmd("", Shell::Bash, &[]), None);
         assert_eq!(cmd(" ", Shell::Bash, &[]), None);
-        assert_eq!(toks("  "), [""]); // qac quirk: two spaces give one empty token
+        assert_eq!(toks("  "), [""]); // two spaces give one empty token
         assert_eq!(toks("git"), ["git"]);
     }
 
@@ -812,8 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn aliases_qac() {
-        // qac tests/command.test.ts.
+    fn alias_expansion_cases() {
         let aliases = [("woman", "man"), ("quote", "'q'"), ("g", "git")];
         assert_eq!(toks_in("git co ", Shell::Bash, &aliases), ["git", "co", ""]);
         assert_eq!(toks_in("woman ", Shell::Bash, &[]), ["woman", ""]);
@@ -951,9 +950,9 @@ mod tests {
         assert_eq!(c.tokens[1].raw, "my` di");
     }
 
-    /// qac `tests/fixtures/*` (MIT): parse trees as JSON, compared on type, offsets, complete and innerText.
+    /// Parse trees as JSON fixtures, compared on type, offsets, complete and innerText.
     #[test]
-    fn qac_fixtures() {
+    fn parse_tree_fixtures() {
         use serde_json::{json, Value};
         fn name(k: Kind) -> &'static str {
             match k {
@@ -979,7 +978,7 @@ mod tests {
         }
         fn mine(p: &P, n: &Node) -> Value {
             let children: Vec<Value> = n.children.iter().map(|c| mine(p, c)).collect();
-            // D22 fix: a word starting with an escape starts at it; qac starts right after it.
+            // D22: a word starting with an escape starts at it; the fixture's offset is one past it.
             let start =
                 n.start + usize::from(n.kind == Kind::Word && p.s.get(n.start) == Some(&b'\\'));
             json!({"type": name(n.kind), "startIndex": start, "endIndex": n.end, "complete": n.complete,

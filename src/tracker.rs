@@ -595,7 +595,7 @@ impl Tracker {
                 Piece::Marker(p) => self.on_marker(&p, model),
             }
         }
-        // Windows: apply deferred markers once a batch brings no new ones (FIFO; Kiro pops LIFO).
+        // Windows: apply deferred markers once a batch brings no new ones (FIFO).
         if self.batch_markers == 0 {
             self.flush_deferred(model);
         }
@@ -622,7 +622,7 @@ impl Tracker {
             None => (payload, None),
         };
         if val == Some("") {
-            return; // empty values are ignored (Kiro)
+            return; // empty values are ignored
         }
         if self.osc_lock
             && !matches!(
@@ -829,7 +829,7 @@ impl Tracker {
         // redrawn without markers).
         // ponytail: continuation lines without a prompt (zle Alt-Enter, fish), an empty PS1, a markerless prompt
         // ending in a newline, and a newline-ended PS1's line while zsh lists completions below it read as not at
-        // the prompt; recording the NewCmd row with scroll tracking (Kiro's cmd_cursor) is the upgrade.
+        // the prompt; recording the NewCmd row with scroll tracking is the upgrade.
         let mut top = cl;
         while top > grid.topmost_line().0 && cl - top < 100 && wraps(top - 1) {
             top -= 1;
@@ -910,7 +910,7 @@ impl Tracker {
         if pwsh {
             self.strip_pwsh_prompts(&mut e);
         }
-        // Blank command cells after the cursor are drawing leftovers (Kiro trims them too).
+        // Blank command cells after the cursor are drawing leftovers.
         let keep = e.buffer.trim_end().len().max(e.cursor);
         e.buffer.truncate(keep);
         Some(e)

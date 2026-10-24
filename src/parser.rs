@@ -116,7 +116,7 @@ impl Parser {
         }
     }
 
-    /// Drop caches (dev mode toggles, settings reload). The CLI-version memo survives (qac keeps it too), and so
+    /// Drop caches (dev mode toggles, settings reload). The CLI-version memo survives, and so
     /// do spec identities (`by_json`, the first-token spec): unchanged specs are not a "new argument".
     pub fn clear_caches(&mut self) {
         self.loader.specs.clear();
@@ -199,7 +199,7 @@ fn gen_ctx(ctx: &ParseCtx) -> GenCtx {
     }
 }
 
-/// qac cache key `type,path,name`.
+/// Cache key `type,path,name`.
 fn loc_key(loc: &SpecLocation) -> String {
     match loc {
         SpecLocation::Global { name } => format!("global,,{name}"),
@@ -211,7 +211,7 @@ fn loc_key(loc: &SpecLocation) -> String {
 struct Loader {
     /// Spec cache by `loc_key` (None = missing, cached too).
     specs: HashMap<String, Option<Rc<Subcommand>>>,
-    /// `cliVersion-<name>` memo (successful detections only, like qac).
+    /// `cliVersion-<name>` memo (successful detections only).
     versions: HashMap<String, String>,
     /// Version detections still running after an aborted parse, reused by the next one (no respawn per keystroke).
     inflight: HashMap<String, TaskId>,
@@ -588,7 +588,7 @@ impl Host for JsHost<'_, '_> {
 
 #[derive(Clone, Debug, Default)]
 struct ArgState {
-    /// Empty = no arg slot (qac `args: null`).
+    /// Empty = no arg slot (`args: null`).
     args: Vec<Rc<Arg>>,
     index: usize,
     variadic_count: usize,
@@ -837,7 +837,7 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
     };
     if st.directives.flags_posix_noncompliant || token.starts_with("--") || !token.starts_with('-')
     {
-        // qac matches separators char by char (a Set of strings vs. the token's chars).
+        // Separators are matched char by char (a Set of strings vs. the token's chars).
         let seps = &st.directives.option_arg_separators;
         if let Some((pos, c)) = token.char_indices().find(|&(_, c)| {
             seps.iter()
@@ -962,9 +962,9 @@ struct ParseCaches {
     first: Rc<Subcommand>,
 }
 
-/// ponytail: caches are cleared wholesale past this size (qac never evicts).
+/// ponytail: caches are cleared wholesale past this size (entries are never evicted otherwise).
 const MAX_CACHED: usize = 1000;
-/// Guards loadSpec cycles in user specs (qac would recurse forever).
+/// Guards loadSpec cycles in user specs (they would recurse forever).
 const MAX_DEPTH: usize = 64;
 
 impl ParseCaches {
