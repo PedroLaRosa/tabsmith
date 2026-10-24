@@ -5,7 +5,6 @@ Path abbreviations used below:
 
 - `BUILD/` = `scratchpad/ref/specs/package/build/`
 - `PKG/` = `scratchpad/ref/specs/package/`
-- `QAC/` = `scratchpad/ref/qac/` (aws/amazon-q-developer-cli-autocomplete)
 - `ISH/` = `scratchpad/ref/ish/` (microsoft/inshellisense)
 
 Every bundle file is a single minified line, so citations into `BUILD/` give a **byte offset** (`@1234`) instead of a line number.
@@ -107,12 +106,10 @@ Icon usage in specs:
 - Of the 1,484 entries, 727 are "root-loadable" (contain no `/`, or are `@scope/name`). The other 757 are sub-paths.
 - `dynamic/index.d.ts`: `declare const completions: {[key: string]: () => Promise<{default: any}>}`. Its 1,484 keys equal `completions`, except that the 6 diff-versioned names appear as `"<name>/index"`. Every key `k` maps to `import("../k.js")`.
 
-How the loaders consume the index:
+What a loader needs from the index:
 
-- QAC's `INDEX_ZOD` = `{completions: string[], diffVersionedCompletions: string[]}` (`QAC/packages/autocomplete-parser/src/loadHelpers.ts:204-223`).
-- `publicSpecExists(name)` is `completions.has(name)` (`:225-228`).
-- `isDiffVersionedSpec(name)` is `diffVersionedSpecs.has(name)` (`:230-233`).
-- The Rust side merges `index.json` from several CDNs into sorted, deduplicated lists (`QAC/crates/fig_desktop/src/protocol/spec.rs:97-193`).
+- "Is there a public spec called `name`?" is `completions.has(name)`.
+- "Is `name` diff-versioned?" is `diffVersionedCompletions.has(name)`.
 
 ---
 
@@ -157,10 +154,10 @@ Export-set histogram: `{default}` 1,444; `{default, versions}` 10; `{default, ge
 - an **array**: 2 files (`index.js`, `aws/regions.js`);
 - `{}`: 2 files (`fig/shared`, `heroku/shared`).
 
-QAC's typing (`loadHelpers.ts:17-25`):
+In TypeScript terms, a loaded module has one of two shapes:
 
 ```ts
-type SpecFileImport =
+type SpecModule =
   | { default: Fig.Spec; getVersionCommand?: Fig.GetVersionCommand }
   | { default: Fig.Subcommand; versions: Fig.VersionDiffMap };
 ```
@@ -171,23 +168,22 @@ Here `Fig.Spec` is either a `Subcommand` or `(version?: string) => Promise<Subco
 
 ## 5. Resolving names and `loadSpec` strings to files
 
-### 5.1 QAC's algorithm (reference behaviour)
+### 5.1 Resolution algorithm (Fig conventions)
 
-- `importSpecFromFile(name, path)` tries `${path}${name}.js` and, **if reading fails**, `${path}${name}/index.js` (`loadHelpers.ts:55-78`).
-- `loadFigSubcommand`: if `isDiffVersionedSpec(name)`, it sets `diffVersionedFile:"index"` and loads `${name}/index` (`loadSpec.ts:199-211`). It then calls `tryResolveSpecToSubcommand`.
-- Public specs are fetched from `https://specs.q.us-east-1.amazonaws.com/<name>.js` and `.../index.json` (`loadHelpers.ts:32-34, 86-133`; `QAC/crates/fig_desktop/src/protocol/spec.rs:58-73, 195-247`). There is a 20 s timeout plus exponential backoff (attemptTimeout 1000 ms, baseDelay 500, maxRetries 5, jitter 100).
-- If the name is not in `index.json`, QAC falls back to `~/.fig/autocomplete/build/<name>.js` (`loadSpec.ts:179-189`).
-- `getSpecPath(name, cwd, isScript)` (`loadSpec.ts:61-106`) decides how the first token, or an `isCommand`/`isScript` arg, maps to a location:
+- A spec file is looked up as `${path}${name}.js` and, **if reading fails**, as `${path}${name}/index.js`.
+- If `name` is diff-versioned, load `${name}/index` and resolve its result to a `Subcommand` (section 6).
+- If the name is not in `index.json`, fall back to a local `~/.fig/autocomplete/build/<name>.js`.
+- The first token, or an `isCommand`/`isScript` arg, maps to a spec location as follows:
   - `"?"` → local `_shortcuts` found by walking up to `.fig/autocomplete/build/_shortcuts.js`.
-  - The personal-shortcuts token (setting `autocomplete.personalShortcutsToken`, default `"+"`) → `~/` local `+`.
+  - The personal-shortcuts token (default `"+"`) → `~/` local `+`.
   - First token (`isScript === undefined`):
     - `bin/console` or `*/bin/console` → global `php/bin-console`;
     - a name with no `/` → **global** spec `name`;
     - anything containing `/` → a **local** script spec `<dir>/.fig/autocomplete/build/<basename>.js`.
   - `isCommand` arg (`isScript === false`): a path not starting with `/`, `./` or `~/` → global, so `npx @capgo/cli` → `@capgo/cli`.
   - `isScript` arg → local.
-- `isModule:"python/"` with token `http.server` → global `python/http.server` (`QAC/packages/autocomplete-parser/src/parseArguments.ts:996`).
-- Load wrapper: `loadSubcommandCached` honours `autocomplete.disableForCommands` (throws `DisabledSpecError`), caches by key `source,path,name`, and wraps loading in a **5000 ms** timeout (`loadSpec.ts:213-245`).
+- `isModule:"python/"` with token `http.server` → global `python/http.server`.
+- Cache loaded specs by `source,path,name` and wrap loading in a **5000 ms** timeout.
 
 ### 5.2 inshellisense's algorithm (simpler)
 
@@ -205,7 +201,7 @@ Here `Fig.Spec` is either a `Subcommand` or `(version?: string) => Promise<Subco
   - 5 are functions plus 1 via a reference (`bun.js`, `pnpm.js`, `yarn.js`, `rushx.js`). Example: `loadSpec:async e=>({name:"create-"+e,type:"global"})` returns a **SpecLocation** `{name, type:"global"|"local", path?}`.
   - The rest are references or calls returning strings.
   - Generators can also put `loadSpec` on *suggestion objects*, e.g. `{name, loadSpec: i==="rw"?"redwood":i}` in `bun.js`/`pnpm.js`.
-- How QAC calls a function `loadSpec`: `await loadSpec(token, exec)`. The result can be a `SpecLocation[]`, which triggers a recursive parse, or a `Subcommand`, which is merged with the parent `parserDirectives` (`parseArguments.ts:857-900`).
+- A function `loadSpec` is called as `await loadSpec(token, exec)`. The result can be a `SpecLocation[]`, which triggers a recursive parse, or a `Subcommand`, which is merged with the parent `parserDirectives`.
 
 **Rust resolution rule for tabsmith (inferred from the above):**
 
@@ -213,7 +209,7 @@ Here `Fig.Spec` is either a `Subcommand` or `(version?: string) => Promise<Subco
 resolve(name):
   if name in diffVersioned           -> load "<name>/index.js"  (default is async fn; see section 6)
   elif exists "<name>.js"            -> load it
-  elif exists "<name>/index.js"      -> load it                 (QAC fallback)
+  elif exists "<name>/index.js"      -> load it                 (fallback)
   else                               -> None (silently)
 first token -> name only if it contains no '/', except the "bin/console" special case
 ```
@@ -244,10 +240,10 @@ else idx = (scan from last to 0, first i with semver.compare(versions[i], v) <= 
 return { versionedSpecPath: `${name}/${versions[idx]}`, version: v };
 ```
 
-**Version detection in QAC** (`loadHelpers.ts:154-190`):
+**Version detection (inferred):**
 
 - It only runs when `typeof default === "function"`.
-- The result is cached per name under key `cliVersion-<name>` (no cache in dev mode).
+- The result is cached per name.
 - With `getVersionCommand`, it uses `await getVersionCommand(executeCommand)`.
 - Otherwise it uses `semver.clean((await executeCommand({command:name,args:["--version"]})).stdout)`.
 - Errors are swallowed and the version becomes `undefined`.
@@ -260,7 +256,7 @@ These export `default` (a full base `Subcommand`) and `versions`, a map of versi
 - `heroku/8.0.0.js`: diffs with `{name:"run:logs",remove:!0}`.
 - `az/2.53.0.js`: `{"2.53.0":{}}`.
 
-QAC applies the diffs with `getVersionFromVersionedSpec(default, versions, version).spec`, imported from `@fig/autocomplete-helpers` (`QAC/packages/autocomplete-parser/src/tryResolveSpecToSubcommand.ts:8-43`). That helper is **not on disk**. (inferred, from the merge code inlined in every `*/index.js` @26692-27400 and from the shape of `versions`) It sorts the `versions` keys by semver and applies `subcommandMerge(spec, versions[k])` for each key `<= version`, in ascending order.
+Applying the diffs needs a helper such as `getVersionFromVersionedSpec(default, versions, version).spec` from `@fig/autocomplete-helpers`, which is **not on disk**. (inferred, from the merge code inlined in every `*/index.js` @26692-27400 and from the shape of `versions`) It sorts the `versions` keys by semver and applies `subcommandMerge(spec, versions[k])` for each key `<= version`, in ascending order.
 
 **Merge semantics** (read from the inlined code, `az/index.js` @~26700):
 
@@ -294,7 +290,7 @@ Each row gives "all code" (including inlined libraries) and "spec code" (inlined
 | `setTimeout` | 1 / 1 | 1 | `man.js` @9609: `await new Promise(i=>setTimeout(()=>i(),4e3))` while another call is filling its cache. **Must be provided**, because QuickJS core has none (rquickjs ships no timers; inferred, verify for your version). |
 | `setInterval` / `clearTimeout` / `queueMicrotask` | 0 | 0 | Provide `clearTimeout` cheaply for safety. |
 | `TextDecoder` / `TextEncoder` / `URL` / `URLSearchParams` / `crypto` / `structuredClone` / `performance` / `navigator` / `window` / `self` / `globalThis` / `fig.*` / `Fig.*` | 0 | 0 | Not needed. QuickJS has `globalThis` anyway. |
-| `console.*` | 132 / 226 | 47 / 132 | Methods: `log` 66, `error` 62, `warn` 4 (spec code). **Must exist.** QAC pipes them to `specs.log` in dev mode (`QAC/packages/autocomplete/src/utils.ts:15-45`). |
+| `console.*` | 132 / 226 | 47 / 132 | Methods: `log` 66, `error` 62, `warn` 4 (spec code). **Must exist.** Route the output to a log file, never to the TTY (section 15). |
 | `JSON.parse` | 170 / 485 | 96 / 309 | Heavily used on `stdout`. |
 | `JSON.stringify` | 94 / 179 | 7 / 91 | — |
 | `Date` | 10 / 18 | 10 | `new Date` 9, `Date.now` 1 (`man.js`), `Date.UTC` 4 (yaml). |
@@ -346,24 +342,24 @@ For item 5, rquickjs `AsyncRuntime::execute_pending_job()` / `idle()` (confirmed
 
 "Spec code" means the `@fig/*` CJS wrappers are blanked. Counts are object-literal keys plus method shorthand.
 
-| Key | Spec-code occurrences: value kinds | Function arity seen | Host call (QAC / ISH) |
+| Key | Spec-code occurrences: value kinds | Function arity seen | Host call |
 |---|---|---|---|
 | `generators` | 4,677 in 312 files: object, array, or result of `filepaths()`/`keyValue*()`/`valueList()`/`ai()` | — | Accepts one generator or an array. |
-| `script` | 695 in 219 files: **array 615**, function 56 + 8 method + 3 ref, object `{command,args[,env]}` 4, call 6+1 | 0–1 `(tokens)` | Array → `{command:a[0], args:a.slice(1), cwd}`. Object → `{cwd, ...obj}`. Function → called with `tokens` and may return an array, an object, or **`undefined`, meaning skip** (`QAC/packages/autocomplete/src/generators/scriptSuggestionsGenerator.ts:29-50`). **No legacy string `script` exists** (0 occurrences). |
-| `postProcess` | 668 in 213 files: function 568 + 15 method + 70 ref, call 14 | 1: 591, 2: 60 | Sync `(stdout, tokens) → (string \| Suggestion)[]`. QAC drops falsy items and items without a name (`:71-80`). |
-| `splitOn` | 30 in 21 files, all string (`"\n"` as a template literal) | — | `stdout.trim()===""?[]:stdout.trim().split(splitOn)` (QAC `:69-70`). Takes priority over `postProcess` in QAC; ISH checks `postProcess` first. |
-| `custom` | 213 in 82 files: function 198, factory call 14, object 1 (bundle-wide 653 including libraries) | 0: 6, 1: 24, 2: 146, 3: 36 | `await custom(tokens, executeCommand, generatorContext)` (`QAC/packages/autocomplete/src/generators/customSuggestionsGenerator.ts:39-46`; `ISH/src/runtime/generator.ts:41-43`). May be sync or async, and **may return `undefined`** (e.g. `aws/ecs.js` `if(s<0)return;`), so treat that as `[]`. Items get `type:"arg"` if `type` is missing. |
-| `trigger` | 89 in 63 files: function 60, string 27, object 1 (`z.js`: `{on:"change"}`) | 2: 39, 1: 12, 0: 9 | Called as `trigger(searchTerm, previousSearchTerm)` → bool (`QAC/packages/autocomplete/src/state/generators.ts:139-174`). A string `s` means `a.lastIndexOf(s)!==b.lastIndexOf(s)`. Objects: `on:"change"` (`a!==b`), `"threshold"` (`length`), `"match"` (`string`). |
+| `script` | 695 in 219 files: **array 615**, function 56 + 8 method + 3 ref, object `{command,args[,env]}` 4, call 6+1 | 0–1 `(tokens)` | Array → `{command:a[0], args:a.slice(1), cwd}`. Object → `{cwd, ...obj}`. Function → called with `tokens` and may return an array, an object, or **`undefined`, meaning skip**. **No legacy string `script` exists** (0 occurrences). |
+| `postProcess` | 668 in 213 files: function 568 + 15 method + 70 ref, call 14 | 1: 591, 2: 60 | Sync `(stdout, tokens) → (string \| Suggestion)[]`. Drop falsy items and items without a name. |
+| `splitOn` | 30 in 21 files, all string (`"\n"` as a template literal) | — | `stdout.trim()===""?[]:stdout.trim().split(splitOn)`. ISH checks `postProcess` first. |
+| `custom` | 213 in 82 files: function 198, factory call 14, object 1 (bundle-wide 653 including libraries) | 0: 6, 1: 24, 2: 146, 3: 36 | `await custom(tokens, executeCommand, generatorContext)` (`ISH/src/runtime/generator.ts:41-43`). May be sync or async, and **may return `undefined`** (e.g. `aws/ecs.js` `if(s<0)return;`), so treat that as `[]`. Items get `type:"arg"` if `type` is missing. |
+| `trigger` | 89 in 63 files: function 60, string 27, object 1 (`z.js`: `{on:"change"}`) | 2: 39, 1: 12, 0: 9 | Called as `trigger(searchTerm, previousSearchTerm)` → bool. A string `s` means `a.lastIndexOf(s)!==b.lastIndexOf(s)`. Objects: `on:"change"` (`a!==b`), `"threshold"` (`length`), `"match"` (`string`). |
 | `getQueryTerm` | 57 in 46 files: string 33, function 23 | 1 | Function → `getQueryTerm(token)`. String `s` → `token.slice(token.lastIndexOf(s)+s.length)`, or the whole token if `s` is not found (`ISH/src/runtime/generator.ts:57-62`). |
 | `template` | 3,621 in 515 files: string 3,143, array 476 | — | Values: `"filepaths"` 2,068, `"folders"` 974, `"help"` 92, `"history"` 7, plus arrays of those. |
 | `filterTemplateSuggestions` | 7 in 6 files | 1 | `(TemplateSuggestion[]) → TemplateSuggestion[]`. |
-| `cache` | 213 in 69 files: object 192, ref 10, boolean 11 (`valueList({cache:true})`) | — | Keys: `ttl` 139 (ms; literal values seen: `1e3`×40, `3e4`×40, `100`×7, `6e4`×4, `60`×4, `1e4`×3, `36e5`×2, `18e5`, `86400`, `72e5`, `1728e5`, `6048e5`; the rest are variables), `strategy` 81 (`"stale-while-revalidate"` 79, `"max-age"` 3), `cacheByDirectory` 24, `cacheKey` 5. Semantics: `QAC/packages/autocomplete/src/generators/cache.ts:1-57`, keying in `helpers.ts:30-58`. |
-| `scriptTimeout` | 13 in 11 files (all values `15e3`, `1e4`, `12e3`, `2e4`; 94 more inside the `ai()` library) | — | QAC uses the max of the setting `autocomplete.scriptTimeout` (default 5000), `scriptTimeout` and `input.timeout`. ISH uses `scriptTimeout ?? 5000` and SIGKILL on timeout (`ISH/src/runtime/utils.ts:96-97`). |
-| `generateSpec` | 44 in 36 files: function 38, ref 6 (all **async**) | **2** | `await generateSpec(tokens, executeCommand)` → `Subcommand`, merged into the current node (`parseArguments.ts:638-695`). Optional cache key `generateSpecCacheKey` (string or `({tokens})=>string`). Never run during history parsing: that path uses an exec that throws (`:596-603`). |
+| `cache` | 213 in 69 files: object 192, ref 10, boolean 11 (`valueList({cache:true})`) | — | Keys: `ttl` 139 (ms; literal values seen: `1e3`×40, `3e4`×40, `100`×7, `6e4`×4, `60`×4, `1e4`×3, `36e5`×2, `18e5`, `86400`, `72e5`, `1728e5`, `6048e5`; the rest are variables), `strategy` 81 (`"stale-while-revalidate"` 79, `"max-age"` 3), `cacheByDirectory` 24, `cacheKey` 5. |
+| `scriptTimeout` | 13 in 11 files (all values `15e3`, `1e4`, `12e3`, `2e4`; 94 more inside the `ai()` library) | — | ISH uses `scriptTimeout ?? 5000` and SIGKILL on timeout (`ISH/src/runtime/utils.ts:96-97`). |
+| `generateSpec` | 44 in 36 files: function 38, ref 6 (all **async**) | **2** | `await generateSpec(tokens, executeCommand)` → `Subcommand`, merged into the current node. Optional cache key `generateSpecCacheKey` (string or `({tokens})=>string`). |
 | `loadSpec` | see 5.3 | 1 | `await loadSpec(token, exec)`. |
-| `parserDirectives.alias` | 10 functions (git, hub, gh, bun, pnpm, yarn, rushx, …) | 2 | `await alias(token, exec)` → string, which replaces the token (`parseArguments.ts:948-955`). Example (`git.js`): `{stdout,status} = await exec({command:"git",args:["config","--get",`alias.${e}`]}); if(status!==0) throw …; return stdout`. |
+| `parserDirectives.alias` | 10 functions (git, hub, gh, bun, pnpm, yarn, rushx, …) | 2 | `await alias(token, exec)` → string, which replaces the token. Example (`git.js`): `{stdout,status} = await exec({command:"git",args:["config","--get",`alias.${e}`]}); if(status!==0) throw …; return stdout`. |
 | other `parserDirectives` keys | `optionsMustPrecedeArguments` 129, `flagsArePosixNoncompliant` 55, `optionArgSeparators` 2 | — | Parser-only. |
-| `debounce` | 102 in 29 files (boolean) | — | QAC: a debounced arg delays generator runs by 200 ms (`generators.ts:182-189`). |
+| `debounce` | 102 in 29 files (boolean) | — | A debounced arg delays generator runs until typing pauses. |
 | `isDangerous` | 351 booleans in 87 files | — | Not a function. |
 
 Version-related signatures:
@@ -377,13 +373,13 @@ Version-related signatures:
 
 ### 9.1 Input
 
-The input is **an object**: `Fig.ExecuteCommandInput = {command: string, args: string[], cwd?: string, env?: Record<string,string>, timeout?: number}` (QAC `executeCommand.ts:19-37`; ISH `utils.ts:90-96`).
+The input is **an object**: `Fig.ExecuteCommandInput = {command: string, args: string[], cwd?: string, env?: Record<string,string>, timeout?: number}` (ISH `utils.ts:90-96`).
 
 - Direct object-literal calls in spec code: `custom` 242 + `generateSpec` 55 = **297**. A further 83 helper functions receive the executor and were resolved to object-form calls as well (88 pass-throughs, 79 + 4 resolved).
 - Keys seen inside `fn({command:…})` calls in spec code: `command` 294, `args` 291. Spec code never passes `cwd`, `env` or `timeout` directly.
   - `cwd` is passed by the inlined `filepaths()` helper (`{command:"ls",args:["-1ApL"],cwd:dir}`, `git.js` @3122).
   - `env` appears only in `vr.js`'s `script:{command:"vr",args:[],env:{NO_COLOR:"1"}}`.
-  - The host must fill in `cwd = currentWorkingDirectory` when it is absent (QAC script generator `:40-49`; ISH `generator.ts:30-31`).
+  - The host must fill in `cwd = currentWorkingDirectory` when it is absent (ISH `generator.ts:30-31`).
   - **Merge `env` over the inherited environment.** ISH does `{...process.env, ...env, ISTERM:"1"}` (`utils.ts:96`). (inferred) tabsmith could likewise set a marker env var, e.g. `TABSMITH=1`.
 
 ### 9.2 Output
@@ -391,15 +387,15 @@ The input is **an object**: `Fig.ExecuteCommandInput = {command: string, args: s
 The output is `Promise<{stdout: string, stderr: string, status: number}>`.
 
 - Spec code reads `{stdout:x}=…` 209 times, `.stdout` 73, `.status` 19, `{status:x}` 7, and `.stderr` **0**. **`status` must be the numeric exit code**: `git.js`/`hub.js` aliases do `if(o!==0)throw…`, and `bun.js`/`pnpm.js` do `if(t.status!==0)…`.
-- QAC normalizes **both** `stdout` and `stderr` with `cleanOutput` (`executeCommand.ts:11-17`):
+- (inferred) Normalize **both** `stdout` and `stderr` with a `cleanOutput` function:
 
   ```js
   out.replace(/\r\n/g, "\n").replace(/\x1b\[\?25h/g, "").replace(/^\n+/, "").replace(/\n+$/, "")
   ```
 
-  ISH returns raw stdout; its script path then `.trim()`s before `postProcess` (`generator.ts:33`). (inferred) Use QAC's `cleanOutput`, since CRLF normalization matters on Windows.
-- On failure (spawn error or timeout), QAC **throws** (`executeCommand.ts:57-60`) and the generator's try/catch returns `[]`. ISH resolves `status:code??0`. Since specs wrap their own calls in try/catch, either works. Throwing on spawn failure is closer to QAC.
-- Timeouts: QAC uses 5000 ms by default and **20000 ms on Windows** (`executeCommand.ts:21`), and takes `max(timeout, input.timeout)`. A login-shell variant exists but specs do not use it.
+  ISH returns raw stdout; its script path then `.trim()`s before `postProcess` (`generator.ts:33`). CRLF normalization matters on Windows.
+- On failure (spawn error or timeout), the executor can **throw**, and the generator's try/catch returns `[]`. ISH resolves `status:code??0`. Since specs wrap their own calls in try/catch, either works; tabsmith rejects on spawn failure (section 14).
+- Timeouts (inferred): default 5000 ms and **20000 ms on Windows**, taking `max(timeout, input.timeout)` when the input carries one. Specs never pass `timeout`, so the default applies to them.
 
 ### 9.3 Legacy string form (old Fig API)
 
@@ -408,7 +404,7 @@ There are exactly **4 call sites in 2 files**:
 - `aws/ecs.js` @3385, @3653 and @4175: `await a("aws ecs list-tasks …")` and `` await a(`aws deploy list-deployment-groups --application-name ${i}`) ``, followed by **`JSON.parse(r)`**. The result is used as the stdout *string*.
 - `magento.js` @22: helper `var c=async t=>{let i=await t(`php -r 'print(json_encode(require "app/etc/env.php"));'`);return JSON.parse(i)}`, called from `generateSpec` next to object-form calls.
 
-Under QAC's object-only executor these throw (`input.args` is undefined, so the `[command, ...args]` spread fails), and the generator yields nothing.
+An executor that accepts only the object form makes these throw (`input.args` is undefined, so a `[command, ...args]` spread fails), and the generator yields nothing.
 
 (inferred) Cheap compatibility in the JS shim: `typeof input === "string"` → run `sh -c input`, or the configured POSIX shell on Windows, and resolve to **`stdout` as a string**. That was legacy Fig's contract.
 
@@ -429,17 +425,17 @@ Portability:
 
 1. **Intercept** `{command:"ls", args:["-1ApL"], cwd}` and answer natively from Rust. Output is one entry per line, directories suffixed `/`, symlinks followed (`-L`), dotfiles included except `.`/`..` (`-A`).
 2. Run `bash` through Git Bash when it is present, as ISH does: `getExecutionShell` → `gitBashPath()` on win32, with special-character escaping (`ISH/src/runtime/utils.ts:17-39`).
-3. Intercept `command:"fig"` (and `q`/`kiro`), returning `{status:1, stdout:"", stderr:""}`, so the 5 specs using `ai()` (`git.js`, `hub.js`, `pre-commit.js`, `turbo.js`, `vsce.js`) degrade quietly instead of running a foreign binary.
+3. Intercept `command:"fig"`, returning `{status:1, stdout:"", stderr:""}`, so the 5 specs using `ai()` (`git.js`, `hub.js`, `pre-commit.js`, `turbo.js`, `vsce.js`) degrade quietly instead of running a foreign binary.
 
 ---
 
 ## 10. `generatorContext` (third argument of `custom`)
 
-What QAC passes (`customSuggestionsGenerator.ts:39-46`; context built in `QAC/packages/autocomplete/src/state/generators.ts:17-37`):
+The `generatorContext` has this shape:
 
 ```ts
-{ currentWorkingDirectory: figState.cwd || "",
-  currentProcess: figState.processUserIsIn || "",
+{ currentWorkingDirectory: cwd || "",
+  currentProcess: foregroundProcess || "",
   sshPrefix: "",
   searchTerm,                       // parser's current search term (raw text of the token being completed)
   environmentVariables,             // shell's env (Record<string,string>)
@@ -501,7 +497,7 @@ The helper's algorithm, for a native re-implementation or verification:
 - **Keep JS functions alive.** Specs mix data with functions, and functions cannot be serialized to JSON. Either:
   - keep `Persistent<Function>` handles, or
   - walk the spec once in JS, replacing each function with `{"$fn": id}` and storing it in a JS-side table, so Rust gets a serde-friendly tree plus callable ids.
-- **Async.** 546 of 638 `custom` functions (bundle-wide) are async, and all `generateSpec`/`getVersionCommand`/`alias`/`loadSpec` functions are async. `postProcess`, `trigger` and `getQueryTerm` are always sync. Always `await` whatever `custom` returns, since some are sync. Pump jobs until the promise settles. Enforce per-call timeouts on the Rust side (loading 5000 ms as in `loadSpec.ts:238-241`; scripts per section 8).
+- **Async.** 546 of 638 `custom` functions (bundle-wide) are async, and all `generateSpec`/`getVersionCommand`/`alias`/`loadSpec` functions are async. `postProcess`, `trigger` and `getQueryTerm` are always sync. Always `await` whatever `custom` returns, since some are sync. Pump jobs until the promise settles. Enforce per-call timeouts on the Rust side (loading 5000 ms; scripts per section 8).
 - **Safety.** Specs are third-party code run on every keystroke. Set a QuickJS memory limit and an interrupt handler (rquickjs `Runtime::set_memory_limit` / `set_interrupt_handler`; inferred, check the API for your version).
 - **Parse cost.** The largest files are:
 
@@ -539,10 +535,10 @@ The helper's algorithm, for a native re-implementation or verification:
 
 **Recommendation (inferred): embed.**
 
-- Embedding adds 4–7 MB to the binary. You get offline operation, a pinned spec version that matches the tested JS shim, and no reliance on AWS's spec CDN, which Q itself fetches per spec at runtime with no on-disk cache (`spec.rs:195-247`).
+- Embedding adds 4–7 MB to the binary. You get offline operation, a pinned spec version that matches the tested JS shim, and no network dependency for specs.
 - The simplest layout with random access and no disk writes is a `build.rs` that zstd-19 compresses each file and emits a sorted `&[(&str /*path*/, &[u8] /*zstd*/)]` table (~7.0 MB), decompressed on first use and cached in memory.
 - If binary size matters more, use one solid `specs.tar.zst` (4.2 MB) extracted once to `<cache_dir>/tabsmith/specs/<version>/` (77 MB on disk), or use the trained dictionary (5.8 MB).
-- **Optional updates.** Add a command that downloads the npm tarball (`https://registry.npmjs.org/@withfig/autocomplete/-/autocomplete-<ver>.tgz`; standard npm URL pattern, inferred) into a user specs dir that takes precedence over the embedded set. Resolution order: user dir → downloaded → embedded. QAC has a similar override, `autocomplete.devCompletionsFolder` (`loadSpec.ts:119-151`).
+- **Optional updates.** Add a command that downloads the npm tarball (`https://registry.npmjs.org/@withfig/autocomplete/-/autocomplete-<ver>.tgz`; standard npm URL pattern, inferred) into a user specs dir that takes precedence over the embedded set. Resolution order: user dir → downloaded → embedded.
 - **Optional build flag** to leave out aws, az and gcloud, saving about 63 MB raw and about 4.4 MB of per-file zstd. ISH excludes them unconditionally (`runtime.ts:26-28`).
 
 ---
@@ -575,7 +571,7 @@ The Rust `__exec` must:
 - normalize output with `cleanOutput`;
 - resolve `{stdout, stderr, status}`;
 - reject on spawn failure;
-- short-circuit `ls -1ApL` (native) and `fig`/`q` (status 1).
+- short-circuit `ls -1ApL` (native) and `fig` (status 1).
 
 ---
 
@@ -592,8 +588,7 @@ The Rust `__exec` must:
 - **`splitOn` + empty stdout.** The result must be `[]`, not `[""]`.
 - **Generators fail silently.** Every generator error, including a JS exception, a timeout, `JSON.parse` of empty stdout, or the `Intl` ReferenceError, must yield `[]` and log, never abort the menu.
 - **`console` capture.** Calls should go to a log file, never to the user's TTY: they would corrupt the overlay.
-- **`trigger` may throw.** QAC then treats the result as `shouldTrigger = true` (`generators.ts:166-171`).
-- **History parsing.** When parsing history lines, pass an exec that throws, as QAC does (`parseArguments.ts:596-603`), so `generateSpec`/`alias` never run commands for old lines.
+- **`trigger` may throw.** Treat that as `shouldTrigger = true`.
 - **Name collisions.** Spec names like `-` (zsh pre-command modifier, `hidden:!0`, `args:{isCommand:!0}`), `aliases`, `figterm` exist as real top-level specs.
 
 ---

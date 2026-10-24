@@ -1,19 +1,15 @@
 # tabsmith — authoritative implementation spec
 
-`tabsmith` is a single cross-platform Rust binary (macOS, Linux, Windows) that re-implements **only the CLI
-autocompletion part of Kiro CLI** (= Amazon Q Developer CLI = Fig): an in-terminal dropdown menu drawn by a PTY
-wrapper, inline ghost text, and the CLI commands around them (`settings`, `theme`, `inline`, `integrations`,
-`doctor`, `init`, `version`, `setup`, `uninstall`, …), driven by the official Fig completion specs run in an
-embedded QuickJS engine.
+`tabsmith` is a single cross-platform Rust binary (macOS, Linux, Windows) that provides terminal autocompletion: an
+in-terminal dropdown menu drawn by a PTY wrapper, inline ghost text, and the CLI commands around them (`settings`,
+`theme`, `inline`, `integrations`, `doctor`, `init`, `version`, `setup`, `uninstall`, …), driven by the Fig
+completion specs run in an embedded QuickJS engine.
 
-This document is the contract. Where it disagrees with the seven research reports, this document wins (the
-decision log in §0.3 says why). The reports remain the place for verbatim detail; this spec cites them as
-`R:<report> §n` (files in the same directory) and cites reference sources as `qac/…`, `ish/…`, `specs/…`
-(root `scratchpad/ref/`). It was written before the implementation and synced with it after four review rounds;
-§0.4 lists the deliberate deviations from Kiro those rounds introduced. Where this text and the code disagree, the
-code wins and this text is the bug.
+This document is the contract. It was written before the implementation and synced with it after four review
+rounds; §0.4 lists the deliberate decisions those rounds introduced. Citations of the form `ish/…` point into the
+inshellisense reference sources. Where this text and the code disagree, the code wins and this text is the bug.
 
-Markers: **MUST** = Kiro parity or required for the product to work. **SHOULD** = worth doing, not in v1's
+Markers: **MUST** = required for the product to work. **SHOULD** = worth doing, not in v1's
 critical path. **SKIP** = deliberately not built (reason given). **(inferred)** = not read from code.
 **(verify)** = check against the pinned crate version before relying on it.
 
@@ -21,23 +17,22 @@ critical path. **SKIP** = deliberately not built (reason given). **(inferred)** 
 
 ## 0. Ground rules
 
-### 0.1 Rebrand map
+### 0.1 Names
 
-| Kiro / Q / Fig | tabsmith |
+| What | tabsmith |
 |---|---|
-| `kiro-cli` / `q` (CLI) | `tabsmith` |
-| `qterm` / figterm (PTY wrapper binary) | `tabsmith _ pty` (same binary, hidden subcommand) |
-| `Amazon Q` product name in strings | `tabsmith` |
-| data dir `<data_local>/amazon-q` | `~/.tabsmith` (override `TABSMITH_HOME`) |
-| `Q_*`, `QTERM_SESSION_ID` env vars | `TABSMITH_*`, `TABSMITH_SESSION_ID` |
-| `PROCESS_LAUNCHED_BY_Q` | `PROCESS_LAUNCHED_BY_TABSMITH` |
-| `SHOULD_QTERM_LAUNCH` | `SHOULD_TABSMITH_LAUNCH` |
-| `# Amazon Q pre block. Keep at the top of this file.` | `# tabsmith pre block. Keep at the top of this file.` |
-| `~/.amazon-q.dotfiles.bak/` | `~/.tabsmith/backups/` |
-| OSC `ESC ] 697 ;` | **kept** (`697`) |
-| `# fig ignore` escape hatch | `# tabsmith ignore` |
-| CDN specs `https://specs.q.us-east-1.amazonaws.com` | embedded `@withfig/autocomplete@2.692.3` |
-| CodeWhisperer inline model | local sources + optional OpenAI-compatible / Anthropic profiles |
+| CLI binary | `tabsmith` |
+| PTY wrapper | `tabsmith _ pty` (same binary, hidden subcommand) |
+| Product name in strings | `tabsmith` |
+| Data dir | `~/.tabsmith` (override `TABSMITH_HOME`) |
+| Env vars | `TABSMITH_*`, `TABSMITH_SESSION_ID` |
+| Launch-guard env vars | `PROCESS_LAUNCHED_BY_TABSMITH`, `SHOULD_TABSMITH_LAUNCH` |
+| Dotfile block marker | `# tabsmith pre block. Keep at the top of this file.` |
+| Dotfile backups dir | `~/.tabsmith/backups/` |
+| Marker protocol | OSC `ESC ] 697 ;` |
+| Escape hatch | `# tabsmith ignore` |
+| Completion specs | embedded `@withfig/autocomplete@2.692.3` |
+| Inline model | local sources + optional OpenAI-compatible / Anthropic profiles |
 
 ### 0.2 Engineering constraints
 
@@ -46,77 +41,77 @@ critical path. **SKIP** = deliberately not built (reason given). **(inferred)** 
   `chrono`, `dialoguer`, `globset` crates. Each was replaced by a few lines of std code (noted where it happens).
 - Logs never go to the user's terminal from inside `_ pty` (they would corrupt the screen).
 
-### 0.3 Decision log (where the references or reports disagree)
+### 0.3 Decision log
 
 | # | Topic | Decision | Why |
 |---|---|---|---|
-| D1 | How the wrapper starts | Kiro model: dotfile **pre** block `exec`s `tabsmith _ pty` (bash/zsh/fish); the inner shell re-reads its rc, whose **post** block emits markers. pwsh has no `exec`: for an interactive invocation only, the pre block runs the wrapper as a child, then ends the outer shell with `[Environment]::Exit($LASTEXITCODE)`; when the wrapper could not start at all the outer shell carries on (§5.4.5). | Kiro parity for `integrations install dotfiles`; ish's launch-flag injection (`--init-file`, ZDOTDIR swap) is only used by `debug shell`. ish's `Stop-Process -Id $PID` lost the exit code and killed every pwsh whose wrapper failed to start. |
-| D2 | Marker protocol | OSC 697 key names (Kiro, `R:shell-integration §6`). Values are **not escaped**; tabsmith's own splitter takes the whole payload up to BEL/ST, so `;` in paths survives. Markers are **stripped** before output reaches the real terminal. | Fixes Kiro's `;` truncation (`qac/crates/alacritty_terminal/src/ansi.rs:1176`) without ish's per-prompt byte-escaping loop. Values containing BEL/ESC/LF are unsupported (documented). |
-| D3 | Edit buffer | Screen-scraped from a headless model (both refs). Cells are **tagged inside the model** with injected OSC 8 hyperlinks (`tabsmith:p` prompt, `tabsmith:c<n>` command cycle n). | Same idea as figterm's per-cell `FigFlags` (`qac/crates/alacritty_terminal/src/term/cell.rs:19-45`) without forking the crate; tags move with scroll/reflow, so no stored coordinates (Kiro's `cmd_cursor` drift bugs disappear). |
-| D4 | Model crate | `alacritty_terminal` | Full SGR incl. dim/italic, WRAPLINE, reflow, alt screen, OSC 8 per cell (`R:overlay-rendering §17.1`). |
-| D5 | Default keybindings | `fig.json` set (Enter, Tab, Shift-Tab/Up/Ctrl-P, Down/Ctrl-N, Esc, Ctrl-K description, Ctrl-R history) | It is what Kiro actually runs with; `actions.json` is overwritten at runtime (`R:autocomplete-ui §3.1`). |
-| D6 | Delete byte for insertions | `0x7f` (DEL) for every shell | PSReadLine treats `0x08` as Ctrl+Backspace (word delete) (`R:overlay-rendering §17.7.8`); bash/zsh/fish bind both. |
-| D7 | Drawing/restoring | Absolute cursor positioning (`CSI r;c H`) per box row; restore only the covered cell span by re-emitting model cells (truecolor exact). Every frame inside synchronized output `CSI ?2026h/l`. | Cheaper and more exact than ish's whole-row `CSI 2K` repaint with 256-colour SGR bugs (`R:overlay-rendering §7.3`); avoids DECSC single-slot clobbering. |
-| D8 | Not enough room | Never scroll the real terminal. Below if it fits, else above, else shrink rows on the bigger side, else hide. | Scrolling would desync model, terminal and the shell's line editor (`R:overlay-rendering §17.5`). |
+| D1 | How the wrapper starts | Dotfile **pre** block `exec`s `tabsmith _ pty` (bash/zsh/fish); the inner shell re-reads its rc, whose **post** block emits markers. pwsh has no `exec`: for an interactive invocation only, the pre block runs the wrapper as a child, then ends the outer shell with `[Environment]::Exit($LASTEXITCODE)`; when the wrapper could not start at all the outer shell carries on (§5.4.5). | `integrations install dotfiles` writes these blocks; ish's launch-flag injection (`--init-file`, ZDOTDIR swap) is only used by `debug shell`. ish's `Stop-Process -Id $PID` lost the exit code and killed every pwsh whose wrapper failed to start. |
+| D2 | Marker protocol | OSC 697 key names. Values are **not escaped**; tabsmith's own splitter takes the whole payload up to BEL/ST, so `;` in paths survives. Markers are **stripped** before output reaches the real terminal. | Keeps `;` in values intact without ish's per-prompt byte-escaping loop. Values containing BEL/ESC/LF are unsupported (documented). |
+| D3 | Edit buffer | Screen-scraped from a headless terminal model. Cells are **tagged inside the model** with injected OSC 8 hyperlinks (`tabsmith:p` prompt, `tabsmith:c<n>` command cycle n). | Per-cell tags without forking the crate; tags move with scroll/reflow, so no stored coordinates (no cursor-drift bugs). |
+| D4 | Model crate | `alacritty_terminal` | Full SGR incl. dim/italic, WRAPLINE, reflow, alt screen, OSC 8 per cell. |
+| D5 | Default keybindings | The default keybinding set (Enter, Tab, Shift-Tab/Up/Ctrl-P, Down/Ctrl-N, Esc, Ctrl-K description, Ctrl-R history) | — |
+| D6 | Delete byte for insertions | `0x7f` (DEL) for every shell | PSReadLine treats `0x08` as Ctrl+Backspace (word delete); bash/zsh/fish bind both. |
+| D7 | Drawing/restoring | Absolute cursor positioning (`CSI r;c H`) per box row; restore only the covered cell span by re-emitting model cells (truecolor exact). Every frame inside synchronized output `CSI ?2026h/l`. | Cheaper and more exact than ish's whole-row `CSI 2K` repaint with 256-colour SGR bugs; avoids DECSC single-slot clobbering. |
+| D8 | Not enough room | Never scroll the real terminal. Below if it fits, else above, else shrink rows on the bigger side, else hide. | Scrolling would desync model, terminal and the shell's line editor. |
 | D9 | Where the engine lives | Rust implements tokenizer, parser, suggestions, ranking; QuickJS only loads spec modules and calls spec functions. | "Rust as the main language"; pure parts unit-testable with `cargo test`. |
-| D10 | Generator cache | ish semantics: fresh within TTL; past TTL `max-age` blocks, otherwise serve stale + background refresh; failures never cached. | qac's cache blocks on refresh and poisons on failure (`R:parser-runtime §4.8`). |
-| D11 | Specs | Embedded solid `specs.tar.zst` (4.2 MB) extracted once to `~/.tabsmith/specs/<ver>/`; user dir overrides. No CDN. | Offline, pinned, reproducible (`R:spec-format §13`). |
-| D12 | `doctor` exit code | 1 if any error (and with `--strict`, any warning); Kiro always exits 0 (`qac/crates/q_cli/src/cli/doctor/mod.rs:2344`). | Scriptable. Documented deviation. |
-| D13 | Theme default | Unset → `dark` (Kiro code path, `qac/crates/q_cli/src/cli/theme.rs:25`); `system` = query terminal background (OSC 11). | Kiro's dashboard default (`system`) relied on OS appearance; a terminal popup has its own bg. |
-| D14 | Menu size units | `autocomplete.width` = columns (default 40), `autocomplete.height` = max list rows (default 7). | Kiro's 320 px × 140 px at 20 px rows = 7 rows ≈ 40 cols (`R:autocomplete-ui §10.2`). |
-| D15 | bash hooks | `PS0` (preexec) + `PROMPT_COMMAND` (precmd); requires bash ≥ 4.4. No vendored bash-preexec; a bash-preexec the user loads keeps working (D47). | Removes ~380 vendored lines and its DEBUG-trap/HISTCONTROL side effects (`R:shell-integration §5.2.1`). macOS `/bin/bash` 3.2 is unsupported (doctor error). |
-| D16 | Inline ghost text | Drawn by the wrapper for every shell. Default source `history+specs` (local). LLM profiles opt-in and consulted only when no local history match exists. | Kiro's ghost text is a zsh-only plugin calling a cloud model (`R:figterm §15`). |
+| D10 | Generator cache | ish semantics: fresh within TTL; past TTL `max-age` blocks, otherwise serve stale + background refresh; failures never cached. | Stale results are served while a refresh runs in the background; a failed run never poisons the cache. |
+| D11 | Specs | Embedded solid `specs.tar.zst` (4.2 MB) extracted once to `~/.tabsmith/specs/<ver>/`; user dir overrides. No CDN. | Offline, pinned, reproducible. |
+| D12 | `doctor` exit code | 1 if any error (and with `--strict`, any warning). | Scriptable. |
+| D13 | Theme default | Unset → `dark`; `system` = query terminal background (OSC 11). | A terminal popup has its own background; OS appearance does not apply. |
+| D14 | Menu size units | `autocomplete.width` = columns (default 40), `autocomplete.height` = max list rows (default 7). | A terminal popup is measured in cells, not pixels. |
+| D15 | bash hooks | `PS0` (preexec) + `PROMPT_COMMAND` (precmd); requires bash ≥ 4.4. No vendored bash-preexec; a bash-preexec the user loads keeps working (D47). | Removes ~380 vendored lines and its DEBUG-trap/HISTCONTROL side effects. macOS `/bin/bash` 3.2 is unsupported (doctor error). |
+| D16 | Inline ghost text | Drawn by the wrapper for every shell. Default source `history+specs` (local). LLM profiles opt-in and consulted only when no local history match exists. | The wrapper draws it, so no shell plugin is needed; the default sources are local. |
 | D17 | IPC | No sockets. `tabsmith _ pre-cmd` writes `~/.tabsmith/run/<session>.json` (env + aliases); the wrapper re-reads it when its mtime changes. Live settings reload by mtime. | Cross-platform with zero code for named pipes/UDS. |
-| D18 | History store | `~/.tabsmith/history.jsonl` | No SQLite C build; same fields as Kiro's table (`R:figterm §16`). |
-| D19 | Launch decision | Exit code 0 (launch) / 1 (don't). Deny-list of environments only; no terminal allow-list or process-tree walk. SSH and WSL allowed. | The allow-list existed to position the desktop GUI window; an in-terminal overlay works in any VT terminal. tabsmith runs on the remote host itself, so SSH needs no tunnel. |
-| D20 | cmd.exe, nushell | SKIP in v1 | cmd has no preexec/exit/cwd hooks and Kiro reports it unsupported (`doctor/mod.rs:591-712`); Kiro's nu scripts are legacy/broken (`R:shell-integration §4.3`) and nu redraws its prompt on every key. |
-| D21 | Recency key | `tokens[commandIndex]` for both read and write | Kiro reads `tokens[0]`, writes `tokens[commandIndex]` (bug, `R:autocomplete-ui §8.2`). |
-| D22 | Backspace count on insert | Chars of the **raw** on-screen token text; for a value typed inside an option token (`--opt=val`, `-oval`) only the value part (§6.8) | Kiro escapes only the first space and ignores typed quotes (`qac/packages/autocomplete/src/state/insertion.ts:25-90`). |
-| D23 | Parser quirks | `FOO= cmd` = complete empty assignment; string `getQueryTerm` slices at `lastIndexOf(s)+s.len()` | Kiro throws / uses `+1` (`R:parser-runtime §1.7, §4.9`); all spec strings are 1 char so ranking is unchanged. |
+| D18 | History store | `~/.tabsmith/history.jsonl` | No SQLite C build. |
+| D19 | Launch decision | Exit code 0 (launch) / 1 (don't). Deny-list of environments only; no terminal allow-list or process-tree walk. SSH and WSL allowed. | An in-terminal overlay works in any VT terminal, so no terminal allow-list is needed. tabsmith runs on the remote host itself, so SSH needs no tunnel. |
+| D20 | cmd.exe, nushell | SKIP in v1 | cmd has no preexec/exit/cwd hooks, and nu redraws its prompt on every key. |
+| D21 | Recency key | `tokens[commandIndex]` for both read and write | Read and write use the same key, so a recorded selection is found again. |
+| D22 | Backspace count on insert | Chars of the **raw** on-screen token text; for a value typed inside an option token (`--opt=val`, `-oval`) only the value part (§6.8) | The deletion must cover exactly what is on screen, including typed escapes and quotes. |
+| D23 | Parser quirks | `FOO= cmd` = complete empty assignment; string `getQueryTerm` slices at `lastIndexOf(s)+s.len()` | The slice offset is the string's own length; all spec strings are 1 char. |
 | D24 | Ghost-colour exclusion | Only cells **at or after the cursor** are tested against the suggestion colour | Prevents syntax-highlighted typed text in `fg=8` from vanishing from the buffer. |
-| D25 | Execute byte | `\r` | Kiro's UI inserts `\n`; figterm's execute path uses `\r` (`qac/crates/fig_proto/src/figterm.rs:4-30`); `\r` is Enter on every shell incl. PSReadLine. |
+| D25 | Execute byte | `\r` | `\r` is Enter on every shell incl. PSReadLine. |
 
-### 0.4 Decision log addendum (deliberate deviations from Kiro introduced during review)
+### 0.4 Decision log addendum (deliberate decisions introduced during review)
 
 | # | Topic | Decision | Why |
 |---|---|---|---|
-| D26 | Insertion escaping | Allow-list: a name stays bare only if every char is alphanumeric or one of `-_./+,:@%=~` (only spaces besides → `\ `); anything else goes through `quote(shell)` (§5.3). Only the name is escaped, never `<sep>{cursor}` (§6.8). | Kiro's deny-list misses `` $ ` ; { } `` and a leading `~`/`=`: a file or branch name such as `zz;id` ran commands. |
+| D26 | Insertion escaping | Allow-list: a name stays bare only if every char is alphanumeric or one of `-_./+,:@%=~` (only spaces besides → `\ `); anything else goes through `quote(shell)` (§5.3). Only the name is escaped, never `<sep>{cursor}` (§6.8). | A file or branch name such as `zz;id` (or one with `` $ ` { } `` or a leading `~`/`=`) must not run commands or expand. |
 | D27 | Variable references | A non-path row that is a bare `$NAME` (pwsh: `$env:NAME` too) is inserted unquoted; file/folder rows are always escaped. | `echo $HO` → `$HOME` must stay a reference; a file named `$foo` must not expand. |
-| D28 | Quote opened before the replaced text | Escape for inside that quote, add no quotes; a file closes the quote, a folder leaves it open; bash/zsh `!` becomes `"'!'"`. | Kiro escapes as if unquoted (`"my dir/x\ y.txt"` is a wrong path); `!` history-expands inside `"…"`. |
+| D28 | Quote opened before the replaced text | Escape for inside that quote, add no quotes; a file closes the quote, a folder leaves it open; bash/zsh `!` becomes `"'!'"`. | Escaping as if unquoted inside a quote gives a wrong path (`"my dir/x\ y.txt"`); `!` history-expands inside `"…"`. |
 | D29 | pwsh smart quotes | U+2018–U+201B count as single and U+201C–U+201E as double quotes: they force quoting and are doubled / backtick-escaped. | PowerShell ends strings on them: a crafted file name injected commands. |
 | D30 | pwsh folders | Inserted as a backtick-escaped bare word (``dir` with` space/``), never `'…{cursor}'`. | A cursor left before the closing `'` hit the mid-word guard: no completion for the next path segment. |
-| D31 | `special` rows (`help` template) | Delete the typed prefix like any other row. | Kiro deletes 0 and doubles the text (`help bubuild`). |
+| D31 | `special` rows (`help` template) | Delete the typed prefix like any other row. | Deleting nothing would double the typed text (`help bubuild`). |
 | D32 | Control characters | Stripped from every insertion; directory entries with control chars and multi-line history rows are not offered; ghost text with control chars is never shown or accepted. | A CR in a file name, generator output or LLM reply ran the line without Enter. |
 | D33 | pwsh path separator | Path templates, their trigger and query term also split on `\` (pwsh only). | Windows paths; POSIX shells keep `\` as the escape char. |
-| D34 | Native `ls -1ApL` | Lists the requested directory (relative to the shell cwd); a missing one lists nothing. | Kiro falls back to the cwd: `cd nonexist/` offered the cwd's folders. |
+| D34 | Native `ls -1ApL` | Lists the requested directory (relative to the shell cwd); a missing one lists nothing. | A missing directory must not fall back to the cwd (`cd nonexist/` would offer the cwd's folders). |
 | D35 | Bare `NewCmd` | Ignored; only `NewCmd=<own sid>` opens a cycle. | Program output (`cat` of a file) could fake a prompt and redirect keystrokes; tabsmith's scripts always send the sid. |
-| D36 | `NoHistory` marker | A command the shell keeps out of its own history (leading space, fish private mode, PSReadLine sensitive/handler-rejected line, bash `HISTCONTROL`) is not written to `history.jsonl`; it still ends its cycle (`CommandEnded`). | Kiro records everything: secrets reached ghost text, history rows and LLM context. |
-| D37 | Recorded command text | The line submitted with Enter (or by an execute insertion) wins over the screen scrape when the scrape shows it as a whole word run followed only by shell output (§5.1 PreExec). | Kiro's scrape records `!!` echoes, zsh correction prompts and transient-prompt glyphs. |
+| D36 | `NoHistory` marker | A command the shell keeps out of its own history (leading space, fish private mode, PSReadLine sensitive/handler-rejected line, bash `HISTCONTROL`) is not written to `history.jsonl`; it still ends its cycle (`CommandEnded`). | Recording everything would let secrets reach ghost text, history rows and LLM context. |
+| D37 | Recorded command text | The line submitted with Enter (or by an execute insertion) wins over the screen scrape when the scrape shows it as a whole word run followed only by shell output (§5.1 PreExec). | The scrape alone records `!!` echoes, zsh correction prompts and transient-prompt glyphs. |
 | D38 | Nested integrated shells | Running commands form a stack keyed by `PID=`; a prompt finishes only its own shell's command and those nested above it. | Nested shells share the sid: the inner prompt closed the outer command with exit 0. |
 | D39 | Paste without bracketed paste | From the 2nd plain printable key forwarded in one read, the rest of that read reaches the shell raw. | pwsh never enables `?2004h`: a pasted line ending in Enter was replaced by the selection. |
 | D40 | Keys ahead of their echo | Printable typeahead is modelled (`unechoed`); after a key that cannot be modelled (Backspace, arrows, Ctrl-…) a key that would act on the menu/ghost is held until the reply for a later request (≤ 100 ms) (§7.3). | A menu computed for a buffer the shell no longer has inserted text instead of running the typed line. |
-| D41 | Insertion lock | Re-armed while nothing of the insertion has been echoed, capped at 1 s (Kiro: 16 ms). | On a slow shell a second accept wrote the insertion twice. |
+| D41 | Insertion lock | Re-armed while nothing of the insertion has been echoed, capped at 1 s. | On a slow shell a second accept wrote the insertion twice. |
 | D42 | Inline TUIs | No menu, ghost or interception while the cursor is off the command line (fzf `--height`, fish's pager search field): the at-prompt rule of §5.6. | Their rows carry the open cycle's tag; the dropdown was drawn over fzf and took its Enter. |
-| D43 | Dotfile writes | Temp file + rename (permissions kept, through symlinks incl. dangling ones) after a write-permission probe. | Kiro truncates in place: an interrupted or concurrent write left the rc empty or torn. |
+| D43 | Dotfile writes | Temp file + rename (permissions kept, through symlinks incl. dangling ones) after a write-permission probe. | Truncating in place would leave the rc empty or torn after an interrupted or concurrent write. |
 | D44 | `integrations uninstall` | Acts on every integration with traces on disk, not only those `is_installed()` accepts. | The scripts embed the exe path: after a binary move nothing counted as installed and nothing was removed. |
-| D45 | Manual setup text | Prints the exact guarded source lines install writes. | Kiro's unguarded `. "$HOME/…"` lines were not recognised by doctor/uninstall and broke shell start after `--purge`. |
+| D45 | Manual setup text | Prints the exact guarded source lines install writes. | Unguarded `. "$HOME/…"` lines would not be recognised by doctor/uninstall and would break shell start after `--purge`. |
 | D46 | Terminal-injected integrations | The post blocks load Ghostty (only when the outer shell had it injected), kitty and VS Code shell integration again in the wrapped shell. | The pre block's `exec` dropped them: no OSC 133/7/633, new tabs opened in `$HOME`. |
 | D47 | bash `PROMPT_COMMAND` layout | `_ts_first` / `_ts_last` are stripped from any element and re-added around the user's commands; bash-preexec's `__bp_interactive_mode` stays after `_ts_last`; the string form is kept until bash-preexec installed itself; array form on bash ≥ 5.1; inside VS Code's integration its prompt command runs ours. | DEBUG-trap preexec hooks (bash-preexec, VS Code) never fired or fired at prompt time; user prompt commands saw `_ts_first`'s `PIPESTATUS`. |
-| D48 | zsh prompt themes | powerlevel10k's `_p9k_set_prompt` is wrapped; zle `line-init` and `line-pre-redraw` re-wrap a PS1 replaced after precmd. | Kiro's precmd-last wrap loses to p10k and to async/streaming themes: no markers at all. |
-| D49 | fish prompt wrappers | `printf '%s'` (not `%b`), `$argv` forwarded to the user's functions, erased user prompts stay erased, `--private` forwarded to the wrapped fish, `_ pre-cmd` backgrounded inside `sh -c`. | Kiro's wrappers interpreted backslashes (`\c` cut the prompt), broke fish 4 transient prompts, resurrected erased prompts, dropped private mode and clobbered `$last_pid`. |
+| D48 | zsh prompt themes | powerlevel10k's `_p9k_set_prompt` is wrapped; zle `line-init` and `line-pre-redraw` re-wrap a PS1 replaced after precmd. | A precmd-last wrap loses to p10k and to async/streaming themes: no markers at all. |
+| D49 | fish prompt wrappers | `printf '%s'` (not `%b`), `$argv` forwarded to the user's functions, erased user prompts stay erased, `--private` forwarded to the wrapped fish, `_ pre-cmd` backgrounded inside `sh -c`. | Naive wrappers interpret backslashes (`\c` cut the prompt), break fish 4 transient prompts, resurrect erased prompts, drop private mode and clobber `$last_pid`. |
 
 ---
 
-## 1. Feature list (Kiro → tabsmith)
+## 1. Feature list
 
-| # | Kiro feature | tabsmith | Notes / reason |
+| # | Feature | tabsmith | Notes / reason |
 |---|---|---|---|
-| F1 | Autocomplete dropdown | **MUST** | In-terminal overlay instead of a GUI window (§7). |
+| F1 | Autocomplete dropdown | **MUST** | In-terminal overlay (§7). |
 | F2 | Fig spec engine: subcommands, options, args, option chains `-abc`, `--opt=val`, `requiresSeparator`, `isRepeatable`, `exclusiveOn`, `dependsOn`, `--`, `optionsMustPrecedeArguments`, `optionsCanBreakVariadicArg`, `flagsArePosixNoncompliant`, persistent options, `loadSpec`, `isCommand/isScript/isModule`, `generateSpec`, arg `alias` directive | **MUST** | §6. |
 | F3 | Diff-versioned specs (az, heroku, fig, infracost, shopify, @usermn/sdc) | **MUST** | §6.3; `@usermn/sdc` skips version detection (would run `npx`). |
 | F4 | Generators: `script`, `postProcess`, `splitOn`, `custom`, `trigger`, `getQueryTerm`, `cache`, `debounce`, `scriptTimeout` | **MUST** | §6.6. |
 | F5 | Templates `filepaths`, `folders`, `help` | **MUST** | §6.6.4. |
-| F6 | Template `history` (7 spec uses) | SKIP | Needs a per-spec history index (`R:parser-runtime §4.4`); returns `[]`. |
+| F6 | Template `history` (7 spec uses) | SKIP | Needs a per-spec history index; returns `[]`. |
 | F7 | Alias expansion (first token, from shell `alias` output) | **MUST** | §6.1.6. |
 | F8 | Filtering (prefix / fuzzy via fuzzysort), `filterStrategy`, exact-match buckets, dedupe | **MUST** | §6.7. |
 | F9 | Ranking: priority, recency (`sortMethod`) | **MUST** | §6.7.4. |
@@ -126,34 +121,34 @@ critical path. **SKIP** = deliberately not built (reason given). **(inferred)** 
 | F13 | `insertCommonPrefix` (Tab) with failure "shake" | **MUST** | Shake = BEL `\x07` to stdout. |
 | F14 | Description bar; argument hint when no suggestions | **MUST** | §7.4. |
 | F15 | Description pop-out (`toggleDescription`, `alwaysShowDescription`) | SHOULD | §7.4.3. |
-| F16 | History rows in dropdown (`beta.history.mode`, `toggleHistoryMode` Ctrl-R) | **MUST** | Uses tabsmith's own history file (§3.5). Kiro's shell-history loading via login shells: SKIP. |
+| F16 | History rows in dropdown (`beta.history.mode`, `toggleHistoryMode` Ctrl-R) | **MUST** | Uses tabsmith's own history file (§3.5). Loading shell history through login shells: SKIP. |
 | F17 | First-token completion (`autocomplete.firstTokenCompletion`) | **MUST** | Spec names + aliases + PATH executables instead of `compgen -c` (portable). |
-| F18 | Themes dark/light/system/custom JSON | **MUST** | Named community themes (dracula, nord, …) SKIP: files not in the Kiro repo (`R:autocomplete-ui §13.3`). |
+| F18 | Themes dark/light/system/custom JSON | **MUST** | Named community themes (dracula, nord, …) SKIP: their theme files are not available. |
 | F19 | `increaseSize` / `decreaseSize` | SKIP | Font scaling has no terminal meaning. |
-| F20 | `selectSuggestion1..10` | SHOULD | Kiro's is a no-op bug; tabsmith selects the Nth visible row. No default binding (Cmd/Ctrl+digit not deliverable). |
-| F21 | Loading indicator | **MUST** | Spinner glyph in the description bar after 200 ms; list stays visible (fixes Kiro's whole-window spinner). Not drawn while the pop-out replaces the bar (§7.4.3). |
+| F20 | `selectSuggestion1..10` | SHOULD | tabsmith selects the Nth visible row. No default binding (Cmd/Ctrl+digit not deliverable). |
+| F21 | Loading indicator | **MUST** | Spinner glyph in the description bar after 200 ms; list stays visible. Not drawn while the pop-out replaces the bar (§7.4.3). |
 | F22 | Inline ghost text | **MUST** | All shells, drawn by the wrapper (§8). |
-| F23 | Inline LLM completion | **MUST** (opt-in) | Replaces CodeWhisperer: OpenAI-compatible + Anthropic profiles (§8.5). |
+| F23 | Inline LLM completion | **MUST** (opt-in) | OpenAI-compatible + Anthropic profiles (§8.5). |
 | F24 | Shell integration bash, zsh, fish | **MUST** | §5. |
 | F25 | Shell integration pwsh (PowerShell 7+) | **MUST** | Windows' primary shell; prompt wrapping + a `PSConsoleHostReadLine` wrapper for PreExec (§5.4.5). Windows PowerShell 5.1 (`powershell`): SHOULD (same scripts, other profile path). |
-| F26 | nushell, cmd.exe, xonsh | SKIP | D20. xonsh was never in Kiro. |
-| F27 | Launch guards (`should-figterm-launch`) | **MUST** | §5.2. |
+| F26 | nushell, cmd.exe, xonsh | SKIP | D20. |
+| F27 | Launch guards (`_ should-launch`) | **MUST** | §5.2. |
 | F28 | OSC lock / session-id guard against nested shells | **MUST** | §5.1. |
 | F29 | Insert text into shell with buffer reconciliation + insertion lock | **MUST** | §7.3. |
 | F30 | Command history recording | **MUST** | Feeds inline + history rows (§3.5). |
 | F31 | Shell env/alias capture for generators (`_ pre-cmd`) | **MUST** | D17. |
 | F32 | Spec execution in the user's environment (RunProcess semantics) | **MUST** | §9.3. |
 | F33 | Windows ConPTY delayed EndPrompt/NewCmd | **MUST** | §5.1.4. |
-| F34 | CSI-u keyboard mode (`qterm.csi-u.enabled`) | SKIP | Only needed for Ctrl+digit bindings; off by default in Kiro. |
+| F34 | CSI-u keyboard mode | SKIP | Only needed for Ctrl+digit bindings. |
 | F35 | `# question` → translate hack | SKIP | AI translate is out of scope. |
-| F36 | Typeahead capture `Q_START_TEXT` | SKIP | tabsmith enters raw mode with `TCSANOW`, so pending input is not flushed; bytes read during the startup probe are forwarded to the inner shell (may echo twice — cosmetic). |
+| F36 | Typeahead capture at startup | SKIP | tabsmith enters raw mode with `TCSANOW`, so pending input is not flushed; bytes read during the startup probe are forwarded to the inner shell (may echo twice — cosmetic). |
 | F37 | Shortcut specs `?` and `+` | SKIP | Legacy Fig shortcuts. |
 | F38 | Dev mode spec folder (`autocomplete.developerMode` + `devCompletionsFolder`) | SHOULD (done) | One extra directory in the resolution order (leading `~` expanded); edited spec files are re-evaluated (§9.2). Dev server port: SKIP. |
 | F39 | Spec CDN | SKIP | D11. `tabsmith specs update` (download npm tarball): SHOULD, post-v1. |
 | F40 | `settings`, `theme`, `inline`, `integrations`, `init`, `doctor`, `setup`, `uninstall`, `version` | **MUST** | §2. |
 | F41 | `diagnostic`, `completion`, `debug key-tester/shell/logs` | SHOULD | §2. |
 | F42 | `issue`, `hook`, `update`, `login/logout/whoami/profile/user`, `chat/mcp/agent/translate`, `telemetry`, `launch/quit/restart/dashboard`, `_ local-state`, `debug diagnostics/fix-permissions/build/app/…` | SKIP | Out of scope (desktop app, auth, AI chat, telemetry) or need the socket tabsmith does not have. |
-| F43 | Integrations `ssh`, `input-method`, `vscode`, `intellij-plugin`, `autostart-entry`, `gnome-shell-extension` | SKIP | Desktop-app plumbing (`R:cli-surface §10.4-10.5`). Not present in the clap tree. |
+| F43 | Integrations `ssh`, `input-method`, `vscode`, `intellij-plugin`, `autostart-entry`, `gnome-shell-extension` | SKIP | Desktop-app plumbing. Not present in the clap tree. |
 | F44 | Mouse click on a row | SKIP | Needs mouse reporting, conflicts with terminal selection. |
 | F45 | `version --changelog` | SKIP | No release feed yet; add with the first release. |
 | F46 | JetBrains login-shell / re-sourcing fixes, input-method prompts, login nags, inline announcement | SKIP | IDE/desktop niceties. |
@@ -168,7 +163,7 @@ critical path. **SKIP** = deliberately not built (reason given). **(inferred)** 
 tabsmith [-v...] [-V|--version] [-h|--help] [COMMAND]
 ```
 
-- No command → print help, exit 0 (Kiro launches chat, `R:cli-surface §1.1`).
+- No command → print help, exit 0.
 - `-v` (count, global): log level 1=warn, 2=info, 3=debug, ≥4=trace (else `TABSMITH_LOG_LEVEL`, default warn); also
   mirrors CLI logs to stderr. `_ pty` never writes logs to the terminal.
 - `-V/--version` → `tabsmith <CARGO_PKG_VERSION>` (clap).
@@ -207,9 +202,9 @@ tabsmith _ (alias: internal, hidden)
 ```
 
 `-s/--silent` and `-f/--format` belong to the parent subcommand, so they precede the integration name:
-`tabsmith integrations uninstall --silent all` (Kiro semantics, `R:cli-surface §10.1`).
+`tabsmith integrations uninstall --silent all`.
 
-### 2.3 `settings` (port of `qac/crates/q_cli/src/cli/settings.rs:42-230`)
+### 2.3 `settings`
 
 clap: `#[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]`,
 `#[command(group(ArgGroup::new("vals").requires("key").args(["value", "format"])))]`.
@@ -226,17 +221,17 @@ clap: `#[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands
 | `settings list` | Configured keys sorted. Plain: `key = <compact json>` per line. json: the whole object. | 0 |
 | `settings list --all` | Every catalog key (§3.3). Plain: `key\ttype\tdefault\tvalue` with a header line. json: `[{key,type,default,description,value}]`. | 0 |
 
-### 2.4 `theme` (port of `theme.rs:51-128`)
+### 2.4 `theme`
 
 - `--folder`: print `~/.tabsmith/themes` (create if missing).
-- `--list`: built-ins `dark`, `light`, `system` then `*.json` stems from the folder, sorted, deduped (fixes Kiro's missing built-ins).
+- `--list`: built-ins `dark`, `light`, `system` then `*.json` stems from the folder, sorted, deduped.
 - `THEME`: if `<folder>/<THEME>.json` exists → parse `{author?:{name?,twitter?,github?}, version?, theme?, shade0..7?, accent0..7?}`
   (parse error → exit 1); print `\n› Switching to theme '<THEME bold>'` + ` by <name bold>` when `author.name`,
   then optional `  🐦 <twitter>` / `  💻 github.com/<github>` lines, then `\n`; set `autocomplete.theme`. Built-in name →
   `› Switching to theme '<THEME bold>'`, set. Else `error: '<THEME>' does not exist in <folder>`.
 - No args: print `autocomplete.theme` (unset → `dark`).
 
-### 2.5 `inline` (port of `inline.rs`, customizations → sources)
+### 2.5 `inline`
 
 | cmd | Behaviour | stdout | exit |
 |---|---|---|---|
@@ -250,7 +245,7 @@ Profiles are created with `settings`, e.g.
 `tabsmith settings inline.profiles.claude '{"provider":"anthropic","model":"claude-opus-5-5","api_key_env":"ANTHROPIC_API_KEY","effort":"low"}'`.
 `show-customizations` prints that example when no profile exists.
 
-### 2.6 `integrations` (port of `integrations.rs`)
+### 2.6 `integrations`
 
 - `install dotfiles [SHELL]`: shells = `[SHELL]` or `[bash, zsh, fish]` (+ `pwsh` when `pwsh` is on PATH). Each
   integration of each shell: if `is_installed()` is Ok → skip, else `install()`. Errors collected as
@@ -262,7 +257,7 @@ Profiles are created with `settings`, e.g.
   `conf.d` file, or one of the four exact dotfile lines of §5.5 — also when `is_installed()` fails (moved binary,
   lines appended after the post block). `Uninstalled!` if any, else `Not installed`; exit 0 unless an error.
 - `reinstall` = uninstall (silently) then install.
-- `status dotfiles [SHELL]|all`: **honours SHELL** (Kiro ignores it). Plain: `✔ <describe>` (green) / `✘ <describe>` (red);
+- `status dotfiles [SHELL]|all`: **honours SHELL**. Plain: `✔ <describe>` (green) / `✘ <describe>` (red);
   then `<shell>: <error>` lines for enumeration errors. json: `{"integrations":[{"installed":bool,"description":str,"shell":str,"file_name":str}],"errors":[{"shell":str,"error":{"title":str,"message":str|null}}]}`.
 - `describe()`: dotfile → `"<shell> pre post into <file_name>"` (e.g. `bash pre post into .bashrc`); fish conf.d file → `"fish <pre|post>"`.
 
@@ -270,12 +265,12 @@ Profiles are created with `settings`, e.g.
 
 `tabsmith init <shell> <pre|post> [--rcfile NAME]` prints the integration code + `\n`, always exit 0; on error prints
 `# Could not load source: <err>` (a comment, so `eval` never breaks). Output composition in §5.3. `--rcfile` is
-accepted and logged at debug level (Kiro's Linux-`profile` empty-output special case is dropped: the pre script's own
-interactive guard covers it). `TABSMITH_INIT_SNAPSHOT_TEST=1` makes output deterministic (bash/zsh pre
+accepted and logged at debug level (no special case: the pre script's own interactive guard covers the Linux
+`profile` case). `TABSMITH_INIT_SNAPSHOT_TEST=1` makes output deterministic (bash/zsh pre
 `TABSMITH_SHELL='/bin/zsh'`, launch value 0, binary path `tabsmith`); the snapshots live in `tests/snapshots/` and are
 re-blessed with `TABSMITH_BLESS=1 cargo test integrations_init_snapshots`.
 
-### 2.8 `doctor` (port of `doctor/mod.rs:2079-2345`)
+### 2.8 `doctor`
 
 Flags `-a/--all` (run every check, print every result, never fix, never abort), `-s/--strict` (soft checks become
 normal; warnings count as failures for the exit code). No `--format`.
@@ -302,9 +297,9 @@ Flow:
 | `Let's check your dotfiles...` | `<shell> <~/path> integration check` (one per integration of bash, zsh, fish, pwsh) | Normal if it is the current shell (parent process name; Windows: Toolhelp snapshot + `QueryFullProcessImageNameW`), Soft if that shell is on PATH, else NoCheck (and no `pwsh` spawn) | `is_installed()` error text; info `Run tabsmith integrations install dotfiles <shell> to reinstall shell integrations for <shell>` | `install()`; none for `Permission denied` |
 | `Let's make sure tabsmith is set up correctly...` | `tabsmith data dir exists` | Normal | `~/.tabsmith` missing → `No directory at path <p>` | create it |
 | | `Integration scripts point at this binary` | Normal | the script files (and fish `conf.d` files) of the **current** integrations of every shell on PATH reference (text between their first two `'`) a path ≠ `current_exe()` → `Integration scripts reference <old>`. Orphaned files in `shell/` are ignored (nothing sources them, install never rewrites them). | `install dotfiles` for those shells |
-| | `tabsmith settings corruption` | Normal | settings.json parse error → `tabsmith settings file is corrupted` | copy to `settings.json.bak-<unix>` then write `{}` (Kiro writes `{}` without backup) |
+| | `tabsmith settings corruption` | Normal | settings.json parse error → `tabsmith settings file is corrupted` | copy to `settings.json.bak-<unix>` then write `{}` |
 | | `Completion specs installed` | Normal | `~/.tabsmith/specs/<ver>/index.json` missing → `Completion specs are not extracted` | extract |
-| | `Windows Console Check` (Windows) | Normal | `GetConsoleMode` fails on stdin/stdout → `Windows Console APIs are not supported in this terminal` + Kiro's MinTTY/winpty info lines | – |
+| | `Windows Console Check` (Windows) | Normal | `GetConsoleMode` fails on stdin/stdout → `Windows Console APIs are not supported in this terminal` + MinTTY/winpty info lines | – |
 | | `Windows version` (Windows) | Normal | build < 17763 → `Windows 10 1809 or newer is required (ConPTY)` | – |
 | `Let's check if your environment is supported...` | `tabsmith terminal integrations` | Normal | in order: `TERM_PROGRAM=WarpTerminal` → `WarpTerminal is not supported`; parent `cmd.exe` → `CMD isn't supported, use PowerShell 7 (pwsh) instead`; `INSIDE_EMACS` → `Emacs is not supported`; SecureCRT → `SecureCRT is not supported`; `PROCESS_LAUNCHED_BY_TABSMITH` → `tabsmith can not run in a process it launched`; CI → `Doctor can not run in CI`; then `TABSMITH_TERM`: == version → Ok; unset → `tabsmith is not running in this terminal, please try restarting your terminal`; other → `This terminal is not running with the latest integration, please restart your terminal` (info `TABSMITH_TERM=<v>`) | – |
 | | `Session check` | Normal | NoCheck when `TABSMITH_SESSION_ID` is unset or the session shell (parent process, else `TABSMITH_SHELL`) is pwsh, which never runs `_ pre-cmd`; else `~/.tabsmith/run/<sid>.json` missing → Warning `Shell has not reported its environment yet (tabsmith _ pre-cmd did not run)` | – |
@@ -326,7 +321,7 @@ Flow:
    `Do you want tabsmith to modify your shell config (you will have to manually do this otherwise)? [Y/n] `.
 3. Yes → `integrations install dotfiles` for every shell of bash, zsh, fish, pwsh found on PATH; print
    `Installed!` / `Already installed` (or `Could not automatically install:` + the error, then step 4).
-4. No (or step 3 failed) → print the manual instructions (Kiro text): for the top and the bottom of the rc file, the
+4. No (or step 3 failed) → print the manual instructions: for the top and the bottom of the rc file, the
    **exact** guarded source lines install writes for `bash:` (`.bashrc`), `zsh:` (`.zshrc`) and, with pwsh on PATH,
    `pwsh ($PROFILE):` (D45); then write only the script files under `~/.tabsmith/shell/` (dotfiles untouched).
 5. Extract the specs (§9.1; error → exit 1). After an automatic install only:
@@ -350,9 +345,8 @@ Windows), exit 0.
   omitted); json = same object.
 - `completion [SHELL]` (SHOULD): `clap_complete::generate(shell, Cli::command(), "tabsmith", buffer)`, then one write
   (a closed pipe is an error, not a panic).
-- `debug key-tester` (SHOULD): raw mode; each read prints `<n> bytes : "<escape_ascii>" : [0x..,...]`; Ctrl-D (0x04) prints `ctrl-d` and exits (Kiro `debug/mod.rs:597-631`).
-- `debug shell [SHELL]` (SHOULD; default `$SHELL`, Windows pwsh): run `_ pty` with only the post integration (Kiro
-  `debug/mod.rs:816-870`). The output of `init <shell> post` is written to a fresh `~/.tabsmith/run/debug-shell-<pid>/`
+- `debug key-tester` (SHOULD): raw mode; each read prints `<n> bytes : "<escape_ascii>" : [0x..,...]`; Ctrl-D (0x04) prints `ctrl-d` and exits.
+- `debug shell [SHELL]` (SHOULD; default `$SHELL`, Windows pwsh): run `_ pty` with only the post integration. The output of `init <shell> post` is written to a fresh `~/.tabsmith/run/debug-shell-<pid>/`
   (0700; never the shared temp dir) and loaded: bash `--noprofile --rcfile <dir>/bashrc`; zsh `ZDOTDIR=<dir>` with
   `<dir>/.zshrc`; fish `--no-config -C 'set -q fish_color_autosuggestion[1]; or set -g fish_color_autosuggestion
   brblack; source <rc>'` (`--no-config` also skips fish's default theme); pwsh `-NoProfile -NoExit -Command ". <rc>"`;
@@ -399,7 +393,7 @@ The writers that run inside a live session (history append, `_ pre-cmd`, the log
 while the data root exists, so a session still running after `uninstall --purge` does not bring `~/.tabsmith` back
 (a new wrapper, settings writes and `setup` do create it).
 
-### 3.2 Storage format and semantics (port of `R:cli-surface §4.2`)
+### 3.2 Storage format and semantics
 
 - **One flat JSON object, keys are literal dotted strings** (`"autocomplete.theme": "dark"`), values arbitrary JSON.
 - Load: missing or blank file → `{}` (not created until a save). Parse error or a non-object → `<path> is corrupted`
@@ -407,9 +401,9 @@ while the data root exists, so a session still running after `uninstall --purge`
 - Save: read-modify-write; write `serde_json::to_string_pretty` + `\n` (keys sorted: `serde_json::Map` without
   `preserve_order` is a BTreeMap) to a temp file next to the **symlink target** (`canonicalize`), mode 0600, then
   rename over that target: a symlinked `settings.json` (dotfiles repo) stays a symlink. Concurrency: last writer wins
-  (ponytail: Kiro used an fd lock; add `fs::File::lock` (std ≥ 1.89) if concurrent CLI writes ever matter). The
+  (ponytail: no file lock; add `fs::File::lock` (std ≥ 1.89) if concurrent CLI writes ever matter). The
   recency map is merged with the file on save instead (§6.7.5).
-- Typed getters follow Kiro: `get_bool` = `Value::as_bool` (the string `"true"` is not true), `get_string` = `as_str`,
+- Typed getters: `get_bool` = `Value::as_bool` (the string `"true"` is not true), `get_string` = `as_str`,
   `get_i64` = `as_i64`; wrong type → default.
 - The wrapper re-reads `settings.json` whenever its mtime changed, checked at every `NewCmd` and every 2 s, then
   rebuilds the keymap and theme and forwards the new map to the engine thread (which clears its parse caches,
@@ -418,7 +412,7 @@ while the data root exists, so a session still running after `uninstall --purge`
 
 ### 3.3 Settings catalog (`settings list --all` prints this table)
 
-Autocomplete (Kiro keys, `R:autocomplete-ui §12`, `R:cli-surface §5.1`):
+Autocomplete:
 
 | key | type | default | semantics |
 |---|---|---|---|
@@ -446,20 +440,15 @@ Autocomplete (Kiro keys, `R:autocomplete-ui §12`, `R:cli-surface §5.1`):
 | `autocomplete.keybindings.<keystroke>` | string | – | Action id or `"ignore"` (§7.2). |
 | `beta.history.mode` | `"off"`\|`"history_only"`\|`"show"` | `"off"` | History rows in the dropdown (§6.10). |
 
-Dropped Kiro keys (no terminal meaning or unused upstream): `autocomplete.fontFamily`, `fontSize`, `iconTheme`,
-`hidePreviewWindow`, `immediatelyRunGitAliases` (never read, `R:autocomplete-ui §12`), `developerModeNPM`,
-`developerModeNPMInvalidateCache`, `devCompletionsServerPort`, `personalShortcutsToken`, `history.disableLoading`,
-`beta.autocomplete.auto-cache`, `beta.history.customCommand`, `beta.history.allShells`, `developer.*`, `qterm.*`, `ssh.*`.
-
-Inline (new; Kiro had only `inline.enabled` and env vars `Q_INLINE_SHELL_COMPLETION_*`):
+Inline:
 
 | key | type | default | semantics |
 |---|---|---|---|
 | `inline.enabled` | bool | true | Ghost text on/off. Live (mtime reload). |
 | `inline.source` | string | `"history+specs"` | `history` \| `specs` \| `history+specs` \| `<profile name>`. Built-in names are reserved. |
 | `inline.profiles.<name>` | object | – | `{provider:"openai"\|"anthropic", model:string (required), base_url?:string, api_key_env?:string, max_tokens?:int, effort?:string}`. Defaults: openai `base_url=https://api.openai.com/v1`, `api_key_env=OPENAI_API_KEY`, `max_tokens=64`; anthropic `base_url=https://api.anthropic.com`, `api_key_env=ANTHROPIC_API_KEY`, `max_tokens=1024`. `effort` (anthropic only) is sent as `output_config.effort`. **API keys are never stored in settings.** |
-| `inline.debounceMs` | number | 300 | Quiet time before an LLM request (Kiro `Q_INLINE_SHELL_COMPLETION_DEBOUNCE_MS`). |
-| `inline.historyCount` | number | 49 | Max history lines sent to the LLM (Kiro default; 0 = none). |
+| `inline.debounceMs` | number | 300 | Quiet time before an LLM request. |
+| `inline.historyCount` | number | 49 | Max history lines sent to the LLM (0 = none). |
 
 ### 3.4 Environment variables
 
@@ -485,7 +474,7 @@ Inline (new; Kiro had only `inline.enabled` and env vars `Q_INLINE_SHELL_COMPLET
 
 `~/.tabsmith/history.jsonl`, one JSON object per line:
 `{"command":str,"shell":str,"pid":int|null,"session_id":str,"cwd":str|null,"start_time":unix_s,"end_time":unix_s|null,"exit_code":int|null,"hostname":str|null}`
-(Kiro's `history` table fields, `R:figterm §16`; `hostname` is always null). Appended (mode 0600) by the engine
+(`hostname` is always null). Appended (mode 0600) by the engine
 thread on `CommandFinished` (§4.3), only for non-blank commands and only while the data root exists. A command marked
 `NoHistory` (D36) ends with `CommandEnded` instead and is never written. Loaded at engine start (last 5000 lines kept
 in memory); when the file exceeds 10 000 lines it is re-read and rewritten with the last 5000 (temp + rename;
@@ -510,7 +499,7 @@ ponytail: no lock, a line another session appends in between is lost).
 | `keys.rs` | Stdin key decoding, keystroke grammar, keybinding table (§7.2.1–7.2.3). |
 | `menu.rs` | Pure UI state: visibility machine, actions, selection/scroll, common prefix. |
 | `render.rs` | Themes, colour conversion, layout, frame bytes (menu, description, pop-out, ghost), restore spans, full repaint. |
-| `shell_parser.rs` | Port of qac `shell-parser` (§6.1). |
+| `shell_parser.rs` | Shell tokenizer (§6.1). |
 | `spec.rs` | Spec model + normalisation (§6.2). |
 | `specs.rs` | Bundle extraction/cleanup, index, name → file resolution (§9.1, §6.3). |
 | `parser.rs` | Spec loading/versioning, argv state machine (§6.3–6.4). |
@@ -637,7 +626,7 @@ intercepting (an Enter meant for an item is dropped rather than running the line
    `[shell] + (["--login"] if TABSMITH_IS_LOGIN_SHELL=1 && shell ∈ {bash,zsh,fish}) + args after --` (pwsh pre:
    `-- -NoLogo <outer args>`; fish pre: `-- --private`; `debug shell`: its rc flags). cwd = current dir (fallback
    `$HOME`). Open PTY at `crossterm::terminal::size()`.
-8. Write `ESC ] 0 ; <shell basename> BEL` (tab title, Kiro `figterm/src/main.rs:608-616`).
+8. Write `ESC ] 0 ; <shell basename> BEL` (tab title).
 9. Spawn threads (§4.3). Main loop.
 10. Exit: write the cached clear, `ESC[0m ESC[?25h`, send `EngineMsg::Shutdown`, kill every generator process still
     running (§9.3), restore raw/console modes, delete `run/<sid>.json`, exit with the child's code: Unix `waitpid`,
@@ -646,9 +635,8 @@ intercepting (an Enter meant for an item is dropped rather than running the line
 **Fallback** (any error or panic before the main loop): restore terminal state, log, print
 `tabsmith had an error: <err>` to stderr, kill live generator processes, then run the plain shell (`/bin/sh` / `pwsh`
 when none is known) with `TABSMITH_TERM_DISABLED=1` (so its pre block does not loop): Unix `execvp` via
-`CommandExt::exec`; Windows spawn with inherited stdio, wait, exit with its code. Kiro does the same
-(`figterm/src/main.rs:453-476`). **Never** leave the user without a shell (Kiro's `qterm.enabled=false` bug,
-`R:figterm §19.1`). Everything that can fail runs before the child is spawned, so the fallback never orphans a
+`CommandExt::exec`; Windows spawn with inherited stdio, wait, exit with its code. **Never** leave the user
+without a shell. Everything that can fail runs before the child is spawned, so the fallback never orphans a
 shell; a panic inside the main loop uses the pass-through guard of §4.3 instead.
 
 Signals (Unix): SIGTERM/SIGHUP → cleanup + exit 129; SIGWINCH → `Msg::Resize`. SIGINT never arrives (raw mode).
@@ -706,14 +694,14 @@ no escaping). A payload is either a bare token or `Key=Value` split at the **fir
 | `PwshListView=<0\|1>` | yes | PSReadLine ListView predictions active; reset when a command starts. |
 | anything else (`Log=`, `DoneSourcing`, …) | – | ignored. |
 
-Empty values (`Key=`) are ignored (Kiro, `ansi.rs:1175-1272`). Values other than `Dir` and `PwshPrompts` are trimmed.
+Empty values (`Key=`) are ignored. Values other than `Dir` and `PwshPrompts` are trimmed.
 
 Line start at `NewCmd` (the cursor is where the command line begins): on the cursor's row, every cell before the cursor
 without a tag gets `tabsmith:p` (a prompt drawn without markers: pwsh re-wraps a foreign prompt at ReadLine, §5.4.5).
 On a redraw, cells still tagged with the old cycle `c<o>` are re-tagged: before the cursor → `tabsmith:p` (readline
 redraws only a multi-line prompt's last line, without StartPrompt), at/after the cursor on that row and its wrap
 continuations → `c<n>` (readline keeps the typed text and moves over it with CUF after a vi-mode switch, or shifts it
-with DCH when leaving i-search; Kiro reads every non-prompt cell after `cmd_cursor`, so it never lost them).
+with DCH when leaving i-search).
 
 The wrapper's reaction to the events is in §7.1 (`on_event`).
 
@@ -735,7 +723,7 @@ CAN/SUB cancel it, `ESC` + other byte ends it and is re-processed. Past 64 KiB t
 #### 5.1.2 Lock
 
 `OSCLock/OSCUnlock` carry our session id so a nested shell (ssh, a manually started `bash`, a nested tabsmith) that
-also emits 697 cannot overwrite our state (Kiro `term/mod.rs:1922-1949`). While locked only `NewCmd`, `PreExec`,
+also emits 697 cannot overwrite our state. While locked only `NewCmd`, `PreExec`,
 `NoHistory`, `OSCLock`, `OSCUnlock` and `User` are processed. The sid gate (with the bare-`NewCmd` rule, D35) stops
 untrusted *output* (a file, an ssh banner) from faking prompts; it is not a trust boundary against local programs:
 every child (and a plain subshell, which can unlock) inherits `TABSMITH_SESSION_ID` and could forge markers, but such
@@ -755,11 +743,11 @@ a program can already write `history.jsonl` or the rc files directly.
   `commandManager.ts:106-122`). A custom grey without dim/italic was read as typed text before.
 - bash: none.
 
-#### 5.1.4 Windows ConPTY deferral (port of `figterm/src/main.rs:583-584, 859-870`, `term/mod.rs:796-881`)
+#### 5.1.4 Windows ConPTY deferral
 
 ConPTY may emit the OSC before the prompt text it belongs to. On Windows, `EndPrompt` and `NewCmd` (and their tag
 injections) are queued instead of applied. At the end of a batch, if the queue is non-empty and **this batch added no
-new 697 markers**, apply the queue in FIFO order (Kiro pops LIFO — bug, `R:figterm §19.13`) with the current cursor.
+new 697 markers**, apply the queue in FIFO order with the current cursor.
 `PreExec` and `NoHistory` apply the queue first (a late flush must not reopen a cycle while a command runs).
 
 ### 5.2 Launch decision (`_ should-launch`, also called in-process by `init … pre`)
@@ -771,7 +759,7 @@ First match wins; prints the reason line.
 3. `PROCESS_LAUNCHED_BY_TABSMITH` → 1
 4. `TABSMITH_TERM` set: `TMUX` set and `TABSMITH_TERM_TMUX` unset → `✅ new tmux pane` → 0; else `❌ already inside tabsmith` → 1
 5. `INSIDE_EMACS` → 1; `TERM_PROGRAM=WarpTerminal` → 1; `__CFBundleIdentifier=com.vandyke.SecureCRT` → 1;
-   `__PWSH_LOGIN_CHECKED` → 1; `CI` → 1; `VSCODE_RESOLVING_ENVIRONMENT` (VS Code/Kiro/Cursor env probing,
+   `__PWSH_LOGIN_CHECKED` → 1; `CI` → 1; `VSCODE_RESOLVING_ENVIRONMENT` (VS Code/Cursor env probing,
    `ish/src/utils/shell.ts:330-372`) → 1; Unix `TERM` unset or `dumb` → 1
 6. Unix: stdin not a tty → 1 (the scripts check stdout and interactivity themselves)
 7. Windows: `GetConsoleMode(stdin)` fails → 1
@@ -795,8 +783,7 @@ absolute path of `current_exe()`. `quote(shell, s)` (also used for insertions, D
 
 ### 5.4 Scripts (normative: the files in `shell/`, reproduced verbatim)
 
-All `printf` calls pass values as `%s` arguments (Kiro builds the format string from the value; a `%` in a path breaks
-it). `{{BIN}}` is replaced as in §5.3. `tests/snapshots/init_<shell>_<when>.snap` hold the rendered `init` output, and
+All `printf` calls pass values as `%s` arguments (a `%` in a path would break a format string built from the value). `{{BIN}}` is replaced as in §5.3. `tests/snapshots/init_<shell>_<when>.snap` hold the rendered `init` output, and
 `integrations_init_syntax` checks it with `bash -n` (+ shellcheck), `zsh -n`, `fish --no-execute` and pwsh's parser
 where those are installed.
 
@@ -826,8 +813,7 @@ if [ "${SHOULD_TABSMITH_LAUNCH:-1}" = 0 ] && [ -t 0 ] && [ -t 1 ] \
 fi
 ```
 
-`exec` replaces the shell (same pid, same tty); argv[0] `zsh (tabsmith)` keeps tab titles sensible (Kiro
-`pre.sh:1-77`). The two variables are exported before `exec` (a prefix assignment is not seen by
+`exec` replaces the shell (same pid, same tty); argv[0] `zsh (tabsmith)` keeps tab titles sensible. The two variables are exported before `exec` (a prefix assignment is not seen by
 `${TABSMITH_SHELL##*/}` in the same command). kitty's bash injection hides `KITTY_SHELL_INTEGRATION` while the rc files
 run. Ghostty's injection is detected here, where it is still visible (`_ghostty_state` from its zsh `.zshenv`,
 `__ghostty_bash_flags` while its bash wrapper sources the rc files): `GHOSTTY_RESOURCES_DIR` alone is also exported
@@ -841,7 +827,7 @@ if [[ -n "${ZSH_NAME:-}" && -n "${TABSMITH_SESSION_ID:-}" && -z "${_TS_POST_LOAD
   _TS_POST_LOADED=1
   _ts_osc() { builtin printf '\e]697;%s\a' "$1"; }
   # zsh keeps RPROMPT and RPS1 apart until both are set (`RPROMPT=x` leaves RPS1 unset, and `RPS1=""` then clears
-  # RPROMPT): wrap and restore whichever name is set, RPROMPT first (Kiro).
+  # RPROMPT): wrap and restore whichever name is set, RPROMPT first.
   _ts_restore() {
     if [[ ${_ts_wrapped:-0} == 1 ]]; then
       PS1=$_ts_u1; PS2=$_ts_u2; _ts_wrapped=0
@@ -923,9 +909,9 @@ fi
   `instant_` render), and from the zle `line-init` / `line-pre-redraw` hooks, which re-wrap and redraw a PS1 a theme
   replaced after precmd or mid-edit (oh-my-posh streaming, pure: `zle -F` handlers + `reset-prompt`) (D48).
 - RPROMPT and RPS1 stay separate until both are set (`RPROMPT=x` leaves RPS1 unset, `RPS1=""` then clears RPROMPT):
-  whichever is set is wrapped and restored (Kiro).
+  whichever is set is wrapped and restored.
 - `NoHistory` when `histignorespace` keeps a space-prefixed line out of zsh's history (D36).
-- `PROMPT`/`prompt` are aliases of `PS1`; PS3/PS4 are not wrapped (Kiro wraps them; PS4 wrapping pollutes `set -x`).
+- `PROMPT`/`prompt` are aliases of `PS1`; PS3/PS4 are not wrapped (wrapping PS4 would pollute `set -x`).
 - Terminal-injected integrations are loaded again (D46): Ghostty only when `pre.sh` saw it injected, kitty when
   `KITTY_SHELL_INTEGRATION` is set, VS Code when `VSCODE_INJECTION=1` (emptied for the call, so its script does not
   source this `.zshrc` again). `_ts_reset_hooks` runs after them, so tabsmith's hooks stay outermost.
@@ -1314,7 +1300,7 @@ if ($env:TABSMITH_SESSION_ID) {
 - pwsh does not run `_ pre-cmd` (a process spawn per prompt is slow on Windows): generators use the wrapper's env plus
   `Dir=`, and doctor skips its Session check.
 
-### 5.5 Dotfile installation (port of `qac/crates/fig_integrations/src/shell/mod.rs`, with exact markers)
+### 5.5 Dotfile installation
 
 Integrations per shell:
 
@@ -1392,8 +1378,8 @@ duplicate blocks (no lock).
 
 Uninstall: remove every line equal to `PRE_MARKER`, `PRE_SOURCE`, `POST_MARKER`, `POST_SOURCE` (exact string compare
 after `trim_end`) from the text after the BOM; then BOM + `trim()` + `"\n"`; write if changed; delete both script files
-(missing = ok; kept when the dotfile write fails). No regexes (Kiro's `^#.*fig.*var.*` deletes unrelated comments,
-`R:shell-integration §7.6`). fish/whole-file integrations: delete the files. Which integrations `integrations uninstall`
+(missing = ok; kept when the dotfile write fails). No regexes (a pattern such as `^#.*fig.*var.*` would delete unrelated comments).
+fish/whole-file integrations: delete the files. Which integrations `integrations uninstall`
 touches: §2.6 (D44); `uninstall` touches all of them.
 
 Error display strings: `Improper integration installation: <msg>`, `Integration not installed: <msg>`,
@@ -1438,7 +1424,7 @@ at_cursor(): if line_has_cmd: buf += " " * pad; pad = 0             // zsh moves
              cursor = Some(buf.len())                               // redraw: `git ` must stay `git `, not `git`
 cursor = cursor.unwrap_or(buf.len())
 pwsh: strip_prompts(buf, cursor)
-buf.truncate(max(buf.trim_end().len(), cursor))                     // blank command cells after the cursor (Kiro)
+buf.truncate(max(buf.trim_end().len(), cursor))                     // blank command cells after the cursor
 return Extracted{buf, cursor, shell_ghost, at_prompt}
 ```
 
@@ -1456,12 +1442,12 @@ the alternate screen; otherwise there is no current buffer (`cur = None`) and ev
 TUI's rows: fzf `--height`, fish's pager search field). `PreExec`'s scrape ignores `at_prompt`, because a transient
 prompt is redrawn without markers before the line and often on another row (§5.1, D37).
 
-Properties (vs Kiro `R:figterm §10.2` quirks): cursor is a **byte offset into `buf`** but every count derived from it
+Properties: the cursor is a **byte offset into `buf`** but every count derived from it
 uses chars; multi-line commands contain real `\n`; RPROMPT/PS2/suggestion text excluded; untagged prompt cells before
 the first command cell of a line are not padding; text printed below the command line excluded; scroll and reflow
 need no coordinate tracking. ponytail: continuation lines without a prompt (zle Alt-Enter, fish), an empty PS1, a
 markerless prompt ending in a newline, and a newline-ended PS1's line while zsh lists completions below it read as
-not at the prompt (no menu); recording the NewCmd row with scroll tracking (Kiro's `cmd_cursor`) is the upgrade.
+not at the prompt (no menu); recording the NewCmd row with scroll tracking is the upgrade.
 
 ---
 
@@ -1472,9 +1458,9 @@ suggestions → trigger generators → filter + rank → precompute insertions �
 triggered generators and reply again (phase `Generators`). Only the latest request is served: before starting and
 whenever the event pump runs, a newer `Complete` aborts the current one.
 
-### 6.1 Tokenizer (port of qac `packages/shell-parser`, ≈900 TS lines; full detail `R:parser-runtime §1`)
+### 6.1 Tokenizer
 
-#### 6.1.1 Grammar (`SP/parser.ts:1-23`)
+#### 6.1.1 Grammar
 
 ```text
 terminator  = ";" | "&" | "&;"            literal = string | ansi_c_string | raw_string | expansion | simple_expansion | word
@@ -1495,14 +1481,14 @@ Node = `{type, text (= src[start..end]), inner_text (unquoted), start, end, comp
   `"`→string (children allowed). Unterminated literal → `complete=false`, extends to EOF.
 - Inside a word, `\x` takes `x` literally (so `a\ b` is one word `a b`); inside `"…"` only `` \$ \` \" \\ \newline ``
   drop the backslash; raw/ansi-c strings keep text verbatim. End delimiter stripped from `inner_text` only if `complete`.
-  A word that starts with the escape char keeps it in `raw` (`\ fo`, not qac's ` fo`: D22 counts raw chars).
+  A word that starts with the escape char keeps it in `raw` (`\ fo`, not ` fo`: D22 counts raw chars).
 - Adjacent literals form one `concatenation` argument: `--foo="a b"c` is one token, inner text `--foo=a bc`.
 - Whitespace (space/tab) ends an argument; newline does not split words (only terminates `$var`).
 - Assignments: while the rest matches `^[\w\[\]]+\+?=`, parse `name(=|+=)value` (value ends at a space).
-  **Fix:** empty value (`FOO= cmd`) is a complete empty assignment (Kiro throws).
+  An empty value (`FOO= cmd`) is a complete empty assignment.
 - `{`/`(` start compound/subshell; `&&`/`||` → flattened `list`; `|`/`|&` → `pipeline` (binds tighter than lists).
 
-#### 6.1.3 Current command and tokens (`SP/command.ts`)
+#### 6.1.3 Current command and tokens
 
 - `descendant_at(tree, index=cursor, "command")`: deepest `command` node with `start <= index <= end`, children in
   order, first hit wins (commands inside `$( )`, backticks, subshells, pipelines, lists).
@@ -1521,7 +1507,7 @@ Node = `{type, text (= src[start..end]), inner_text (unquoted), start, end, comp
 | `git commit -m "fix bu` | `git`, `commit`, `-m`, `fix bu` |
 | `FOO=1 BAR=2 npm ` | `npm`, `""` |
 | `(cd x && git ` | `git`, `""` |
-| `FOO= git ` | `git`, `""` (fix) |
+| `FOO= git ` | `git`, `""` |
 | ` ` (one space) | none |
 
 #### 6.1.4 pwsh
@@ -1534,9 +1520,9 @@ Same parser with escape char `` ` `` instead of `\` (so no backtick substitution
 #### 6.1.5 Mid-word guard
 
 If the char at `cursor` exists and is not whitespace (or the cursor is not on a char boundary) → reply `error=true`
-without a ghost (Kiro "Cursor is in the middle of a word", `AC/state/index.ts:486-489`).
+without a ghost.
 
-#### 6.1.6 Aliases (`SP/command.ts:100-187`)
+#### 6.1.6 Aliases
 
 Alias map from `run/<sid>.json` `alias` text: strip `^alias\s` per line, split lines; separator `" "` for fish, `"="`
 otherwise; `[key, ...rest] = line.split(sep)`; value = `rest.join(sep)` with one leading and one trailing `'` stripped;
@@ -1545,10 +1531,10 @@ empty values are not aliases. The map is rebuilt whenever a new session file arr
 the alias value in the command text, re-parse, require exactly one top-level `command` (aliases containing `|`, `&&`,
 `;` are not expanded), map new tokens inside the alias span to the alias token's original raw node. The command text
 **before** expansion is kept too (`original_text`): it is what the menu compares between keystrokes (§7.1), so
-`g ` (alias `g=git`) is typing, not a large change. Tests (`qac/packages/shell-parser/tests/command.test.ts:24-33`):
+`g ` (alias `g=git`) is typing, not a large change. Tests:
 `woman` → `woman`; `woman ` → `man ""`; `man woman ` unchanged; `quote ` (alias `'q'`) → `q ""`.
 
-### 6.2 Spec model and normalisation (replaces `@fig/autocomplete-shared` `convertSubcommand`, inferred `R:parser-runtime §2.7`)
+### 6.2 Spec model and normalisation (replaces `@fig/autocomplete-shared` `convertSubcommand`, inferred)
 
 Spec JSON arrives from JS (§9.2) with functions as `{"$fn": id}`.
 
@@ -1572,13 +1558,13 @@ Normalisation rules: `name` string → `[name]`; `args`/`generators`/`options` s
 generator `{template}` prepended (generators whose template includes `filepaths` or `folders` get default
 `trigger:"/"`, `getQueryTerm:"/"`; the engine treats both as path queries, §6.6.4); options with `isPersistent` go
 only to `persistent`; string `loadSpec` → `Locations([{global, name}])`; object → `Inline(normalise)`; name collisions
-in an index: later wins; `isRepeatable`: absent → `No` (=1 for suggestions, not enforced by the parser, qac),
+in an index: later wins; `isRepeatable`: absent → `No` (=1 for suggestions, not enforced by the parser),
 `false` → `Times(1)` (enforced), `true` → `Unlimited`, number → `Times(n)`; `debounce: true` → 200 ms;
-`optionArgSeparators` as a string = its chars (qac builds a Set).
+`optionArgSeparators` as a string = its chars.
 
-### 6.3 Spec resolution and loading (`R:parser-runtime §2`, `R:spec-format §5-6`)
+### 6.3 Spec resolution and loading
 
-`spec_location(name, cwd, is_script: Option<bool>)` (`AP/loadSpec.ts:61-106`, shortcuts `?`/`+` dropped):
+`spec_location(name, cwd, is_script: Option<bool>)` (shortcuts `?`/`+` dropped):
 - first token (`None`): `name == "bin/console"` or ends with `/bin/console` → global `php/bin-console`; no `/` → global `name`; else local.
 - `isCommand` arg (`Some(false)`): path not starting with `/`, `./`, `~/` → global `name` (`npx @capgo/cli` → `@capgo/cli`).
 - local: path starting `/` or `~/` → `{local, dir, basename}`; else relative to cwd (strip `./`). Local specs load
@@ -1626,7 +1612,7 @@ merge_args(b, d) = d.filter(!remove).enumerate().map((i, x) → {...b[i], ...x})
 
 Spec-load errors are logged; the request replies with no suggestions (menu error-reset).
 
-### 6.4 Argv state machine (port of `AP/parseArguments.ts`; full detail `R:parser-runtime §3`)
+### 6.4 Argv state machine
 
 ```text
 ArgState { args: Option<Vec<Rc<Arg>>>, index, variadic_count }
@@ -1720,13 +1706,13 @@ result(st):
   flags = ARGS | (!only_args && !end_of_options && can_subcommands ? SUBCOMMANDS) | (… && can_options ? OPTIONS)
 ```
 
-Guards not in qac: `loadSpec` recursion deeper than 64 is an error (a cyclic user spec would overflow the stack); the
-prefix and generateSpec caches are cleared wholesale at 1000 entries (ponytail; qac never evicts); a cached nested
+Guards: `loadSpec` recursion deeper than 64 is an error (a cyclic user spec would overflow the stack); the
+prefix and generateSpec caches are cleared wholesale at 1000 entries (ponytail: wholesale instead of per-entry eviction); a cached nested
 state gets the current command's token prefix; an abort from any JS call always propagates. Inline loadSpec
 directives replace the parent's whole object (ponytail: 4 upstream specs). generateSpec failures are logged with the
 spec name only (logs never hold typed text).
 
-Expected outcomes (qac test table `qac/packages/autocomplete-parser/tests/parseArguments.test.ts:291-530`; mock spec:
+Expected outcomes (mock spec:
 `-m` mandatory arg, `-o` optional arg, `-v` variadic, `-n` none, `--req-eq` requiresEquals, `--req-sep` requiresSeparator
 `":"`, `man` two mandatory positionals, `oas` optionArgSeparators `["=",":"]`, `pnf` posix-noncompliant, `ompa`
 optionsMustPrecedeArguments) — copy as Rust tests:
@@ -1758,16 +1744,15 @@ ctx = { currentWorkingDirectory: tracker.cwd (`Dir=`), else the wrapper's cwd, c
 tokenArray = token texts from command_index (includes the partial last token)
 ```
 
-Empty cwd → script/custom generators return `[]` (`AC/generators/helpers.ts:25-26`).
+Empty cwd → script/custom generators return `[]`.
 
 ### 6.6 Generators
 
-#### 6.6.1 State and triggers (`AC/state/generators.ts:118-198`)
+#### 6.6.1 State and triggers
 
 The engine keeps `Slot { key, result, loading, gen_id }` per generator of the current arg (identity = the arg's `Rc`
 address, kept stable by §6.3). Per request, for each generator `g` at index `i`:
-- trigger if no slot / arg identity changed (the slots are rebuilt empty: results are not carried over to another arg;
-  ponytail, qac keeps them while loading);
+- trigger if no slot / arg identity changed (the slots are rebuilt empty: results are not carried over to another arg);
 - else `filepaths`/`folders` template → the directory part changed (`/`, pwsh also `\`, D33);
   `g.trigger` undefined → trigger only if `arg.debounce`; string `t` → `a.rfind(t) != b.rfind(t)` (char index);
   function → `call(trigger, [a, b])` (sync, 1 s; exception ⇒ trigger); `{on:"change"}` → `a != b`;
@@ -1776,16 +1761,16 @@ address, kept stable by §6.3). Per request, for each generator `g` at index `i`
   200 ms before running (abandon if superseded). One deadline per run: debounce + 2 × max(scriptTimeout,
   g.scriptTimeout) + 1 s (ponytail: custom generators may exec several times); past it the run fails (`[]`).
 - `triggered_generators` in the reply = keys of slots whose run was started (used by the visibility machine, §7.1).
-- While a slot is loading, its stale results are shown only if the generator has no `getQueryTerm` (`AC/suggestions/index.ts:216-223`).
+- While a slot is loading, its stale results are shown only if the generator has no `getQueryTerm`.
 - Slots are reset on `CommandFinished`/`CommandEnded`, on settings reloads and on error replies.
 
-#### 6.6.2 Run (`AC/state/generators.ts:83-116`)
+#### 6.6.2 Run
 
 - `template` → §6.6.4. Else `script` → §6.6.3. Else `custom(tokenArray, exec, ctx)` → awaited; `undefined` → `[]`;
   items get `type: item.type || "arg"`; if `filterTemplateSuggestions` and first item has `context` → apply it.
 - Every result item is tagged with the generator key (for `getQueryTerm` and §7.1). Any error → `[]` + log.
 
-#### 6.6.3 Script generators (`scriptSuggestionsGenerator.ts:10-92`)
+#### 6.6.3 Script generators
 
 ```text
 cmd = script is fn ? call(script, [tokenArray]) : script;  falsy → []
@@ -1808,7 +1793,7 @@ strings → {type:"arg", name:s, insertValue:s, isDangerous}; objects → type d
   separator; relative → `cwd/` + it); names sorted non-dot by `localeCompare` (approximation §6.7.1), then dot names,
   `.DS_Store` and names with control characters skipped (D32), `"../"` always appended; an unreadable dir → `[]`;
   trailing `/` → `{type:"folder"}` else `{type:"file"}`; `context.templateType`; trigger = the directory part changed;
-  queryTerm = after the last separator (`R:parser-runtime §4.3`). Separator = `/`, in pwsh also `\` (D33; the JS
+  queryTerm = after the last separator. Separator = `/`, in pwsh also `\` (D33; the JS
   helper still splits on `/` only).
 - `help`: walk annotations from the root spec through each subcommand annotation except the last; return that level's
   subcommand names excluding the triggering subcommand's aliases as `{type:"special", name, insertValue:name, context:{templateType:"help"}}`.
@@ -1829,7 +1814,7 @@ failures are never stored; in-flight identical keys are shared
 
 ### 6.7 Assembly, filtering, ranking
 
-#### 6.7.1 Assembly (`AC/suggestions/index.ts:96-290`), in this order
+#### 6.7.1 Assembly, in this order
 
 1. `SUBCOMMANDS` flag: unique subcommands (dedupe aliases), `type:"subcommand"`, `should_add_space`, sorted by first name (lowercase compare, ties by exact compare — approximates ICU `localeCompare`; the same ordering is used for the native `filepaths` template listing).
 2. `ARGS` flag: `current_arg.suggestions` (strings → `{type:"arg", name, isDangerous: arg.is_dangerous}`), then each generator's results (§6.6.1 stale rule).
@@ -1844,9 +1829,9 @@ failures are never stored; in-flight identical keys are shared
 
 `should_add_space(item)` = args[0] exists and is not optional → true; else `requires_subcommand` if set; else has subcommands.
 
-#### 6.7.2 History rows (`AC/state/index.ts:124-160`, §6.10)
+#### 6.7.2 History rows (§6.10)
 
-#### 6.7.3 Filter (`filterSuggestions`, `AC/suggestions/index.ts:393-519`)
+#### 6.7.3 Filter (`filterSuggestions`)
 
 ```text
 query(s) = s.get_query_term or generator.get_query_term:
@@ -1889,7 +1874,7 @@ partial(names, q):  prefix(n) = 0 if n==q, -1 if eq ignore case, -2 if n.starts_
 Fuzzy mode = `current_arg ? arg.filter_strategy : completion.filter_strategy`: `prefix` → off, `fuzzy` → on, else the
 user flag (setting `autocomplete.fuzzySearch`, toggled by `toggleFuzzySearch`, reset to the setting when `arg_key` changes).
 
-#### 6.7.4 fuzzysort (`qac/packages/fuzzysort/fuzzysort.js:42-252`, fresh struct per call)
+#### 6.7.4 fuzzysort (fresh struct per call)
 
 ```text
 single(q, t): None if q or t empty; compare lowercase chars (per char, not UTF-16 unit)
@@ -1907,7 +1892,7 @@ single(q, t): None if q or t empty; compare lowercase chars (per char, not UTF-1
   → Some(score, indexes)          tests: ("fs","Fuzzy Search") → -16 ; ("test","test") → 0
 ```
 
-#### 6.7.5 Ranking pipeline (`AC/state/index.ts:98-187`)
+#### 6.7.5 Ranking pipeline
 
 ```text
 s = assembly (+ history per beta.history.mode / history_mode)
@@ -1919,7 +1904,7 @@ if 0 < s.len <= 50: dedupe by (names, insert_value, display_name, args) keeping 
 update_priorities: use_recency = sortMethod != "alphabetical"
   for x: name = first name; rec = use_recency && name != "../" ? recency[cmd][name] : None
          boost = rec.map(ms / 1e13).unwrap_or(0)
-         p = x.priority.filter(|p| p != 0).unwrap_or(50)        // Kiro treats 0 as 50 (kept)
+         p = x.priority.filter(|p| p != 0).unwrap_or(50)        // 0 means unset and is treated as 50
          if x.type != auto-execute: p = clamp(p, 0, 100)
          p = rec.is_some() && 50 <= p <= 75 ? 75 + boost : p + boost
 ```
@@ -1929,7 +1914,7 @@ update_priorities: use_recency = sortMethod != "alphabetical"
 a trailing debounce; again at shutdown). The save merges with the file (newest timestamp per entry wins), so
 concurrent sessions keep each other's entries, and is skipped when the data root is gone (§3.1).
 
-### 6.8 Insertion text (precomputed per item; `AC/state/insertion.ts:25-224`, with D22/D25 and D26–D33 fixes)
+### 6.8 Insertion text (precomputed per item; with D22/D25 and D26–D33)
 
 ```text
 q = query(item)                                  // §6.7.3; path query = after the last separator (pwsh: also `\`)
@@ -1942,7 +1927,7 @@ delete = item.type == auto-execute ? 0           // special rows delete like any
        : string getQueryTerm g ? raw[raw.rfind(g)+g.len()..].chars().count()
        : path query ? raw[after the last separator..].chars().count()
        : /* function getQueryTerm */ the last q.chars().count() logical chars spell q ? raw chars from the first of them
-                                     : Kiro's approximation (each whitespace counts 2), at most raw.chars().count()
+                                     : approximation (each whitespace counts 2), at most raw.chars().count()
 deleted = the last `delete` chars of raw
 quote   = deleted starts with ' or "             // the user started the token with a quote: keep quoting
 inside  = the open quote, if it opened before the deleted part   // `cat "my dir/x`
@@ -1981,7 +1966,7 @@ escape_in_quote(s, q, shell):                                             // D28
 ```
 
 Examples (tests): buffer `git st`, item `status` → delete 0, text `atus `; buffer `git ch` + `checkout` → `eckout `;
-option `--out` requiresSeparator + mandatory arg → text `--out=` + cursor_back 1 then auto-space (Kiro quirk: `--out= `
+option `--out` requiresSeparator + mandatory arg → text `--out=` + cursor_back 1 then auto-space (so `--out= `
 with the cursor right after `=`); `ls --color=al` + `always` → delete 0, text `ways`; `cd my\ di` + folder `my dir/` →
 delete 6, text `my\ dir/`; `cat 'my fi` + file `my file` → delete 6 (raw `'my fi`), text `'my file'`;
 `cat "my dir/x` + file `x y.txt` → delete 0, text ` y.txt"`; branch `zz;id` → `'zz;id'`; `cd ~` + spec row `~`
@@ -1989,7 +1974,7 @@ stays `cd ~` (never `'~'`);
 `echo $HO` + `$HOME` → delete 0, text `ME` (pwsh too); pwsh `cat di` + folder `dir with space/` → text
 ``r` with` space/``; pwsh file `a’;x;’.txt` → `'a’’;x;’’.txt'`.
 
-Common prefix (`insertCommonPrefix`, `insertion.ts:226-304`) is computed in main from the item list (§7.2.5).
+Common prefix (`insertCommonPrefix`) is computed in main from the item list (§7.2.5).
 
 ### 6.9 First-token completion (`autocomplete.firstTokenCompletion`, default false)
 
@@ -2018,7 +2003,7 @@ priority = max(own, priority of the history row whose first word equals one of i
 - `specs` / `history+specs` second: first item that is not auto-execute/history, whose insertion has `delete == 0`,
   a `cursor_back` that stays within the trailing space (accepting leaves the cursor at the end: `commit -m '{cursor}'`
   is skipped), non-empty text after trimming a trailing space, and that came from a prefix (not fuzzy) match — never
-  on an empty token (§6.7.3) → that text. The spec ghost is a tabsmith addition (no Kiro equivalent).
+  on an empty token (§6.7.3) → that text.
 - LLM profile: history first (as above); if none, main schedules an LLM request (§8.4).
 Only when `inline.enabled`, buffer non-empty and cursor at the end of the buffer. Error replies (a command without a
 spec, no command at the cursor) carry the local ghost too; the mid-word error does not.
@@ -2027,7 +2012,7 @@ spec, no command at the cursor) carry the local ghost too; the mid-word error do
 
 ## 7. Dropdown UI (main thread)
 
-### 7.1 Visibility state machine (port of `AC/state/index.ts:297-392`, `R:autocomplete-ui §2`)
+### 7.1 Visibility state machine
 
 ```rust
 enum Vis { Visible, HiddenUntilKeypress, HiddenUntilShown, HiddenByInsertion }
@@ -2043,7 +2028,7 @@ struct Menu { vis: Vis /* init HiddenUntilKeypress */, items, selected: usize, s
   alternate screen.
 - **Prompt redraw** (`NewCmd(None)`: SIGWINCH, `zle reset-prompt`, a clock or async theme, a nested shell's first
   prompt): menu, ghost, lock and the last request are kept, and the unchanged buffer is **not** re-requested (its reply
-  would count as a keypress and re-show a menu hidden by Esc, Up or a large change; Kiro memoizes the command). Settings
+  would count as a keypress and re-show a menu hidden by Esc, Up or a large change). Settings
   and session files are re-checked. For 50 ms an empty line is not acted on (a redraw whose line arrives in a later
   read); after that an empty line resets as usual.
 - **On a phase-Parse reply** `c` (only if `c.req` is the latest request; `steps` = requests since `last`, ≥ 1):
@@ -2054,7 +2039,7 @@ else:
   has_new_arg = last.arg_key != c.arg_key
   backspaced  = 0 < c.tokens.len < last.tokens.len && last.tokens[c.tokens.len-1] == c.tokens[c.tokens.len-1]
   large       = !typing(c.command_text, last.command_text, steps)
-typing(a, b, k) = chars(a) + chars(b) - 2 * common_prefix_chars(a, b) <= k     // Kiro isBufferDifferenceFromTyping
+typing(a, b, k) = chars(a) + chars(b) - 2 * common_prefix_chars(a, b) <= k     // at most k typing edits
 orig = vis
 match vis: HiddenUntilKeypress → Visible
            HiddenByInsertion → (has_new_arg || last_inserted.gen ∈ c.triggered_generators) ? Visible : HiddenUntilKeypress
@@ -2067,12 +2052,12 @@ set_items(c.items)
 ```
 
   `command_text` is the text before alias expansion (§6.1.6). The engine serves only the latest request, so replies
-  for the buffers typed in between never arrive: one typing edit per request since `last` is allowed (Kiro compares
-  consecutive buffers as its UI saw them). ponytail: a large change followed by skipped typing stays hidden until the
+  for the buffers typed in between never arrive: one typing edit per request since `last` is allowed.
+  ponytail: a large change followed by skipped typing stays hidden until the
   next key; exact = send the previous request's command text with each request.
 - **On a phase-Generators reply**: `set_items(c.items)` only.
 - `set_items`: always replaces the list (also while HiddenUntilKeypress: show/toggle/Tab must never act on a stale
-  list; Kiro recomputes when it becomes visible). If `sticky`, the menu is Visible and the previously selected item (by
+  list). If `sticky`, the menu is Visible and the previously selected item (by
   `names, type, description`; the query-stripped insertion text changes every keystroke) is in the new list → keep it
   selected and scrolled into view; else `selected = 0, sticky = false, scroll_top = 0`.
 - "Shown" ⇔ `vis == Visible && (items non-empty || current_arg has name/description)` and not `autocomplete.disable`.
@@ -2093,14 +2078,14 @@ input records) stays opaque until `ESC[201~`.
 
 | bytes | key |
 |---|---|
-| `\r`, `\n` | `enter` (Ctrl-J/Ctrl-M are Enter, Kiro `input/mod.rs:1247-1257`) |
+| `\r`, `\n` | `enter` (Ctrl-J/Ctrl-M are Enter) |
 | `\t` | `tab` |
 | `ESC [ Z` | `shift+tab` |
 | `ESC [ A/B/C/D`, `ESC O A/B/C/D` | `up/down/right/left` (DECCKM variants included) |
 | `ESC [ 1 ; m A..D` | arrows with modifiers (`m-1` bits: 1 shift, 2 alt, 4 ctrl) |
 | `ESC [ H`, `ESC O H`, `ESC [ 1 ~`, `ESC [ 7 ~` / `ESC [ F`, `ESC O F`, `ESC [ 4 ~`, `ESC [ 8 ~` | `home` / `end` |
 | `ESC [ 3 ~`, `ESC [ 2 ~`, `ESC [ 5 ~`, `ESC [ 6 ~` | `delete`, `insert`, `pageup`, `pagedown` |
-| `ESC O M`, `ESC O I` | `enter`, `tab` (keypad application mode, DECKPAM/smkx; Kiro maps them too) |
+| `ESC O M`, `ESC O I` | `enter`, `tab` (keypad application mode, DECKPAM/smkx) |
 | `ESC O P..S`, `ESC [ 11..24 ~`, `ESC [ P/Q/S` | `f1..f12` |
 | `0x7f`, `0x08` | `backspace` |
 | `0x01..0x1a` (others) | `control+<a..z>` (case-insensitive) |
@@ -2112,7 +2097,7 @@ input records) stays opaque until `ESC[201~`.
 | CPR reply `ESC [ r ; c R` | forwarded to the PTY untouched (the shell asked); a late reply to the startup probe is dropped (§4.4) |
 | anything else (`ESC [ ?…`, NUL, other C0) | unknown: forwarded untouched |
 
-#### 7.2.2 Binding grammar (port of `qac/crates/figterm/src/interceptor.rs:26-187`)
+#### 7.2.2 Binding grammar
 
 Split on `+` from the left; all but the last segment are modifiers (`ctrl|control`, `shift`, `alt|option`,
 `meta|command`; unknown → ignored); `"+"` alone and `"ctrl++"` work. Key names: `backspace enter left|arrowleft
@@ -2120,7 +2105,7 @@ right|arrowright up|arrowup down|arrowdown home end pageup pagedown tab delete i
 `shift+<lowercase letter>` → uppercase letter, no shift. Ctrl/Alt + letter match both cases. Arrows also match their
 `ESC O x` forms.
 
-#### 7.2.3 Default bindings (fig.json, D5) and overrides
+#### 7.2.3 Default bindings (D5) and overrides
 
 | action | default keys |
 |---|---|
@@ -2135,9 +2120,9 @@ right|arrowright up|arrowup down|arrowdown home end pageup pagedown tab delete i
 
 Settings `autocomplete.keybindings.<keystroke>` = `"<action>"` (also accepted with an `autocomplete.` prefix) override
 the default for that key; `"ignore"` disables interception for that key; an unknown action string swallows the key
-and does nothing (Kiro). Table rebuilt on settings reload.
+and does nothing. Table rebuilt on settings reload.
 
-#### 7.2.4 Interception (`interceptor.rs:195-226`, `R:autocomplete-ui §4`)
+#### 7.2.4 Interception
 
 ```text
 on_input(chunk): drop a late startup-probe reply (§4.4); if keys are held (§7.3): append the chunk to them; return
@@ -2145,7 +2130,7 @@ typed = 0
 for key in decoder.decode(chunk):
    prompt       = !preexec && !alt_screen && cur.is_some() /* at the prompt, §5.6 */ && typed < 2    // D39
    shown        = prompt && menu intercepting (shown, items non-empty)
-   intercepting = shown && drawable()          // the render guards of §7.5.1 let the menu be seen (Kiro: window visible)
+   intercepting = shown && drawable()          // the render guards of §7.5.1 let the menu be seen
    global       = prompt && !shown && !autocomplete.disable && items non-empty
    binding      = prompt ? keymap.lookup(key) : None
    tab_show     = global && onlyShowOnTab && key == plain tab
@@ -2168,7 +2153,7 @@ panic above leaves the read for the guard, §4.3)
 Esc is swallowed and stops interception immediately (the next Esc reaches the shell; vi-mode users can bind
 `autocomplete.keybindings.esc` to `ignore`). With `autocomplete.disable` nothing is ever intercepted for the menu.
 
-#### 7.2.5 Actions (`AC/hooks/keypress.ts:59-196`)
+#### 7.2.5 Actions
 
 Preamble: with `onlyShowOnTab` and Tab while not Visible → exactly 1 item: insert it; else `vis = Visible`. All other
 actions are no-ops when there is no selected item.
@@ -2198,7 +2183,7 @@ navigate(d, hide_on_negative): i = selected + d
                                                           if selected >= top+rows: top = selected-rows+1
 ```
 
-Common prefix (`insertion.ts:226-304`): 1 item → full insertion; selected type (or `original_type` for auto-execute)
+Common prefix: 1 item → full insertion; selected type (or `original_type` for auto-execute)
 ∈ {special, auto-execute} → fail; candidates = items of a matching type (`../` only matches `../`; file/folder match
 each other) whose lowercase first name starts with `q.lowercase`; 1 candidate → full insertion (auto-execute → fail);
 `lcp` = longest common prefix of the sorted lowercase names; `shared = first_name(selected)[..lcp.chars]` (selected
@@ -2211,7 +2196,7 @@ the row's raw delete count, 0 with the typed query not retyped, D22; `just_inser
 
 ### 7.3 Writing insertions to the PTY
 
-Typed-ahead model (Kiro reconciles after an IPC round trip, when the keys have echoed; tabsmith acts in the same read):
+Typed-ahead model (reconciled in the same read, not after the keys have echoed):
 
 ```text
 unechoed     = printable keys forwarded at the end of the line that the extracted buffer does not show yet
@@ -2229,7 +2214,7 @@ held keys    : a key that would act on the menu/ghost while echo_pending is set 
 full insertion of item (precomputed delete, text, cursor_back, execute), dropped while preexec:
   ib  = the buffer and cursor the menu's last reply was computed from (else the extracted ones)
   cur = basis()                                          // not just the last batch: keys sent ahead are reconciled
-  bytes = (cur extends ib ? "\x7f" × (cur.chars − ib.chars)        // the user typed more meanwhile (Kiro)
+  bytes = (cur extends ib ? "\x7f" × (cur.chars − ib.chars)        // the user typed more meanwhile
            : ib extends cur ? ib[cur.len()..] : "")              // the shell has not echoed yet
         + "\x7f" × delete + text + "\x1b[D" × cursor_back + (execute ? "\r" : "")
   forward bytes; unechoed = ""
@@ -2268,17 +2253,17 @@ x0     = clamp(cx - width(query of selected item) - 4, 0, C - w)
          // rows start with ' ' + icon (2 cols) + ' ': the title's first char lands under the typed query's first char
 block order is always list rows then the description row:
   Below → list on cy+1 ..= cy+n, description on cy+n+1
-  Above → list on cy-h ..= cy-h+n-1, description on cy-1 (block bottom-aligned to the cursor, like Kiro's isAboveCursor)
+  Above → list on cy-h ..= cy-h+n-1, description on cy-1 (block bottom-aligned to the cursor)
 ```
 
 #### 7.4.2 Rows
 
 List row for item `s` (selected row uses selected colours):
 `' '` + icon (2 cols) + `' '` + title + (`' '` + args hint in dim when room) + pad to `w`.
-- Icon slot: always two columns. Resolved like Q's `SuggestionIcon.tsx`: a spec `icon` that is a single wide emoji
+- Icon slot: always two columns. A spec `icon` that is a single wide emoji
   is text (`⭐` for the current git branch). With the kitty graphics protocol (Ghostty, kitty; inside tmux when
   `tmux display` reports `allow-passthrough` on and a kitty or Ghostty client), `fig://icon?type=<t>` is that PNG and `fig://template?color=&badge=` the template
-  tinted by Q's `scale_u8` (`a·b/256` per channel, alpha kept) with the badge in white. Otherwise the row type's
+  tinted by `scale_u8` (`a·b/256` per channel, alpha kept) with the badge in white. Otherwise the row type's
   image: subcommand `command`, option `option`, arg `box`, auto-execute `carrot`, file `file`, folder `folder`,
   shortcut `💡` and mixin `➡` on tinted templates, history `📚`.
   PNGs live in `assets/icons` (see its README). Each image is transmitted once (`a=t`), placed every frame over the
@@ -2293,7 +2278,7 @@ List row for item `s` (selected row uses selected colours):
   would tear the frame.
 - Title = `display_name` or names joined `", "`. Highlight: prefix mode → for each name whose lowercase starts with
   the lowercase query, the first `q.chars().count()` chars get `matching-bg`; fuzzy mode → fuzzysort indexes of the best
-  name. (No regex; fixes `R:autocomplete-ui §15.4`.)
+  name. (No regex.)
 - Args hint: for each arg with a name: `name` + (`...` if variadic); optional → `[x]`, mandatory → `<x>`; joined `" "`.
 - Truncation by display width (`unicode-width`), overflow replaced by `…`.
 
@@ -2380,7 +2365,7 @@ rescans; ponytail: no keyboard-protocol upgrade is that long, so it is never str
 - Alternate screen (`CSI ?1049h/?1047h/?47h`): the clear runs before the batch that switches (always), no frames while
   `ALT_SCREEN`, keys never intercepted, menu state error-reset on leave.
 
-### 7.7 Themes (port of `qac/packages/autocomplete/src/fig/themes.ts`)
+### 7.7 Themes
 
 Eight colours: `main-bg`, `main-text`, `matching-bg`, `selected-bg`, `selected-text`, `selected-matching-bg`,
 `description-text`, `description-border` (unused in v1).
@@ -2401,7 +2386,7 @@ Eight colours: `main-bg`, `main-text`, `matching-bg`, `selected-bg`, `selected-t
   #282828 #383838 #585858 #b8b8b8 #d8d8d8 #e8e8e8 #f8f8f8`; accents `#ab4642 #dc9656 #f7ca88 #a1b56c #86c1b9 #7cafc2
   #ba8baf #a16946`). Any error → dark.
 - Colour parsing: `#rgb`, `#rrggbb`, `#rrggbbaa` (alpha premultiplied against black), `rgb(r, g, b)` with optional
-  spaces (fixes Kiro's no-space regex).
+  spaces.
 - Output: truecolor SGR if `COLORTERM ∈ {truecolor, 24bit}` or `WT_SESSION` set; else nearest xterm-256 index (6×6×6
   cube + 24 greys).
 
@@ -2444,14 +2429,14 @@ ordinary typing to the shell).
 
 Local sources arrive in every `Completion` (§6.11). LLM (when `inline.enabled`, `inline.source` is a valid profile,
 and a phase-Parse reply has no local ghost with the cursor at the end of the buffer — error replies too: commands
-without a spec get LLM ghosts, Kiro's inline completion depends on the buffer only): main sets
+without a spec get LLM ghosts, since the inline completion depends on the buffer only): main sets
 `llm_deadline = last buffer change + inline.debounceMs`; a new request clears it; on expiry send
 `EngineMsg::Llm{req, buffer, cwd, shell}` for the last sent buffer. Engine: cache lookup (below) → immediate
 `Msg::Ghost`; else spawn an LLM worker (5 s timeout) with the `llm_history` snapshot: the last `inline.historyCount`
 usable entries (exit code known, privacy filter), oldest → newest. The worker replies `Msg::Ghost{req, text}`; main
 keeps it only if `req` is both the latest request and the LLM request.
 
-Cache (port of `qac/crates/figterm/src/inline/completion_cache.rs`): `Vec<(full_text, priority)>`, cleared on
+Cache: `Vec<(full_text, priority)>`, cleared on
 `CommandFinished`/`CommandEnded` (ponytail: linear scan of ≤ 50 entries instead of a radix trie). Lookup: entries where
 `full.starts_with(buffer) && full != buffer`, minimum priority (first inserted wins ties) → `full[buffer.len()..]`. The
 first completion of a response is stored with priority 0.0, others 1.0. This makes a suggestion survive the user typing
@@ -2459,7 +2444,7 @@ its first characters.
 
 ### 8.5 LLM providers
 
-Prompt (Kiro format, `qac/crates/figterm/src/inline/mod.rs:381-403`): the last `inline.historyCount` (49; 0 = none)
+Prompt: the last `inline.historyCount` (49; 0 = none)
 usable history commands (non-null exit code, privacy filter below), oldest → newest, then the buffer, numbered like `history`:
 `format!("{:>5}  {cmd}", n)` joined by `\n`; drop oldest lines until ≤ 10 240 bytes. **Privacy filter**: history lines
 containing (case-insensitive) `password`, `passwd`, `secret`, `token`, `api_key`, `apikey`, `authorization:`,
@@ -2511,7 +2496,7 @@ quote does not also appear inside); strip a leading history number (`\d+` then t
 allowed), then the buffer if the model echoed it (in that order, so `    3  git status` loses both); `trim_end`;
 empty, or any control character left (a bare `\r` survives `lines()`, D32) → none.
 
-Validation (port of `inline/validate.rs:3-59`): `full = buffer + completion`; if `full.trim()` splits (shell words) into
+Validation: `full = buffer + completion`; if `full.trim()` splits (shell words) into
 exactly `["cd", arg]`: expand `~`/`$VAR` from the session env (unknown var → accept); absolute non-directory → reject;
 else `cwd.join(path)` must canonicalize to a directory. Everything else is valid.
 
@@ -2537,7 +2522,7 @@ else `cwd.join(path)` must canonicalize to a directory. Everything else is valid
 - Index: `index.json` (`completions` 1 484 entries, `diffVersionedCompletions` 6) of the embedded set ∪ `*.js` stems
   present in `specs/user/`.
 - Licences: `assets/SPECS_LICENSE` (MIT, Hercules Labs/Fig) is shipped; THIRD_PARTY notices for inlined semver, yaml,
-  strip-json-comments, `@fig/autocomplete-*` (`R:spec-format §1`) are not yet.
+  strip-json-comments, `@fig/autocomplete-*` are not yet.
 - SHOULD (post-v1): `tabsmith specs update` downloads a newer tarball into `specs/user/`.
 
 ### 9.2 JS host (engine thread, rquickjs 0.14)
@@ -2548,8 +2533,7 @@ long-lived context: modules evaluated once and their serialized namespaces cache
 (mtime, size); an edited file is evaluated again (developer mode, F38; old function ids stay valid). Specs keep
 module-level caches (e.g. `man.js`).
 
-Module loading without a module loader (every bundled file ends with exactly one `export{…};`, no imports,
-`R:spec-format §3`):
+Module loading without a module loader (every bundled file ends with exactly one `export{…};`, no imports):
 
 ```text
 src = read file; if src.trim().is_empty() → namespace {}
@@ -2617,7 +2601,7 @@ calls `__ts.start(task, fnId, argsJson, ctxJson)`; argument positions listed in 
 by identity (the same function always gets the same id), so the table grows with distinct functions only (not
 collected, ponytail). Finished results are delivered once.
 
-Callback signatures the engine uses (`R:spec-format §8`): `custom(tokens, exec, generatorContext)`,
+Callback signatures the engine uses: `custom(tokens, exec, generatorContext)`,
 `postProcess(stdout, tokens)`, `script(tokens)`, `trigger(newSearchTerm, oldSearchTerm)`, `getQueryTerm(token)`,
 `generateSpec(tokens, exec)`, `loadSpec(token, exec)`, `parserDirectives.alias(token, exec)`,
 `getVersionCommand(exec)`, diff-versioned `default(version)`, `filterTemplateSuggestions(suggestions)`,
@@ -2644,7 +2628,7 @@ __ts_exec(task, input): new op id; run §9.3 on a worker thread, which sends Eng
 The engine's generator runs wait in 50 ms slices (finished generators are replied together per slice); a callback that
 is interrupted fails its task only when its run deadline passes (§6.6.1).
 
-### 9.3 `exec` semantics (port of figterm RunProcess, `qac/crates/figterm/src/message.rs:61-151,459-515`)
+### 9.3 `exec` semantics
 
 ```text
 input {command, args[], cwd?, env?: {k: v|null}, timeout?}
@@ -2653,7 +2637,7 @@ short-circuits:
   command == "ls" && args.map(trim) == ["-1ApL"] → native listing of input.cwd joined onto the shell cwd (or the
        cwd above when input.cwd is empty) — never the fallback: a missing dir → {stdout:"", stderr, status:2} (D34);
        read_dir following symlinks, dotfiles included except . and .., dirs get "/", one per line, unsorted
-  command ∈ {fig, q, kiro, kiro-cli, tabsmith} → {stdout:"", stderr:"", status:1}   (bundled ai() helper)
+  command ∈ {fig, tabsmith} → {stdout:"", stderr:"", status:1}   (bundled ai() helper)
 env   = session env if known (env_clear + session env) else the wrapper's env; remove LS_COLORS CLICOLOR_FORCE
         CLICOLOR COLORTERM; set PROCESS_LAUNCHED_BY_TABSMITH=1 HISTFILE="" HISTCONTROL=ignoreboth
         TERM=xterm-256color NO_COLOR=1; apply input.env (null → remove); a cmd.exe child also gets
@@ -2669,13 +2653,13 @@ timeout = max(autocomplete.scriptTimeout (5000; Windows 20000), input.timeout); 
           poll try_wait every 5 ms while reader threads drain both pipes;
           on expiry kill the whole group (Unix kill(-pgid, SIGKILL), Windows TerminateJobObject) and the child
           → reject "timed out after N ms running executable (<cmd>)"
-output  = lossy UTF-8; clean: \r\n→\n, remove "\x1b[?25h", strip leading and trailing \n+ (qac cleanOutput)
+output  = lossy UTF-8; clean: \r\n→\n, remove "\x1b[?25h", strip leading and trailing \n+
 status  = exit code; killed by signal → 1;  non-zero status resolves normally (specs check it)
 ```
 
 Every running exec child is registered (Unix process group, Windows job handle) and killed at session end:
 `cleanup`, the fallback path and, on Unix, an `atexit` hook — no generator outlives the session (a hanging one would
-run forever, reparented to init; Kiro uses `kill_on_drop`).
+run forever, reparented to init).
 
 `bash -c …` appears 138× in 72 spec files: on Windows these work only when Git Bash's `bash` is on PATH; otherwise
 those generators yield `[]` (risk, §11).
@@ -2689,15 +2673,15 @@ rounds has a regression test next to the code it fixed.
 
 | area | tests |
 |---|---|
-| `shell_parser` | Every row of the §6.1.3 table; operators without spaces; unterminated quotes (`complete=false`, inner text); escapes in word vs string vs raw string; concatenation `--foo="a b"c`; `$(…)` nesting; `FOO= cmd` (fix); alias cases from §6.1.6; alias with `\|` not expanded; qac's parse-tree fixtures (`tests/fixtures/shell_parser/`). |
-| `parser` | Mock spec (the §6.4 table and qac's full table, as JSON fixtures in `tests/fixtures/parser/cmd_spec.json`); `isRepeatable` limits; `exclusiveOn`/`dependsOn`; persistent option inheritance without mutation; `--` end of options; `loadSpec` locations recursion with `command_index` (`sudo git ` → git spec, generators see `["git",…]`); `spec_location` table (`R:parser-runtime §2.1`); diff merge (`merge_named` order, `remove`, `merge_args` index quirk) on hand-made fixtures; version pick (newest ≤ target, none → newest). |
+| `shell_parser` | Every row of the §6.1.3 table; operators without spaces; unterminated quotes (`complete=false`, inner text); escapes in word vs string vs raw string; concatenation `--foo="a b"c`; `$(…)` nesting; `FOO= cmd`; alias cases from §6.1.6; alias with `\|` not expanded; parse-tree fixtures (`tests/fixtures/shell_parser/`). |
+| `parser` | Mock spec (the §6.4 table and the full mock-spec table, as JSON fixtures in `tests/fixtures/parser/cmd_spec.json`); `isRepeatable` limits; `exclusiveOn`/`dependsOn`; persistent option inheritance without mutation; `--` end of options; `loadSpec` locations recursion with `command_index` (`sudo git ` → git spec, generators see `["git",…]`); `spec_location` table; diff merge (`merge_named` order, `remove`, `merge_args` index quirk) on hand-made fixtures; version pick (newest ≤ target, none → newest). |
 | `suggest` | fuzzysort examples (`fs`/`Fuzzy Search` → −16, `test`/`test` → 0, non-match → None); prefix score ladder 0/−1/−2/−3; bucket order A ++ B ++ C; auto-execute rules (dangerous, optional args, hidden setting, onlyShowOnTab); `.` and `/`-folder auto-execute; dedupe ≤ 50; recency boost bands (`75 + ms/1e13`), `priority: 0` → 50, alphabetical setting; triggers (string/fn/threshold/match/change); cache TTL/SWR/max-age; option-chain rewriting (`-la`); history rows priority; insertion table from §6.8 (incl. POSIX and pwsh escaping, `{cursor}`, auto-space, raw-token deletion counts with quotes and escaped spaces). |
 | `menu` | Visibility transitions for: typing, space/new arg, full insertion with and without new arg, generator re-trigger, Esc → stays hidden across tokens, backspace into previous token, large change (paste) vs `just_inserted`, `onlyShowOnTab`, `navigateToHistory`, Up at 0, wrap-around, sticky selection across recompute; common prefix (single item, mixed types, `../`, no prefix → BEL); keybinding parser (`ctrl+k`, `control+K`, `shift+tab`, `shift+a`→`A`, `+`, `ctrl++`, `f12`, unknown modifier ignored, multi-char unknown → dropped); `"ignore"`; stdin decoding table §7.2.1 incl. a chunk with several keys and a bracketed paste. |
 | `render` | Layout: below/above/shrink/hide decisions at various `cy`, `R`; `x0` clamping; truncation with wide chars; colour parsing (`#rgb`, `#rrggbbaa`, `rgb( 1, 2, 3 )`); 256-colour mapping; **round-trip invariant**: model A ← `output`; model B ← `output + frame + clear`; visible grids (chars, fg, bg, flags) equal — for below, above, ghost, wide chars at both span edges, truecolor cells. |
 | `tracker`, `pty` (no real PTY) | OSC splitter across chunk boundaries (split inside `ESC ]`, inside payload, BEL vs ST, non-697 OSC passthrough, 64 KiB flush); markers stripped from output; lock/unlock with foreign sid; `NewCmd=<other sid>` ignored; edit-buffer extraction by feeding a real `alacritty_terminal::Term` with byte transcripts: zsh prompt + command, RPROMPT, PS2 multi-line (real `\n`), wrapped long command, zsh completion listing below (excluded), ghost text in `fg=8` after cursor (excluded) vs typed `fg=8` before cursor (kept), prompt scrolled by output, resize reflow, Windows deferral FIFO; reconciliation byte strings (`cur` ahead / behind `ib`). |
 | `integrations` | `init` snapshots for every (shell, when) under `TABSMITH_INIT_SNAPSHOT_TEST=1` (`insta`-free: compare to files in `tests/snapshots/`, `TABSMITH_BLESS=1` rewrites them); syntax-check snapshots when tools exist: `bash -n` + shellcheck, `zsh -n`, `fish --no-execute`, `pwsh -NoProfile -Command [ScriptBlock]::Create(...)`; the post scripts run in real bash/zsh/fish (markers, hook order, bash-preexec layout, injected-integration reload with fake scripts); dotfile install into a temp HOME: idempotent (install twice → same bytes), shebang kept first, `# tabsmith ignore`, pre-not-first / post-not-last detection, uninstall restores original content (modulo trailing newline), backup created; should-launch decision table from env maps. |
 | `settings` | get/set JSON-or-string parsing, missing key plain vs json, delete wildcard (`autocomplete.*`, `?`), sorted pretty output, corruption handling, mtime reload. |
-| `inline` | Kiro cache test vector (`{"echo hello, world":0.5,…}` → `"e"`→`echo hello, world`, `"ls -a"`→`ls -al`, `"other"`→None, `R:figterm §15.2`); history prompt numbering + 10 240-byte truncation + privacy filter; cleaning (fences, echoed buffer, numbering); `cd` validation; request bodies for both providers serialized exactly as §8.5 (no `temperature`; `output_config` only with effort); response parsing incl. refusal and thinking-before-text. |
+| `inline` | Cache test vector (`{"echo hello, world":0.5,…}` → `"e"`→`echo hello, world`, `"ls -a"`→`ls -al`, `"other"`→None); history prompt numbering + 10 240-byte truncation + privacy filter; cleaning (fences, echoed buffer, numbering); `cd` validation; request bodies for both providers serialized exactly as §8.5 (no `temperature`; `output_config` only with effort); response parsing incl. refusal and thinking-before-text. |
 | `js` (`all_bundle_modules` is `#[ignore]`, run in CI with `--release -- --ignored`) | Evaluate all 1 484 modules: each yields a namespace or the documented empties; all 727 root specs normalise; `git` alias directive via a fake exec; `filepaths()` through the native `ls -1ApL` path; `setTimeout` ordering; `Intl.NumberFormat` compact; interrupt handler stops `while(true){}`; legacy string exec (`aws/ecs.js`). |
 
 Smoke / end-to-end: **not automated** (there is no `tests/e2e.rs`). The review rounds ran these flows, and many more,
@@ -2736,12 +2720,12 @@ All OSes:
   newline-ended PS1's line while zsh lists completions below it also reads as not at the prompt.
 - Typeahead before the wrapper starts may be echoed twice (F36).
 - Startup files run twice: the outer shell reads its rc files up to the pre block (zsh `.zshenv`, `/etc/zprofile`, a
-  login bash's `/etc/profile`), the wrapped shell reads them all again (Kiro behaves the same). fish: only `--private`
+  login bash's `/etc/profile`), the wrapped shell reads them all again. fish: only `--private`
   reaches the wrapped fish (`-C`, `--features`, `-d` are dropped).
 - Env/alias capture lags one prompt (`_ pre-cmd` runs in the background at precmd); generators use the previous env.
   pwsh never reports its env (generators use the wrapper's).
-- Generator commands are third-party spec code run on keystrokes (as in Kiro); mitigations: no shell, own process
-  group / job, env sanitised, timeouts, killed at session end, `fig`/`q` stubbed, QuickJS memory/interrupt limits.
+- Generator commands are third-party spec code run on keystrokes; mitigations: no shell, own process
+  group / job, env sanitised, timeouts, killed at session end, `fig`/`tabsmith` stubbed, QuickJS memory/interrupt limits.
   Repo-local `.fig/autocomplete/build` specs run only for path-form commands (`./x`), which already trust that tree.
 - Markers are forgeable by any local program (the sid is in every child's env, §5.1.2): marker-based history is not a
   security boundary; untrusted *output* cannot forge them (D35).
@@ -2765,7 +2749,7 @@ Windows:
 - **Verified by code review and cross-compilation only** (CI builds and unit-tests on `windows-latest`; the review
   rounds had no Windows console): ConPTY ordering and the deferral, the ConPTY close on a helper thread, job objects,
   the Toolhelp parent lookup, the console-less pwsh encoding guard. Ctrl+Space arrives as a NUL key record, which is
-  not forwarded (Kiro does the same; unverified whether PSReadLine's MenuComplete is affected).
+  not forwarded (unverified whether PSReadLine's MenuComplete is affected).
 - **ConPTY re-rendering**: ConPTY repaints from its own buffer, may reorder OSC relative to text and repaint whole
   regions after resize. Mitigations: deferred `EndPrompt`/`NewCmd` (§5.1.4), redraw after every batch, 150 ms full
   repaint after resize. portable-pty uses the system ConPTY; shipping a side-loaded `conpty.dll` + `OpenConsole.exe`
