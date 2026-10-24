@@ -12,6 +12,14 @@ pub(crate) fn settings_from_json(map: Map<String, Value>) -> Settings {
     )
 }
 
+/// A settings snapshot as the settings.json object.
+pub(crate) fn settings_to_json(settings: &Settings) -> Map<String, Value> {
+    settings
+        .entries()
+        .map(|(key, value)| (key.to_string(), setting_value_to_json(value)))
+        .collect()
+}
+
 /// A serde_json value as a setting value, integers and floats kept apart.
 pub(crate) fn setting_value_from_json(value: Value) -> SettingValue {
     match value {
@@ -217,5 +225,17 @@ mod tests {
         let written = setting_value_to_json(&value);
 
         assert_eq!(written, json);
+    }
+
+    #[test]
+    fn should_write_a_settings_snapshot_as_the_settings_file_object_it_was_read_from() {
+        let Value::Object(map) = json!({"autocomplete.height": 5, "inline.enabled": false}) else {
+            unreachable!()
+        };
+        let settings = settings_from_json(map.clone());
+
+        let written = settings_to_json(&settings);
+
+        assert_eq!(written, map);
     }
 }
