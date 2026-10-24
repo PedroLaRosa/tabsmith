@@ -212,7 +212,7 @@ shared/infrastructure/
 
 ### settings
 ```
-domain/value_objects/{setting_key, setting_value, setting_key_pattern ← wildcard_match,
+domain/value_objects/{setting_key, setting_value, setting_number, setting_key_pattern ← wildcard_match,
                       setting_definition ← CatalogEntry, settings ← Settings}.rs
 domain/services/settings_catalog.rs       ← CATALOG + key constants + default(key)
 domain/repositories/settings_repository.rs  trait {load, save, last_modified} + InMemory
@@ -221,6 +221,7 @@ application/{get_setting, set_setting, delete_settings, list_settings, list_sett
              open_settings_file}_use_case.rs
 application/ports/settings_editor.rs
 infrastructure/settings_module.rs
+infrastructure/load_or_defaults.rs        the pty's and doctor's lenient load: defaults + the old warning
 infrastructure/adapters/{json_file_settings_repository.rs, setting_value_json.rs (SettingValue ↔ serde_json,
                          "JSON else string" parsing), system_settings_editor.rs ← cli::open_settings}
 infrastructure/cli/settings_command.rs    ← cli::{SettingsArgs, SettingsCmd, settings, render_get, render_list,
@@ -515,7 +516,7 @@ Baseline recorded on 2026-10-24 at `ef807c1` (rustc 1.95.0, macOS):
    - the os helpers, the logger, and `testing/temp_dir.rs`. The temp-dir helper replaces `specs::testutil::TmpDir`
      and the 5 ad-hoc helpers.
 4. Add the `DataDirectory` VO + `data_directory_from_env` + `SharedDependencies`. Each later phase switches its own
-   callers. The old `settings::home()` family is deleted in Phase 11.
+   callers. The old `settings::home()` family went in Phase 2, once its callers had switched.
 5. Add the `Clock` port + `SystemClock` + `FixedClock`. `types::now_ms/now_secs` stay as thin wrappers until Phase 11.
 6. Add `JsonDocumentStore` and `AtomicFile`. Move these tests to `atomic_file.rs`: `save_keeps_a_symlinked_file`,
    `dotfile_write_is_atomic`, and the `write_private` behaviour.
@@ -657,7 +658,7 @@ Done when `shared` is registered in the architecture test and the build has no c
 3. Write the three use cases. Add the CLI handlers (with `diagnostic_toml`). Delete `doctor.rs` and `cli.rs`.
 
 ### Phase 11: cleanup and documentation
-1. Delete `types.rs` and the old path functions. Remove `#![allow(dead_code)]` and delete whatever the compiler then
+1. Delete `types.rs`. Remove `#![allow(dead_code)]` and delete whatever the compiler then
    flags, including:
    - `logger::trace`;
    - `EngineMsg::Timer`;
@@ -773,3 +774,14 @@ where following it literally would change behaviour. They bind every phase.
 Phase 1 notes: `anyhow` is gone from shared infrastructure (typed errors whose `{:#}` chain prints the old text);
 `shell_serde` was dropped because nothing (de)serialises a `Shell`; the one remaining module cycle is the legacy
 `cli.rs` → `bootstrap::cli::Cli` back-edge for the `settings --help` fallback, removed in Phase 2.
+
+Phase 2 notes: `SettingNumber` holds `SettingValue::Number` as unsigned, negative or float like serde_json's
+`Number`, so a settings.json number keeps its integer or float form. `SettingKey` is not validated (D1: `settings "" v` stores the
+empty key); the get and set use cases take it, while `Settings::{get, with, without}` keep `&str` keys because the
+catalog constants and the legacy callers pass them. `Settings` exposes `entries()` (key-ordered pairs) as its
+primitives view in place of `to_primitives()`. `infrastructure/load_or_defaults.rs` gives the pty and doctor the
+defaults plus the old `settings: <error>` warning when settings cannot be loaded; the settings commands stay strict.
+`run_settings_command` takes a `print_root_help` callback from bootstrap, which removed the back-edge above.
+`settings::user_home` became `shared::infrastructure::data_directory_from_env::user_home_from_env` with
+`SharedError::UserHomeNotFound` (its plain message, no `TABSMITH_HOME` hint), and the `home`/`settings_path`/
+`state_path`/`Store` family was deleted in Phase 2, not Phase 11, because shims never cross phases.
