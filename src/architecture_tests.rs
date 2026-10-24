@@ -1,5 +1,8 @@
 //! Architecture fitness test (plan section 1): every registered module keeps the hexagonal layer rules.
 
+/// External crates the inner layers may use. std, core and alloc are not in Cargo.toml, so they are never flagged.
+const ALLOWED_EXTERNAL_CRATES: &[&str] = &["unicode_width"];
+
 #[derive(Debug, PartialEq)]
 enum Rule {
     DomainLayer,
@@ -22,7 +25,10 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
             code.contains("::application")
                 || code.contains("::infrastructure")
                 || code.contains("crate::bootstrap")
-                || external_crates.iter().any(|name| code.contains(&format!("{name}::")))
+                || external_crates
+                    .iter()
+                    .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
+                    .any(|name| code.contains(&format!("{name}::")))
         })
         .map(|(index, _)| Violation { line: index + 1, rule: Rule::DomainLayer })
         .collect()
@@ -77,6 +83,17 @@ mod tests {
                 Violation { line: 3, rule: Rule::DomainLayer },
             ]
         );
+    }
+
+    #[test]
+    fn should_not_flag_a_domain_file_that_uses_std_or_unicode_width() {
+        let source = "use std::fmt;\n\
+                      use unicode_width::UnicodeWidthStr;\n\
+                      let width = unicode_width::UnicodeWidthChar::width(c);\n";
+
+        let found = violations_in("dropdown/domain/menu.rs", source);
+
+        assert_eq!(found, vec![]);
     }
 
     #[test]
