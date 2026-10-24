@@ -73,6 +73,12 @@ impl Settings {
             .iter()
             .filter_map(move |(key, value)| key.strip_prefix(prefix).map(|rest| (rest, value)))
     }
+
+    /// These settings with `value` stored under `key`.
+    pub(crate) fn with(mut self, key: &str, value: SettingValue) -> Settings {
+        Arc::make_mut(&mut self.0).insert(key.to_string(), value);
+        self
+    }
 }
 
 /// ponytail: the catalog's string literals hold no escapes, so dropping the quotes is the JSON string.
@@ -373,5 +379,18 @@ mod tests {
             .collect();
 
         assert!(mismatches.is_empty(), "{mismatches:?}");
+    }
+
+    /// `tabsmith theme light` stores the theme it switched to.
+    #[test]
+    fn should_hold_the_value_set_for_a_key() {
+        let settings = Settings::default();
+
+        let updated = settings.with(AUTOCOMPLETE_THEME, SettingValue::Text("light".to_string()));
+
+        assert_eq!(
+            updated.get(AUTOCOMPLETE_THEME),
+            Some(&SettingValue::Text("light".to_string()))
+        );
     }
 }
