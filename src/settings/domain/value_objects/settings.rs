@@ -26,9 +26,19 @@ impl Settings {
             .unwrap_or_default()
     }
 
+    /// The user's string, else the catalog default when it is a string; `None` for `null` (devCompletionsFolder).
     pub(crate) fn string(&self, key: &str) -> Option<&str> {
-        self.get(key).and_then(SettingValue::as_str)
+        self.get(key)
+            .and_then(SettingValue::as_str)
+            .or_else(|| catalog_default_string(key))
     }
+}
+
+/// ponytail: the catalog's string literals hold no escapes, so dropping the quotes is the JSON string.
+fn catalog_default_string(key: &str) -> Option<&'static str> {
+    settings_catalog::default(key)?
+        .strip_prefix('"')?
+        .strip_suffix('"')
 }
 
 /// The catalog's JSON default literal for `key`, read as a `T`.
@@ -97,5 +107,14 @@ mod tests {
         let theme = settings.string(AUTOCOMPLETE_THEME);
 
         assert_eq!(theme, Some("light"));
+    }
+
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_a_string_the_user_did_not_set() {
+        let settings = Settings::default();
+
+        let theme = settings.string(AUTOCOMPLETE_THEME);
+
+        assert_eq!(theme, Some("dark"));
     }
 }
