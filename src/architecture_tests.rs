@@ -11,7 +11,10 @@ struct Violation {
     rule: Rule,
 }
 
-fn violations(_path: &str, source: &str) -> Vec<Violation> {
+fn violations(path: &str, source: &str) -> Vec<Violation> {
+    if path.split('/').nth(1) != Some("domain") {
+        return Vec::new();
+    }
     source
         .lines()
         .enumerate()
@@ -42,5 +45,14 @@ mod tests {
                 Violation { line: 3, rule: Rule::DomainLayer },
             ]
         );
+    }
+
+    #[test]
+    fn should_not_flag_an_infrastructure_file_that_uses_the_application_layer() {
+        let source = "use crate::settings::application::set_setting_use_case::SetSettingUseCase;\n";
+
+        let found = violations_in("settings/infrastructure/settings_module.rs", source);
+
+        assert_eq!(found, vec![]);
     }
 }
