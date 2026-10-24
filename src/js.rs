@@ -713,7 +713,7 @@ pub fn exec(
             .map_or(cwd, |c| Path::new(&ctx.cwd).join(c));
         return Ok(native_ls(&dir));
     }
-    if ["fig", "q", "kiro", "kiro-cli", "tabsmith"].contains(&input.command.as_str()) {
+    if ["fig", "tabsmith"].contains(&input.command.as_str()) {
         return Ok(ExecOutput {
             status: 1,
             ..Default::default()
@@ -1406,7 +1406,7 @@ mod tests {
         assert_eq!((missing.status, missing.stdout.as_str()), (2, ""));
 
         // exec answers `ls -1ApL` natively (args trimmed; no input.cwd → ctx cwd; relative → under ctx cwd; missing
-        // dir → error, not the ctx cwd's listing) and stubs fig/q/kiro.
+        // dir → error, not the ctx cwd's listing) and stubs fig/tabsmith.
         let ctx = GenCtx {
             cwd: dir.path().display().to_string(),
             ..Default::default()
@@ -1424,7 +1424,7 @@ mod tests {
         assert_eq!(ls(Some("sub/")), native_ls(&dir.path().join("sub")));
         let missing = ls(Some(&dir.path().join("nonexist/").display().to_string()));
         assert_eq!((missing.status, missing.stdout.as_str()), (2, ""));
-        for cmd in ["fig", "q", "kiro", "kiro-cli", "tabsmith"] {
+        for cmd in ["fig", "tabsmith"] {
             let input = ExecInput {
                 command: cmd.into(),
                 ..Default::default()
@@ -1436,6 +1436,27 @@ mod tests {
                     ..Default::default()
                 })
             );
+        }
+    }
+
+    #[test]
+    fn exec_runs_other_clis_instead_of_stubbing_them() {
+        let empty_path = TmpDir::new("empty-path");
+        let ctx = GenCtx {
+            env: HashMap::from([("PATH".to_string(), empty_path.path().display().to_string())]),
+            ..Default::default()
+        };
+
+        let results = ["q", "kiro", "kiro-cli"].map(|command| {
+            let input = ExecInput {
+                command: command.into(),
+                ..Default::default()
+            };
+            exec(&input, &ctx, 5000)
+        });
+
+        for result in results {
+            assert!(result.unwrap_err().contains("not found"));
         }
     }
 
