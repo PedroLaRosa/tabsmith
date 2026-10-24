@@ -11,11 +11,7 @@ pub(crate) fn data_directory_from_env() -> DataDirectory {
 
 /// The user's home directory (not the tabsmith dir).
 pub(crate) fn user_home_from_env() -> Result<PathBuf, SharedError> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .or_else(|| std::env::var_os("HOME"))
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .ok_or(SharedError::UserHomeNotFound)
+    user_home_from(&|name| std::env::var_os(name)).ok_or(SharedError::UserHomeNotFound)
 }
 
 fn data_directory_from(env: impl Fn(&str) -> Option<OsString>) -> DataDirectory {
@@ -27,10 +23,15 @@ fn root_from(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     if let Some(h) = env("TABSMITH_HOME").filter(|h| !h.is_empty()) {
         return Some(PathBuf::from(h));
     }
-    let base = env(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+    Some(user_home_from(env)?.join(".tabsmith"))
+}
+
+/// `$HOME` (Unix) / `%USERPROFILE%` (Windows), else `$HOME`; an empty platform variable is no home, with no fallback.
+fn user_home_from(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    env(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .or_else(|| env("HOME"))
-        .filter(|h| !h.is_empty())?;
-    Some(PathBuf::from(base).join(".tabsmith"))
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
 }
 
 fn settings_file_from(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
