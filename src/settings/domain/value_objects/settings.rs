@@ -1,5 +1,7 @@
+use crate::settings::domain::services::settings_catalog;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use std::collections::BTreeMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// Immutable snapshot of the user's settings, cheap to clone and shared across threads.
@@ -16,11 +18,18 @@ impl Settings {
         self.0.get(key)
     }
 
+    /// The user's bool, else the catalog default; `false` when the catalog has no bool for `key`.
     pub(crate) fn bool(&self, key: &str) -> bool {
         self.get(key)
             .and_then(SettingValue::as_bool)
+            .or_else(|| catalog_default(key))
             .unwrap_or_default()
     }
+}
+
+/// The catalog's JSON default literal for `key`, read as a `T`.
+fn catalog_default<T: FromStr>(key: &str) -> Option<T> {
+    settings_catalog::default(key)?.parse().ok()
 }
 
 #[cfg(test)]
@@ -56,5 +65,14 @@ mod tests {
         let disabled = settings.bool(AUTOCOMPLETE_DISABLE);
 
         assert!(disabled);
+    }
+
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_a_bool_the_user_did_not_set() {
+        let settings = Settings::default();
+
+        let enabled = settings.bool(INLINE_ENABLED);
+
+        assert!(enabled);
     }
 }
