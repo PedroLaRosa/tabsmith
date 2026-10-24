@@ -46,6 +46,22 @@ mod tests {
         );
     }
 
+    /// `tabsmith settings "" v` stores the key "": keys are not validated (D1).
+    #[test]
+    fn should_store_the_value_under_the_empty_key() {
+        let repository = Rc::new(InMemorySettingsRepository::default());
+        let use_case = SetSettingUseCase::new(repository.clone());
+
+        use_case
+            .execute("", SettingValue::Text("v".to_string()))
+            .unwrap();
+
+        assert_eq!(
+            repository.load().unwrap().get(""),
+            Some(&SettingValue::Text("v".to_string()))
+        );
+    }
+
     #[test]
     fn should_keep_every_other_setting() {
         let repository = Rc::new(InMemorySettingsRepository::default());
