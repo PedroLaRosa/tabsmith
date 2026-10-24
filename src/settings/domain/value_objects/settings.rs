@@ -63,6 +63,16 @@ impl Settings {
             })
             .unwrap_or_default()
     }
+
+    /// The user's keys with the given prefix, prefix stripped, in key order (e.g. `autocomplete.keybindings.`).
+    pub(crate) fn with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a SettingValue)> + 'a {
+        self.0
+            .iter()
+            .filter_map(move |(key, value)| key.strip_prefix(prefix).map(|rest| (rest, value)))
+    }
 }
 
 /// ponytail: the catalog's string literals hold no escapes, so dropping the quotes is the JSON string.
@@ -281,5 +291,20 @@ mod tests {
         let disabled = settings.str_list(AUTOCOMPLETE_DISABLE_FOR_COMMANDS);
 
         assert!(disabled.is_empty(), "{disabled:?}");
+    }
+
+    /// Two aliases of one keystroke: the alphabetically later binding is applied last and wins.
+    #[test]
+    fn should_give_the_keys_under_a_prefix_without_it_in_sorted_order() {
+        let ignore = SettingValue::Text("ignore".to_string());
+        let settings = settings_with(&[
+            ("autocomplete.keybindings.tab", ignore.clone()),
+            ("autocomplete.keybindings.control+r", ignore.clone()),
+            (AUTOCOMPLETE_THEME, ignore.clone()),
+        ]);
+
+        let bindings: Vec<_> = settings.with_prefix("autocomplete.keybindings.").collect();
+
+        assert_eq!(bindings, [("control+r", &ignore), ("tab", &ignore)]);
     }
 }
