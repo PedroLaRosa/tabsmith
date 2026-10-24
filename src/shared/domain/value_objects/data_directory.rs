@@ -36,6 +36,10 @@ impl DataDirectory {
     pub(crate) fn run_dir(&self) -> Result<PathBuf, SharedError> {
         Ok(self.root()?.join("run"))
     }
+
+    pub(crate) fn logs_dir(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("logs"))
+    }
 }
 
 #[cfg(test)]
@@ -106,5 +110,14 @@ mod tests {
         let path = data_directory.run_dir();
 
         assert_eq!(path, Ok(PathBuf::from("/data/run")));
+    }
+
+    #[test]
+    fn should_put_the_logs_directory_under_the_root() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let path = data_directory.logs_dir();
+
+        assert_eq!(path, Ok(PathBuf::from("/data/logs")));
     }
 }
