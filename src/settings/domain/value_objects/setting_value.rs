@@ -47,6 +47,17 @@ impl SettingValue {
         self.as_number()?.as_f64()
     }
 
+    pub(crate) fn as_list(&self) -> Option<&[SettingValue]> {
+        match self {
+            SettingValue::List(items) => Some(items),
+            SettingValue::Null
+            | SettingValue::Bool(_)
+            | SettingValue::Number(_)
+            | SettingValue::Text(_)
+            | SettingValue::Object(_) => None,
+        }
+    }
+
     fn as_number(&self) -> Option<&SettingNumber> {
         match self {
             SettingValue::Number(number) => Some(number),
@@ -143,5 +154,15 @@ mod tests {
         let read = (value.as_i64(), value.as_u64(), value.as_f64());
 
         assert_eq!(read, (number.as_i64(), number.as_u64(), number.as_f64()));
+    }
+
+    #[test]
+    fn should_read_a_list_value_as_its_items() {
+        let items = vec![SettingValue::Text("git".to_string()), SettingValue::Null];
+        let value = SettingValue::List(items.clone());
+
+        let read = value.as_list();
+
+        assert_eq!(read, Some(items.as_slice()));
     }
 }
