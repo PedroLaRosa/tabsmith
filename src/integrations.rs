@@ -2945,9 +2945,10 @@ mod tests {
 
     /// Dotfiles are replaced atomically: whoever holds the old file sees it whole, a symlinked dotfile stays a
     /// symlink, permissions stay, no temp file is left, and a read-only file still reports PermissionDenied.
+    /// The same scenario against the write itself is shared atomic_file.rs `integrations_dotfile_write_is_atomic`.
     #[cfg(unix)]
     #[test]
-    fn integrations_dotfile_write_is_atomic() {
+    fn integrations_dotfile_write_is_atomic_install() {
         use std::os::unix::fs::PermissionsExt;
         let temp_dir = TempDir::new("atomic");
         let dir = temp_dir.path().to_path_buf();
