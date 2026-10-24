@@ -1,10 +1,10 @@
-use crate::shared::infrastructure::os::process_runner_error::ProcessRunnerError;
-use std::io::Read;
+use std::io::{self, Read};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Run `cmd` (stdin null, stderr ignored) and return its stdout; killed after `timeout`.
-pub(crate) fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Result<String, ProcessRunnerError> {
+/// Run `cmd` (stdin null, stderr ignored) and return its stdout; killed after `timeout`, then a `TimedOut` error
+/// "timed out after <secs>s".
+pub(crate) fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> io::Result<String> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -15,7 +15,8 @@ pub(crate) fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Resul
         if start.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(ProcessRunnerError::TimedOut { secs: timeout.as_secs() });
+            let message = format!("timed out after {}s", timeout.as_secs());
+            return Err(io::Error::new(io::ErrorKind::TimedOut, message));
         }
         std::thread::sleep(Duration::from_millis(20));
     }
