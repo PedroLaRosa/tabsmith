@@ -26,8 +26,11 @@ impl From<i64> for SettingNumber {
 }
 
 impl SettingNumber {
+    /// `None` for NaN and the infinities, which are not JSON numbers.
     pub(crate) fn from_f64(number: f64) -> Option<Self> {
-        Some(SettingNumber(Representation::Float(number)))
+        number
+            .is_finite()
+            .then_some(SettingNumber(Representation::Float(number)))
     }
 
     pub(crate) fn as_i64(&self) -> Option<i64> {
@@ -102,5 +105,14 @@ mod tests {
         let read = (number.as_i64(), number.as_u64(), number.as_f64());
 
         assert_eq!(read, (None, None, Some(12.0)));
+    }
+
+    #[test]
+    fn should_refuse_a_float_that_json_cannot_hold() {
+        let floats = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+
+        let numbers: Vec<_> = floats.into_iter().map(SettingNumber::from_f64).collect();
+
+        assert!(numbers.iter().all(Option::is_none), "{numbers:?}");
     }
 }
