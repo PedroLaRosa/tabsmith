@@ -270,4 +270,16 @@ mod tests {
 
         assert_eq!(disabled, ["git", "cd"]);
     }
+
+    #[test]
+    fn should_read_a_value_that_is_not_a_list_as_an_empty_list() {
+        let settings = settings_with(&[(
+            AUTOCOMPLETE_DISABLE_FOR_COMMANDS,
+            SettingValue::Text("git".to_string()),
+        )]);
+
+        let disabled = settings.str_list(AUTOCOMPLETE_DISABLE_FOR_COMMANDS);
+
+        assert!(disabled.is_empty(), "{disabled:?}");
+    }
 }
