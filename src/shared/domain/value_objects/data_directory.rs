@@ -40,6 +40,10 @@ impl DataDirectory {
     pub(crate) fn logs_dir(&self) -> Result<PathBuf, SharedError> {
         Ok(self.root()?.join("logs"))
     }
+
+    pub(crate) fn themes_dir(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("themes"))
+    }
 }
 
 #[cfg(test)]
@@ -119,5 +123,14 @@ mod tests {
         let path = data_directory.logs_dir();
 
         assert_eq!(path, Ok(PathBuf::from("/data/logs")));
+    }
+
+    #[test]
+    fn should_put_the_themes_directory_under_the_root() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let path = data_directory.themes_dir();
+
+        assert_eq!(path, Ok(PathBuf::from("/data/themes")));
     }
 }
