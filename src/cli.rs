@@ -1,4 +1,4 @@
-//! Small user-facing commands: settings, theme, inline, diagnostic, completion, debug (SPEC §2.3–2.5, §2.10).
+//! Small user-facing commands: settings, theme, inline, diagnostic, debug (SPEC §2.3–2.5, §2.10).
 //! OWNER: cli agent.
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
 use crate::integrations::When;

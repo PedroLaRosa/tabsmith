@@ -127,7 +127,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
 #[derive(Args)]
 pub(crate) struct CompletionArgs {
     #[arg(value_enum, default_value_t = clap_complete::Shell::Zsh)]
-    pub shell: clap_complete::Shell,
+    shell: clap_complete::Shell,
 }
 
 pub(crate) fn completion(args: CompletionArgs) -> Result<i32> {
