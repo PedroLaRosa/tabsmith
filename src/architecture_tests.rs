@@ -18,7 +18,11 @@ fn violations(path: &str, source: &str) -> Vec<Violation> {
     source
         .lines()
         .enumerate()
-        .filter(|(_, code)| code.contains("::application") || code.contains("::infrastructure"))
+        .filter(|(_, code)| {
+            code.contains("::application")
+                || code.contains("::infrastructure")
+                || code.contains("crate::bootstrap")
+        })
         .map(|(index, _)| Violation { line: index + 1, rule: Rule::DomainLayer })
         .collect()
 }
@@ -45,6 +49,15 @@ mod tests {
                 Violation { line: 3, rule: Rule::DomainLayer },
             ]
         );
+    }
+
+    #[test]
+    fn should_flag_a_domain_file_that_uses_the_composition_root() {
+        let source = "use crate::bootstrap::cli::Cli;\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
     }
 
     #[test]
