@@ -221,8 +221,8 @@ fn render_list_all(map: &Map<String, Value>, format: OutputFormat) -> String {
         || {
             let mut out = String::from("key\ttype\tdefault\tvalue");
             for e in catalog {
-                let value = map.get(e.key).map(Value::to_string).unwrap_or_default();
-                out += &format!("\n{}\t{}\t{}\t{value}", e.key, e.ty, e.default);
+                let value = map.get(e.key()).map(Value::to_string).unwrap_or_default();
+                out += &format!("\n{}\t{}\t{}\t{value}", e.key(), e.value_type(), e.default());
             }
             out
         },
@@ -231,11 +231,11 @@ fn render_list_all(map: &Map<String, Value>, format: OutputFormat) -> String {
                 .iter()
                 .map(|e| {
                     json!({
-                        "key": e.key,
-                        "type": e.ty,
-                        "default": serde_json::from_str::<Value>(e.default).unwrap_or(Value::Null),
-                        "description": e.description,
-                        "value": map.get(e.key),
+                        "key": e.key(),
+                        "type": e.value_type(),
+                        "default": serde_json::from_str::<Value>(e.default()).unwrap_or(Value::Null),
+                        "description": e.description(),
+                        "value": map.get(e.key()),
                     })
                 })
                 .collect()
