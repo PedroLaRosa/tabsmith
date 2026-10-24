@@ -22,9 +22,11 @@ impl Rule {
     fn description(self) -> &'static str {
         match self {
             Rule::DomainLayer => {
-                "domain uses application, infrastructure, bootstrap, an external crate, println!/eprintln! or the logger"
+                "domain uses application, infrastructure, bootstrap, an external crate, an output macro or the logger"
             }
-            Rule::ApplicationLayer => "application uses infrastructure, bootstrap or an external crate",
+            Rule::ApplicationLayer => {
+                "application uses infrastructure, bootstrap, an external crate or an output macro (print!, dbg!, ..)"
+            }
             Rule::ModuleBoundary => "uses another module's use case or infrastructure, or bootstrap",
             Rule::SharedKernel => "shared uses a crate module other than shared",
         }
@@ -100,7 +102,7 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
             ),
             (
                 Rule::ApplicationLayer,
-                production && layer == Some("application") && breaks_application_layer(&paths, external_crates),
+                production && layer == Some("application") && breaks_application_layer(code, &paths, external_crates),
             ),
             (
                 Rule::ModuleBoundary,
@@ -182,18 +184,27 @@ fn is_path_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == ':'
 }
 
-/// The domain is std plus unicode-width: no other layer, no composition root, no external crate, no output.
+/// The domain keeps the application rule and uses neither the application layer nor the logger.
 fn breaks_domain_layer(code: &str, paths: &[Vec<&str>], external_crates: &[String]) -> bool {
-    code.contains("println!")
-        || breaks_application_layer(paths, external_crates)
+    breaks_application_layer(code, paths, external_crates)
         || paths.iter().any(|path| path.contains(&"application") || path.contains(&"logger"))
 }
 
-fn breaks_application_layer(paths: &[Vec<&str>], external_crates: &[String]) -> bool {
-    paths.iter().any(|path| {
-        path.contains(&"infrastructure")
-            || is_the_composition_root(path)
-            || is_forbidden_external_crate(path[0], external_crates)
+/// std plus unicode-width: no infrastructure, no composition root, no external crate, no output.
+fn breaks_application_layer(code: &str, paths: &[Vec<&str>], external_crates: &[String]) -> bool {
+    writes_output(code)
+        || paths.iter().any(|path| {
+            path.contains(&"infrastructure")
+                || is_the_composition_root(path)
+                || is_forbidden_external_crate(path[0], external_crates)
+        })
+}
+
+/// `print!`, `println!`, `eprint!`, `eprintln!` or `dbg!`, bare or by path (`std::println!`).
+fn writes_output(code: &str) -> bool {
+    code.split_inclusive(|c: char| !is_path_char(c)).any(|piece| {
+        let name = piece.strip_suffix('!').map(|path| path.rsplit("::").next().unwrap_or(path));
+        matches!(name, Some("print" | "println" | "eprint" | "eprintln" | "dbg"))
     })
 }
 
@@ -610,6 +621,48 @@ mod tests {
         let found = violations_in("settings/infrastructure/cli/settings_command.rs", source);
 
         assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
+    }
+
+    #[test]
+    fn should_flag_a_domain_or_application_file_that_writes_to_stdout_or_stderr() {
+        let domain = "print!(\"{key}\");\n\
+                      eprint!(\"{err}\");\n\
+                      let width = dbg!(text.len());\n\
+                      std::println!(\"{width}\");\n";
+        let application = "println!(\"{key}\");\n\
+                           eprintln!(\"{err}\");\n";
+
+        let found = [
+            violations_in("settings/domain/settings.rs", domain),
+            violations_in("settings/application/set_setting_use_case.rs", application),
+        ];
+
+        assert_eq!(
+            found,
+            [
+                vec![
+                    Violation { line: 1, rule: Rule::DomainLayer },
+                    Violation { line: 2, rule: Rule::DomainLayer },
+                    Violation { line: 3, rule: Rule::DomainLayer },
+                    Violation { line: 4, rule: Rule::DomainLayer },
+                ],
+                vec![
+                    Violation { line: 1, rule: Rule::ApplicationLayer },
+                    Violation { line: 2, rule: Rule::ApplicationLayer },
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn should_not_take_a_function_or_a_comparison_for_an_output_macro() {
+        let source = "fn print(report: &Report) -> String { report.to_string() }\n\
+                      let changed = !reprint!(value) != dbg;\n\
+                      let text = sprint!(\"{key}\");\n";
+
+        let found = violations_in("settings/application/set_setting_use_case.rs", source);
+
+        assert_eq!(found, vec![]);
     }
 
     #[test]
