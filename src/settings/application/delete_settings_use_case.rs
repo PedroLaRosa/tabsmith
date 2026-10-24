@@ -28,7 +28,10 @@ impl DeleteSettingsUseCase {
             .map(String::from)
             .collect();
         announce(&keys);
-        Ok(())
+        let remaining = keys
+            .iter()
+            .fold(settings, |settings, key| settings.without(key));
+        self.settings.save(&remaining)
     }
 }
 
@@ -70,5 +73,21 @@ mod tests {
         );
         assert_eq!(matching_keys("inline.enabled"), ["inline.enabled"]);
         assert!(matching_keys("nope*").is_empty());
+    }
+
+    #[test]
+    fn should_remove_every_setting_the_pattern_matches() {
+        let repository = three_settings();
+        let use_case = DeleteSettingsUseCase::new(repository.clone());
+
+        use_case.execute("autocomplete.*", |_| {}).unwrap();
+
+        let remaining: Vec<String> = repository
+            .load()
+            .unwrap()
+            .entries()
+            .map(|(key, _)| key.to_string())
+            .collect();
+        assert_eq!(remaining, ["inline.enabled"]);
     }
 }
