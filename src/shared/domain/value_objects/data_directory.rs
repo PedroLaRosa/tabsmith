@@ -14,6 +14,10 @@ impl DataDirectory {
         self.root.clone().ok_or(SharedError::HomeDirectoryNotFound)
     }
 
+    pub(crate) fn settings_file(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("settings.json"))
+    }
+
     pub(crate) fn state_file(&self) -> Result<PathBuf, SharedError> {
         Ok(self.root()?.join("state.json"))
     }
@@ -51,5 +55,14 @@ mod tests {
         let state_file = data_directory.state_file();
 
         assert_eq!(state_file, Ok(PathBuf::from("/data/state.json")));
+    }
+
+    #[test]
+    fn should_put_the_settings_file_under_the_root_when_it_is_not_overridden() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let settings_file = data_directory.settings_file();
+
+        assert_eq!(settings_file, Ok(PathBuf::from("/data/settings.json")));
     }
 }
