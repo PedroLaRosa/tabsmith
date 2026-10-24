@@ -12,10 +12,12 @@ pub(crate) fn setting_value_from_json(value: Value) -> SettingValue {
 
 /// serde_json's `PosInt`, `NegInt` and `Float`, read in that order.
 fn setting_number(number: &serde_json::Number) -> SettingNumber {
-    match number.as_u64() {
-        Some(unsigned) => SettingNumber::from(unsigned),
-        None => SettingNumber::from(number.as_i64().unwrap()),
-    }
+    number
+        .as_u64()
+        .map(SettingNumber::from)
+        .or_else(|| number.as_i64().map(SettingNumber::from))
+        .or_else(|| number.as_f64().and_then(SettingNumber::from_f64))
+        .expect("a serde_json number is an integer or a finite float")
 }
 
 #[cfg(test)]
@@ -40,5 +42,18 @@ mod tests {
         let value = setting_value_from_json(json);
 
         assert_eq!(value, SettingValue::Number(SettingNumber::from(-3i64)));
+    }
+
+    /// `inline.historyCount: 10.0` stays a float, which the integer getter refuses.
+    #[test]
+    fn should_keep_a_json_float_a_float_even_when_it_is_whole() {
+        let json = json!(10.0);
+
+        let value = setting_value_from_json(json);
+
+        assert_eq!(
+            value,
+            SettingValue::Number(SettingNumber::from_f64(10.0).unwrap())
+        );
     }
 }
