@@ -44,6 +44,9 @@ struct Violation {
 fn registered_module_violations(src: &Path, external_crates: &[String]) -> Vec<String> {
     let mut report = Vec::new();
     for module in REGISTERED_MODULES {
+        for path in misplaced_files(src, module) {
+            report.push(format!("src/{path}: {MISPLACED_FILE}"));
+        }
         for file in rust_files(&src.join(module)) {
             let path = relative_path(src, &file);
             let source = fs::read_to_string(&file).unwrap_or_else(|err| panic!("read {path}: {err}"));
@@ -55,6 +58,16 @@ fn registered_module_violations(src: &Path, external_crates: &[String]) -> Vec<S
         }
     }
     report
+}
+
+const MISPLACED_FILE: &str =
+    "outside a layer folder, where the layer rules cannot read its layer: a module is src/<module>/mod.rs plus its layers";
+
+/// The files of `module` that the layer rules, which read the layer from the folder name, would never check. The
+/// plan's layout keeps a module in `src/<module>/`, with only `mod.rs` outside a layer folder.
+fn misplaced_files(src: &Path, module: &str) -> Vec<String> {
+    let root_file = src.join(format!("{module}.rs"));
+    root_file.exists().then(|| relative_path(src, &root_file)).into_iter().collect()
 }
 
 fn rust_files(dir: &Path) -> Vec<PathBuf> {
@@ -313,10 +326,22 @@ fn external_crates(cargo_toml: &str) -> Vec<String> {
 
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     fn violations_in(path: &str, source: &str) -> Vec<Violation> {
         let external_crates = ["anyhow", "serde", "serde_json", "unicode_width"].map(String::from);
         violations(path, source, &external_crates)
+    }
+
+    /// A `src` folder holding an empty file at each of `files` (relative, `/`-separated).
+    fn source_tree(files: &[&str]) -> TempDir {
+        let src = TempDir::new("architecture");
+        for file in files {
+            let path = src.path().join(file);
+            fs::create_dir_all(path.parent().expect("file under src")).expect("create folder");
+            fs::write(path, "").expect("write file");
+        }
+        src
     }
 
     #[test]
@@ -853,5 +878,14 @@ mod tests {
         let found = violations_in("settings/infrastructure/settings_module.rs", source);
 
         assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_flag_a_module_root_file_next_to_the_module_folder() {
+        let src = source_tree(&["settings.rs", "settings/domain/settings.rs"]);
+
+        let misplaced = misplaced_files(src.path(), "settings");
+
+        assert_eq!(misplaced, ["settings.rs"]);
     }
 }
