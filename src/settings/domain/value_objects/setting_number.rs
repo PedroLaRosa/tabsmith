@@ -7,6 +7,7 @@ pub(crate) struct SettingNumber(Representation);
 enum Representation {
     Unsigned(u64),
     Negative(i64),
+    Float(f64),
 }
 
 impl From<u64> for SettingNumber {
@@ -25,17 +26,22 @@ impl From<i64> for SettingNumber {
 }
 
 impl SettingNumber {
+    pub(crate) fn from_f64(number: f64) -> Option<Self> {
+        Some(SettingNumber(Representation::Float(number)))
+    }
+
     pub(crate) fn as_i64(&self) -> Option<i64> {
         match self.0 {
             Representation::Unsigned(number) => i64::try_from(number).ok(),
             Representation::Negative(number) => Some(number),
+            Representation::Float(_) => None,
         }
     }
 
     pub(crate) fn as_u64(&self) -> Option<u64> {
         match self.0 {
             Representation::Unsigned(number) => Some(number),
-            Representation::Negative(_) => None,
+            Representation::Negative(_) | Representation::Float(_) => None,
         }
     }
 
@@ -43,6 +49,7 @@ impl SettingNumber {
         match self.0 {
             Representation::Unsigned(number) => Some(number as f64),
             Representation::Negative(number) => Some(number as f64),
+            Representation::Float(number) => Some(number),
         }
     }
 }
@@ -85,5 +92,15 @@ mod tests {
         let read = number.as_u64();
 
         assert_eq!(read, Some(5));
+    }
+
+    /// `inline.historyCount: 10.0` falls back to the default because a float is not an i64.
+    #[test]
+    fn should_read_a_float_only_as_an_f64_even_when_it_is_whole() {
+        let number = SettingNumber::from_f64(12.0).unwrap();
+
+        let read = (number.as_i64(), number.as_u64(), number.as_f64());
+
+        assert_eq!(read, (None, None, Some(12.0)));
     }
 }
