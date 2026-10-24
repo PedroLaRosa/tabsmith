@@ -91,7 +91,7 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let mut test_only_item = TestOnlyItem::default();
     let mut found = Vec::new();
     for (index, line) in source.lines().enumerate() {
-        let code = line.find("//").map_or(line, |comment| &line[..comment]);
+        let code = without_line_comment(line);
         test_only_item.open_at(code, open_braces.len());
         let paths = paths_in(code, &mut open_braces);
         let production = !test_only_item.holds(code, open_braces.len()) && !test_file;
@@ -147,6 +147,12 @@ impl TestOnlyItem {
     }
 }
 
+/// `line` up to its `//` comment; the `//` of a `scheme://` URL does not start one.
+fn without_line_comment(line: &str) -> &str {
+    let comment = line.match_indices("//").find(|(start, _)| !line[..*start].ends_with(':'));
+    comment.map_or(line, |(start, _)| &line[..start])
+}
+
 /// `#[cfg(test)]` or `#[cfg(all(test, ..))]`: the item it marks is compiled only for tests.
 fn is_test_only_attribute(code: &str) -> bool {
     let code = code.trim_start();
@@ -156,8 +162,10 @@ fn is_test_only_attribute(code: &str) -> bool {
 /// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`. A member of
 /// a `use a::{..}` group gets the `a` prefix, and the name right after `use` is a path even without `::`. `open_braces` holds each open brace's prefix across lines (empty for
 /// a block).
-// ponytail: a line scanner, not a Rust parser. String literals are read as code, only `//` comments are skipped,
-// and `super::`-relative paths are not resolved. Switch to a real parser if a false hit or a miss ever shows up.
+// ponytail: a line scanner, not a Rust parser. String literals are read as code (a `//` in one cuts the line unless
+// it follows `:`, and an unpaired brace in one shifts the use-group and test-only item tracking), only `//` comments
+// are skipped, and `super::`-relative paths are not resolved. Switch to a real parser if a false hit or a miss ever
+// shows up.
 fn paths_in<'a>(code: &'a str, open_braces: &mut Vec<Vec<&'a str>>) -> Vec<Vec<&'a str>> {
     let mut paths = Vec::new();
     let mut previous_word = "";
@@ -677,6 +685,16 @@ mod tests {
                       use unicode_width;\n";
 
         let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
+    }
+
+    #[test]
+    fn should_not_take_the_slashes_of_a_url_for_a_line_comment() {
+        let source = "let docs = \"https://fig.io/docs\"; let value = serde_json::Value::Null;\n\
+                      let docs = \"https://fig.io/docs\"; // serde_json::Value::Null\n";
+
+        let found = violations_in("specs/domain/spec.rs", source);
 
         assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
     }
