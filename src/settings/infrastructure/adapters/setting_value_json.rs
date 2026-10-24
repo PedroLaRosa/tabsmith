@@ -5,7 +5,10 @@ use serde_json::Value;
 /// A serde_json value as a setting value, integers and floats kept apart.
 pub(crate) fn setting_value_from_json(value: Value) -> SettingValue {
     match value {
+        Value::Null => SettingValue::Null,
+        Value::Bool(value) => SettingValue::Bool(value),
         Value::Number(number) => SettingValue::Number(setting_number(&number)),
+        Value::String(text) => SettingValue::Text(text),
         _ => todo!(),
     }
 }
@@ -54,6 +57,22 @@ mod tests {
         assert_eq!(
             value,
             SettingValue::Number(SettingNumber::from_f64(10.0).unwrap())
+        );
+    }
+
+    #[test]
+    fn should_turn_json_null_bools_and_strings_into_the_same_setting_values() {
+        let json = [json!(null), json!(true), json!("dark")];
+
+        let values: Vec<_> = json.into_iter().map(setting_value_from_json).collect();
+
+        assert_eq!(
+            values,
+            [
+                SettingValue::Null,
+                SettingValue::Bool(true),
+                SettingValue::Text("dark".to_string())
+            ]
         );
     }
 }
