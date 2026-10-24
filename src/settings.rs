@@ -1,9 +1,10 @@
 //! Paths, the flat-JSON settings/state store, typed getters and the settings catalog (SPEC §3).
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shared::infrastructure::logger;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// `TABSMITH_HOME`, else `$HOME/.tabsmith` (Unix) / `%USERPROFILE%\.tabsmith` (Windows).
@@ -31,59 +32,17 @@ pub fn state_path() -> Result<PathBuf> {
     Ok(data_directory_from_env().state_file()?)
 }
 
-/// A flat JSON object file (`settings.json`, `state.json`): literal dotted keys → arbitrary JSON.
-pub struct Store {
-    pub path: PathBuf,
-    pub map: Map<String, Value>,
-}
+/// A flat JSON object file (`settings.json`, `state.json`): [`JsonDocumentStore`] under its old name until Phase 2
+/// switches the callers.
+pub(crate) type Store = JsonDocumentStore;
 
 impl Store {
-    /// Missing file → empty map. Parse error → Err.
-    pub fn load(path: &Path) -> Result<Store> {
-        let map = match std::fs::read_to_string(path) {
-            Ok(s) if s.trim().is_empty() => Map::new(),
-            Ok(s) => match serde_json::from_str::<Value>(&s)
-                .with_context(|| format!("{} is corrupted", path.display()))?
-            {
-                Value::Object(m) => m,
-                _ => anyhow::bail!("{} is corrupted (not a JSON object)", path.display()),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Map::new(),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-        };
-        Ok(Store {
-            path: path.to_path_buf(),
-            map,
-        })
-    }
-
     pub fn load_settings() -> Result<Store> {
-        Store::load(&settings_path()?)
+        Ok(Store::load(&settings_path()?)?)
     }
 
     pub fn load_state() -> Result<Store> {
-        Store::load(&state_path()?)
-    }
-
-    /// Pretty JSON (keys sorted), written to a temp file then renamed over the symlink target (a symlinked
-    /// settings file stays a symlink); Unix mode 0600.
-    pub fn save(&self) -> Result<()> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let target = std::fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone());
-        let tmp = target.with_extension(format!("tmp-{}", std::process::id()));
-        let mut body = serde_json::to_string_pretty(&Value::Object(self.map.clone()))?;
-        body.push('\n');
-        std::fs::write(&tmp, body)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-        }
-        std::fs::rename(&tmp, &target)
-            .with_context(|| format!("writing {}", self.path.display()))?;
-        Ok(())
+        Ok(Store::load(&state_path()?)?)
     }
 }
 

@@ -93,7 +93,7 @@ pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
     store
         .map
         .insert(RECENCY_KEY.into(), serde_json::to_value(merged)?);
-    store.save()
+    Ok(store.save()?)
 }
 
 fn hash2(a: usize, b: usize) -> u64 {
