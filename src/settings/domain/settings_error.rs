@@ -7,6 +7,8 @@ pub(crate) enum SettingsError {
     Storage(Box<dyn std::error::Error + Send + Sync>),
     /// `settings --delete PATTERN` found no key matching the pattern.
     NoMatchingSettings(String),
+    /// The settings file could not be opened in an editor. Shown as the editor's own error.
+    Editor(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl fmt::Display for SettingsError {
@@ -16,6 +18,7 @@ impl fmt::Display for SettingsError {
             SettingsError::NoMatchingSettings(pattern) => {
                 write!(f, "No settings found matching {pattern}")
             }
+            SettingsError::Editor(error) => write!(f, "{error}"),
         }
     }
 }
@@ -26,6 +29,7 @@ impl std::error::Error for SettingsError {
             // Display already is the storage error: continue with its own cause so nothing prints twice.
             SettingsError::Storage(error) => error.source(),
             SettingsError::NoMatchingSettings(_) => None,
+            SettingsError::Editor(_) => None,
         }
     }
 }
@@ -89,5 +93,33 @@ mod tests {
         let text = error.to_string();
 
         assert_eq!(text, "No settings found matching nope.key");
+    }
+
+    #[derive(Debug)]
+    struct LaunchFailure(std::io::Error);
+
+    impl fmt::Display for LaunchFailure {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("could not launch the editor")
+        }
+    }
+
+    impl Error for LaunchFailure {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    fn not_found() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory")
+    }
+
+    #[test]
+    fn should_describe_an_editor_failure_as_the_editor_error_itself() {
+        let error = SettingsError::Editor(Box::new(LaunchFailure(not_found())));
+
+        let text = error.to_string();
+
+        assert_eq!(text, "could not launch the editor");
     }
 }
