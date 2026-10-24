@@ -1,6 +1,8 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
 use crate::settings::Settings;
+use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::system_clock::SystemClock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -258,15 +260,14 @@ pub enum EngineMsg {
     Shutdown,
 }
 
+/// Delegates to [`SystemClock`] until every caller takes the `Clock` port (deleted in Phase 11).
 pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    SystemClock.now_ms()
 }
 
+/// Delegates to [`SystemClock`] until every caller takes the `Clock` port (deleted in Phase 11).
 pub fn now_secs() -> u64 {
-    now_ms() / 1000
+    SystemClock.now_secs()
 }
 
 /// The headless terminal model the wrapper feeds with PTY output (alacritty_terminal, SPEC D4).
