@@ -15,11 +15,18 @@ impl Settings {
     pub(crate) fn get(&self, key: &str) -> Option<&SettingValue> {
         self.0.get(key)
     }
+
+    pub(crate) fn bool(&self, key: &str) -> bool {
+        self.get(key)
+            .and_then(SettingValue::as_bool)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::domain::services::settings_catalog::*;
 
     fn settings_with(entries: &[(&str, SettingValue)]) -> Settings {
         Settings::new(
@@ -40,5 +47,14 @@ mod tests {
         let value = settings.get("autocomplete.theme");
 
         assert_eq!(value, Some(&SettingValue::Text("light".to_string())));
+    }
+
+    #[test]
+    fn should_read_a_bool_the_user_set() {
+        let settings = settings_with(&[(AUTOCOMPLETE_DISABLE, SettingValue::Bool(true))]);
+
+        let disabled = settings.bool(AUTOCOMPLETE_DISABLE);
+
+        assert!(disabled);
     }
 }
