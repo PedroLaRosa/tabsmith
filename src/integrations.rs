@@ -1,9 +1,10 @@
 //! Shell integration: `init` scripts, launch decision, dotfile install/uninstall/status, setup/uninstall flows,
 //! and the internal `_ should-launch|get-shell|pre-cmd` commands (SPEC §2.6, §2.7, §2.9, §2.11, §5).
 //! OWNER: integrations agent. Shell scripts live in `shell/` and are embedded with `include_str!`.
-use crate::cli::OutputFormat;
 use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::output_format::OutputFormat;
+use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -92,7 +93,7 @@ pub enum IntegrationsCmd {
         #[command(subcommand)]
         target: IntegrationTarget,
         #[arg(long, short, value_enum, default_value_t)]
-        format: crate::cli::OutputFormat,
+        format: OutputFormat,
     },
 }
 
@@ -118,24 +119,6 @@ pub struct UninstallArgs {
 
 // ---------------------------------------------------------------------------------------------------------------
 // Small shared helpers (also used by doctor)
-
-/// `s` wrapped in SGR `code` when stdout is a terminal.
-pub fn paint(code: &str, s: &str) -> String {
-    if std::io::stdout().is_terminal() {
-        format!("\x1b[{code}m{s}\x1b[0m")
-    } else {
-        s.to_string()
-    }
-}
-
-/// `s` wrapped in SGR `code` when stderr is a terminal.
-pub fn epaint(code: &str, s: &str) -> String {
-    if std::io::stderr().is_terminal() {
-        format!("\x1b[{code}m{s}\x1b[0m")
-    } else {
-        s.to_string()
-    }
-}
 
 /// Unix euid 0.
 pub fn is_root() -> bool {

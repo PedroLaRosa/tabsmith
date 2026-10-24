@@ -1,9 +1,10 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
 use crate::integrations::{
-    self, epaint, output_with_timeout, paint, which, Ctx, Integration, IntegrationError, When,
+    self, output_with_timeout, which, Ctx, Integration, IntegrationError, When,
 };
 use crate::settings::{Settings, Store};
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::types::now_secs;
 use clap::Args;
 use std::io::IsTerminal;

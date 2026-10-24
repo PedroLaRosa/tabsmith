@@ -5,31 +5,14 @@ use crate::integrations::When;
 use crate::settings::{self, Settings, Store};
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::output_format::OutputFormat;
+use crate::shared::infrastructure::terminal_style::{bold, sgr, stdout_tty};
 use anyhow::{bail, Context, Result};
-use clap::{ArgGroup, Args, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
-pub enum OutputFormat {
-    #[default]
-    Plain,
-    Json,
-    JsonPretty,
-}
-
-impl OutputFormat {
-    /// Plain → `plain()`; json → compact; json-pretty → 2-space indent.
-    pub fn render(self, plain: impl FnOnce() -> String, json: impl FnOnce() -> Value) -> String {
-        match self {
-            OutputFormat::Plain => plain(),
-            OutputFormat::Json => json().to_string(),
-            OutputFormat::JsonPretty => format!("{:#}", json()),
-        }
-    }
-}
 
 #[derive(Args)]
 #[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]
@@ -115,22 +98,6 @@ pub enum DebugCmd {
     },
     /// Show log file paths and the end of pty.log
     Logs,
-}
-
-fn stdout_tty() -> bool {
-    std::io::stdout().is_terminal()
-}
-
-fn sgr(s: &str, code: &str, on: bool) -> String {
-    if on {
-        format!("\x1b[{code}m{s}\x1b[0m")
-    } else {
-        s.to_string()
-    }
-}
-
-fn bold(s: &str, on: bool) -> String {
-    sgr(s, "1", on)
 }
 
 /// Print `s` + newline unless it is empty (an empty plain list prints nothing).
