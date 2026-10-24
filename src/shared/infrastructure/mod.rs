@@ -1,3 +1,4 @@
+pub(crate) mod data_directory_from_env;
 pub(crate) mod logger;
 pub(crate) mod os;
 pub(crate) mod output_format;
