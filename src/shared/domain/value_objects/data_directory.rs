@@ -231,6 +231,9 @@ mod tests {
             data_directory.user_specs_dir(),
         ];
 
-        assert_eq!(paths, [const { Err(SharedError::HomeDirectoryNotFound) }; 10]);
+        assert_eq!(
+            paths,
+            [const { Err(SharedError::HomeDirectoryNotFound) }; 10]
+        );
     }
 }
