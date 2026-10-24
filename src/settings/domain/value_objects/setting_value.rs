@@ -12,6 +12,19 @@ pub(crate) enum SettingValue {
     Object(BTreeMap<String, SettingValue>),
 }
 
+impl SettingValue {
+    pub(crate) fn as_bool(&self) -> Option<bool> {
+        match self {
+            SettingValue::Bool(value) => Some(*value),
+            SettingValue::Null
+            | SettingValue::Number(_)
+            | SettingValue::Text(_)
+            | SettingValue::List(_)
+            | SettingValue::Object(_) => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,5 +80,14 @@ mod tests {
         let float = SettingValue::Number(SettingNumber::from_f64(5.0).unwrap());
 
         assert_ne!(integer, float);
+    }
+
+    #[test]
+    fn should_read_a_bool_value_as_a_bool() {
+        let value = SettingValue::Bool(true);
+
+        let read = value.as_bool();
+
+        assert_eq!(read, Some(true));
     }
 }
