@@ -42,8 +42,7 @@ includes **background auto-update**.
    Code's startup check. It spawns a background thread that checks at most once every 24h, using the mtime of the
    marker file `~/.tabsmith/update-check`. It touches the marker before checking, and does no JSON writes, so it can't
    race the engine's `state.json` writes. It does nothing unless `current_exe()` is in `~/.local/bin`: cargo installs,
-   `target/` dev builds and package managers are left alone. Opt-out is `app.disableAutoupdates` (Kiro's key, per
-   `docs/research/cli-surface.md:274`, without Kiro's inverted-logic bug from `figterm.md:943`). A new version takes
+   `target/` dev builds and package managers are left alone. Opt-out is `app.disableAutoupdates`. A new version takes
    effect in the next tab. Failures go to the logs; nothing is ever printed over the user's screen.
 5. **Never install a broken binary.** Every shell start execs this file, so a truncated download would break every new
    terminal. Before the rename, the updater and both installers check SHA256 against `SHA256SUMS`, and the updater also

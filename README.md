@@ -1,9 +1,7 @@
 # tabsmith
 
 IDE-style autocomplete for your terminal: a dropdown menu of subcommands, options and arguments as you type, plus
-inline gray "ghost text" suggestions. It is a rebranded, autocompletion-only re-implementation of the
-[Kiro CLI](https://kiro.dev/docs/cli/autocomplete/) autocomplete (formerly Amazon Q / Fig), written in Rust and
-working on **macOS, Linux and Windows**.
+inline gray "ghost text" suggestions. Written in Rust, it works on **macOS, Linux and Windows**.
 
 ```
 ~/project % git ch█
@@ -97,8 +95,7 @@ The shell integration's *pre* block replaces the interactive shell with `tabsmit
 and exits with its code), which runs your shell inside a pseudo-terminal and passes everything through. The *post*
 block marks prompts and commands with `OSC 697` escape sequences. tabsmith reads the command line from its own copy
 of the screen (alacritty_terminal), parses it against the completion spec, and draws the menu and ghost text over the
-screen cells, restoring them exactly afterwards. Design details and the deliberate differences from Kiro:
-[`docs/SPEC.md`](docs/SPEC.md).
+screen cells, restoring them exactly afterwards. Design details: [`docs/SPEC.md`](docs/SPEC.md).
 
 ## Known limitations
 
