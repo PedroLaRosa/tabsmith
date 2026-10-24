@@ -54,7 +54,10 @@ pub(crate) fn setting_value_to_json(value: &SettingValue) -> Value {
 }
 
 fn json_number(number: &SettingNumber) -> Value {
-    Value::from(number.as_u64().unwrap())
+    match number.as_u64() {
+        Some(unsigned) => Value::from(unsigned),
+        None => Value::from(number.as_i64().unwrap()),
+    }
 }
 
 #[cfg(test)]
@@ -163,5 +166,14 @@ mod tests {
         let json = setting_value_to_json(&value);
 
         assert_eq!(json, json!(5));
+    }
+
+    #[test]
+    fn should_write_a_negative_setting_number_as_a_negative_json_integer() {
+        let value = SettingValue::Number(SettingNumber::from(-3i64));
+
+        let json = setting_value_to_json(&value);
+
+        assert_eq!(json, json!(-3));
     }
 }
