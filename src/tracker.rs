@@ -23,6 +23,9 @@ pub enum Piece {
     Bytes(Vec<u8>),
     /// OSC 697 payload (everything after `697;`, terminator stripped).
     Marker(String),
+    /// screen's window name (`ESC k … ESC \`), raw, for the terminal only: tmux takes it as the window name, the
+    /// model (no `ESC k` in alacritty) would print its text.
+    WindowName(Vec<u8>),
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -32,13 +35,17 @@ enum State {
     Esc,
     Osc,
     OscEsc,
+    Name,
+    NameEsc,
 }
 
-/// Splits PTY output into plain bytes and OSC 697 markers at the exact byte offset; stateful across chunks.
+/// Splits PTY output into plain bytes, OSC 697 markers and window names at the exact byte offset; stateful across
+/// chunks.
 #[derive(Default)]
 pub struct Splitter {
     state: State,
     osc: Vec<u8>,
+    name: Vec<u8>,
 }
 
 impl Splitter {
@@ -62,6 +69,10 @@ impl Splitter {
                 self.state = State::Osc;
                 self.osc.clear();
             }
+            State::Esc if b == b'k' => {
+                self.state = State::Name;
+                self.name = b"\x1bk".to_vec();
+            }
             State::Esc => {
                 bytes.push(0x1b);
                 self.state = State::Ground;
@@ -84,7 +95,28 @@ impl Splitter {
                 self.state = State::Esc;
                 self.step(b, bytes, pieces);
             }
+            // Ended as tmux ends it: only ST, not BEL.
+            State::Name if b == 0x1b => self.state = State::NameEsc,
+            State::Name => self.name.push(b),
+            State::NameEsc if b == b'\\' => {
+                self.name.extend_from_slice(b"\x1b\\");
+                self.end_name(bytes, pieces);
+            }
+            State::NameEsc => {
+                // `ESC x` ends the name for tmux too (dropped), and the ESC is re-processed.
+                self.end_name(bytes, pieces);
+                self.state = State::Esc;
+                self.step(b, bytes, pieces);
+            }
         }
+    }
+
+    fn end_name(&mut self, bytes: &mut Vec<u8>, pieces: &mut Vec<Piece>) {
+        self.state = State::Ground;
+        if !bytes.is_empty() {
+            pieces.push(Piece::Bytes(std::mem::take(bytes)));
+        }
+        pieces.push(Piece::WindowName(std::mem::take(&mut self.name)));
     }
 
     /// Emit the collected OSC prefix as plain bytes.
@@ -545,6 +577,7 @@ impl Tracker {
                     self.advance(model, &b);
                     self.filter.feed(&b, out);
                 }
+                Piece::WindowName(b) => self.filter.feed(&b, out),
                 Piece::Marker(p) => self.on_marker(&p, model),
             }
         }
@@ -1129,6 +1162,19 @@ mod tests {
         assert_eq!(out, b"\x1b]0;t\x07% x");
         assert_eq!(t.cwd, Some(PathBuf::from("/tmp")));
         assert_eq!(buf(&t, &m), ("x".into(), 1));
+    }
+
+    #[test]
+    fn window_name_reaches_the_terminal_but_is_not_printed() {
+        // screen's `ESC k name ST` (oh-my-zsh titles inside tmux): tmux names the window, the model would print `vim`,
+        // drift right and, once PROMPT_SP pads the line to the margin, wrap a row below the real cursor.
+        let (mut t, mut m) = setup(40, 5, Shell::Zsh);
+        let shell_output = "ab\x1bkvim\x1b\\cd";
+
+        let out = feed(&mut t, &mut m, shell_output);
+
+        assert_eq!(out, shell_output.as_bytes());
+        assert_eq!(m.grid().cursor.point.column.0, 4);
     }
 
     #[test]
