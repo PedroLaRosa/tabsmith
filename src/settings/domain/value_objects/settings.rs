@@ -25,6 +25,10 @@ impl Settings {
             .or_else(|| catalog_default(key))
             .unwrap_or_default()
     }
+
+    pub(crate) fn string(&self, key: &str) -> Option<&str> {
+        self.get(key).and_then(SettingValue::as_str)
+    }
 }
 
 /// The catalog's JSON default literal for `key`, read as a `T`.
@@ -84,5 +88,14 @@ mod tests {
         let enabled = settings.bool(INLINE_ENABLED);
 
         assert!(enabled);
+    }
+
+    #[test]
+    fn should_read_a_string_the_user_set() {
+        let settings = settings_with(&[(AUTOCOMPLETE_THEME, SettingValue::Text("light".to_string()))]);
+
+        let theme = settings.string(AUTOCOMPLETE_THEME);
+
+        assert_eq!(theme, Some("light"));
     }
 }
