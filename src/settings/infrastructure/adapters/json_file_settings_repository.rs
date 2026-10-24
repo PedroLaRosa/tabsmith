@@ -37,8 +37,10 @@ impl SettingsRepository for JsonFileSettingsRepository {
         document.save().map_err(storage_error)
     }
 
+    /// `None` when the file is missing, unreadable or has no known path (no home), as the pty's `mtime` was.
     fn last_modified(&self) -> Option<SystemTime> {
-        todo!()
+        let path = self.data_directory.settings_file().ok()?;
+        std::fs::metadata(path).ok()?.modified().ok()
     }
 }
 
@@ -82,5 +84,18 @@ mod tests {
             std::fs::read_to_string(temp_dir.path().join("settings.json")).unwrap(),
             "{\n  \"autocomplete.height\": 5,\n  \"autocomplete.theme\": \"light\"\n}\n"
         );
+    }
+
+    /// The pty reloads its settings when this time changes.
+    #[test]
+    fn should_give_the_modification_time_of_the_settings_file() {
+        let temp_dir = TempDir::new("settings-mtime");
+        let repository = repository_in(&temp_dir);
+        let path = temp_dir.path().join("settings.json");
+        std::fs::write(&path, "{}\n").unwrap();
+
+        let modified = repository.last_modified();
+
+        assert_eq!(modified, std::fs::metadata(&path).unwrap().modified().ok());
     }
 }
