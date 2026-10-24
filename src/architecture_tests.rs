@@ -902,4 +902,29 @@ mod tests {
 
         assert_eq!(misplaced, ["settings/helpers.rs"]);
     }
+
+    /// `settings/domain.rs` next to `settings/domain/` is legal Rust, but its layer would read as `domain.rs`.
+    #[test]
+    fn should_flag_a_layer_root_file_next_to_its_layer_folder() {
+        let src = source_tree(&["settings/mod.rs", "settings/domain.rs", "settings/domain/settings.rs"]);
+
+        let misplaced = misplaced_files(src.path(), "settings");
+
+        assert_eq!(misplaced, ["settings/domain.rs"]);
+    }
+
+    #[test]
+    fn should_not_flag_the_mod_rs_layout_at_any_depth() {
+        let src = source_tree(&[
+            "settings/mod.rs",
+            "settings/domain/mod.rs",
+            "settings/domain/value_objects/mod.rs",
+            "settings/domain/value_objects/setting_key.rs",
+            "settings/infrastructure/cli/settings_command.rs",
+        ]);
+
+        let misplaced = misplaced_files(src.path(), "settings");
+
+        assert_eq!(misplaced, Vec::<String>::new());
+    }
 }
