@@ -888,17 +888,9 @@ mod tests {
         );
     }
 
+    /// The message half of `settings_delete_wildcards`; its matching half lives with `DeleteSettingsUseCase`.
     #[test]
-    fn settings_delete_wildcards() {
-        let m = map(
-            json!({"autocomplete.theme": "dark", "autocomplete.width": 40, "inline.enabled": true}),
-        );
-        assert_eq!(
-            matching_keys(&m, "autocomplete.*"),
-            ["autocomplete.theme", "autocomplete.width"]
-        );
-        assert_eq!(matching_keys(&m, "inline.enabled"), ["inline.enabled"]);
-        assert!(matching_keys(&m, "nope*").is_empty());
+    fn settings_delete_wildcards_removal_message() {
         assert_eq!(removal_message(&["a.b".into()]), "Removing \"a.b\"");
         assert_eq!(
             removal_message(&["a".into(), "b".into()]),
