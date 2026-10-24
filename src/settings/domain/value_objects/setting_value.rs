@@ -187,4 +187,35 @@ mod tests {
 
         assert_eq!(read, Some(&fields));
     }
+
+    /// `settings inline.enabled '"false"'` stores text, so the typed getters fall back to the default.
+    #[test]
+    fn should_not_read_text_that_spells_a_bool_or_a_number_as_one() {
+        let values = [
+            SettingValue::Text("false".to_string()),
+            SettingValue::Text("5".to_string()),
+        ];
+
+        let read: Vec<_> = values
+            .iter()
+            .map(|value| (value.as_bool(), value.as_i64(), value.as_f64()))
+            .collect();
+
+        assert_eq!(read, [(None, None, None), (None, None, None)]);
+    }
+
+    #[test]
+    fn should_not_read_null_as_any_kind() {
+        let value = SettingValue::Null;
+
+        let read = (
+            value.as_bool(),
+            value.as_str(),
+            value.as_u64(),
+            value.as_list(),
+            value.as_object(),
+        );
+
+        assert_eq!(read, (None, None, None, None, None));
+    }
 }
