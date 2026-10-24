@@ -564,6 +564,28 @@ mod tests {
     }
 
     #[test]
+    fn should_flag_another_modules_use_case_reached_through_its_imported_application_layer() {
+        let source = "use crate::history::application;\n\
+                      let uc = application::record_command_use_case::RecordCommandUseCase::new(r);\n";
+
+        let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
+    }
+
+    #[test]
+    fn should_not_flag_its_own_adapters_or_the_shared_kernel_reached_through_an_imported_module() {
+        let source = "use crate::ghost_text::{self, domain::ghost_text::GhostText};\n\
+                      use crate::shared;\n\
+                      let cache = ghost_text::infrastructure::ghost_text_cache::GhostTextCache::new();\n\
+                      shared::infrastructure::logger::warn(\"cache miss\");\n";
+
+        let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
     fn should_not_flag_a_file_that_uses_its_own_use_cases_or_another_modules_domain_and_ports() {
         let source = "use crate::ghost_text::application::suggest_ghost_text_use_case::SuggestGhostTextUseCase;\n\
                       use crate::ghost_text::infrastructure::ghost_text_cache::GhostTextCache;\n\
