@@ -11,7 +11,7 @@ use crate::settings::domain::value_objects::setting_key_pattern::SettingKeyPatte
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::adapters::setting_value_json::{
-    parse_value, setting_value_to_json, settings_from_json,
+    parse_value, setting_value_to_json,
 };
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
@@ -413,7 +413,7 @@ pub fn inline(cmd: InlineCmd) -> Result<i32> {
         InlineCmd::Enable => set_inline_enabled(true, color)?,
         InlineCmd::Disable => set_inline_enabled(false, color)?,
         InlineCmd::Status => {
-            let on = settings_from_json(Store::load_settings()?.map).bool(INLINE_ENABLED);
+            let on = settings_repository().load()?.bool(INLINE_ENABLED);
             println!(
                 "Inline is {}",
                 bold(if on { "enabled" } else { "disabled" }, color)
@@ -421,7 +421,7 @@ pub fn inline(cmd: InlineCmd) -> Result<i32> {
         }
         InlineCmd::SetCustomization { name } => set_customization(name, color)?,
         InlineCmd::ShowCustomizations { format } => {
-            let s = settings_from_json(Store::load_settings()?.map);
+            let s = settings_repository().load()?;
             print!(
                 "{}",
                 render_sources(
@@ -437,9 +437,9 @@ pub fn inline(cmd: InlineCmd) -> Result<i32> {
 }
 
 fn set_inline_enabled(on: bool, color: bool) -> Result<()> {
-    let mut store = Store::load_settings()?;
-    store.map.insert("inline.enabled".into(), Value::Bool(on));
-    store.save()?;
+    let repository = settings_repository();
+    let settings = repository.load()?;
+    repository.save(&settings.with(INLINE_ENABLED, SettingValue::Bool(on)))?;
     println!(
         "{}",
         sgr(
@@ -467,20 +467,19 @@ fn provider_name(p: Provider) -> &'static str {
 }
 
 fn set_customization(name: Option<String>, color: bool) -> Result<()> {
-    let mut store = Store::load_settings()?;
+    let repository = settings_repository();
+    let settings = repository.load()?;
     // Only valid profiles can be selected (an invalid one would only make doctor fail).
-    let profiles: Vec<(String, Profile)> =
-        crate::inline::profiles(&settings_from_json(store.map.clone()))
-            .into_iter()
-            .filter_map(|(n, p)| Some((n, p.ok()?)))
-            .collect();
+    let profiles: Vec<(String, Profile)> = crate::inline::profiles(&settings)
+        .into_iter()
+        .filter_map(|(n, p)| Some((n, p.ok()?)))
+        .collect();
     let name = match name {
         Some(n) => n,
         None => match choose_source(&profiles)? {
             Some(n) => n,
             None => {
-                store.map.remove("inline.source");
-                store.save()?;
+                repository.save(&settings.without(INLINE_SOURCE))?;
                 println!("Customization unset");
                 return Ok(());
             }
@@ -490,10 +489,7 @@ fn set_customization(name: Option<String>, color: bool) -> Result<()> {
     {
         bail!("Customization not found");
     }
-    store
-        .map
-        .insert("inline.source".into(), Value::String(name.clone()));
-    store.save()?;
+    repository.save(&settings.with(INLINE_SOURCE, SettingValue::Text(name.clone())))?;
     println!("Customization {} selected", bold(&name, color));
     Ok(())
 }
