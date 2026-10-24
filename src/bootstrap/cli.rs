@@ -22,7 +22,7 @@ pub(crate) struct Cli {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum Command {
+enum Command {
     /// Customize appearance & behavior
     Settings(cli::SettingsArgs),
     /// Get or set theme
@@ -60,7 +60,7 @@ pub(crate) enum Command {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum InternalCmd {
+enum InternalCmd {
     /// Run the PTY wrapper (the autocomplete session)
     Pty {
         /// Shell executable to spawn
@@ -126,12 +126,12 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
 }
 
 #[derive(Args)]
-pub(crate) struct CompletionArgs {
+struct CompletionArgs {
     #[arg(value_enum, default_value_t = clap_complete::Shell::Zsh)]
     shell: clap_complete::Shell,
 }
 
-pub(crate) fn completion(args: CompletionArgs) -> Result<i32> {
+fn completion(args: CompletionArgs) -> Result<i32> {
     // Buffered: clap_complete panics on a write error (e.g. `| head`).
     let mut buf = Vec::new();
     clap_complete::generate(
