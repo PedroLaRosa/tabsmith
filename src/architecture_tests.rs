@@ -20,6 +20,7 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     }
     source
         .lines()
+        .map(|line| line.find("//").map_or(line, |comment| &line[..comment]))
         .enumerate()
         .filter(|(_, code)| {
             code.contains("::application")
@@ -104,6 +105,17 @@ mod tests {
                 Violation { line: 4, rule: Rule::DomainLayer },
             ]
         );
+    }
+
+    #[test]
+    fn should_ignore_references_inside_line_comments() {
+        let source = "//! Built by crate::bootstrap, printed with println!.\n\
+                      /// Same rules as crate::settings::application::set_setting_use_case.\n\
+                      let width = text.len(); // serde::Serialize would leak here\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(found, vec![]);
     }
 
     #[test]
