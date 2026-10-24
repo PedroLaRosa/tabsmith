@@ -1,4 +1,6 @@
 //! Paths, the flat-JSON settings/state store, typed getters and the settings catalog (SPEC §3).
+pub(crate) mod domain;
+
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shared::infrastructure::logger;
