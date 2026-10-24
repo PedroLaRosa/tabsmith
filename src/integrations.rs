@@ -374,7 +374,7 @@ impl Ctx {
                 .map(PathBuf::from)
         };
         Ok(Ctx {
-            data: crate::settings::home()?,
+            data: data_directory_from_env().root()?,
             bin: exe_path()?,
             zdotdir: var("ZDOTDIR"),
             fish_dir: var("XDG_CONFIG_HOME")

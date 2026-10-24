@@ -7,6 +7,7 @@
 //! finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, History, Source};
 use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId, TaskResult};
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::logger;
 use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
 use crate::settings::domain::services::settings_catalog::{
@@ -17,7 +18,8 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS, AUTOCOMPLETE_SCRIPT_TIMEOUT, AUTOCOMPLETE_SORT_METHOD,
     BETA_HISTORY_MODE, INLINE_ENABLED, INLINE_HISTORY_COUNT,
 };
-use crate::settings::{Settings, Store};
+use crate::settings::Settings;
+use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shell_parser;
 use crate::spec::{Arg, Generator, Script, StrOrFn, Strategy, Suggestion, Trigger};
 use crate::specs::SpecIndex;
@@ -70,7 +72,7 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
 
 /// Load `autocomplete.recency` from a state file (missing/corrupt → empty).
 pub fn load_recency(path: &Path) -> Recency {
-    Store::load(path)
+    JsonDocumentStore::load(path)
         .ok()
         .and_then(|s| s.map.get(RECENCY_KEY).cloned())
         .and_then(|v| serde_json::from_value(v).ok())
@@ -79,12 +81,12 @@ pub fn load_recency(path: &Path) -> Recency {
 
 /// Read-modify-write `autocomplete.recency` into a state file (other keys kept). Merged with what is on disk
 /// (newest timestamp wins), so concurrent sessions keep each other's entries. Skipped when the data root is gone
-/// (`uninstall --purge` while this session runs): Store::save would recreate it.
+/// (`uninstall --purge` while this session runs): JsonDocumentStore::save would recreate it.
 pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
     if !path.parent().is_some_and(Path::is_dir) {
         return Ok(());
     }
-    let mut store = Store::load(path)?;
+    let mut store = JsonDocumentStore::load(path)?;
     let mut merged: Recency = store
         .map
         .get(RECENCY_KEY)
@@ -317,7 +319,7 @@ impl Engine {
             settings,
             index,
             History::load(),
-            crate::settings::state_path().ok(),
+            data_directory_from_env().state_file().ok(),
         )
     }
 
@@ -1220,7 +1222,7 @@ mod tests {
         .into();
         save_recency(&path, &rec).unwrap();
         assert_eq!(load_recency(&path), rec);
-        let store = Store::load(&path).unwrap();
+        let store = JsonDocumentStore::load(&path).unwrap();
         assert_eq!(
             store.map.get("doctor.prompt-restart-terminal"),
             Some(&json!(true))

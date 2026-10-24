@@ -367,7 +367,7 @@ fn script_bins(ctx: &Ctx) -> Vec<(Shell, String)> {
 /// `Let's make sure tabsmith is set up correctly...`
 fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
     let settings_path =
-        crate::settings::settings_path().unwrap_or_else(|_| ctx.data.join("settings.json"));
+        data_directory_from_env().settings_file().unwrap_or_else(|_| ctx.data.join("settings.json"));
     let specs_index = ctx
         .data
         .join("specs")

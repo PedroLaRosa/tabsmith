@@ -2,7 +2,7 @@
 //! OWNER: cli agent.
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
 use crate::integrations::When;
-use crate::settings::{self, Settings};
+use crate::settings::Settings;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_THEME, INLINE_ENABLED, INLINE_SOURCE,
@@ -111,7 +111,7 @@ fn parse_theme(text: &str) -> Result<ThemeFile> {
 }
 
 pub fn theme(args: ThemeArgs) -> Result<i32> {
-    let dir = settings::home()?.join("themes");
+    let dir = data_directory_from_env().themes_dir()?;
     if args.folder {
         std::fs::create_dir_all(&dir)?;
         println!("{}", dir.display());
@@ -568,7 +568,7 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
         .filter(|s| Shell::from_name(s) == Some(shell))
         .unwrap_or_else(|| shell.name().to_string());
     let post = crate::integrations::init_script(shell, When::Post)? + "\n";
-    let (dir, cmd) = debug_shell_files(&settings::home()?, shell, &exe, &post)?;
+    let (dir, cmd) = debug_shell_files(&data_directory_from_env().root()?, shell, &exe, &post)?;
     if shell == Shell::Zsh {
         std::env::set_var("ZDOTDIR", &dir);
     }
@@ -625,7 +625,7 @@ fn debug_shell_files(
 }
 
 fn debug_logs() -> Result<i32> {
-    let dir = settings::home()?.join("logs");
+    let dir = data_directory_from_env().logs_dir()?;
     let pty = dir.join("pty.log");
     println!("{}\n{}", dir.join("cli.log").display(), pty.display());
     if let Ok(bytes) = std::fs::read(&pty) {

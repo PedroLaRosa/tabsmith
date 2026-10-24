@@ -4,7 +4,7 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER,
 };
 use crate::settings::Settings;
-use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
+use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use anyhow::Context;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -29,7 +29,7 @@ const TMP_STALE: Duration = Duration::from_secs(600);
 /// `~/.tabsmith/specs/<ver>/`, extracting the embedded archive first if `index.json` is missing (atomic rename).
 /// Marks the version used and removes stale versions/temp dirs. Without `embed-specs` the dir must already exist.
 pub fn ensure_extracted() -> anyhow::Result<PathBuf> {
-    let root = crate::settings::home()?.join("specs");
+    let root = data_directory_from_env().specs_dir()?;
     let dir = root.join(version());
     if dir.join("index.json").is_file() {
         touch(&dir);
@@ -126,7 +126,7 @@ fn unpack(archive: &[u8], dst: &Path) -> std::io::Result<()> {
 
 /// `~/.tabsmith/specs/user/` (user overrides, same layout as the npm build/ dir).
 pub fn user_dir() -> anyhow::Result<PathBuf> {
-    Ok(crate::settings::home()?.join("specs").join("user"))
+    Ok(data_directory_from_env().user_specs_dir()?)
 }
 
 /// `index.json` of the bundled set ∪ `*.js` stems in the user dir.
@@ -178,9 +178,9 @@ impl SpecIndex {
 /// the extracted bundle; `<name>.js`, else `<name>/index.js`; diff-versioned names go to `<name>/index.js`.
 pub fn resolve(name: &str, settings: &Settings, index: &SpecIndex) -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = dev_folder(settings).into_iter().collect();
-    let home = crate::settings::home().ok()?;
-    roots.push(home.join("specs").join("user"));
-    roots.push(home.join("specs").join(version()));
+    let specs = data_directory_from_env().specs_dir().ok()?;
+    roots.push(specs.join("user"));
+    roots.push(specs.join(version()));
     resolve_in(name, &roots, index)
 }
 

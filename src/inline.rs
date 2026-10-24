@@ -5,7 +5,7 @@ use crate::settings::domain::services::settings_catalog::INLINE_SOURCE;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
+use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::shared::infrastructure::logger;
 use crate::types::{HistoryEntry, Item, ItemType};
 use serde_json::{json, Value};
@@ -29,8 +29,8 @@ pub struct History {
 impl History {
     /// Load the history file (missing/corrupt lines skipped).
     pub fn load() -> History {
-        match crate::settings::home() {
-            Ok(home) => History::load_from(home.join("history.jsonl")),
+        match data_directory_from_env().history_file() {
+            Ok(path) => History::load_from(path),
             Err(e) => {
                 logger::warn(&format!("history: {e:#}"));
                 History::from_entries(Vec::new())

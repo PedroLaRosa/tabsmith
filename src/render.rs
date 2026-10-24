@@ -4,6 +4,7 @@ use crate::icons::{self, Graphics, Image};
 use crate::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::{AUTOCOMPLETE_THEME, AUTOCOMPLETE_WIDTH};
 use crate::settings::Settings;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::types::{Item, ItemType, Model};
 use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
@@ -79,11 +80,10 @@ impl Theme {
                 }
                 _ => Theme::dark(),
             },
-            name => crate::settings::home()
+            name => data_directory_from_env()
+                .themes_dir()
                 .ok()
-                .and_then(|h| {
-                    std::fs::read_to_string(h.join("themes").join(format!("{name}.json"))).ok()
-                })
+                .and_then(|dir| std::fs::read_to_string(dir.join(format!("{name}.json"))).ok())
                 .and_then(|s| serde_json::from_str::<Value>(&s).ok())
                 .map_or_else(Theme::dark, |v| Theme::from_json(&v)),
         }

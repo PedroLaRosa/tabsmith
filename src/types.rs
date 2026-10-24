@@ -2,6 +2,7 @@
 use crate::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -199,8 +200,8 @@ pub struct SessionCtx {
 
 impl SessionCtx {
     pub fn path(session_id: &str) -> anyhow::Result<PathBuf> {
-        Ok(crate::settings::home()?
-            .join("run")
+        Ok(data_directory_from_env()
+            .run_dir()?
             .join(format!("{session_id}.json")))
     }
 
