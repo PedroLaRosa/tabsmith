@@ -725,6 +725,13 @@ in `Osc` → abandon (flush collected bytes as `Bytes`) and re-process. A comple
 (original bytes). An OSC buffer > 64 KiB is flushed as `Bytes`. Splitting at the exact byte offset matters: the
 cursor position at `NewCmd` must be the one at that byte.
 
+States `Name(buf)`, `NameEsc(buf)`: screen's window name `ESC k … ESC \` (oh-my-zsh and others name tmux windows with
+it) → `Piece::WindowName(original bytes)`, sent to the terminal but **not** fed to the model: alacritty has no `ESC k`
+and prints the name, which drifts the model's cursor right and, once PROMPT_SP pads the line to the margin, a row
+below the real one (every frame then moves the cursor there). Ended as tmux ends it: `ESC \` (BEL does not end it),
+CAN/SUB cancel it, `ESC` + other byte ends it and is re-processed. Past 64 KiB the collected part is flushed as
+`WindowName` and collecting goes on.
+
 #### 5.1.2 Lock
 
 `OSCLock/OSCUnlock` carry our session id so a nested shell (ssh, a manually started `bash`, a nested tabsmith) that
