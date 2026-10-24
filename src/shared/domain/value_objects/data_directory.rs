@@ -201,4 +201,36 @@ mod tests {
 
         assert_eq!(path, Ok(PathBuf::from("/data/specs/user")));
     }
+
+    #[test]
+    fn should_keep_the_state_file_under_the_root_when_the_settings_file_is_overridden() {
+        let data_directory = DataDirectory::new(
+            Some(PathBuf::from("/data")),
+            Some(PathBuf::from("/elsewhere/s.json")),
+        );
+
+        let state_file = data_directory.state_file();
+
+        assert_eq!(state_file, Ok(PathBuf::from("/data/state.json")));
+    }
+
+    #[test]
+    fn should_fail_every_path_under_an_unknown_root() {
+        let data_directory = DataDirectory::new(None, None);
+
+        let paths = [
+            data_directory.settings_file(),
+            data_directory.state_file(),
+            data_directory.history_file(),
+            data_directory.run_dir(),
+            data_directory.logs_dir(),
+            data_directory.themes_dir(),
+            data_directory.shell_dir(),
+            data_directory.backups_dir(),
+            data_directory.specs_dir(),
+            data_directory.user_specs_dir(),
+        ];
+
+        assert_eq!(paths, [const { Err(SharedError::HomeDirectoryNotFound) }; 10]);
+    }
 }
