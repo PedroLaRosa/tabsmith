@@ -8,6 +8,7 @@ enum Rule {
     DomainLayer,
     ApplicationLayer,
     ModuleBoundary,
+    SharedKernel,
 }
 
 #[derive(Debug, PartialEq)]
@@ -30,6 +31,7 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
                 layer == Some("application") && breaks_application_layer(code, external_crates),
             ),
             (Rule::ModuleBoundary, crosses_module_boundary(module, code)),
+            (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(code)),
         ];
         let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
         found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
@@ -62,6 +64,14 @@ fn crosses_module_boundary(own_module: &str, code: &str) -> bool {
             _ => false,
         };
         module != Some(own_module) && reached
+    })
+}
+
+/// The kernel never imports a feature or legacy module.
+fn leaves_the_shared_kernel(code: &str) -> bool {
+    code.match_indices("crate::").any(|(at, prefix)| {
+        let module = code[at + prefix.len()..].split("::").next();
+        module != Some("shared")
     })
 }
 
@@ -211,6 +221,23 @@ mod tests {
             vec![
                 Violation { line: 2, rule: Rule::ModuleBoundary },
                 Violation { line: 3, rule: Rule::ModuleBoundary },
+            ]
+        );
+    }
+
+    #[test]
+    fn should_flag_a_shared_file_that_uses_a_feature_or_legacy_module() {
+        let source = "use crate::shared::application::ports::clock::Clock;\n\
+                      use crate::settings::domain::settings::Settings;\n\
+                      let now = crate::types::now_ms();\n";
+
+        let found = violations_in("shared/infrastructure/system_clock.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 2, rule: Rule::SharedKernel },
+                Violation { line: 3, rule: Rule::SharedKernel },
             ]
         );
     }
