@@ -44,12 +44,11 @@ fn setting_number(number: &serde_json::Number) -> SettingNumber {
 /// A setting value as the serde_json value it was read from: integers stay integers, floats stay floats.
 pub(crate) fn setting_value_to_json(value: &SettingValue) -> Value {
     match value {
+        SettingValue::Null => Value::Null,
+        SettingValue::Bool(value) => Value::Bool(*value),
         SettingValue::Number(number) => json_number(number),
-        SettingValue::Null
-        | SettingValue::Bool(_)
-        | SettingValue::Text(_)
-        | SettingValue::List(_)
-        | SettingValue::Object(_) => todo!(),
+        SettingValue::Text(text) => Value::String(text.clone()),
+        SettingValue::List(_) | SettingValue::Object(_) => todo!(),
     }
 }
 
@@ -188,5 +187,18 @@ mod tests {
         let json = setting_value_to_json(&value);
 
         assert_eq!(json, json!(10.0));
+    }
+
+    #[test]
+    fn should_write_null_bool_and_text_setting_values_as_the_same_json() {
+        let values = [
+            SettingValue::Null,
+            SettingValue::Bool(true),
+            SettingValue::Text("dark".to_string()),
+        ];
+
+        let json: Vec<_> = values.iter().map(setting_value_to_json).collect();
+
+        assert_eq!(json, [json!(null), json!(true), json!("dark")]);
     }
 }
