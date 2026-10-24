@@ -1,9 +1,12 @@
+use crate::settings::domain::value_objects::setting_number::SettingNumber;
 use std::collections::BTreeMap;
 
 /// A JSON-shaped setting value. `Object` is sorted by key, like serde_json's map without `preserve_order`.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SettingValue {
     Null,
     Bool(bool),
+    Number(SettingNumber),
     Text(String),
     List(Vec<SettingValue>),
     Object(BTreeMap<String, SettingValue>),
@@ -54,5 +57,15 @@ mod tests {
             })
             .collect();
         assert_eq!(texts, items);
+    }
+
+    /// `settings autocomplete.height 5` prints `5` back, not `5.0`.
+    #[test]
+    fn should_tell_an_integer_value_from_the_float_of_the_same_value() {
+        let integer = SettingValue::Number(SettingNumber::from(5u64));
+
+        let float = SettingValue::Number(SettingNumber::from_f64(5.0).unwrap());
+
+        assert_ne!(integer, float);
     }
 }
