@@ -6,17 +6,24 @@ pub(crate) trait SettingsEditor {
     fn open(&self) -> Result<bool, SettingsError>;
 }
 
-/// Test double: an editor that exits the way it was scripted to.
+/// Test double: an editor that exits the way it was scripted to, or none at all.
 #[cfg(test)]
 pub(crate) struct ScriptedSettingsEditor {
-    exits_successfully: bool,
+    /// `None` when no editor can be launched.
+    exits_successfully: Option<bool>,
 }
 
 #[cfg(test)]
 impl ScriptedSettingsEditor {
     pub(crate) fn exiting(successfully: bool) -> Self {
         ScriptedSettingsEditor {
-            exits_successfully: successfully,
+            exits_successfully: Some(successfully),
+        }
+    }
+
+    pub(crate) fn unavailable() -> Self {
+        ScriptedSettingsEditor {
+            exits_successfully: None,
         }
     }
 }
@@ -24,7 +31,8 @@ impl ScriptedSettingsEditor {
 #[cfg(test)]
 impl SettingsEditor for ScriptedSettingsEditor {
     fn open(&self) -> Result<bool, SettingsError> {
-        Ok(self.exits_successfully)
+        self.exits_successfully
+            .ok_or_else(|| SettingsError::Editor("no editor to open the settings file".into()))
     }
 }
 
@@ -39,5 +47,14 @@ mod tests {
         let exited_successfully = editor.open().unwrap();
 
         assert!(!exited_successfully);
+    }
+
+    #[test]
+    fn should_fail_to_open_when_scripted_to_have_no_editor() {
+        let editor = ScriptedSettingsEditor::unavailable();
+
+        let opened = editor.open();
+
+        assert!(matches!(opened, Err(SettingsError::Editor(_))));
     }
 }
