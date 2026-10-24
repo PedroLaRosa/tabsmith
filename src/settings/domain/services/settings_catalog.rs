@@ -262,4 +262,32 @@ mod tests {
 
         assert_eq!(literal, None);
     }
+
+    #[test]
+    fn should_not_take_a_concrete_key_for_the_template_row_it_fits() {
+        let key = "autocomplete.keybindings.control+r";
+
+        let literal = default(key);
+
+        assert_eq!(literal, None);
+    }
+
+    #[test]
+    fn should_have_no_default_for_a_key_it_does_not_document() {
+        let key = "no.such.key";
+
+        let literal = default(key);
+
+        assert_eq!(literal, None);
+    }
+
+    /// The Phase 0 output capture runs on macOS only, so this pins the Windows default too.
+    #[test]
+    fn should_default_the_script_timeout_to_20000_ms_on_windows_and_5000_elsewhere() {
+        let key = AUTOCOMPLETE_SCRIPT_TIMEOUT;
+
+        let literal = default(key);
+
+        assert_eq!(literal, Some(if cfg!(windows) { "20000" } else { "5000" }));
+    }
 }
