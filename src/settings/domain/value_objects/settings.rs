@@ -50,6 +50,7 @@ fn catalog_default<T: FromStr>(key: &str) -> Option<T> {
 mod tests {
     use super::*;
     use crate::settings::domain::services::settings_catalog::*;
+    use crate::settings::domain::value_objects::setting_number::SettingNumber;
 
     fn settings_with(entries: &[(&str, SettingValue)]) -> Settings {
         Settings::new(
@@ -116,5 +117,26 @@ mod tests {
         let theme = settings.string(AUTOCOMPLETE_THEME);
 
         assert_eq!(theme, Some("dark"));
+    }
+
+    /// `inline.source: 5` resolves to the default `history+specs` source.
+    #[test]
+    fn should_fall_back_to_the_catalog_default_for_a_string_of_the_wrong_type() {
+        let five = SettingNumber::from(5u64);
+        let settings = settings_with(&[(INLINE_SOURCE, SettingValue::Number(five))]);
+
+        let source = settings.string(INLINE_SOURCE);
+
+        assert_eq!(source, Some("history+specs"));
+    }
+
+    /// An unset `autocomplete.devCompletionsFolder` means no dev folder, as before the catalog gave defaults.
+    #[test]
+    fn should_have_no_string_for_an_unset_key_whose_catalog_default_is_null() {
+        let settings = Settings::default();
+
+        let folder = settings.string(AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER);
+
+        assert_eq!(folder, None);
     }
 }
