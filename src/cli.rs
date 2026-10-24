@@ -7,7 +7,7 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_THEME, INLINE_ENABLED, INLINE_SOURCE,
 };
 use crate::settings::domain::value_objects::setting_key_pattern::SettingKeyPattern;
-use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
+use crate::settings::infrastructure::adapters::setting_value_json::{parse_value, settings_from_json};
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::output_format::OutputFormat;
@@ -169,11 +169,6 @@ pub fn settings(args: SettingsArgs) -> Result<i32> {
         }
     }
     Ok(0)
-}
-
-/// `VALUE` as JSON, else as a JSON string (`true` → bool, `5` → number, `foo` → "foo").
-fn parse_value(value: &str) -> Value {
-    serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
 }
 
 /// `settings KEY`: plain prints strings raw and other values pretty; json formats print `null` when unset.
@@ -857,16 +852,6 @@ mod tests {
 
     fn map(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
-    }
-
-    #[test]
-    fn settings_set_parses_json_or_string() {
-        assert_eq!(parse_value("true"), json!(true));
-        assert_eq!(parse_value("5"), json!(5));
-        assert_eq!(parse_value("[\"git\"]"), json!(["git"]));
-        assert_eq!(parse_value("\"x\""), json!("x"));
-        assert_eq!(parse_value("most recent"), json!("most recent"));
-        assert_eq!(parse_value("{bad"), json!("{bad"));
     }
 
     #[test]

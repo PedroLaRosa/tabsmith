@@ -76,6 +76,11 @@ fn json_number(number: &SettingNumber) -> Value {
         .expect("every setting number reads as an f64")
 }
 
+/// `VALUE` as JSON, else as a JSON string (`true` → bool, `5` → number, `foo` → "foo").
+pub(crate) fn parse_value(value: &str) -> Value {
+    serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +257,15 @@ mod tests {
         let written = serde_json::to_string_pretty(&settings_to_json(&settings_from_json(map))).unwrap();
 
         assert_eq!(written, original);
+    }
+
+    #[test]
+    fn settings_set_parses_json_or_string() {
+        assert_eq!(parse_value("true"), json!(true));
+        assert_eq!(parse_value("5"), json!(5));
+        assert_eq!(parse_value("[\"git\"]"), json!(["git"]));
+        assert_eq!(parse_value("\"x\""), json!("x"));
+        assert_eq!(parse_value("most recent"), json!("most recent"));
+        assert_eq!(parse_value("{bad"), json!("{bad"));
     }
 }
