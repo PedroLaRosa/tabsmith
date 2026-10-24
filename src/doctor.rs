@@ -3,8 +3,11 @@ use crate::integrations::{self, Ctx, Integration, IntegrationError, When};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE, INLINE_ENABLED, INLINE_SOURCE,
 };
+use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
+use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
 use crate::settings::{Settings, Store};
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info;
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
@@ -482,7 +485,7 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
         let base = p.rsplit(['/', '\\']).next().unwrap_or(p);
         base.eq_ignore_ascii_case("cmd.exe") || base.eq_ignore_ascii_case("cmd")
     });
-    let settings = crate::settings::load_or_defaults();
+    let settings = load_or_defaults(&JsonFileSettingsRepository::new(data_directory_from_env()));
     let sid = var("TABSMITH_SESSION_ID");
     let inline_kind = if settings.bool(INLINE_ENABLED) {
         Kind::Normal
