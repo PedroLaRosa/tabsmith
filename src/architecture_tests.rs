@@ -160,8 +160,8 @@ fn is_test_only_attribute(code: &str) -> bool {
 }
 
 /// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`. A member of
-/// a `use a::{..}` group gets the `a` prefix, and the name right after `use` is a path even without `::`. `open_braces` holds each open brace's prefix across lines (empty for
-/// a block).
+/// a `use a::{..}` group gets the `a` prefix, and the name right after `use` is a path even without `::`.
+/// `open_braces` holds each open brace's prefix across lines (empty for a block).
 // ponytail: a line scanner, not a Rust parser. String literals are read as code (a `//` in one cuts the line unless
 // it follows `:`, and an unpaired brace in one shifts the use-group and test-only item tracking), only `//` comments
 // are skipped, and `super::`-relative paths are not resolved. Switch to a real parser if a false hit or a miss ever
