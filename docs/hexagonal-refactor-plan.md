@@ -1,0 +1,731 @@
+# tabsmith → DDD + hexagonal architecture: refactor plan
+
+Status: planned, nothing implemented. Written for a fresh implementation session. Source inventory taken on
+2026-10-24 from `main` @ `4f26859`.
+
+## Context
+
+tabsmith is one crate: 21 flat files in `src/`, about 26k lines, about 330 tests. The files are grouped by technical
+role (`pty.rs`, `render.rs`, `engine.rs`, `types.rs`, …), which causes these problems:
+
+- Business rules, I/O, threads and terminal protocol are mixed together. `pty::Session` has 44 fields and 22
+  responsibilities; `Engine` has 22 fields.
+- There are no ports. The only trait in the crate is the private `parser::Host`.
+- Paths come from env vars read wherever they are needed (`settings::home()`).
+- There are dependency cycles: `cli` ↔ `integrations`, and `suggest` → `integrations::quote`.
+- Rules and parsers are duplicated: theme parsing, setting defaults, launch rules, three atomic-write helpers, two
+  versions of the generator-context JSON.
+
+Goal: reorganise into **10 business modules (vertical slices)**, each with `domain/`, `application/` and
+`infrastructure/`, following `.claude/skills/hexagonal-architecture` adapted to Rust.
+
+- Use a ubiquitous language that every type name follows.
+- Behaviour must not change. Every step keeps `cargo test` green and leaves user-visible output unchanged (`init`
+  snapshots, `settings list --all`, the dropdown).
+
+Decisions taken with the user:
+1. **The domain uses std only**, plus `unicode-width` for display width. serde, serde_json and every I/O or framework
+   crate live in infrastructure only.
+2. **Module map.** 10 modules plus a `bootstrap/` composition root.
+3. **One application use case per event** in both real-time loops (the PTY session and the completion engine). The
+   loops themselves become thin infrastructure drivers.
+
+---
+
+## 1. Rust adaptation of the skill (conventions for every module)
+
+| Skill (TypeScript) | Rust in this repo |
+|---|---|
+| `interface` | `trait` |
+| class with private constructor + `create()` | struct with private fields + `pub(crate) fn new(..) -> Result<Self, <Module>Error>` (or `-> Self` when the value cannot be invalid) |
+| `Maybe<T>` | `Option<T>` |
+| throw `DomainError` | `Result<T, <Module>Error>`. One `enum` per module in `domain/<module>_error.rs`, with hand-written `Display` and `std::error::Error` (no new crate) |
+| exhaustive switch | `match` with no `_` arm on domain enums |
+| `toPrimitives()` | only on entities that are persisted or exposed through a DTO (`HistoryEntry`, `SessionContext`, `Settings`, `Integration`): `to_primitives()` returns a plain struct. Other types expose read-only accessors (YAGNI). |
+| generic `Id` VO | identities here are natural keys, so use specific VOs: `SessionId`, `SpecLocation`, `GeneratorKey`, (shell, path) for `Integration`. No generated ids exist. |
+| one file per class, PascalCase | **one file per type, snake_case file name** (`edit_buffer.rs` holds `EditBuffer`). Small private helper enums stay in their owner's file. |
+| folder = module | directory modules with `mod.rs`, which only declares children (no glob re-exports) |
+| Repository interface + InMemory in same file | trait + `InMemory<Name>Repository` in the same file. The InMemory version is `#[cfg(test)]` unless production uses it. |
+| External port in `application/ports/` | trait in `application/ports/<port>.rs`, with its test double in the same file under `#[cfg(test)]` (`FixedClock`, `ScriptedLlmClient`, `RecordingCompletionEngine`, …) |
+| constructor DI | use cases are structs holding `Rc<dyn Port>` (same thread) or `Arc<dyn Port + Send + Sync>` (crosses threads). No generics on use cases. |
+| state loaded through repositories | **in-process aggregates** (`TerminalSession`, `CompletionSession`, `Menu`) are owned by the driver and passed to `execute` as `&mut`. Repositories exist only for persisted state. |
+| `register<Module>Module(app, deps)` | `<module>/infrastructure/<module>_module.rs` contains `build_<module>_module(&SharedDependencies) -> <Module>Module`, a struct of built use cases. CLI handlers are `run_<command>(args, &<Module>Module) -> anyhow::Result<i32>`. |
+| `http/` controllers | `infrastructure/cli/` holds the clap `Args`/`Subcommand` types and handlers (driving adapters). `terminal_session/infrastructure/pty/` holds the PTY event loop (also a driving adapter). |
+| `shared/infrastructure/server` + `main` | `src/main.rs` (thin) + `src/bootstrap/`: clap root and dispatch, engine server, and cross-module bridges. `shared/` stays a kernel and never imports a feature module. |
+| tests folder | **tests stay in the same file** (`#[cfg(test)] mod tests` at the bottom). A test module over about 500 lines goes to the sibling `<file>/tests.rs` (precedent: `src/parser/tests.rs`). `tests/fixtures/` and `tests/snapshots/` stay as data. No `tests/*.rs`. |
+
+Other rules:
+- **Errors.** `anyhow` is used only in `infrastructure/cli`, `infrastructure/pty` and `bootstrap`.
+- **Logging.** Only infrastructure logs. Domain and application return errors or warnings, and the adapter or driver
+  logs them.
+- **Output.** No `println!`/`eprintln!` in domain or application. Output goes through presenters in `infrastructure/cli`
+  or through ports.
+- **Visibility.** Everything is `pub(crate)` at most. Domain struct fields are private.
+- **Cross-module imports.** A module may import another module's domain types, repository traits, port traits and
+  DTOs (DTOs are the contracts of ports and use cases, for example `CompletionRequest` in the `CompletionEngine`
+  port). It must never import another module's use cases or infrastructure. When one event needs several modules, the driver
+  in `bootstrap/` calls each module's use case in turn; a use case never calls another use case.
+- **Dependencies.** No new crates (AGENTS.md). Versions in `Cargo.toml` stay as they are.
+- **Naming.** Ports have no suffix (`Clock`, `LlmClient`); adapters get a technology prefix (`QuickJsSpecRuntime`,
+  `JsonlHistoryRepository`); use cases get the `UseCase` suffix; DTOs are named after what they carry (no `Dto`
+  suffix needed when unambiguous).
+- **DTOs.** DTOs hold primitives. One exception: setting values are inherently tree-shaped, so the setting DTOs reuse
+  the behaviour-free `SettingValue` enum.
+
+### Canonical shape (the skill's TypeScript examples, in Rust)
+
+```rust
+// src/settings/domain/repositories/settings_repository.rs
+pub(crate) trait SettingsRepository {
+    fn load(&self) -> Result<Settings, SettingsError>;
+    fn save(&self, settings: &Settings) -> Result<(), SettingsError>;
+}
+
+#[cfg(test)]
+pub(crate) struct InMemorySettingsRepository { stored: std::cell::RefCell<Settings> }
+#[cfg(test)]
+impl SettingsRepository for InMemorySettingsRepository { /* clone in / clone out */ }
+
+// src/settings/application/set_setting_use_case.rs
+pub(crate) struct SetSettingUseCase { settings: Rc<dyn SettingsRepository> }
+
+impl SetSettingUseCase {
+    pub(crate) fn new(settings: Rc<dyn SettingsRepository>) -> Self { Self { settings } }
+
+    pub(crate) fn execute(&self, key: &str, value: SettingValue) -> Result<(), SettingsError> {
+        let key = SettingKey::new(key)?;
+        let updated = self.settings.load()?.with(key, value);
+        self.settings.save(&updated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn should_store_the_value_under_the_given_key() {
+        // Arrange: InMemorySettingsRepository, use case
+        // Act: execute("autocomplete.height", SettingValue::Number(10.0))
+        // Assert: repository.load()?.get("autocomplete.height")
+    }
+}
+
+// src/settings/infrastructure/settings_module.rs
+pub(crate) struct SettingsModule { pub(crate) set_setting: SetSettingUseCase, /* … */ }
+pub(crate) fn build_settings_module(deps: &SharedDependencies) -> SettingsModule { /* adapters → use cases */ }
+
+// src/settings/infrastructure/cli/settings_command.rs
+#[derive(clap::Args)] pub(crate) struct SettingsArgs { /* moved from cli.rs */ }
+pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) -> anyhow::Result<i32> { /* parse → use case → render */ }
+```
+
+### Architecture fitness test (one runnable check that enforces all of the above)
+
+`src/architecture_tests.rs` (`#[cfg(test)]`) walks `src/` with `std::fs` and fails on:
+1. a file in `*/domain/` that uses another layer (`::application`, `::infrastructure`), `crate::bootstrap`, an external
+   crate other than `std`/`core`/`alloc`/`unicode_width`, or `println!`/`eprintln!`/`logger::`;
+2. a file in `*/application/` that uses `::infrastructure`, `crate::bootstrap`, or external crates (same allow-list);
+3. a module other than `bootstrap` that references another module's `application::*_use_case` or `::infrastructure`;
+4. `shared/` that references a feature module.
+
+It starts with the module list empty, and each phase adds the module it finishes.
+
+---
+
+## 2. Module map and dependency direction
+
+```
+src/
+├── main.rs              thin: Cli::parse, logger init, bootstrap::run, exit code
+├── bootstrap/           composition root: clap root + dispatch, engine server, cross-module bridges
+├── shared/              kernel: Shell, ShellQuoting, DataDirectory, Clock + infra utilities
+├── settings/            settings.json, catalog, get/set/delete/list/open
+├── history/             history.jsonl, record executed commands
+├── shell_integration/   init scripts, dotfiles, launch decision, setup/uninstall, status
+├── specs/               Fig spec model, bundle, spec loading, QuickJS runtime, process exec
+├── completion/          tokenizer, argv parser, generators, suggestions, ranking, insertion
+├── ghost_text/          inline ghost text: history/spec sources, LLM, cache
+├── dropdown/            menu state machine, keymap, themes, layout, icons
+├── terminal_session/    PTY wrapper, OSC 697 markers, edit buffer, overlay drawing, session context
+└── diagnostics/         doctor, diagnostic report, debug logs
+```
+
+Allowed module dependencies. The graph is acyclic; the architecture test checks the layer rules.
+
+```
+settings, history                  → shared
+shell_integration                  → shared, settings
+specs                              → shared, settings
+completion                         → shared, settings, specs, history
+ghost_text                         → shared, settings, history, specs, completion
+dropdown                           → shared, settings, specs, completion
+terminal_session                   → shared, settings, history, completion, ghost_text, dropdown
+diagnostics                        → shared, settings, shell_integration, specs, ghost_text, terminal_session
+bootstrap                          → everything (composition root only)
+```
+
+Cross-module **bridges**. Each port is declared by the module that uses it; `bootstrap/bridges.rs` implements it by
+calling the other module's use case or adapter.
+
+| Port (declared in) | Implemented in bootstrap by |
+|---|---|
+| `shell_integration::SpecBundleInstaller` | `specs::InstallSpecBundleUseCase` |
+| `diagnostics::CheckFixer` | shell_integration install/reinstall use cases, settings repository reset, `specs::InstallSpecBundleUseCase`, data-dir creation |
+| `terminal_session::CompletionEngine` | `bootstrap::ChannelCompletionEngine` (sends `EngineMessage` to the engine server thread) |
+| `terminal_session::GeneratorProcessReaper` | `specs` `ProcessExecutor::kill_live_children` |
+| `specs::RuntimeEventSource` | `bootstrap::EngineServer` inbox (single channel, keeps today's abort-on-newer-request semantics) |
+| theme and settings repositories used by `terminal_session` | `dropdown::FileThemeRepository`, `settings::JsonFileSettingsRepository` (injected as trait objects) |
+
+---
+
+## 3. Ubiquitous language (glossary)
+
+See [`ubiquitous-language.md`](ubiquitous-language.md): every entity and value object per module, the type it
+replaces, and the qualified names for words with more than one meaning (lock, prompt, ghost, history, session,
+suggestion, completion, cache). Every type named in the sections below must match it.
+
+---
+
+## 4. Target layout per module
+
+`←` means "moved/extracted from". Only files with content are created; there are no empty folders.
+
+### shared
+```
+shared/domain/value_objects/{shell.rs ← types::Shell, data_directory.rs ← settings path fns + joins}
+shared/domain/services/shell_quoting.rs ← integrations::{quote, pwsh_sq}
+shared/application/ports/clock.rs        trait Clock + #[cfg(test)] FixedClock
+shared/infrastructure/
+  shared_dependencies.rs                  struct SharedDependencies { data_directory, clock }
+  system_clock.rs
+  data_directory_from_env.rs              ← TABSMITH_HOME / TABSMITH_SETTINGS_PATH / HOME / USERPROFILE (settings.rs:8-35)
+  json_document_store.rs                  ← settings::Store (flat dotted-key JSON file; corrupted detection)
+  atomic_file.rs                          unifies Store::save, integrations::write_private, integrations::write
+                                          (temp+rename, 0600/0700, keeps symlinks, purge guard)
+  logger.rs                               ← logger.rs (global OnceLock stays)
+  output_format.rs                        ← cli::OutputFormat  (breaks the cli ↔ integrations cycle)
+  terminal_style.rs                       ← cli::{stdout_tty, sgr, bold}, integrations::{paint, epaint}
+  os/{executable_lookup.rs ← integrations::which (+ js::find_exe dedupe),
+      process_runner.rs ← output_with_timeout,
+      process_info.rs ← is_root, is_console, exe_path, parent_exe, windows_parent_exe}
+  testing/temp_dir.rs (#[cfg(test)])      ← specs::testutil::TmpDir; replaces the 5 ad-hoc temp-dir helpers
+```
+
+### settings
+```
+domain/value_objects/{setting_key, setting_value, setting_key_pattern ← wildcard_match,
+                      setting_definition ← CatalogEntry, settings ← Settings}.rs
+domain/services/settings_catalog.rs       ← CATALOG + key constants + default(key)
+domain/repositories/settings_repository.rs  trait {load, save, last_modified} + InMemory
+domain/settings_error.rs
+application/{get_setting, set_setting, delete_settings, list_settings, list_setting_definitions,
+             open_settings_file}_use_case.rs
+application/ports/settings_editor.rs
+infrastructure/settings_module.rs
+infrastructure/adapters/{json_file_settings_repository.rs, setting_value_json.rs (SettingValue ↔ serde_json,
+                         "JSON else string" parsing), system_settings_editor.rs ← cli::open_settings}
+infrastructure/cli/settings_command.rs    ← cli::{SettingsArgs, SettingsCmd, settings, render_get, render_list,
+                                           render_list_all, removal_message, matching_keys}
+```
+
+### history
+```
+domain/entities/history_entry.rs          ← types::HistoryEntry (no serde)
+domain/repositories/history_repository.rs trait {append, recent} + InMemory (← History::from_entries)
+domain/history_error.rs
+application/record_command_use_case.rs    (blank commands are skipped)
+infrastructure/history_module.rs
+infrastructure/adapters/jsonl_history_repository.rs ← inline::History (load, append, compact 10k→5k, 0600,
+                                                       purge guard) + HistoryRecord (serde)
+```
+
+### shell_integration
+```
+domain/entities/integration.rs            ← Integration (+ describe, file_name, rc, script_path, source_line)
+domain/value_objects/{integration_phase, integration_target, integration_status, dotfile, integration_script,
+                      init_script, launch_facts, launch_decision, restart_reminder}.rs
+domain/services/{integration_catalog ← integrations() §5.5 table (existence facts passed in),
+                 launch_policy ← launch_decision, init_script_renderer ← init_output minus I/O,
+                 manual_install_instructions ← manual_text}.rs
+domain/repositories/{dotfile_repository, backup_repository, restart_reminder_repository}.rs (+ InMemory)
+domain/shell_integration_error.rs
+application/{install_integrations, uninstall_integrations, reinstall_integrations, get_integration_status,
+             render_init_script, decide_launch, set_up_tabsmith, uninstall_tabsmith}_use_case.rs
+application/integration_status.rs (DTO)
+application/ports/{user_confirmation ← confirm, shell_environment (which, parent shell, current exe, pwsh $PROFILE,
+                   is_root, stdin tty, env snapshot), spec_bundle_installer, data_directory_purger}.rs
+infrastructure/shell_integration_module.rs
+infrastructure/adapters/{file_dotfile_repository, file_backup_repository, state_restart_reminder_repository,
+                         stdin_user_confirmation ← confirm/answer, os_shell_environment,
+                         embedded_shell_scripts ← include_str!("../shell/*") + real-shell tests in its tests.rs}.rs
+infrastructure/cli/{init_command ← InitArgs/ShellArg, integrations_command ← IntegrationsCmd/status,
+                    setup_command, uninstall_command, should_launch_command, get_shell_command}.rs
+```
+
+### specs
+```
+domain/entities/subcommand.rs             ← spec::Subcommand (+ reindex)
+domain/value_objects/{spec_option, arg, generator, spec_suggestion, suggestion_kind, spec_location,
+                      spec_function_ref, text_or_function, generator_trigger, generator_cache_policy,
+                      generator_script, repeatability, filter_strategy, parser_directives, spec_load_directive,
+                      spec_index, semantic_version, generator_context, exec_request, process_output}.rs
+domain/services/{spec_locator ← parser::spec_location + specs::resolve_in name rules and lookup order
+                 (exists predicate injected; bin/console, dotslash rules),
+                 spec_version_selector ← version pick (newest ≤ target),
+                 bundle_retention_policy ← specs cleanup staleness rules}.rs
+domain/repositories/spec_repository.rs    trait {find(&SpecLocation) -> Result<Rc<Subcommand>, SpecError>} + InMemory
+domain/spec_error.rs                      (Aborted, Timeout, NotFound, Invalid)
+application/install_spec_bundle_use_case.rs ← ensure_extracted orchestration
+application/ports/spec_runtime.rs         typed task API: start(SpecFunctionCall, Option<&GeneratorContext>) -> TaskId,
+                                          start_exec(ExecRequest, &GeneratorContext), start_sleep, wait(tasks, deadline)
+                                          -> Result<Vec<Option<TaskOutcome>>, Interrupted>, forget, call;
+                                          + #[cfg(test)] InMemorySpecRuntime (← parser/tests.rs Mock)
+application/ports/{spec_bundle.rs, runtime_event_source.rs}
+infrastructure/specs_module.rs
+infrastructure/adapters/
+  fig_spec_mapper.rs        ← spec::{normalise, subcommand, option, arg, generator, …, suggestion_from_json,
+                               load_spec_result, fn_id}, ItemType::from_fig, suggest::{fig_type, template_json},
+                               engine::{json_items, script_exec_input, script_string} (JSON halves); 8 spec tests
+  fig_version_diff.rs       ← parser::{apply_versions, merge_*, shallow_merge, make_array, names, truthy}
+  quickjs_spec_runtime.rs   ← js::Js + task registry; JSON ↔ typed results via fig_spec_mapper; one
+                               generatorContext JSON builder (dedupes engine::gen_context_json / GenCtx::context_json)
+  quickjs_module_wrapper.rs ← wrap_module, PRELUDE
+  quickjs_spec_repository.rs ← parser::Loader (spec cache, Rc identity by JSON, diff-versioned specs, CLI version probe)
+  process_executor.rs       ← js::{exec, build_command, key_eq, wait_output, git_bash, clean, LIVE, kill_live_children, job}
+  native_ls.rs              ← js::native_ls
+  embedded_spec_bundle.rs   ← specs::{ARCHIVE, version, ensure_extracted, extract_to, touch, cleanup, unpack,
+                               SpecIndex::load_from, resolve (fs part), dev_folder, user_dir}
+```
+
+### completion
+```
+domain/entities/{completion_session ← Engine state (Current, slots, runs, fuzzy, aliases, env, first-token cache),
+                 generator_slot ← Slot, generator_run ← Run/Step/Outcome + step transitions (engine 713-948)
+                 returning GeneratorCommand {StartCall, StartExec, StartSleep, Settle},
+                 generator_cache ← GenCache/Lookup, parse_prefix_cache ← ParseCaches,
+                 suggestion_recency ← Recency + merge (engine 79-91)}.rs
+domain/value_objects/{token, command_line, alias_table, token_annotation, parsed_command_line,
+                      suggestion_candidate, suggestion_query, filter_options, insertion_context, insertion,
+                      suggestion, argument_hint, completion_phase, completion_result, generator_key}.rs
+domain/services/
+  command_line_tokenizer.rs ← shell_parser.rs (whole; AST stays private; 16 tests in tests.rs sibling)
+  argv_parser.rs            ← parser 589-954 (State, ArgState, update…result)
+  suggestion_assembler.rs   ← assemble, static_options, short_name, option_chain
+  history_suggestions.rs    ← history_rows, mix_history
+  fuzzy_matcher.rs          ← fuzzysort
+  suggestion_filter.rs      ← filter, partial, prefix_score, auto_exec, same_row, after_sep, cmp_locale, cmp_first
+  suggestion_ranker.rs      ← update_priorities, dedupe, rank
+  insertion_composer.rs     ← insertion, name_match, is_var_ref, unquote, escape_* (uses shared ShellQuoting)
+  suggestion_finalizer.rs   ← to_item, highlight, args_hint
+  generator_trigger_policy.rs ← triggered, dir_changed, cache_key, is_path_template, script_timeout, debounce/budget
+  path_template.rs          ← shell_expand, inserted_directory, help_items
+  first_token_suggestions.rs ← first_token_items minus fs, is_root_spec, exe_name
+  completion_request_policy.rs ← compute's pure parts: mid-word guard, arg key, fuzzy strategy, prefix,
+                               autocomplete.disableForCommands rule (moved out of the loader)
+domain/repositories/recency_repository.rs trait + InMemory
+domain/completion_error.rs                ← ParseError (Aborted, NoSuggestions)
+domain/test_fixtures.rs (#[cfg(test)])    ← menu::tests::{comp, item, settings} builders (shared by dropdown/terminal tests)
+application/command_line_parser.rs        application service ← ParseCaches::parse, parse_prefix, substitute_alias,
+                                          apply_load_spec, generate_spec over SpecRepository + SpecRuntime
+                                          (parser/tests.rs → command_line_parser/tests.rs)
+application/{complete_command_line, progress_generators, reset_generators, record_suggestion_insertion,
+             apply_completion_settings, apply_session_context, toggle_fuzzy_search}_use_case.rs
+application/completion_request.rs (DTO)
+application/ports/{directory_lister ← list_dir, executable_catalog ← executables (PATH scan)}.rs
+infrastructure/completion_module.rs
+infrastructure/adapters/{fs_directory_lister, path_executable_catalog,
+                         state_file_recency_repository ← load_recency/save_recency + throttled saver thread}.rs
+```
+
+### ghost_text
+```
+domain/entities/ghost_text_cache.rs       ← GhostCache
+domain/value_objects/{ghost_text ← pty ghost_key/next_word/ghost_rest, ghost_text_source ← Source + BUILTIN_SOURCES,
+                      llm_profile ← Profile + parse_profile (from SettingValue), llm_provider, llm_prompt}.rs
+domain/services/{history_ghost_text, spec_ghost_text, llm_prompt_builder ← llm_history/is_private/usable/
+                 history_prompt/SYSTEM/limits, llm_completion_cleaner ← clean, cd_target_validator ← validate/
+                 split_words/expand (dir probe injected), ghost_text_source_resolver ← profiles/source}.rs
+domain/ghost_text_error.rs
+application/{suggest_local_ghost_text ← engine::ghost, request_llm_ghost_text ← engine::llm + llm_complete pipeline,
+             clear_ghost_text_cache, set_inline_enabled, get_inline_status, select_ghost_text_source,
+             list_ghost_text_sources}_use_case.rs
+application/ghost_text_sources.rs (DTO)
+application/ports/{llm_client.rs (+ ScriptedLlmClient), directory_probe.rs, source_chooser.rs ← choose_source}
+infrastructure/ghost_text_module.rs
+infrastructure/adapters/{openai_llm_client, anthropic_llm_client ← build_request/parse_response + ureq,
+                         fs_directory_probe, stdin_source_chooser}.rs
+infrastructure/cli/inline_command.rs      ← InlineCmd, inline, render_sources, provider_name, PROFILE_EXAMPLE
+```
+
+### dropdown
+```
+domain/entities/menu.rs                   ← menu::Menu (Instant passed in, never read inside)
+domain/value_objects/{menu_visibility, menu_effect, key, key_action, key_binding, keymap, theme, rgb,
+                      theme_choice, theme_definition, menu_layout, icon_slot, icon_id, graphics_support}.rs
+domain/services/{common_prefix ← menu, keystroke_parser ← parse_keystroke/normalize,
+                 menu_layout_calculator ← render::layout, color_parser ← parse_color/xterm256,
+                 theme_resolver ← Theme::from_settings rules (dark/light/system luma/custom),
+                 icon_resolver ← icons::{slot, spec_image, type_image, ascii_slot, wide_emoji, tint maths},
+                 text_fitting ← render::{clean, cw, width, fit, wrap}}.rs
+domain/repositories/theme_repository.rs   trait {find, list} + InMemory
+domain/dropdown_error.rs
+application/{select_theme, list_themes, show_theme}_use_case.rs
+infrastructure/dropdown_module.rs
+infrastructure/adapters/file_theme_repository.rs + theme_json_mapper.rs ← cli::{parse_theme, ThemeFile, ThemeAuthor},
+                                           render::Theme::from_json (one parser, not two)
+infrastructure/cli/theme_command.rs       ← ThemeArgs, theme, theme_banner, BUILTIN_THEMES (deduped with ThemeChoice)
+```
+
+### terminal_session
+```
+domain/entities/{terminal_session (aggregate), marker_splitter ← Splitter, marker_tracker ← Tracker state +
+                 on_marker/end_prompt/new_cmd/pre_exec/flush_deferred (cursor column in, ShellEvents +
+                 ScreenCommands out), insertion_lock, echo_hold, session_context ← SessionCtx}.rs
+domain/value_objects/{session_id, shell_marker, output_piece, shell_event, edit_buffer, shell_suggestion_color,
+                      screen_command, screen_state, key_route, wrapped_shell_command, terminal_background}.rs
+domain/services/{insertion_reconciler ← insertion_bytes/expected_buffer/unechoed_after, key_router ← on_keys
+                 1046-1110, render_guard ← suppressed/drawable, session_deadlines ← next_deadline}.rs
+domain/repositories/session_context_repository.rs trait {save, find, remove, prune_older_than} + InMemory
+domain/terminal_session_error.rs
+application/  one use case per event (table below) + report_session_context_use_case.rs (`_ pre-cmd`)
+application/ports/{terminal_screen.rs (pass_through bytes → stdout bytes, apply ScreenCommand, cursor_column,
+                   edit_buffer, state, resize, draw_overlay, take_clear, full_repaint),
+                   terminal_writer.rs, wrapped_shell.rs (write input, resize),
+                   completion_engine.rs (+ RecordingCompletionEngine), generator_process_reaper.rs}
+infrastructure/terminal_session_module.rs
+infrastructure/pty/{session_runner ← run/start/run/step/guard/emit (event loop, panic pass-through, batching,
+                    credits, ONE stdout write per batch), session_message ← types::Msg, pty_reader ← pump,
+                    terminal_probe ← PROBE/parse_probe/parse_cpr/parse_osc11, fallback_shell ← fallback,
+                    platform_unix, platform_windows ← sys}.rs
+infrastructure/adapters/{alacritty_terminal_screen (implements TerminalScreen; owns Term = types::Model),
+                         output_filter ← OutFilter, edit_buffer_extractor ← extract/strip_pwsh_prompts/cell colours,
+                         cell_tagger ← tag/mark_line_start, overlay_renderer ← render::Renderer + frame/restore code,
+                         kitty_graphics ← icons::{transmit, place, base64, tmux_graphics, detect},
+                         icon_assets ← PNGS/TEMPLATE_RGBA, stdin_key_decoder ← keys::Decoder/decode*,
+                         stdout_terminal_writer, pty_wrapped_shell,
+                         file_session_context_repository ← SessionCtx::path/load, pre_cmd writer, prune_run_files,
+                         + SessionContextRecord (serde)}.rs
+infrastructure/cli/{pty_command, pre_cmd_command, debug_shell_command ← cli::debug_shell/debug_shell_files,
+                    key_tester_command ← cli::key_tester/key_line}.rs
+```
+
+### diagnostics
+```
+domain/entities/doctor_run.rs             ← doctor::Run policy (soft→warn unless strict, abort on unfixed, --all)
+domain/value_objects/{check, check_group, check_severity, check_outcome, check_fix, system_facts, tool_version,
+                      diagnostic_report}.rs
+domain/services/{doctor_check_catalog ← dotfile/setup/env/system checks evaluated over SystemFacts
+                 (session_kind, inline_outcome, is_local, short_path; launch rules reuse
+                 shell_integration::LaunchPolicy instead of duplicating them), username_scrubber}.rs
+application/{run_doctor, collect_diagnostic_report, show_recent_logs}_use_case.rs
+application/ports/{system_facts_probe, doctor_reporter, check_fixer, log_reader}.rs
+infrastructure/diagnostics_module.rs
+infrastructure/adapters/{os_system_facts_probe, terminal_doctor_reporter ← print_outcome/Spinner/SIGINT cursor
+                         restore, file_log_reader}.rs
+infrastructure/cli/{doctor_command, diagnostic_command ← diagnostic/diagnostics/to_toml, debug_logs_command}.rs
+```
+
+### bootstrap (composition root)
+```
+main.rs                    Cli::parse → logger init → bootstrap::run → exit code
+bootstrap/cli.rs           ← main.rs Cli/Command/InternalCmd + dispatch to module cli handlers; cli::completion,
+                             version, cli::print_error
+bootstrap/engine_server.rs ← engine::spawn/run/handle + types::EngineMsg (renamed EngineMessage); owns the inbox
+                             (implements specs::RuntimeEventSource); dispatches events to use cases (table below)
+bootstrap/channel_completion_engine.rs  implements terminal_session::CompletionEngine over Sender<EngineMessage>
+bootstrap/bridges.rs       cross-module port implementations (section 2)
+```
+
+### Event → use case tables
+
+PTY session (`terminal_session/infrastructure/pty/session_runner.rs`). The driver only decodes, routes and writes.
+| Event (today's `Msg`) | Use case |
+|---|---|
+| startup | `PrepareSessionLaunchUseCase` (argv, env, title) |
+| `Stdin(bytes)`: keys decoded and late probe replies stripped by the driver | `HandleKeystrokesUseCase` |
+| `Pty(batch)` | `ProcessShellOutputUseCase` (markers → events → refresh → request → frame; one write) |
+| `Resize(c, r)` | `ResizeTerminalUseCase` |
+| `Completion(c)` | `ApplyCompletionResultUseCase` |
+| `Ghost{req, text}` | `ApplyLlmGhostTextUseCase` |
+| `ChildExit(code)` / `PtyEof` | `HandleShellExitUseCase` |
+| timeout | `HandleTimerTickUseCase` (resize repaint, redraw grace, held keys, lock expiry, LLM debounce, spinner, settings/session reload) |
+| `Term` and loop end | `EndSessionUseCase` (engine shutdown, reap generator processes, remove session context) |
+| `_ pre-cmd` (separate process) | `ReportSessionContextUseCase` |
+
+Completion engine (`bootstrap/engine_server.rs`).
+| Event (today's `EngineMsg`) | Use cases, in order |
+|---|---|
+| `Complete(request)` | `completion::CompleteCommandLine` → `ghost_text::SuggestLocalGhostText` → reply |
+| idle with generator tasks pending | `completion::ProgressGenerators` → reply if changed |
+| `CommandFinished(entry)` | `history::RecordCommand` → `ghost_text::ClearGhostTextCache` → `completion::ResetGenerators` |
+| `CommandEnded` | `ghost_text::ClearGhostTextCache` → `completion::ResetGenerators` |
+| `RecordInsert` | `completion::RecordSuggestionInsertion` |
+| `Llm` | `ghost_text::RequestLlmGhostText` (on a worker thread, as today) |
+| `Settings` / `Session` / `ToggleFuzzy` | `completion::ApplyCompletionSettings` / `ApplySessionContext` / `ToggleFuzzySearch` |
+| `Shutdown` | driver stops; the recency adapter flushes |
+| `ExecDone`, `Timer` | not events of the engine any more. They become `RuntimeEvent`s on the same channel, consumed by `QuickJsSpecRuntime` through `RuntimeEventSource`. `Timer` is never sent today and is deleted. |
+
+---
+
+## 5. Phases
+
+Every step follows the same loop:
+
+1. Move code verbatim first, with its tests. Then rename to the glossary names. Then extract the pure logic.
+2. While a phase is in progress, the old file may become a shim of `pub(crate) use` re-exports. The phase ends by
+   deleting that shim; shims never cross phases. The one exception is `types.rs`, which shrinks phase by phase and is
+   deleted in Phase 11.
+3. New seams (repository traits, InMemory doubles, port fakes, new VOs with validation) are written test-first,
+   following the xp-tdd cycle RED → GREEN → COMMIT → REFACTOR → COMMIT. Pure moves need no new test; the moved tests
+   are the safety net. Existing test names are kept. New tests follow testing-standard (`should_…`, AAA, no mocks).
+4. Before each commit: `cargo build --locked && cargo test --locked` (pass count ≥ baseline), `cargo clippy
+   --all-targets --locked` (no new warnings), and the architecture test.
+5. Commit as `refactor(<module>): <why>` (Conventional Commits, like the existing log), with the attribution trailer.
+   `docs/git-convention.md`, which AGENTS.md points to, does not exist yet; follow the log style.
+
+Implementation session protocol (AGENTS.md):
+- At the start, load the skills `xp-tdd`, `testing-standard`, `coding-standards` and `hexagonal-architecture`.
+- Commit after each step.
+- Work on branch `refactor/hexagonal-architecture`. Never commit on `main`.
+
+### Phase 0: branch and baseline
+1. `git switch -c refactor/hexagonal-architecture`.
+2. Commit this plan and `docs/ubiquitous-language.md` (both written by the planning session) on the branch, if they
+   are not committed yet.
+3. Record the baseline in the plan doc:
+   - `cargo test --locked` result lines;
+   - `cargo test --locked --release -- --ignored all_bundle_modules`;
+   - the `cargo clippy --all-targets --locked` warning count.
+
+### Phase 1: composition root, fitness test, shared kernel
+1. Move `main.rs`'s clap root and dispatch, `cli::completion` and `cli::print_error` to `bootstrap/cli.rs`.
+   `main.rs` becomes thin.
+2. Add `src/architecture_tests.rs` with an empty module list.
+3. Move these into shared:
+   - `Shell` and `ShellQuoting`. This removes `suggest` → `integrations` and `cli` → `integrations::quote`.
+   - `OutputFormat` and `terminal_style`. This removes the `cli` ↔ `integrations` cycle.
+   - the os helpers, the logger, and `testing/temp_dir.rs`. The temp-dir helper replaces `specs::testutil::TmpDir`
+     and the 5 ad-hoc helpers.
+4. Add the `DataDirectory` VO + `data_directory_from_env` + `SharedDependencies`. Each later phase switches its own
+   callers. The old `settings::home()` family is deleted in Phase 11.
+5. Add the `Clock` port + `SystemClock` + `FixedClock`. `types::now_ms/now_secs` stay as thin wrappers until Phase 11.
+6. Add `JsonDocumentStore` and `AtomicFile`. Move these tests to `atomic_file.rs`: `save_keeps_a_symlinked_file`,
+   `dotfile_write_is_atomic`, and the `write_private` behaviour.
+
+Done when `shared` is registered in the architecture test and the build has no cycles.
+
+### Phase 2: settings
+1. Write the VOs test-first: `SettingKey`, `SettingValue`. Move `SettingKeyPattern` (with the wildcard test) and
+   `SettingDefinition` + `SettingsCatalog` (with the catalog test).
+2. Build `Settings` with the same getter surface (`bool`, `string`, `i64`, `f64`, `str_list`, `with_prefix`, `get`),
+   so callers switch mechanically. Defaults come from the catalog.
+   - Add one test per key that call sites defaulted before, asserting the catalog default equals the old literal:
+     `autocomplete.height` 7, `autocomplete.width` 40, `inline.enabled` true, `autocomplete.theme` "dark",
+     `inline.source` "history+specs".
+3. Add `SettingsRepository` + InMemory, `JsonFileSettingsRepository` and `setting_value_json`.
+4. Write the six use cases with InMemory tests. Move `cli.rs`'s settings render/parse tests into
+   `cli/settings_command.rs`.
+5. Add `settings_module` and switch the dispatch arm. Switch every `crate::settings::*` import. Delete `settings.rs`.
+
+### Phase 3: history
+1. Make `HistoryEntry` an entity without serde, and give the adapter a `HistoryRecord` struct.
+2. Add `HistoryRepository` + InMemory, and `JsonlHistoryRepository` with `history_file_round_trip_and_compaction`.
+3. Write `RecordCommandUseCase` test-first; blank commands are skipped.
+
+### Phase 4: shell_integration (the first full CLI-only slice; also starts terminal_session's session context)
+1. Domain:
+   - Extract the `Dotfile` VO from `install` / `uninstall` / `is_installed`, test-first, using the existing expectations.
+   - Move these services, with their tests: `IntegrationCatalog`, `LaunchPolicy` (with
+     `integrations_should_launch_table`), `InitScriptRenderer` and `ManualInstallInstructions`.
+2. Add the three repositories + InMemory + file adapters (on `AtomicFile`), and the ports.
+   - `SpecBundleInstaller` is bridged to the legacy `specs::ensure_extracted` until Phase 5.
+3. Write the eight use cases with InMemory tests. The temp-HOME tests stay green as adapter-level tests.
+4. Add the CLI handlers, plus `embedded_shell_scripts.rs`, which receives the 22 real-shell tests and the snapshot
+   tests in its `tests.rs`.
+5. Move `_ pre-cmd` and run-file pruning into `terminal_session`:
+   - `SessionContext`, `SessionId`, `SessionContextRepository` and `FileSessionContextRepository`;
+   - `ReportSessionContextUseCase` and `cli/pre_cmd_command.rs`.
+6. Delete `integrations.rs`.
+
+### Phase 5: specs
+1. **Model.** Move the VOs and entities from `spec.rs` under glossary names. Build `FigSpecMapper` with the 8 spec
+   tests, `from_fig` and `fig_type`. `GeneratorScript::Object(Value)` becomes a typed `ExecRequest`.
+2. **Bundle and location.**
+   - Domain: `SpecIndex`, `SpecLocator`, `SemanticVersion` + `SpecVersionSelector`, `BundleRetentionPolicy`.
+   - Split `spec_location_table` and `resolve_order` into a pure domain part and an fs adapter part.
+   - Add `EmbeddedSpecBundle`, the `SpecBundle` port and `InstallSpecBundleUseCase`. Switch the shell_integration
+     bridge to it.
+3. **Runtime (the riskiest step: do it alone).**
+   - Add the typed `SpecRuntime` port + `InMemorySpecRuntime`, and the `RuntimeEventSource` port.
+   - Build `QuickJsSpecRuntime` from `js.rs`. Keep the `{"$fn": n}` wire format, the task registry and the timeouts
+     unchanged. JSON ↔ typed conversion goes through `fig_spec_mapper`.
+   - Split out `ProcessExecutor` and `native_ls`.
+   - Until Phase 6 the legacy engine implements `RuntimeEventSource`.
+   - Guard tests: all 18 js tests, `wait_aborts_and_defers_on_complete`, and
+     `cli_version_detection_survives_an_aborted_parse`.
+4. **Repository.**
+   - Add `SpecRepository` + InMemory.
+   - Build `QuickJsSpecRepository` from `parser::Loader`, using `fig_version_diff` (with the `diff_merge` test).
+   - The legacy `JsHost` delegates to the repository + runtime until Phase 6.
+   - Keep `Rc` identity by JSON. Guard tests: `first_token_spec_identity_is_stable` and
+     `spec_identity_survives_dev_reload_and_cache_clear`.
+5. Delete `spec.rs`, `specs.rs` and `js.rs`.
+
+### Phase 6: completion
+1. Move the tokenizer and its VOs from `shell_parser.rs`, with its 16 tests.
+2. Build the pipeline VOs and services from `suggest.rs`, splitting its 23 tests across the services.
+   - `list_dir` and `executables` sit behind the `DirectoryLister` and `ExecutableCatalog` ports; their 3 fs tests
+     move to the adapters.
+3. Move `ArgvParser` (pure) and `ParsePrefixCache`.
+   - Build `CommandLineParser` over `SpecRepository` + `SpecRuntime`; `trait Host` is deleted.
+   - Move `parser/tests.rs` to `command_line_parser/tests.rs`, using `InMemorySpecRepository` + `InMemorySpecRuntime`.
+   - Move the `disableForCommands` rule into `CompletionRequestPolicy`.
+4. Build the generator entities. `GeneratorRun` returns commands; the use case executes them through `SpecRuntime`.
+   - Also build `GeneratorTriggerPolicy`, `SuggestionRecency` + `RecencyRepository` + `StateFileRecencyRepository`
+     (with the recency tests) and `CompletionSession`.
+5. Write the seven use cases and the result VOs (`types.rs` shrinks).
+   - Add **new** use-case tests for the request pipeline and the generator lifecycle, using the InMemory spec
+     repository/runtime and history/recency. These are untested today.
+6. Build `bootstrap/engine_server.rs`: the inbox implements `RuntimeEventSource`, and the dispatch table calls the
+   legacy `inline.rs` until Phase 7.
+   - Create the `terminal_session::CompletionEngine` port + `ChannelCompletionEngine`. The legacy `pty.rs` switches
+     from the raw `Sender<EngineMsg>` to the port.
+7. Delete `shell_parser.rs`, `suggest.rs`, `parser.rs`, `parser/tests.rs` and `engine.rs`.
+
+### Phase 7: ghost_text
+1. Domain: `GhostText`, with the accept rules and the tests `ghost_keys_and_words` and
+   `ghost_with_control_chars_is_never_shown_or_accepted` moved from `pty.rs`. Also `LlmProfile` (from `SettingValue`),
+   `LlmPrompt`, `GhostTextCache`, and the five services with their 11 pure tests.
+2. Ports and adapters: the OpenAI and Anthropic clients (with `request_bodies` and `response_parsing`), the directory
+   probe and the stdin chooser.
+3. Use cases.
+   - `RequestLlmGhostTextUseCase` gets its first end-to-end test with `ScriptedLlmClient`; `llm_complete` has none today.
+   - Move the `cli.rs` inline tests to `cli/inline_command.rs`.
+4. Switch the engine-server dispatch to ghost_text. Delete `inline.rs`.
+
+### Phase 8: dropdown
+1. Move the keys VOs, `Keymap` and `KeystrokeParser` (`keys.rs` tests). The `Decoder` goes to
+   `terminal_session/infrastructure/adapters/stdin_key_decoder.rs`.
+2. Move `Menu` with `MenuVisibility`, `MenuEffect` and `CommonPrefix`, and its 12 tests. `now` is passed in. The
+   fixtures go to `completion/domain/test_fixtures.rs`.
+3. Move the pure parts of `render.rs` and `icons.rs`: theme, colour, layout, text fitting and icon resolution, with
+   `layout_decisions`, `truncation_and_wrap`, `colours_and_themes`, `resolves_like_q` and the tint test.
+4. Build `ThemeRepository` + `FileThemeRepository` + `theme_json_mapper`. This unifies the two theme parsers; move
+   `theme_file_parsing` and `theme_list_order`. Add the three theme use cases and `cli/theme_command.rs`.
+5. Move `Renderer`, the kitty graphics code and the icon assets to the terminal_session infrastructure adapters, with
+   the round-trip tests unchanged. Delete `keys.rs`, `menu.rs`, `render.rs` and `icons.rs`.
+
+### Phase 9: terminal_session (the biggest phase; one commit per step)
+1. Pure domain from `tracker.rs`: `MarkerSplitter` (7 tests), `ShellMarker`, `OutputPiece`, `ShellEvent`, `EditBuffer`,
+   `ShellSuggestionColor` and `ScreenCommand`. Build the `MarkerTracker` entity test-first: it takes the cursor
+   column in and returns events + screen commands.
+2. Infrastructure: `OutputFilter` (4 tests), `EditBufferExtractor`, `CellTagger` and `AlacrittyTerminalScreen`.
+   - The 26 marker/extract tests run through the real screen adapter. The alacritty model is in-memory and fast, so a
+     real object beats a fake.
+   - Delete `tracker.rs` and its four never-read fields (`has_seen_prompt`, `shell_path`, `tty`, `user`).
+3. Domain from `pty.rs`: `InsertionReconciler`, `InsertionLock`, `EchoHold`, `KeyRouter`, `RenderGuard` +
+   `ScreenState`, `SessionDeadlines`, `WrappedShellCommand` and `TerminalBackground`, with their 7 pure tests. Then
+   build the `TerminalSession` aggregate.
+4. Ports + doubles: `TerminalScreen`, `TerminalWriter` (+ a capturing double that replaces the `sink`),
+   `WrappedShell` and `GeneratorProcessReaper`.
+5. The use cases in the event table. Move each of the 22 `Session` tests to the use case it exercises. Each test
+   arranges a `TerminalSession` + `AlacrittyTerminalScreen` + `RecordingCompletionEngine` + `CapturingTerminalWriter`.
+6. Driver and CLI:
+   - `session_runner`, which keeps the panic pass-through, the credits (`pty_reader_waits_for_credits`) and the
+     one-write-per-batch rule;
+   - `platform_unix` / `platform_windows`, `terminal_probe` (`probe_replies`), `fallback_shell` and the adapters;
+   - the commands `pty_command`, `debug_shell_command` and `key_tester_command`, with their tests from `cli.rs`.
+   - The `#[cfg(test)]` panic injection stays at the driver's call site.
+7. Delete `pty.rs`. `types::Msg` and `types::Model` are gone.
+
+### Phase 10: diagnostics
+1. Domain:
+   - `DoctorRun`, with `doctor_group_soft_fix_abort` split between `DoctorRun` and `RunDoctorUseCase`;
+   - `CheckOutcome` and `CheckFix` (data, no closures);
+   - `SystemFacts`, `ToolVersion` (with `doctor_version_parsing`), `DoctorCheckCatalog` and `UsernameScrubber`.
+   - Write **new** tests for each check evaluated from facts. Only 4 doctor tests exist today.
+2. Add the ports and adapters. The spinner and the SIGINT cursor restore live in `terminal_doctor_reporter`. Add the
+   `CheckFixer` bridge in bootstrap.
+3. Write the three use cases. Add the CLI handlers (with `diagnostic_toml`). Delete `doctor.rs` and `cli.rs`.
+
+### Phase 11: cleanup and documentation
+1. Delete `types.rs` and the old path functions. Remove `#![allow(dead_code)]` and delete whatever the compiler then
+   flags, including:
+   - `logger::trace`;
+   - `EngineMsg::Timer`;
+   - the test-only `Parser::load_spec` (move its test to the repository);
+   - `pub` items that are only used locally.
+2. Register all 10 modules in the architecture test, with no exceptions left.
+3. Update `docs/SPEC.md`: §4.1 (module table → the new tree), §4.3 (message and type names) and §10 (test locations).
+   The README needs no change.
+
+---
+
+## 6. Source file → destination (completeness checklist)
+
+| Today | Goes to |
+|---|---|
+| `main.rs` | `main.rs` (thin), `bootstrap/cli.rs` |
+| `cli.rs` | settings, dropdown (theme), ghost_text (inline), diagnostics (diagnostic, debug logs), terminal_session (debug shell, key tester), bootstrap (completion, print_error), shared (OutputFormat, style) |
+| `settings.rs` | settings/*, shared (DataDirectory, JsonDocumentStore, AtomicFile) |
+| `logger.rs` | `shared/infrastructure/logger.rs` |
+| `integrations.rs` | shell_integration/*, shared (quoting, os helpers, style, AtomicFile), terminal_session (pre-cmd, run files) |
+| `doctor.rs` | diagnostics/* |
+| `keys.rs` | dropdown domain (keys, keymap, keystroke parser), terminal_session adapter (stdin decoder) |
+| `menu.rs` | dropdown `Menu` + `CommonPrefix`; fixtures → `completion/domain/test_fixtures.rs` |
+| `render.rs` | dropdown domain (theme, colour, layout, text fitting), dropdown theme mapper, terminal_session `overlay_renderer` |
+| `icons.rs` | dropdown (icon slot/resolver), terminal_session (`kitty_graphics`, `icon_assets`) |
+| `pty.rs` | terminal_session/* |
+| `tracker.rs` | terminal_session/* |
+| `types.rs` | split across shared, specs, completion, history, terminal_session, bootstrap; deleted |
+| `shell_parser.rs` | completion tokenizer + Token / CommandLine / AliasTable |
+| `spec.rs` | specs domain model + `fig_spec_mapper` |
+| `specs.rs` | specs domain (index, locator, retention), `embedded_spec_bundle`, shared temp_dir |
+| `parser.rs` (+ `tests.rs`) | completion (argv parser, prefix cache, `CommandLineParser`), specs (locator, semver, version selector, `quickjs_spec_repository`, `fig_version_diff`) |
+| `suggest.rs` | completion services and VOs, completion fs adapters, specs mapper (`template_json`, `fig_type`) |
+| `engine.rs` | completion entities and use cases, `bootstrap/engine_server.rs`, recency adapter, specs mapper |
+| `js.rs` | specs adapters (runtime, module wrapper, process executor, native ls), specs VOs |
+| `inline.rs` | ghost_text/*, history/* |
+| `shell/`, `assets/`, `tests/fixtures/`, `tests/snapshots/` | unchanged; only the `include_str!` / `include_bytes!` / `CARGO_MANIFEST_DIR` paths are updated |
+
+---
+
+## 7. Risks and how each is held
+
+| Risk | Guard |
+|---|---|
+| Typed `SpecRuntime` replaces JSON results. This is the largest semantic change. | Its own step (5.3); 18 js tests + parser and engine tests green; `{"$fn"}` wire format unchanged; `all_bundle_modules` ignored test run |
+| Abort-on-newer-request semantics when the inbox moves to bootstrap | Single channel kept; `wait_aborts_and_defers_on_complete`, `cli_version_detection_survives_an_aborted_parse` |
+| `Rc`-address identity (`GeneratorKey`, arg key, spec cache by JSON) | Encapsulated in `GeneratorKey::for_arg`, not redesigned; identity tests listed in 5.4 and `generator_keys_differ_per_index` |
+| Latency and the one-write-per-batch rule in the PTY loop | `ProcessShellOutputUseCase` returns one byte buffer; the driver writes once; round-trip render tests |
+| Setting defaults drift when call-site literals go | Per-key equality tests (Phase 2.2) |
+| Windows-only code (`platform_windows`, job objects, console) | Compiles and tests on the CI `windows-latest` job; moved verbatim, no logic edits |
+| Real-shell tests need zsh/fish/pwsh | Unchanged skips when a shell is absent; CI Linux installs zsh and fish |
+| Doctor rewrite from closures to facts | New per-check tests before the old code is deleted |
+
+---
+
+## 8. Verification
+
+- **Per step:**
+  - `cargo build --locked`;
+  - `cargo test --locked`: the pass count never drops below the Phase 0 baseline, except for duplicates removed on
+    purpose, which the commit message names;
+  - `cargo clippy --all-targets --locked`: no new warnings;
+  - the architecture test.
+- **Per phase:** `cargo test --locked --release -- --ignored all_bundle_modules`.
+- **Output equivalence:**
+  - `TABSMITH_INIT_SNAPSHOT_TEST=1` `init` snapshots are unchanged (the existing snapshot test);
+  - `tabsmith settings list --all` and `tabsmith inline show-customizations --format json` output is diffed against
+    a capture taken in Phase 0.
+- **Manual smoke** (SPEC §10 checklist) after Phases 6, 9 and 11, with `TABSMITH_HOME=$(mktemp -d)`, using
+  `cargo run -- debug shell zsh` (and bash and fish):
+  1. `git ch` shows the menu.
+  2. Tab inserts and branches appear.
+  3. Esc hides the menu.
+  4. `echo hi` then `ec` shows ghost `ho hi`, and → accepts it.
+  5. The prompt at the bottom row draws the menu above.
+  6. Resizing leaves no artefacts.
+  7. `vim` draws no overlay.
+  8. `exit` code is propagated.
+  9. `tabsmith doctor` passes.
+- **End:** push the branch and let the CI matrix (ubuntu, macos, windows) run. Ask the user before pushing.
