@@ -126,8 +126,9 @@ pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) 
 2. a file in `*/application/` that uses `::infrastructure`, `crate::bootstrap`, or external crates (same allow-list);
 3. a module other than `bootstrap` that references another module's `application::*_use_case` or `::infrastructure`;
 4. `shared/` that references a feature module;
-5. a registered module with a `src/<module>.rs`, or a file directly in `src/<module>/` other than `mod.rs` (rules 1-2
-   read the layer from the folder name, so such a file would escape them).
+5. a registered module with a `src/<module>.rs`, or a file in `src/<module>/` other than `mod.rs` and the files inside
+   its `domain/`, `application/` and `infrastructure/` folders (rules 1-2 read the layer from the folder name, so a file
+   beside the layers or in a misspelled or extra folder would escape them).
 
 It starts with the module list empty, and each phase adds the module it finishes.
 
@@ -614,6 +615,8 @@ Done when `shared` is registered in the architecture test and the build has no c
 3. Use cases.
    - `RequestLlmGhostTextUseCase` gets its first end-to-end test with `ScriptedLlmClient`; `llm_complete` has none today.
    - Move the `cli.rs` inline tests to `cli/inline_command.rs`.
+   - The inline commands get the settings repository from bootstrap as a trait object (section 2). The legacy
+     `cli.rs` builds a `JsonFileSettingsRepository` itself; importing it from a registered module breaks fitness rule 3.
 4. Switch the engine-server dispatch to ghost_text. Delete `inline.rs`.
 
 ### Phase 8: dropdown
@@ -625,6 +628,12 @@ Done when `shared` is registered in the architecture test and the build has no c
    `layout_decisions`, `truncation_and_wrap`, `colours_and_themes`, `resolves_like_q` and the tint test.
 4. Build `ThemeRepository` + `FileThemeRepository` + `theme_json_mapper`. This unifies the two theme parsers; move
    `theme_file_parsing` and `theme_list_order`. Add the three theme use cases and `cli/theme_command.rs`.
+   - The theme command gets the settings repository from bootstrap as a trait object (section 2), not the legacy
+     `cli.rs`'s own `JsonFileSettingsRepository`.
+   - `theme` with no name prints a non-string `autocomplete.theme` as pretty JSON (`{:#}`); `Settings::string` would
+     print `dark` instead. The legacy `cli.rs` converts it with `settings::infrastructure::adapters::setting_value_json`,
+     which dropdown may not import (rule 3), so dropdown's infrastructure does that `SettingValue` to JSON conversion
+     itself, with the same output.
 5. Move `Renderer`, the kitty graphics code and the icon assets to the terminal_session infrastructure adapters, with
    the round-trip tests unchanged. Delete `keys.rs`, `menu.rs`, `render.rs` and `icons.rs`.
 
