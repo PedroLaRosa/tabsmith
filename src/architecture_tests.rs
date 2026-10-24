@@ -65,6 +65,8 @@ const MISPLACED_FILE: &str =
 
 /// The files of `module` that the layer rules, which read the layer from the folder name, would never check. The
 /// plan's layout keeps a module in `src/<module>/`, with only `mod.rs` outside a layer folder.
+// ponytail: that `mod.rs` gets rules 3-4 only, since it is meant to hold just the layer declarations; flag any other
+// line in it if code ever lands there.
 fn misplaced_files(src: &Path, module: &str) -> Vec<String> {
     let folder = src.join(module);
     let root_file = src.join(format!("{module}.rs"));
