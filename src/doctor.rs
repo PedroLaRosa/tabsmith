@@ -8,6 +8,7 @@ use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
 use crate::settings::{Settings, Store};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info;
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
@@ -226,7 +227,8 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
         println!("  tabsmith still not working? Check ~/.tabsmith/logs/pty.log");
         println!();
     }
-    if let Ok(mut state) = Store::load_state() {
+    let state_file = data_directory_from_env().state_file();
+    if let Some(mut state) = state_file.ok().and_then(|path| JsonDocumentStore::load(&path).ok()) {
         if state
             .map
             .get("doctor.prompt-restart-terminal")

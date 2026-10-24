@@ -5,6 +5,8 @@ use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::atomic_file::AtomicFile;
 use crate::shared::infrastructure::atomic_file_error::AtomicFileError;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::os::executable_lookup::which;
 #[cfg(windows)]
@@ -130,7 +132,8 @@ pub struct UninstallArgs {
 
 /// Mark that existing terminals need a restart (state `doctor.prompt-restart-terminal`, printed by doctor).
 pub fn mark_restart() {
-    if let Ok(mut s) = crate::settings::Store::load_state() {
+    let state_file = data_directory_from_env().state_file();
+    if let Some(mut s) = state_file.ok().and_then(|path| JsonDocumentStore::load(&path).ok()) {
         s.map
             .insert("doctor.prompt-restart-terminal".into(), true.into());
         let _ = s.save();
