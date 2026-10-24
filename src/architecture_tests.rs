@@ -161,8 +161,11 @@ impl TestOnlyItem {
     }
 }
 
-/// The names that `use` brings in for crate paths, so `history::infrastructure::..` after
-/// `use crate::history::{self, ..}` reads as `crate::history::infrastructure::..`.
+/// The short names crate paths bring in: after `use crate::history;`, `use crate::history::{self, ..}` or
+/// `use crate::history::application;`, `history::..` and `application::..` read as the crate paths they stand for.
+// ponytail: every crate path's last segment is recorded, not only those on `use` lines (code that compiles uses a
+// short name only after importing it), file-wide rather than per scope; `as` renames and glob imports are not
+// followed.
 #[derive(Default)]
 struct ImportedNames<'a> {
     full_paths: HashMap<&'a str, Vec<&'a str>>,
@@ -172,7 +175,9 @@ impl<'a> ImportedNames<'a> {
     fn record(&mut self, paths: &[Vec<&'a str>]) {
         for path in paths.iter().filter(|path| path.first() == Some(&"crate")) {
             let full_path = path.strip_suffix(&["self"]).unwrap_or(path);
-            self.full_paths.insert(full_path[full_path.len() - 1], full_path.to_vec());
+            if let Some(name) = full_path.last() {
+                self.full_paths.insert(name, full_path.to_vec());
+            }
         }
     }
 
