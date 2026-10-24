@@ -4,6 +4,7 @@
 use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::atomic_file::AtomicFile;
+use crate::shared::infrastructure::atomic_file_error::AtomicFileError;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::os::executable_lookup::which;
 #[cfg(windows)]
@@ -427,33 +428,18 @@ fn read(path: &Path) -> Result<String, IntegrationError> {
     std::fs::read_to_string(path).map_err(|e| io_err(path, e))
 }
 
-/// Write through symlinks, creating the parent directory. Atomic (temp file + rename, permissions kept): a failed or
-/// concurrent write never leaves the user's file empty or torn. A file we may not write stays PermissionDenied.
-/// ponytail: a hard-linked dotfile is split (rename); write in place when nlink > 1 if anyone links dotfiles.
+/// See [`AtomicFile::write_keeping_permissions`]; its failures keep their IntegrationError (the parent directory or
+/// the dotfile path, as before).
 fn write(path: &Path, contents: &str) -> Result<(), IntegrationError> {
-    // A dangling symlink (dotfiles checkout not populated yet) has no canonical path: write where it points.
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| match std::fs::read_link(path) {
-        Ok(link) => path.parent().unwrap_or(Path::new("")).join(link),
-        Err(_) => path.to_path_buf(),
-    });
-    if let Some(dir) = target.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
-    }
-    let old = std::fs::metadata(&target).ok();
-    if old.is_some() {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&target)
-            .map_err(|e| io_err(path, e))?;
-    }
-    let tmp = target.with_extension(format!("tabsmith-tmp-{}", std::process::id()));
-    let r = std::fs::write(&tmp, contents)
-        .and_then(|()| old.map_or(Ok(()), |m| std::fs::set_permissions(&tmp, m.permissions())))
-        .and_then(|()| std::fs::rename(&tmp, &target));
-    if r.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    r.map_err(|e| io_err(path, e))
+    AtomicFile::new(path)
+        .write_keeping_permissions(contents.as_bytes())
+        .map_err(|e| match e {
+            AtomicFileError::Io { path: failed, source } | AtomicFileError::Rename { path: failed, source } => {
+                io_err(&failed, source)
+            }
+            // Not produced by this write (it never needs a parent); mapped to stay exhaustive.
+            no_parent @ AtomicFileError::NoParentDirectory => io_err(path, std::io::Error::other(no_parent)),
+        })
 }
 
 /// Delete a file; missing is fine.
