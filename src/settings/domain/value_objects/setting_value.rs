@@ -23,6 +23,17 @@ impl SettingValue {
             | SettingValue::Object(_) => None,
         }
     }
+
+    pub(crate) fn as_str(&self) -> Option<&str> {
+        match self {
+            SettingValue::Text(text) => Some(text),
+            SettingValue::Null
+            | SettingValue::Bool(_)
+            | SettingValue::Number(_)
+            | SettingValue::List(_)
+            | SettingValue::Object(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -89,5 +100,14 @@ mod tests {
         let read = value.as_bool();
 
         assert_eq!(read, Some(true));
+    }
+
+    #[test]
+    fn should_read_a_text_value_as_a_str() {
+        let value = SettingValue::Text("dark".to_string());
+
+        let read = value.as_str();
+
+        assert_eq!(read, Some("dark"));
     }
 }
