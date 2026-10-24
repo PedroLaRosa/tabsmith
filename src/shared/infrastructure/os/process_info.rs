@@ -99,3 +99,14 @@ fn windows_parent_exe() -> Option<String> {
         ok.then(|| String::from_utf16_lossy(&buf[..len as usize]))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integrations_parent_exe() {
+        // The test runner always has a parent (cargo); on Windows this needs the Toolhelp32 lookup.
+        assert!(parent_exe().is_some_and(|p| !p.is_empty()));
+    }
+}

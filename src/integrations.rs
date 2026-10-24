@@ -1575,12 +1575,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn integrations_parent_exe() {
-        // The test runner always has a parent (cargo); on Windows this needs the Toolhelp32 lookup.
-        assert!(parent_exe().is_some_and(|p| !p.is_empty()));
-    }
-
     /// Run `argv` in a PTY with only PATH, TERM and `env`; type `input` once `ready` appears in the output (at once
     /// when `ready` is empty). Answers cursor-position and device-attribute queries. Returns (output, exit code).
     #[cfg(unix)]
