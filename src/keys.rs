@@ -451,6 +451,7 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     const NONE: Mods = Mods {
         ctrl: false,
@@ -664,7 +665,7 @@ mod tests {
 
     fn settings(json: &str) -> Settings {
         match serde_json::from_str(json).unwrap() {
-            serde_json::Value::Object(m) => Settings::from_map(m),
+            serde_json::Value::Object(m) => settings_from_json(m),
             _ => unreachable!(),
         }
     }

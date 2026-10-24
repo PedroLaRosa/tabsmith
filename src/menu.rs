@@ -1,6 +1,11 @@
 //! Dropdown UI state: visibility machine, selection/scroll, actions, common prefix (SPEC §7.1–7.3).
 //! Pure: no I/O. OWNER: ui agent. Driven by the wrapper (pty.rs); read by render.rs.
 use crate::keys::Action;
+use crate::settings::domain::services::settings_catalog::{
+    AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION, AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_HEIGHT,
+    AUTOCOMPLETE_NAVIGATE_TO_HISTORY, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
+    AUTOCOMPLETE_SCROLL_WRAP_AROUND,
+};
 use crate::settings::Settings;
 use crate::types::{ArgInfo, Completion, GenKey, Insertion, Item, ItemType, Phase};
 use std::time::{Duration, Instant};
@@ -52,7 +57,7 @@ pub struct Menu {
 
 /// Max visible list rows (`autocomplete.height`, D14).
 pub fn max_rows(settings: &Settings) -> usize {
-    settings.f64("autocomplete.height", 7.0).max(1.0) as usize
+    settings.f64(AUTOCOMPLETE_HEIGHT).max(1.0) as usize
 }
 
 /// Over `steps` consecutive buffers: `a` is at most `steps` one-char edits from `b`
@@ -138,7 +143,7 @@ impl Menu {
                 }
                 v => v,
             };
-            if settings.bool("autocomplete.onlyShowOnTab", false) {
+            if settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB) {
                 self.vis = orig;
                 if has_new_arg {
                     self.vis = Vis::HiddenUntilShown;
@@ -187,7 +192,7 @@ impl Menu {
 
     /// Menu drawn? (`Visible` and items or arg hint, and not `autocomplete.disable`.)
     pub fn shown(&self, settings: &Settings) -> bool {
-        !settings.bool("autocomplete.disable", false)
+        !settings.bool(AUTOCOMPLETE_DISABLE)
             && self.vis == Vis::Visible
             && (!self.items.is_empty() || self.arg_hint().is_some())
     }
@@ -215,7 +220,7 @@ impl Menu {
         if self.items.is_empty() {
             return Vec::new();
         }
-        let always_desc = settings.bool("autocomplete.alwaysShowDescription", false);
+        let always_desc = settings.bool(AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION);
         match action {
             Action::NavigateUp => self.navigate(-1, true, settings),
             Action::NavigateDown => self.navigate(1, false, settings),
@@ -309,7 +314,7 @@ impl Menu {
 
     /// Description pop-out open (or `alwaysShowDescription`).
     pub fn popout(&self, settings: &Settings) -> bool {
-        self.popout || settings.bool("autocomplete.alwaysShowDescription", false)
+        self.popout || settings.bool(AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION)
     }
 
     /// Some generator has been loading for > 200 ms (spinner).
@@ -321,10 +326,10 @@ impl Menu {
     fn navigate(&mut self, d: isize, hide_on_negative: bool, settings: &Settings) -> Vec<Effect> {
         let len = self.items.len() as isize;
         let mut i = self.selected as isize + d;
-        if settings.bool("autocomplete.scrollWrapAround", false) {
+        if settings.bool(AUTOCOMPLETE_SCROLL_WRAP_AROUND) {
             i = i.rem_euclid(len);
         } else if i == -1 && hide_on_negative {
-            if settings.bool("autocomplete.navigateToHistory", false) {
+            if settings.bool(AUTOCOMPLETE_NAVIGATE_TO_HISTORY) {
                 self.history_mode = !self.history_mode;
                 return vec![Effect::Rerequest];
             }
@@ -462,6 +467,7 @@ impl Menu {
 pub(crate) mod tests {
     use super::*;
     use crate::types::ArgInfo;
+    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     pub fn item(name: &str, kind: ItemType, query: &str) -> Item {
         let typed = name.starts_with(query) && !query.is_empty();
@@ -521,7 +527,7 @@ pub(crate) mod tests {
 
     pub fn settings(json: &str) -> Settings {
         match serde_json::from_str(json).unwrap() {
-            serde_json::Value::Object(m) => Settings::from_map(m),
+            serde_json::Value::Object(m) => settings_from_json(m),
             _ => unreachable!(),
         }
     }

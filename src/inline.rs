@@ -1,6 +1,8 @@
 //! Inline ghost text: history store, local sources, LLM profiles/clients, completion cache, validation (SPEC §8,
 //! §3.5, §6.11). OWNER: inline agent. Used by the engine (sources, LLM worker), the CLI (`inline` command) and
 //! doctor (profile checks).
+use crate::settings::domain::services::settings_catalog::INLINE_SOURCE;
+use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::logger;
@@ -184,7 +186,7 @@ pub fn profiles(settings: &Settings) -> Vec<(String, Result<Profile, String>)> {
 
 /// Resolve `inline.source` (unset → HistoryAndSpecs). `Err` when it names a missing/invalid profile.
 pub fn source(settings: &Settings) -> Result<Source, String> {
-    match settings.string("inline.source").unwrap_or("history+specs") {
+    match settings.string(INLINE_SOURCE).unwrap_or_default() {
         "history+specs" => Ok(Source::HistoryAndSpecs),
         "history" => Ok(Source::History),
         "specs" => Ok(Source::Specs),
@@ -198,14 +200,14 @@ pub fn source(settings: &Settings) -> Result<Source, String> {
 }
 
 /// One profile object with per-provider defaults (SPEC §3.3).
-fn parse_profile(name: &str, v: &Value) -> Result<Profile, String> {
+fn parse_profile(name: &str, v: &SettingValue) -> Result<Profile, String> {
     if BUILTIN_SOURCES.iter().any(|(b, _)| *b == name) {
         return Err(format!("'{name}' is a reserved source name"));
     }
     let o = v.as_object().ok_or("not a JSON object")?;
     let s = |k: &str| match o.get(k) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.clone())),
+        None | Some(SettingValue::Null) => Ok(None),
+        Some(SettingValue::Text(s)) => Ok(Some(s.clone())),
         Some(_) => Err(format!("{k} must be a string")),
     };
     let provider = match s("provider")?.as_deref() {
@@ -226,7 +228,7 @@ fn parse_profile(name: &str, v: &Value) -> Result<Profile, String> {
         Provider::Anthropic => ("https://api.anthropic.com", "ANTHROPIC_API_KEY", 1024),
     };
     let max_tokens = match o.get("max_tokens") {
-        None | Some(Value::Null) => max_tokens,
+        None | Some(SettingValue::Null) => max_tokens,
         Some(n) => n
             .as_u64()
             .filter(|n| (1..=u32::MAX as u64).contains(n))
@@ -629,6 +631,7 @@ mod tests {
     use super::*;
     use crate::types::Insertion;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     fn entry(cmd: &str, exit: Option<i32>) -> HistoryEntry {
         HistoryEntry {
@@ -640,7 +643,7 @@ mod tests {
     }
 
     fn settings(v: Value) -> Settings {
-        Settings::from_map(v.as_object().unwrap().clone())
+        settings_from_json(v.as_object().unwrap().clone())
     }
 
     fn profile(provider: Provider, effort: Option<&str>) -> Profile {

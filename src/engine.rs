@@ -9,6 +9,14 @@ use crate::inline::{self, GhostCache, History, Source};
 use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId, TaskResult};
 use crate::shared::infrastructure::logger;
 use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
+use crate::settings::domain::services::settings_catalog::{
+    AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
+    AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
+    AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE, AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS,
+    AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
+    AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS, AUTOCOMPLETE_SCRIPT_TIMEOUT, AUTOCOMPLETE_SORT_METHOD,
+    BETA_HISTORY_MODE, INLINE_ENABLED, INLINE_HISTORY_COUNT,
+};
 use crate::settings::{Settings, Store};
 use crate::shell_parser;
 use crate::spec::{Arg, Generator, Script, StrOrFn, Strategy, Suggestion, Trigger};
@@ -141,20 +149,12 @@ fn env_var(env: &HashMap<String, String>, key: &str) -> Option<String> {
 
 /// `autocomplete.scriptTimeout` (5000 ms; Windows 20000).
 fn script_timeout(settings: &Settings) -> u64 {
-    settings
-        .f64(
-            "autocomplete.scriptTimeout",
-            if cfg!(windows) { 20000.0 } else { 5000.0 },
-        )
-        .max(0.0) as u64
+    settings.f64(AUTOCOMPLETE_SCRIPT_TIMEOUT).max(0.0) as u64
 }
 
 /// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
 fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
-    inline::llm_history(
-        entries,
-        settings.i64("inline.historyCount", 49).max(0) as usize,
-    )
+    inline::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
 }
 
 /// Script value → exec input JSON (SPEC §6.6.3); `None` for falsy values. A legacy string runs as `sh -c`, the
@@ -331,7 +331,7 @@ impl Engine {
         let recency = state_path.as_deref().map(load_recency).unwrap_or_default();
         Engine {
             tx,
-            user_fuzzy: settings.bool("autocomplete.fuzzySearch", false),
+            user_fuzzy: settings.bool(AUTOCOMPLETE_FUZZY_SEARCH),
             settings,
             parser: Parser::new(),
             index,
@@ -503,7 +503,7 @@ impl Engine {
             Rc::as_ptr(&pr.completion) as usize,
         );
         if arg_key != self.last_arg_key {
-            self.user_fuzzy = self.settings.bool("autocomplete.fuzzySearch", false);
+            self.user_fuzzy = self.settings.bool(AUTOCOMPLETE_FUZZY_SEARCH);
             self.last_arg_key = arg_key;
         }
         let strategy = arg
@@ -530,9 +530,7 @@ impl Engine {
             .to_vec();
         let triggered = self.update_slots(&pr, &ctx, &tokens, js)?;
         let first = if pr.first_token
-            && self
-                .settings
-                .bool("autocomplete.firstTokenCompletion", false)
+            && self.settings.bool(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION)
         {
             self.first_token_items(&aliases, path, pathext)
         } else {
@@ -1044,25 +1042,25 @@ impl Engine {
                 .collect();
             suggest::assemble(pr, &views)
         };
-        let mode = s.string("beta.history.mode").unwrap_or("off");
+        let mode = s.string(BETA_HISTORY_MODE).unwrap_or_default();
         if cur.req.history_mode || mode == "show" || mode == "history_only" {
             let hist = suggest::history_rows(&cur.prefix, self.history.entries());
             list = suggest::mix_history(list, hist, mode == "show" && !cur.req.history_mode);
         }
         let fo = FilterOpts {
             fuzzy: cur.fuzzy,
-            auto_exec_hidden: s.bool("autocomplete.hideAutoExecuteSuggestion", false)
-                || s.bool("autocomplete.onlyShowOnTab", false),
-            exec_after_space: s.bool("autocomplete.immediatelyExecuteAfterSpace", false),
-            run_dangerous: s.bool("autocomplete.immediatelyRunDangerousCommands", false),
+            auto_exec_hidden: s.bool(AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION)
+                || s.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
+            exec_after_space: s.bool(AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE),
+            run_dangerous: s.bool(AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS),
             suggest_current_token: pr
                 .current_arg
                 .as_ref()
                 .and_then(|a| a.suggest_current_token)
-                .unwrap_or_else(|| s.bool("autocomplete.alwaysSuggestCurrentToken", false)),
+                .unwrap_or_else(|| s.bool(AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN)),
         };
         let cmd = pr.tokens.get(pr.command_index).map_or("", String::as_str); // D21
-        let use_recency = s.string("autocomplete.sortMethod") != Some("alphabetical");
+        let use_recency = s.string(AUTOCOMPLETE_SORT_METHOD) != Some("alphabetical");
         let ranked = {
             let rec = self.recency.lock().ok();
             let map = rec
@@ -1076,8 +1074,8 @@ impl Engine {
             raw: &pr.raw_last_token,
             shell: cur.req.shell,
             fuzzy: cur.fuzzy,
-            prefer_verbose: s.bool("autocomplete.preferVerboseSuggestions", false),
-            insert_space: s.bool("autocomplete.insertSpaceAutomatically", true),
+            prefer_verbose: s.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS),
+            insert_space: s.bool(AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY),
         };
         let items: Vec<Item> = ranked
             .into_iter()
@@ -1113,7 +1111,7 @@ impl Engine {
 
     /// Local inline ghost (SPEC §6.11). Also computed for parse-error replies (commands without a spec).
     fn ghost(&self, req: &Request, cursor: usize, items: Option<&[Item]>) -> Option<String> {
-        if !self.settings.bool("inline.enabled", true)
+        if !self.settings.bool(INLINE_ENABLED)
             || req.buffer.is_empty()
             || cursor != req.buffer.len()
         {
@@ -1206,6 +1204,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     #[test]
     fn recency_round_trip_keeps_other_keys() {
@@ -1262,7 +1261,7 @@ mod tests {
         };
         let entries: Vec<HistoryEntry> = (0..100).map(|i| e(&format!("echo {i}"))).collect();
         let with = |v: Value| {
-            Settings::from_map(
+            settings_from_json(
                 json!({ "inline.historyCount": v })
                     .as_object()
                     .unwrap()

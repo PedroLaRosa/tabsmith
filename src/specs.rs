@@ -1,5 +1,8 @@
 //! The embedded Fig spec bundle: extraction, index and name → file resolution (SPEC §9.1, §6.3).
 //! OWNER: host agent.
+use crate::settings::domain::services::settings_catalog::{
+    AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER,
+};
 use crate::settings::Settings;
 use anyhow::Context;
 use std::collections::HashSet;
@@ -183,9 +186,9 @@ pub fn resolve(name: &str, settings: &Settings, index: &SpecIndex) -> Option<Pat
 /// `autocomplete.devCompletionsFolder` (leading `~` = the user's home) when `autocomplete.developerMode` is on.
 fn dev_folder(settings: &Settings) -> Option<PathBuf> {
     let d = settings
-        .string("autocomplete.devCompletionsFolder")
+        .string(AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER)
         .filter(|d| !d.is_empty())?;
-    if !settings.bool("autocomplete.developerMode", false) {
+    if !settings.bool(AUTOCOMPLETE_DEVELOPER_MODE) {
         return None;
     }
     Some(match Path::new(d).strip_prefix("~") {
@@ -251,6 +254,7 @@ pub(crate) mod testutil {
 mod tests {
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use super::*;
+    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     fn tar_zst(files: &[(&str, &str)]) -> Vec<u8> {
         let mut b = tar::Builder::new(Vec::new());
@@ -450,7 +454,7 @@ mod tests {
                 ("autocomplete.developerMode", dev.into()),
                 ("autocomplete.devCompletionsFolder", d.into()),
             ];
-            Settings::from_map(
+            settings_from_json(
                 m.into_iter()
                     .map(|(k, v): (&str, serde_json::Value)| (k.to_string(), v))
                     .collect(),

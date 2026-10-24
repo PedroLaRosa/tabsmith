@@ -4,6 +4,9 @@ use crate::keys::{self, Action, Binding, Key, KeyCode, Keymap, Mods};
 use crate::shared::infrastructure::logger;
 use crate::menu::{Effect, Menu};
 use crate::render::{FrameInput, Renderer, Theme};
+use crate::settings::domain::services::settings_catalog::{
+    AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
+};
 use crate::settings::Settings;
 use crate::tracker::{Event, Extracted, Tracker};
 use crate::shared::domain::value_objects::shell::Shell;
@@ -398,7 +401,7 @@ impl Session {
         let program = argv
             .first()
             .context("no shell to run (set SHELL or pass --shell)")?;
-        let settings = Settings::load();
+        let settings = crate::settings::load_or_defaults();
         let (m, lf_to_ind) = sys::enter()?;
         *modes = Some(m);
         let (cols, rows) = crossterm::terminal::size().context("terminal size")?;
@@ -878,7 +881,7 @@ impl Session {
             && c.cursor == c.buffer.len()
             && self.llm_enabled()
         {
-            let debounce = self.settings.i64("inline.debounceMs", 300).max(0) as u64;
+            let debounce = self.settings.i64(INLINE_DEBOUNCE_MS).max(0) as u64;
             self.llm_at = Some(self.changed_at + Duration::from_millis(debounce));
         }
         if c.loading && self.spinner_at.is_none() {
@@ -890,7 +893,7 @@ impl Session {
     }
 
     fn llm_enabled(&self) -> bool {
-        self.settings.bool("inline.enabled", true)
+        self.settings.bool(INLINE_ENABLED)
             && matches!(
                 crate::inline::source(&self.settings),
                 Ok(crate::inline::Source::Profile(_))
@@ -900,7 +903,7 @@ impl Session {
     /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
     /// their echo (what accepting it must add), else after the buffer on screen (what is drawn).
     fn ghost_text(&self, typed: bool) -> Option<String> {
-        if !self.settings.bool("inline.enabled", true) || self.tracker.preexec || self.alt() {
+        if !self.settings.bool(INLINE_ENABLED) || self.tracker.preexec || self.alt() {
             return None;
         }
         let e = self.cur.as_ref()?;
@@ -1034,8 +1037,8 @@ impl Session {
         }
         let mut fwd = Vec::new();
         let (mut redraw, mut rerequest) = (false, false);
-        let only_tab = self.settings.bool("autocomplete.onlyShowOnTab", false);
-        let disabled = self.settings.bool("autocomplete.disable", false);
+        let only_tab = self.settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB);
+        let disabled = self.settings.bool(AUTOCOMPLETE_DISABLE);
         let mut typed = 0usize;
         for ev in self.decoder.decode(chunk) {
             #[cfg(test)]
@@ -1272,7 +1275,7 @@ impl Session {
             return false;
         }
         self.settings_mtime = m;
-        self.settings = Settings::load();
+        self.settings = crate::settings::load_or_defaults();
         self.keymap = Keymap::from_settings(&self.settings);
         self.renderer
             .set_theme(Theme::from_settings(&self.settings, self.terminal_bg));

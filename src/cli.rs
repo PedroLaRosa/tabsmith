@@ -3,7 +3,11 @@
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
 use crate::integrations::When;
 use crate::settings::{self, Settings, Store};
+use crate::settings::domain::services::settings_catalog::{
+    AUTOCOMPLETE_THEME, INLINE_ENABLED, INLINE_SOURCE,
+};
 use crate::settings::domain::value_objects::setting_key_pattern::SettingKeyPattern;
+use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::output_format::OutputFormat;
@@ -326,10 +330,12 @@ pub fn theme(args: ThemeArgs) -> Result<i32> {
     let Some(name) = args.theme else {
         println!(
             "{}",
-            match store.map.get("autocomplete.theme") {
-                None => "dark".to_string(),
-                Some(Value::String(s)) => s.clone(),
-                Some(v) => format!("{v:#}"),
+            match store.map.get(AUTOCOMPLETE_THEME) {
+                Some(v) if !v.is_string() => format!("{v:#}"),
+                _ => settings_from_json(store.map.clone())
+                    .string(AUTOCOMPLETE_THEME)
+                    .unwrap_or_default()
+                    .to_string(),
             }
         );
         return Ok(0);
@@ -403,7 +409,7 @@ pub fn inline(cmd: InlineCmd) -> Result<i32> {
         InlineCmd::Enable => set_inline_enabled(true, color)?,
         InlineCmd::Disable => set_inline_enabled(false, color)?,
         InlineCmd::Status => {
-            let on = Settings::from_map(Store::load_settings()?.map).bool("inline.enabled", true);
+            let on = settings_from_json(Store::load_settings()?.map).bool(INLINE_ENABLED);
             println!(
                 "Inline is {}",
                 bold(if on { "enabled" } else { "disabled" }, color)
@@ -411,7 +417,7 @@ pub fn inline(cmd: InlineCmd) -> Result<i32> {
         }
         InlineCmd::SetCustomization { name } => set_customization(name, color)?,
         InlineCmd::ShowCustomizations { format } => {
-            let s = Settings::from_map(Store::load_settings()?.map);
+            let s = settings_from_json(Store::load_settings()?.map);
             print!(
                 "{}",
                 render_sources(
@@ -446,7 +452,7 @@ fn set_inline_enabled(on: bool, color: bool) -> Result<()> {
 }
 
 fn selected_source(s: &Settings) -> &str {
-    s.string("inline.source").unwrap_or("history+specs")
+    s.string(INLINE_SOURCE).unwrap_or_default()
 }
 
 fn provider_name(p: Provider) -> &'static str {
@@ -460,7 +466,7 @@ fn set_customization(name: Option<String>, color: bool) -> Result<()> {
     let mut store = Store::load_settings()?;
     // Only valid profiles can be selected (an invalid one would only make doctor fail).
     let profiles: Vec<(String, Profile)> =
-        crate::inline::profiles(&Settings::from_map(store.map.clone()))
+        crate::inline::profiles(&settings_from_json(store.map.clone()))
             .into_iter()
             .filter_map(|(n, p)| Some((n, p.ok()?)))
             .collect();

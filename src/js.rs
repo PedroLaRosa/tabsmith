@@ -8,6 +8,7 @@
 //! settles them with `__ts.settle(opId, ok, payload)`, so no JS handle ever lives on the Rust side (ponytail: no
 //! `Persistent`, nothing can outlive the runtime). Callbacks start with `__ts.start(task, fnId, args, ctx)` and
 //! report back through `__ts_done`.
+use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_SCRIPT_TIMEOUT;
 use crate::settings::Settings;
 use crate::shared::infrastructure::logger;
 use crate::spec::FnId;
@@ -209,12 +210,7 @@ impl Host {
 }
 
 fn script_timeout(settings: &Settings) -> u64 {
-    settings
-        .i64(
-            "autocomplete.scriptTimeout",
-            if cfg!(windows) { 20000 } else { 5000 },
-        )
-        .max(0) as u64
+    settings.i64(AUTOCOMPLETE_SCRIPT_TIMEOUT).max(0) as u64
 }
 
 pub struct Js {

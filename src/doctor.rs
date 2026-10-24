@@ -1,5 +1,8 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
 use crate::integrations::{self, Ctx, Integration, IntegrationError, When};
+use crate::settings::domain::services::settings_catalog::{
+    AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE, INLINE_ENABLED, INLINE_SOURCE,
+};
 use crate::settings::{Settings, Store};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::os::executable_lookup::which;
@@ -479,9 +482,9 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
         let base = p.rsplit(['/', '\\']).next().unwrap_or(p);
         base.eq_ignore_ascii_case("cmd.exe") || base.eq_ignore_ascii_case("cmd")
     });
-    let settings = Settings::load();
+    let settings = crate::settings::load_or_defaults();
     let sid = var("TABSMITH_SESSION_ID");
-    let inline_kind = if settings.bool("inline.enabled", true) {
+    let inline_kind = if settings.bool(INLINE_ENABLED) {
         Kind::Normal
     } else {
         Kind::Soft
@@ -530,7 +533,7 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
             },
         ),
         check("Autocomplete is enabled", Kind::Normal, move || {
-            if !settings.bool("autocomplete.disable", false) {
+            if !settings.bool(AUTOCOMPLETE_DISABLE) {
                 return Outcome::Ok;
             }
             Outcome::Err {
@@ -540,7 +543,7 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
             }
         }),
         check("Autocomplete dev mode", Kind::Normal, move || {
-            if s2.bool("autocomplete.developerMode", false) {
+            if s2.bool(AUTOCOMPLETE_DEVELOPER_MODE) {
                 Outcome::Warn("autocomplete.developerMode is enabled".into())
             } else {
                 Outcome::Ok
@@ -568,7 +571,7 @@ fn session_kind(sid: Option<&str>, parent: Option<&str>, tabsmith_shell: Option<
 /// The `Inline` check; `env_set(name)` = the variable is set and non-empty.
 fn inline_outcome<'a>(settings: &Settings, env_set: impl Fn(&str) -> bool) -> Outcome<'a> {
     use crate::inline::Source;
-    if !settings.bool("inline.enabled", true) {
+    if !settings.bool(INLINE_ENABLED) {
         return Outcome::Warn(
             "Inline is disabled, to re-enable run: tabsmith inline enable".into(),
         );
@@ -576,7 +579,7 @@ fn inline_outcome<'a>(settings: &Settings, env_set: impl Fn(&str) -> bool) -> Ou
     match crate::inline::source(settings) {
         Err(_) => err(format!(
             "Inline source '{}' is not a valid profile",
-            settings.string("inline.source").unwrap_or("")
+            settings.string(INLINE_SOURCE).unwrap_or_default()
         )),
         Ok(Source::Profile(p)) if !is_local(&p.base_url) && !env_set(&p.api_key_env) => {
             err(format!("{} is not set", p.api_key_env))

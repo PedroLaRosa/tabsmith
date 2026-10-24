@@ -1,6 +1,9 @@
 //! Spec loading (resolution, diff-versioned merge) and the argv state machine (SPEC §6.3–6.4).
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
 use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId};
+use crate::settings::domain::services::settings_catalog::{
+    AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE_FOR_COMMANDS,
+};
 use crate::settings::Settings;
 use crate::shell_parser::CommandInfo;
 use crate::spec::{
@@ -188,7 +191,7 @@ pub fn spec_location(name: &str, cwd: &Path, is_script: Option<bool>) -> SpecLoc
 // Loading (SPEC §6.3)
 
 fn dev_mode(settings: &Settings) -> bool {
-    settings.bool("autocomplete.developerMode", false)
+    settings.bool(AUTOCOMPLETE_DEVELOPER_MODE)
 }
 
 fn gen_ctx(ctx: &ParseCtx) -> GenCtx {
@@ -232,7 +235,7 @@ impl Loader {
         let (SpecLocation::Global { name } | SpecLocation::Local { name, .. }) = loc;
         if ctx
             .settings
-            .str_list("autocomplete.disableForCommands")
+            .str_list(AUTOCOMPLETE_DISABLE_FOR_COMMANDS)
             .contains(name)
         {
             return Ok(None);

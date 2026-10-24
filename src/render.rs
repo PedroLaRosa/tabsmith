@@ -2,6 +2,7 @@
 //! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2). OWNER: ui agent.
 use crate::icons::{self, Graphics, Image};
 use crate::menu::{max_rows, Menu};
+use crate::settings::domain::services::settings_catalog::{AUTOCOMPLETE_THEME, AUTOCOMPLETE_WIDTH};
 use crate::settings::Settings;
 use crate::types::{Item, ItemType, Model};
 use alacritty_terminal::grid::{Dimensions, Row};
@@ -67,7 +68,7 @@ impl Theme {
 
     /// From `autocomplete.theme` (dark/light/system/custom file). `terminal_bg` = OSC 11 reply (for `system`).
     pub fn from_settings(settings: &Settings, terminal_bg: Option<(u8, u8, u8)>) -> Theme {
-        match settings.string("autocomplete.theme").unwrap_or("dark") {
+        match settings.string(AUTOCOMPLETE_THEME).unwrap_or_default() {
             "" | "dark" => Theme::dark(),
             "light" => Theme::light(),
             "system" => match terminal_bg {
@@ -403,7 +404,7 @@ impl Renderer {
             Some(it) => it.query.as_str(),
             None => menu.last().map_or("", |c| c.search_term.as_str()),
         };
-        let menu_w = s.f64("autocomplete.width", 40.0).max(10.0) as usize;
+        let menu_w = s.f64(AUTOCOMPLETE_WIDTH).max(10.0) as usize;
         let Some(l) = layout(size, cur, items.len(), max_rows(s), menu_w, width(query)) else {
             return;
         };

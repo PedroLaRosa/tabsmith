@@ -1,5 +1,6 @@
 //! Parser tests: parseArguments and loadSpec cases, loadSpec recursion, aliases, diffs.
 use super::*;
+use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::shell_parser::Token;
 use serde_json::json;
 use std::cell::RefCell;
@@ -889,7 +890,7 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
         r#"var s={name:"mk",args:{name:"t"}};export{s as default};"#,
     )
     .unwrap();
-    let settings = Settings::from_map(
+    let settings = settings_from_json(
         json!({"autocomplete.developerMode": true})
             .as_object()
             .unwrap()
