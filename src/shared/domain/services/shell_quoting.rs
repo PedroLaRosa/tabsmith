@@ -24,11 +24,34 @@ fn pwsh_sq(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::os::executable_lookup::which;
+    use std::process::Command;
 
     #[test]
     fn integrations_quote() {
         assert_eq!(quote(Shell::Zsh, "/a b/it's"), r"'/a b/it'\''s'");
         assert_eq!(quote(Shell::Fish, r"/a\it's"), r"'/a\\it\'s'");
         assert_eq!(quote(Shell::Pwsh, r"C:\it's"), r"'C:\it''s'");
+    }
+
+    /// PowerShell also ends a '…' string at U+2018-U+201B: doubled, a file name holding one stays one argument.
+    #[test]
+    fn integrations_quote_pwsh_smart_quotes() {
+        let name = "report\u{2019};Write-Output PWNED;\u{2018}\u{201A}\u{201B}'.txt";
+        let q = quote(Shell::Pwsh, name);
+        assert_eq!(q, "'report\u{2019}\u{2019};Write-Output PWNED;\u{2018}\u{2018}\u{201A}\u{201A}\u{201B}\u{201B}''.txt'");
+        if which("pwsh").is_some() {
+            let script = format!("$a = @({q}); [Console]::Out.Write(\"$($a.Count)|$($a[0])\")");
+            let out = Command::new("pwsh")
+                .args(["-NoProfile", "-Command", &script])
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                format!("1|{name}"),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
     }
 }

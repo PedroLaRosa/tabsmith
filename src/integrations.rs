@@ -3107,25 +3107,4 @@ mod tests {
         assert!(!old.exists() && new.exists() && sub.exists());
         let _ = std::fs::remove_dir_all(dir);
     }
-
-    /// PowerShell also ends a '…' string at U+2018-U+201B: doubled, a file name holding one stays one argument.
-    #[test]
-    fn integrations_quote_pwsh_smart_quotes() {
-        let name = "report\u{2019};Write-Output PWNED;\u{2018}\u{201A}\u{201B}'.txt";
-        let q = quote(Shell::Pwsh, name);
-        assert_eq!(q, "'report\u{2019}\u{2019};Write-Output PWNED;\u{2018}\u{2018}\u{201A}\u{201A}\u{201B}\u{201B}''.txt'");
-        if which("pwsh").is_some() {
-            let script = format!("$a = @({q}); [Console]::Out.Write(\"$($a.Count)|$($a[0])\")");
-            let out = Command::new("pwsh")
-                .args(["-NoProfile", "-Command", &script])
-                .output()
-                .unwrap();
-            assert_eq!(
-                String::from_utf8_lossy(&out.stdout),
-                format!("1|{name}"),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-    }
 }
