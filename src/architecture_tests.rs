@@ -154,21 +154,26 @@ fn is_test_only_attribute(code: &str) -> bool {
 }
 
 /// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`. A member of
-/// a `use a::{..}` group gets the `a` prefix. `open_braces` holds each open brace's prefix across lines (empty for
+/// a `use a::{..}` group gets the `a` prefix, and the name right after `use` is a path even without `::`. `open_braces` holds each open brace's prefix across lines (empty for
 /// a block).
 // ponytail: a line scanner, not a Rust parser. String literals are read as code, only `//` comments are skipped,
 // and `super::`-relative paths are not resolved. Switch to a real parser if a false hit or a miss ever shows up.
 fn paths_in<'a>(code: &'a str, open_braces: &mut Vec<Vec<&'a str>>) -> Vec<Vec<&'a str>> {
     let mut paths = Vec::new();
+    let mut previous_word = "";
     for piece in code.split_inclusive(|c: char| !is_path_char(c)) {
         let chunk = piece.trim_end_matches(|c: char| !is_path_char(c));
+        let imported = previous_word == "use";
+        if !chunk.is_empty() {
+            previous_word = chunk;
+        }
         let segments: Vec<&str> = chunk.split("::").filter(|segment| !segment.is_empty()).collect();
         if piece.ends_with("::{") {
             open_braces.push(segments);
             continue;
         }
         let in_use_group = open_braces.iter().any(|prefix| !prefix.is_empty());
-        if !segments.is_empty() && (chunk.contains("::") || in_use_group) {
+        if !segments.is_empty() && (chunk.contains("::") || in_use_group || imported) {
             paths.push(open_braces.concat().into_iter().chain(segments).collect());
         }
         if piece.ends_with('{') {
@@ -663,6 +668,17 @@ mod tests {
         let found = violations_in("settings/application/set_setting_use_case.rs", source);
 
         assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_flag_an_external_crate_imported_under_another_name() {
+        let source = "use serde_json as json;\n\
+                      let text = json::to_string(&value);\n\
+                      use unicode_width;\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
     }
 
     #[test]
