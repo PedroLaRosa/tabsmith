@@ -3,9 +3,10 @@
 /// External crates the inner layers may use. std, core and alloc are not in Cargo.toml, so they are never flagged.
 const ALLOWED_EXTERNAL_CRATES: &[&str] = &["unicode_width"];
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Rule {
     DomainLayer,
+    ApplicationLayer,
 }
 
 #[derive(Debug, PartialEq)]
@@ -15,25 +16,32 @@ struct Violation {
 }
 
 fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Violation> {
-    if path.split('/').nth(1) != Some("domain") {
-        return Vec::new();
-    }
+    let rule = match path.split('/').nth(1) {
+        Some("domain") => Rule::DomainLayer,
+        Some("application") => Rule::ApplicationLayer,
+        _ => return Vec::new(),
+    };
     source
         .lines()
         .map(|line| line.find("//").map_or(line, |comment| &line[..comment]))
         .enumerate()
-        .filter(|(_, code)| {
-            code.contains("::application")
-                || code.contains("::infrastructure")
-                || code.contains("crate::bootstrap")
-                || code.contains("println!")
-                || code.contains("logger::")
-                || external_crates
-                    .iter()
-                    .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
-                    .any(|name| code.contains(&format!("{name}::")))
+        .filter(|(_, code)| match rule {
+            Rule::DomainLayer => {
+                code.contains("::application")
+                    || code.contains("::infrastructure")
+                    || code.contains("crate::bootstrap")
+                    || code.contains("println!")
+                    || code.contains("logger::")
+                    || external_crates
+                        .iter()
+                        .filter(|name| !ALLOWED_EXTERNAL_CRATES.contains(&name.as_str()))
+                        .any(|name| code.contains(&format!("{name}::")))
+            }
+            Rule::ApplicationLayer => {
+                code.contains("::infrastructure") || code.contains("crate::bootstrap")
+            }
         })
-        .map(|(index, _)| Violation { line: index + 1, rule: Rule::DomainLayer })
+        .map(|(index, _)| Violation { line: index + 1, rule })
         .collect()
 }
 
@@ -127,6 +135,23 @@ mod tests {
         let found = violations_in("dropdown/domain/menu.rs", source);
 
         assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_flag_an_application_file_that_uses_infrastructure_or_the_composition_root() {
+        let source = "use crate::settings::domain::settings::Settings;\n\
+                      use crate::settings::infrastructure::cli::SettingsArgs;\n\
+                      use crate::bootstrap::cli::Cli;\n";
+
+        let found = violations_in("settings/application/set_setting_use_case.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 2, rule: Rule::ApplicationLayer },
+                Violation { line: 3, rule: Rule::ApplicationLayer },
+            ]
+        );
     }
 
     #[test]
