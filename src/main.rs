@@ -2,6 +2,8 @@
 //! driven by the Fig completion specs. See docs/SPEC.md.
 #![allow(dead_code)]
 
+#[cfg(test)]
+mod architecture_tests;
 mod bootstrap;
 mod cli;
 mod doctor;
