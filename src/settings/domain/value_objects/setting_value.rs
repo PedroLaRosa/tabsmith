@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 pub(crate) enum SettingValue {
     Null,
     Bool(bool),
+    Text(String),
+    List(Vec<SettingValue>),
     Object(BTreeMap<String, SettingValue>),
 }
 
@@ -27,5 +29,30 @@ mod tests {
             unreachable!()
         };
         assert_eq!(object.keys().collect::<Vec<_>>(), ["a", "b"]);
+    }
+
+    /// `autocomplete.disableForCommands` keeps the order it was written in.
+    #[test]
+    fn should_keep_a_list_in_the_order_it_was_given() {
+        let items = ["git", "cd"];
+
+        let value = SettingValue::List(
+            items
+                .into_iter()
+                .map(|item| SettingValue::Text(item.to_string()))
+                .collect(),
+        );
+
+        let SettingValue::List(list) = &value else {
+            unreachable!()
+        };
+        let texts: Vec<_> = list
+            .iter()
+            .map(|item| match item {
+                SettingValue::Text(text) => text.as_str(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(texts, items);
     }
 }
