@@ -1,8 +1,12 @@
 use std::time::Instant;
 
+/// What time it is. Wall-clock time is for values kept or compared across runs (generator cache ages, recency
+/// timestamps in `state.json`, history times, backup names); the monotonic `Instant` is for timeouts and debounces.
 pub(crate) trait Clock {
+    /// Milliseconds since the Unix epoch.
     fn now_ms(&self) -> u64;
 
+    /// Whole seconds since the Unix epoch: the milliseconds divided by 1000, truncated.
     fn now_secs(&self) -> u64 {
         self.now_ms() / 1000
     }
@@ -10,6 +14,8 @@ pub(crate) trait Clock {
     fn now_instant(&self) -> Instant;
 }
 
+/// Test double: the wall clock reads the milliseconds it was built with and the `Instant` is taken once, when it is
+/// built, so no time passes for the code under test.
 #[cfg(test)]
 pub(crate) struct FixedClock {
     now_ms: u64,

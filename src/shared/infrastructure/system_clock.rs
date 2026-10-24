@@ -1,7 +1,7 @@
 use crate::shared::application::ports::clock::Clock;
 use std::time::Instant;
 
-/// The real clock: `SystemTime` for wall-clock time.
+/// The real clock: `SystemTime` for wall-clock time (0 before the Unix epoch), `Instant::now()` for monotonic time.
 pub(crate) struct SystemClock;
 
 impl Clock for SystemClock {
