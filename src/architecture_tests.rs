@@ -131,7 +131,7 @@ impl TestOnlyItem {
     /// Before the line's braces are read: a test-only attribute opens an item at the current brace depth.
     fn open_at(&mut self, code: &str, depth: usize) {
         if self.depth.is_none() && is_test_only_attribute(code) {
-            *self = TestOnlyItem { depth: Some(depth), has_body: false, open_groups: 0 };
+            *self = TestOnlyItem { depth: Some(depth), ..Self::default() };
         }
     }
 
