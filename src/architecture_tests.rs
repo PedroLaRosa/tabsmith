@@ -394,6 +394,50 @@ mod tests {
     }
 
     #[test]
+    fn should_not_flag_an_application_file_that_uses_the_domain_and_ports() {
+        let source = "use super::ports::spec_bundle_installer::SpecBundleInstaller;\n\
+                      use crate::settings::domain::settings::Settings;\n\
+                      use crate::shared::application::ports::clock::Clock;\n\
+                      use std::rc::Rc;\n";
+
+        let found = violations_in("shell_integration/application/install_integration_use_case.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_flag_another_modules_use_case_imported_as_a_module() {
+        let source = "use crate::specs::application::install_spec_bundle_use_case;\n";
+
+        let found = violations_in("shell_integration/infrastructure/shell_integration_module.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+    }
+
+    #[test]
+    fn should_not_flag_a_file_that_uses_its_own_use_cases_or_another_modules_domain_and_ports() {
+        let source = "use crate::ghost_text::application::suggest_ghost_text_use_case::SuggestGhostTextUseCase;\n\
+                      use crate::ghost_text::infrastructure::ghost_text_cache::GhostTextCache;\n\
+                      use crate::completion::domain::suggestion::Suggestion;\n\
+                      use crate::history::application::ports::history_source::HistorySource;\n";
+
+        let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_not_flag_a_shared_file_that_uses_the_kernel_or_an_external_crate() {
+        let source = "use crate::shared::domain::value_objects::data_directory::DataDirectory;\n\
+                      use serde_json::Value;\n\
+                      let text = std::fs::read_to_string(path)?;\n";
+
+        let found = violations_in("shared/infrastructure/json_document_store.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
     fn should_not_flag_an_infrastructure_file_that_uses_the_application_layer() {
         let source = "use crate::settings::application::set_setting_use_case::SetSettingUseCase;\n";
 
