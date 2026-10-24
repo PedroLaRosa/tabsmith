@@ -1,6 +1,16 @@
 use crate::settings::domain::value_objects::setting_number::SettingNumber;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
-use serde_json::Value;
+use crate::settings::domain::value_objects::settings::Settings;
+use serde_json::{Map, Value};
+
+/// The settings.json object as a settings snapshot.
+pub(crate) fn settings_from_json(map: Map<String, Value>) -> Settings {
+    Settings::new(
+        map.into_iter()
+            .map(|(key, value)| (key, setting_value_from_json(value)))
+            .collect(),
+    )
+}
 
 /// A serde_json value as a setting value, integers and floats kept apart.
 pub(crate) fn setting_value_from_json(value: Value) -> SettingValue {
@@ -109,5 +119,23 @@ mod tests {
             .collect(),
         );
         assert_eq!(value, expected);
+    }
+
+    #[test]
+    fn should_build_a_settings_snapshot_from_the_settings_file_object() {
+        let json = json!({"autocomplete.height": 5, "inline.enabled": false});
+        let Value::Object(map) = json else {
+            unreachable!()
+        };
+
+        let settings = settings_from_json(map);
+
+        assert_eq!(
+            (
+                settings.f64("autocomplete.height"),
+                settings.bool("inline.enabled")
+            ),
+            (5.0, false)
+        );
     }
 }
