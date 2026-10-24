@@ -18,6 +18,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `Settings` | VO | Immutable snapshot of the user's settings. Typed reads fall back to the catalog default. | `settings::Settings` |
 | `SettingKey` | VO | Dotted key such as `autocomplete.height`. Validated non-empty. | string literals |
 | `SettingValue` | VO | JSON-shaped value: Null, Bool, Number, Text, List, Object. | `serde_json::Value` in settings |
+| `SettingNumber` | VO | The number inside `SettingValue::Number`: unsigned, negative or float, read as i64/u64/f64 exactly like serde_json's `Number`, so `5` never becomes `5.0`. | `serde_json::Number` in settings |
 | `SettingKeyPattern` | VO | Wildcard pattern (`*`, `?`) for bulk delete. | `wildcard_match` |
 | `SettingDefinition` | VO | Catalog entry: key, type, default, description. | `CatalogEntry` |
 | `SettingsCatalog` | Domain service | The 28 definitions and the single source of defaults. | `CATALOG` + duplicated call-site defaults |
