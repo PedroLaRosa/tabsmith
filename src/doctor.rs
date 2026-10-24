@@ -5,7 +5,7 @@ use crate::settings::domain::services::settings_catalog::{
 };
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
-use crate::settings::{Settings, Store};
+use crate::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
@@ -412,7 +412,7 @@ fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
             },
         ),
         check("tabsmith settings corruption", Kind::Normal, move || {
-            if Store::load(&settings_path).is_ok() {
+            if JsonDocumentStore::load(&settings_path).is_ok() {
                 return Outcome::Ok;
             }
             let path = settings_path.clone();

@@ -7,10 +7,8 @@ pub(crate) use crate::settings::domain::services::settings_catalog::catalog;
 /// The settings snapshot under its old path until Phase 2 switches the callers.
 pub(crate) use crate::settings::domain::value_objects::settings::Settings;
 
-use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
-use crate::shared::infrastructure::logger;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -42,24 +40,3 @@ pub fn state_path() -> Result<PathBuf> {
 /// A flat JSON object file (`settings.json`, `state.json`): [`JsonDocumentStore`] under its old name until Phase 2
 /// switches the callers.
 pub(crate) type Store = JsonDocumentStore;
-
-impl Store {
-    pub fn load_settings() -> Result<Store> {
-        Ok(Store::load(&settings_path()?)?)
-    }
-
-    pub fn load_state() -> Result<Store> {
-        Ok(Store::load(&state_path()?)?)
-    }
-}
-
-/// Load settings.json; any error → empty (defaults).
-pub(crate) fn load_or_defaults() -> Settings {
-    match Store::load_settings() {
-        Ok(s) => settings_from_json(s.map),
-        Err(e) => {
-            logger::warn(&format!("settings: {e:#}"));
-            Settings::default()
-        }
-    }
-}
