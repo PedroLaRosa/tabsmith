@@ -1,6 +1,7 @@
 use crate::settings::application::ports::settings_editor::SettingsEditor;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::settings_error::SettingsError;
+use crate::settings::domain::value_objects::settings::Settings;
 use std::rc::Rc;
 
 /// `tabsmith settings open`: opens the settings file in the user's editor and waits for it.
@@ -17,8 +18,12 @@ impl OpenSettingsFileUseCase {
         OpenSettingsFileUseCase { settings, editor }
     }
 
-    /// True when the editor exited successfully.
+    /// True when the editor exited successfully. Settings that were never saved are saved empty first, before an
+    /// editor is even chosen, so the file is there for it.
     pub(crate) fn execute(&self) -> Result<bool, SettingsError> {
+        if self.settings.last_modified().is_none() {
+            self.settings.save(&Settings::default())?;
+        }
         self.editor.open()
     }
 }
@@ -39,5 +44,25 @@ mod tests {
         let exited_successfully = use_case.execute().unwrap();
 
         assert!(!exited_successfully);
+    }
+
+    /// A fresh install opens an editor on `{}` rather than on a file that does not exist.
+    #[test]
+    fn should_save_empty_settings_when_none_are_saved_yet() {
+        let repository = Rc::new(InMemorySettingsRepository::default());
+        let use_case = OpenSettingsFileUseCase::new(
+            repository.clone(),
+            Rc::new(ScriptedSettingsEditor::exiting(true)),
+        );
+
+        use_case.execute().unwrap();
+
+        assert_eq!(
+            (
+                repository.last_modified().is_some(),
+                repository.load().unwrap()
+            ),
+            (true, Settings::default())
+        );
     }
 }
