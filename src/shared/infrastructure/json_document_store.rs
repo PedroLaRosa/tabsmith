@@ -55,4 +55,77 @@ mod tests {
 
         assert!(document.map.is_empty());
     }
+
+    #[test]
+    fn should_load_a_blank_file_as_an_empty_document() {
+        let temp_dir = TempDir::new("document-blank");
+        let path = temp_dir.path().join("settings.json");
+        std::fs::write(&path, "  \n\t\n").unwrap();
+
+        let document = JsonDocumentStore::load(&path).unwrap();
+
+        assert!(document.map.is_empty());
+    }
+
+    #[test]
+    fn should_report_invalid_json_as_corrupted_with_the_parser_cause() {
+        let temp_dir = TempDir::new("document-corrupted");
+        let path = temp_dir.path().join("settings.json");
+        std::fs::write(&path, "{oops").unwrap();
+
+        let error = JsonDocumentStore::load(&path).err().unwrap();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!("{} is corrupted: key must be a string at line 1 column 2", path.display())
+        );
+    }
+
+    #[test]
+    fn should_report_json_that_is_not_an_object_as_corrupted() {
+        let temp_dir = TempDir::new("document-not-object");
+        let path = temp_dir.path().join("settings.json");
+        std::fs::write(&path, "[1]").unwrap();
+
+        let error = JsonDocumentStore::load(&path).err().unwrap();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!("{} is corrupted (not a JSON object)", path.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_report_a_file_it_cannot_read_with_the_path_it_was_reading() {
+        let temp_dir = TempDir::new("document-unreadable");
+        let path = temp_dir.path().join("settings.json");
+        std::fs::create_dir(&path).unwrap();
+
+        let error = JsonDocumentStore::load(&path).err().unwrap();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!("reading {}: Is a directory (os error 21)", path.display())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_report_a_failed_save_as_writing_the_path_it_was_given() {
+        let temp_dir = TempDir::new("document-unwritable");
+        let path = temp_dir.path().join("settings.json");
+        std::fs::create_dir(&path).unwrap();
+        let document = JsonDocumentStore {
+            path: path.clone(),
+            map: Map::new(),
+        };
+
+        let error = document.save().err().unwrap();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!("writing {}: Is a directory (os error 21)", path.display())
+        );
+    }
 }

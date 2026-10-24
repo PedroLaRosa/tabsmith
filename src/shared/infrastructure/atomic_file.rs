@@ -207,6 +207,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn should_refuse_a_private_write_to_a_path_without_a_parent() {
+        let file = AtomicFile::new(Path::new(""));
+
+        let error = file.write_private(b"{}").err().unwrap();
+
+        assert_eq!(format!("{:#}", anyhow::Error::from(error)), "no parent directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_report_a_failed_private_write_as_the_bare_io_error() {
+        let temp_dir = TempDir::new("private-missing-root");
+        let path = temp_dir.path().join("purged").join("run").join("abc123.json");
+
+        let error = AtomicFile::new(&path).write_private(b"{}").err().unwrap();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            "No such file or directory (os error 2)"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn save_keeps_a_symlinked_file() {
