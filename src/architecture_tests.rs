@@ -171,9 +171,8 @@ struct ImportedNames<'a> {
 impl<'a> ImportedNames<'a> {
     fn record(&mut self, paths: &[Vec<&'a str>]) {
         for path in paths.iter().filter(|path| path.first() == Some(&"crate")) {
-            if let Some(full_path) = path.strip_suffix(&["self"]) {
-                self.full_paths.insert(full_path[full_path.len() - 1], full_path.to_vec());
-            }
+            let full_path = path.strip_suffix(&["self"]).unwrap_or(path);
+            self.full_paths.insert(full_path[full_path.len() - 1], full_path.to_vec());
         }
     }
 
@@ -543,6 +542,16 @@ mod tests {
     fn should_flag_another_modules_infrastructure_reached_through_its_module_imported_as_self() {
         let source = "use crate::history::{self, domain::history_entry::HistoryEntry};\n\
                       let repo = history::infrastructure::jsonl_history_repository::JsonlHistoryRepository::new(p);\n";
+
+        let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
+    }
+
+    #[test]
+    fn should_flag_another_modules_use_case_reached_through_its_imported_module() {
+        let source = "use crate::history;\n\
+                      let uc = history::application::record_command_use_case::RecordCommandUseCase::new(r);\n";
 
         let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
 
