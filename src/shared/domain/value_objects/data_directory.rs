@@ -3,11 +3,15 @@ use std::path::PathBuf;
 
 pub(crate) struct DataDirectory {
     root: Option<PathBuf>,
+    settings_file_override: Option<PathBuf>,
 }
 
 impl DataDirectory {
-    pub(crate) fn new(root: Option<PathBuf>, _settings_file_override: Option<PathBuf>) -> Self {
-        DataDirectory { root }
+    pub(crate) fn new(root: Option<PathBuf>, settings_file_override: Option<PathBuf>) -> Self {
+        DataDirectory {
+            root,
+            settings_file_override,
+        }
     }
 
     pub(crate) fn root(&self) -> Result<PathBuf, SharedError> {
@@ -15,6 +19,9 @@ impl DataDirectory {
     }
 
     pub(crate) fn settings_file(&self) -> Result<PathBuf, SharedError> {
+        if let Some(path) = &self.settings_file_override {
+            return Ok(path.clone());
+        }
         Ok(self.root()?.join("settings.json"))
     }
 
@@ -64,5 +71,14 @@ mod tests {
         let settings_file = data_directory.settings_file();
 
         assert_eq!(settings_file, Ok(PathBuf::from("/data/settings.json")));
+    }
+
+    #[test]
+    fn should_use_the_settings_file_override_even_without_a_root() {
+        let data_directory = DataDirectory::new(None, Some(PathBuf::from("/elsewhere/s.json")));
+
+        let settings_file = data_directory.settings_file();
+
+        assert_eq!(settings_file, Ok(PathBuf::from("/elsewhere/s.json")));
     }
 }
