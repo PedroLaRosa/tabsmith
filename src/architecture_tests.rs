@@ -145,7 +145,7 @@ impl TestOnlyItem {
         let ends = if self.has_body {
             depth <= start
         } else {
-            self.open_groups <= 0 && code.trim_end().ends_with([';', ','])
+            depth < start || (self.open_groups <= 0 && code.trim_end().ends_with([';', ',']))
         };
         if ends {
             self.depth = None;
@@ -618,6 +618,19 @@ mod tests {
                 Violation { line: 6, rule: Rule::DomainLayer },
             ]
         );
+    }
+
+    #[test]
+    fn should_apply_the_layer_rules_again_once_the_block_around_a_test_only_variant_closes() {
+        let source = "pub(crate) enum MenuEvent {\n    \
+                      #[cfg(test)]\n    \
+                      Probe\n\
+                      }\n\
+                      fn load() -> serde_json::Value { serde_json::Value::Null }\n";
+
+        let found = violations_in("dropdown/domain/menu_event.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 5, rule: Rule::DomainLayer }]);
     }
 
     #[test]
