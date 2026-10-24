@@ -13,6 +13,10 @@ impl DataDirectory {
     pub(crate) fn root(&self) -> Result<PathBuf, SharedError> {
         self.root.clone().ok_or(SharedError::HomeDirectoryNotFound)
     }
+
+    pub(crate) fn state_file(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("state.json"))
+    }
 }
 
 #[cfg(test)]
@@ -38,5 +42,14 @@ mod tests {
         let root = data_directory.root();
 
         assert_eq!(root, Ok(PathBuf::from("/data")));
+    }
+
+    #[test]
+    fn should_put_the_state_file_under_the_root() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let state_file = data_directory.state_file();
+
+        assert_eq!(state_file, Ok(PathBuf::from("/data/state.json")));
     }
 }
