@@ -104,12 +104,6 @@ pub struct DiagnosticArgs {
     pub format: OutputFormat,
 }
 
-#[derive(Args)]
-pub struct CompletionArgs {
-    #[arg(value_enum, default_value_t = clap_complete::Shell::Zsh)]
-    pub shell: clap_complete::Shell,
-}
-
 #[derive(Subcommand)]
 pub enum DebugCmd {
     /// Print the bytes of every key press (Ctrl-D exits)
@@ -173,7 +167,7 @@ pub fn settings(args: SettingsArgs) -> Result<i32> {
         }
         // Same as `tabsmith settings --help`.
         if let Err(help) =
-            <crate::Cli as clap::Parser>::try_parse_from(["tabsmith", "settings", "--help"])
+            <crate::bootstrap::cli::Cli as clap::Parser>::try_parse_from(["tabsmith", "settings", "--help"])
         {
             help.print()?;
         }
@@ -743,20 +737,7 @@ fn to_toml(sections: &[Section]) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// completion, debug (SPEC §2.10)
-
-pub fn completion(args: CompletionArgs) -> Result<i32> {
-    // Buffered: clap_complete panics on a write error (e.g. `| head`).
-    let mut buf = Vec::new();
-    clap_complete::generate(
-        args.shell,
-        &mut <crate::Cli as clap::CommandFactory>::command(),
-        "tabsmith",
-        &mut buf,
-    );
-    std::io::stdout().write_all(&buf)?;
-    Ok(0)
-}
+// debug (SPEC §2.10)
 
 pub fn debug(cmd: DebugCmd) -> Result<i32> {
     match cmd {
@@ -891,15 +872,6 @@ fn debug_logs() -> Result<i32> {
             .for_each(|l| println!("{l}"));
     }
     Ok(0)
-}
-
-/// `error: <msg>` on stderr (`error:` bold red when stderr is a tty).
-pub fn print_error(err: &anyhow::Error) {
-    if std::io::stderr().is_terminal() {
-        eprintln!("\x1b[1;31merror:\x1b[0m {err:#}");
-    } else {
-        eprintln!("error: {err:#}");
-    }
 }
 
 #[cfg(test)]
