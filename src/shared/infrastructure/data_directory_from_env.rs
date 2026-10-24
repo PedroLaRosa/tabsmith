@@ -2,6 +2,12 @@ use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+/// The data directory this process's environment names (`TABSMITH_HOME`, `TABSMITH_SETTINGS_PATH`, `HOME`,
+/// `USERPROFILE`). Never fails: an unknown home surfaces from the paths that need it.
+pub(crate) fn data_directory_from_env() -> DataDirectory {
+    data_directory_from(|name| std::env::var_os(name))
+}
+
 fn data_directory_from(env: impl Fn(&str) -> Option<OsString>) -> DataDirectory {
     DataDirectory::new(root_from(&env), settings_file_from(&env))
 }

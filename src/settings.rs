@@ -1,4 +1,5 @@
 //! Paths, the flat-JSON settings/state store, typed getters and the settings catalog (SPEC §3).
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::logger;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
@@ -6,15 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// `TABSMITH_HOME`, else `$HOME/.tabsmith` (Unix) / `%USERPROFILE%\.tabsmith` (Windows).
+/// Delegates to [`data_directory_from_env`] until every caller uses `DataDirectory` (deleted in Phase 11).
 pub fn home() -> Result<PathBuf> {
-    if let Some(h) = std::env::var_os("TABSMITH_HOME").filter(|h| !h.is_empty()) {
-        return Ok(PathBuf::from(h));
-    }
-    let base = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .or_else(|| std::env::var_os("HOME"))
-        .filter(|h| !h.is_empty())
-        .context("could not determine the home directory (set HOME or TABSMITH_HOME)")?;
-    Ok(PathBuf::from(base).join(".tabsmith"))
+    Ok(data_directory_from_env().root()?)
 }
 
 /// The user's home directory (not the tabsmith dir).
@@ -26,15 +21,14 @@ pub fn user_home() -> Result<PathBuf> {
         .context("could not determine the home directory")
 }
 
+/// Delegates to [`data_directory_from_env`] until every caller uses `DataDirectory` (deleted in Phase 11).
 pub fn settings_path() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("TABSMITH_SETTINGS_PATH").filter(|p| !p.is_empty()) {
-        return Ok(PathBuf::from(p));
-    }
-    Ok(home()?.join("settings.json"))
+    Ok(data_directory_from_env().settings_file()?)
 }
 
+/// Delegates to [`data_directory_from_env`] until every caller uses `DataDirectory` (deleted in Phase 11).
 pub fn state_path() -> Result<PathBuf> {
-    Ok(home()?.join("state.json"))
+    Ok(data_directory_from_env().state_file()?)
 }
 
 /// A flat JSON object file (`settings.json`, `state.json`): literal dotted keys → arbitrary JSON.
