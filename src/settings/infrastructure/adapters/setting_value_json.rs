@@ -9,7 +9,15 @@ pub(crate) fn setting_value_from_json(value: Value) -> SettingValue {
         Value::Bool(value) => SettingValue::Bool(value),
         Value::Number(number) => SettingValue::Number(setting_number(&number)),
         Value::String(text) => SettingValue::Text(text),
-        _ => todo!(),
+        Value::Array(items) => {
+            SettingValue::List(items.into_iter().map(setting_value_from_json).collect())
+        }
+        Value::Object(fields) => SettingValue::Object(
+            fields
+                .into_iter()
+                .map(|(key, value)| (key, setting_value_from_json(value)))
+                .collect(),
+        ),
     }
 }
 
@@ -74,5 +82,32 @@ mod tests {
                 SettingValue::Text("dark".to_string())
             ]
         );
+    }
+
+    /// An `inline.profiles.<name>` object with a nested list keeps every member.
+    #[test]
+    fn should_turn_json_arrays_and_objects_into_lists_and_objects_all_the_way_down() {
+        let json = json!({"model": "m", "max_tokens": 64, "tags": ["a", 1.5]});
+
+        let value = setting_value_from_json(json);
+
+        let number = |n: SettingNumber| SettingValue::Number(n);
+        let expected = SettingValue::Object(
+            [
+                ("max_tokens", number(SettingNumber::from(64u64))),
+                ("model", SettingValue::Text("m".to_string())),
+                (
+                    "tags",
+                    SettingValue::List(vec![
+                        SettingValue::Text("a".to_string()),
+                        number(SettingNumber::from_f64(1.5).unwrap()),
+                    ]),
+                ),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect(),
+        );
+        assert_eq!(value, expected);
     }
 }
