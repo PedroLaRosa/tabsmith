@@ -1,9 +1,9 @@
 /// A JSON number that keeps integers and floats apart the way serde_json's `Number` does, so a stored `5` stays `5`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SettingNumber(Representation);
 
 /// serde_json's `PosInt`, `NegInt` and `Float`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Representation {
     Unsigned(u64),
     Negative(i64),
@@ -114,5 +114,15 @@ mod tests {
         let numbers: Vec<_> = floats.into_iter().map(SettingNumber::from_f64).collect();
 
         assert!(numbers.iter().all(Option::is_none), "{numbers:?}");
+    }
+
+    /// `settings autocomplete.height 5` stores `5`, not `5.0`.
+    #[test]
+    fn should_tell_an_integer_from_the_float_of_the_same_value() {
+        let integer = SettingNumber::from(5u64);
+
+        let float = SettingNumber::from_f64(5.0).unwrap();
+
+        assert_ne!(integer, float);
     }
 }
