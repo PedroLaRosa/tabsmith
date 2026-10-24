@@ -496,6 +496,15 @@ Implementation session protocol (AGENTS.md):
    - `cargo test --locked --release -- --ignored all_bundle_modules`;
    - the `cargo clippy --all-targets --locked` warning count.
 
+Baseline recorded on 2026-10-24 at `ef807c1` (rustc 1.95.0, macOS):
+- `cargo test --locked`: 284 tests, `283 passed; 0 failed; 1 ignored`.
+- `cargo test --locked --release -- --ignored all_bundle_modules`: `1 passed; 0 failed`.
+- `cargo clippy --all-targets --locked`: 3 warnings (2 × `useless use of format!`, 1 × `use of default to create a
+  unit struct`).
+- Output capture for the equivalence check: `--help` of every command, `init` for every shell and phase, `settings`
+  get/set/delete/list (plain, json, json-pretty), `theme`, `inline`, `integrations status/install/uninstall` (with the
+  written dotfiles and their modes), `completion`, `diagnostic`, `doctor --all`, run in an isolated `HOME`.
+
 ### Phase 1: composition root, fitness test, shared kernel
 1. Move `main.rs`'s clap root and dispatch, `cli::completion` and `cli::print_error` to `bootstrap/cli.rs`.
    `main.rs` becomes thin.
