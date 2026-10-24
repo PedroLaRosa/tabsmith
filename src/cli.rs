@@ -3,13 +3,19 @@
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
 use crate::integrations::When;
 use crate::settings::{self, Settings, Store};
+use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_THEME, INLINE_ENABLED, INLINE_SOURCE,
 };
 use crate::settings::domain::value_objects::setting_key_pattern::SettingKeyPattern;
-use crate::settings::infrastructure::adapters::setting_value_json::{parse_value, settings_from_json};
+use crate::settings::domain::value_objects::setting_value::SettingValue;
+use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
+use crate::settings::infrastructure::adapters::setting_value_json::{
+    parse_value, setting_value_to_json, settings_from_json,
+};
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{bold, sgr, stdout_tty};
 use anyhow::{bail, Context, Result};
@@ -242,6 +248,11 @@ fn render_list_all(map: &Map<String, Value>, format: OutputFormat) -> String {
     )
 }
 
+/// settings.json, or the file `TABSMITH_SETTINGS_PATH` names, resolved when a command reads or writes it.
+fn settings_repository() -> JsonFileSettingsRepository {
+    JsonFileSettingsRepository::new(data_directory_from_env())
+}
+
 /// `$EDITOR <path>` (waits), else macOS `open -t`, Windows `notepad`.
 fn open_settings(path: &Path) -> Result<i32> {
     if !path.exists() {
@@ -321,13 +332,14 @@ pub fn theme(args: ThemeArgs) -> Result<i32> {
         theme_list(&dir).iter().for_each(|t| println!("{t}"));
         return Ok(0);
     }
-    let mut store = Store::load_settings()?;
+    let repository = settings_repository();
+    let settings = repository.load()?;
     let Some(name) = args.theme else {
         println!(
             "{}",
-            match store.map.get(AUTOCOMPLETE_THEME) {
-                Some(v) if !v.is_string() => format!("{v:#}"),
-                _ => settings_from_json(store.map.clone())
+            match settings.get(AUTOCOMPLETE_THEME) {
+                Some(v) if v.as_str().is_none() => format!("{:#}", setting_value_to_json(v)),
+                _ => settings
                     .string(AUTOCOMPLETE_THEME)
                     .unwrap_or_default()
                     .to_string(),
@@ -346,10 +358,7 @@ pub fn theme(args: ThemeArgs) -> Result<i32> {
     } else {
         bail!("'{name}' does not exist in {}", dir.display());
     }
-    store
-        .map
-        .insert("autocomplete.theme".into(), Value::String(name));
-    store.save()?;
+    repository.save(&settings.with(AUTOCOMPLETE_THEME, SettingValue::Text(name)))?;
     Ok(0)
 }
 
