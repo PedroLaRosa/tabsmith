@@ -32,6 +32,10 @@ impl DataDirectory {
     pub(crate) fn history_file(&self) -> Result<PathBuf, SharedError> {
         Ok(self.root()?.join("history.jsonl"))
     }
+
+    pub(crate) fn run_dir(&self) -> Result<PathBuf, SharedError> {
+        Ok(self.root()?.join("run"))
+    }
 }
 
 #[cfg(test)]
@@ -93,5 +97,14 @@ mod tests {
         let path = data_directory.history_file();
 
         assert_eq!(path, Ok(PathBuf::from("/data/history.jsonl")));
+    }
+
+    #[test]
+    fn should_put_the_run_directory_under_the_root() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let path = data_directory.run_dir();
+
+        assert_eq!(path, Ok(PathBuf::from("/data/run")));
     }
 }
