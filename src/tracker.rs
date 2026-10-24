@@ -1143,6 +1143,34 @@ mod tests {
     }
 
     #[test]
+    fn splitter_holds_a_window_name_whole_across_chunks() {
+        let whole = b"ab\x1bkvim\x1b\\cd";
+        let name = Piece::WindowName(b"\x1bkvim\x1b\\".to_vec());
+
+        for cut in 0..=whole.len() {
+            let p = split_all(&[&whole[..cut], &whole[cut..]]);
+
+            assert_eq!(bytes_of(&p), b"abcd", "cut {cut}");
+            assert!(p.contains(&name), "cut {cut}");
+        }
+    }
+
+    #[test]
+    fn splitter_ends_a_window_name_at_another_escape_like_tmux() {
+        // tmux drops `foo` and runs the SGR: `ABC` on screen.
+        let p = split_all(&[b"A\x1bkfoo\x1b[31mB\x1b[0mC"]);
+
+        assert_eq!(
+            p,
+            [
+                Piece::Bytes(b"A".to_vec()),
+                Piece::WindowName(b"\x1bkfoo".to_vec()),
+                Piece::Bytes(b"\x1b[31mB\x1b[0mC".to_vec())
+            ]
+        );
+    }
+
+    #[test]
     fn splitter_flushes_huge_osc() {
         let mut s = Splitter::default();
         let mut big = b"\x1b]697;".to_vec();
