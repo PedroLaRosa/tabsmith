@@ -79,6 +79,12 @@ impl Settings {
         Arc::make_mut(&mut self.0).insert(key.to_string(), value);
         self
     }
+
+    /// These settings with nothing stored under `key`.
+    pub(crate) fn without(mut self, key: &str) -> Settings {
+        Arc::make_mut(&mut self.0).remove(key);
+        self
+    }
 }
 
 /// ponytail: the catalog's string literals hold no escapes, so dropping the quotes is the JSON string.
@@ -392,5 +398,15 @@ mod tests {
             updated.get(AUTOCOMPLETE_THEME),
             Some(&SettingValue::Text("light".to_string()))
         );
+    }
+
+    /// `tabsmith inline set-customization` with "None" picked unsets the source.
+    #[test]
+    fn should_no_longer_hold_a_key_it_was_cleared_of() {
+        let settings = settings_with(&[(INLINE_SOURCE, SettingValue::Text("history".to_string()))]);
+
+        let updated = settings.without(INLINE_SOURCE);
+
+        assert_eq!(updated.get(INLINE_SOURCE), None);
     }
 }
