@@ -1,7 +1,9 @@
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::settings_error::SettingsError;
 use crate::settings::domain::value_objects::settings::Settings;
-use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
+use crate::settings::infrastructure::adapters::setting_value_json::{
+    settings_from_json, settings_to_json,
+};
 use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use std::time::SystemTime;
@@ -26,8 +28,13 @@ impl SettingsRepository for JsonFileSettingsRepository {
         Ok(settings_from_json(document.map))
     }
 
-    fn save(&self, _settings: &Settings) -> Result<(), SettingsError> {
-        todo!()
+    /// Written with [`JsonDocumentStore::save`]: pretty JSON, a symlinked file stays a symlink, Unix mode 0600.
+    fn save(&self, settings: &Settings) -> Result<(), SettingsError> {
+        let document = JsonDocumentStore {
+            path: self.data_directory.settings_file().map_err(storage_error)?,
+            map: settings_to_json(settings),
+        };
+        document.save().map_err(storage_error)
     }
 
     fn last_modified(&self) -> Option<SystemTime> {
@@ -42,6 +49,8 @@ fn storage_error(error: impl std::error::Error + Send + Sync + 'static) -> Setti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::domain::value_objects::setting_number::SettingNumber;
+    use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     fn repository_in(temp_dir: &TempDir) -> JsonFileSettingsRepository {
@@ -56,5 +65,22 @@ mod tests {
         let settings = repository.load().unwrap();
 
         assert_eq!(settings.entries().count(), 0);
+    }
+
+    /// The text `settings autocomplete.height 5` has always written: pretty, keys sorted, a trailing newline.
+    #[test]
+    fn should_save_settings_as_pretty_json_with_sorted_keys_and_a_trailing_newline() {
+        let temp_dir = TempDir::new("settings-save");
+        let repository = repository_in(&temp_dir);
+        let settings = Settings::default()
+            .with("autocomplete.theme", SettingValue::Text("light".to_string()))
+            .with("autocomplete.height", SettingValue::Number(SettingNumber::from(5u64)));
+
+        repository.save(&settings).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(temp_dir.path().join("settings.json")).unwrap(),
+            "{\n  \"autocomplete.height\": 5,\n  \"autocomplete.theme\": \"light\"\n}\n"
+        );
     }
 }
