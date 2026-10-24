@@ -206,12 +206,13 @@ pub(crate) fn catalog() -> &'static [SettingDefinition] {
     CATALOG
 }
 
-/// The raw JSON default literal `settings list --all` shows for `key`.
+/// The raw JSON default literal `settings list --all` shows for `key`; `None` for a template row, which has none.
 pub(crate) fn default(key: &str) -> Option<&'static str> {
     CATALOG
         .iter()
         .find(|definition| definition.key() == key)
         .map(SettingDefinition::default)
+        .filter(|literal| !literal.is_empty())
 }
 
 #[cfg(test)]
@@ -251,5 +252,14 @@ mod tests {
         let literal = default(key);
 
         assert_eq!(literal, Some("\"most recent\""));
+    }
+
+    #[test]
+    fn should_have_no_default_for_a_template_row() {
+        let key = "inline.profiles.<name>";
+
+        let literal = default(key);
+
+        assert_eq!(literal, None);
     }
 }
