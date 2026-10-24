@@ -218,6 +218,7 @@ pub(crate) fn default(key: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::domain::value_objects::settings::Settings;
     use serde_json::Value;
 
     #[test]
@@ -289,5 +290,308 @@ mod tests {
         let literal = default(key);
 
         assert_eq!(literal, Some(if cfg!(windows) { "20000" } else { "5000" }));
+    }
+
+    /// menu.rs max_rows: `f64("autocomplete.height", 7.0)`.
+    #[test]
+    fn should_default_the_menu_height_to_7_rows() {
+        let settings = Settings::default();
+
+        let read = settings.f64(AUTOCOMPLETE_HEIGHT);
+
+        assert_eq!(read, 7.0);
+    }
+
+    /// render.rs: `f64("autocomplete.width", 40.0)`.
+    #[test]
+    fn should_default_the_menu_width_to_40_columns() {
+        let settings = Settings::default();
+
+        let read = settings.f64(AUTOCOMPLETE_WIDTH);
+
+        assert_eq!(read, 40.0);
+    }
+
+    /// engine.rs script_timeout: `f64(.., if cfg!(windows) { 20000.0 } else { 5000.0 })`.
+    #[test]
+    fn should_default_the_engine_script_timeout_to_20000_ms_on_windows_and_5000_elsewhere() {
+        let settings = Settings::default();
+
+        let read = settings.f64(AUTOCOMPLETE_SCRIPT_TIMEOUT);
+
+        assert_eq!(read, if cfg!(windows) { 20000.0 } else { 5000.0 });
+    }
+
+    /// js.rs script_timeout: `i64(.., if cfg!(windows) { 20000 } else { 5000 })`.
+    #[test]
+    fn should_default_the_js_script_timeout_to_20000_ms_on_windows_and_5000_elsewhere() {
+        let settings = Settings::default();
+
+        let read = settings.i64(AUTOCOMPLETE_SCRIPT_TIMEOUT);
+
+        assert_eq!(read, if cfg!(windows) { 20000 } else { 5000 });
+    }
+
+    /// engine.rs llm_history: `i64("inline.historyCount", 49)`.
+    #[test]
+    fn should_default_the_llm_history_to_49_lines() {
+        let settings = Settings::default();
+
+        let read = settings.i64(INLINE_HISTORY_COUNT);
+
+        assert_eq!(read, 49);
+    }
+
+    /// pty.rs: `i64("inline.debounceMs", 300)`.
+    #[test]
+    fn should_default_the_llm_debounce_to_300_ms() {
+        let settings = Settings::default();
+
+        let read = settings.i64(INLINE_DEBOUNCE_MS);
+
+        assert_eq!(read, 300);
+    }
+
+    /// cli.rs, doctor.rs, engine.rs and pty.rs: `bool("inline.enabled", true)`.
+    #[test]
+    fn should_default_ghost_text_to_enabled() {
+        let settings = Settings::default();
+
+        let read = settings.bool(INLINE_ENABLED);
+
+        assert!(read);
+    }
+
+    /// engine.rs: `bool("autocomplete.insertSpaceAutomatically", true)`.
+    #[test]
+    fn should_default_to_inserting_a_space_automatically() {
+        let settings = Settings::default();
+
+        let read = settings.bool(AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY);
+
+        assert!(read);
+    }
+
+    /// doctor.rs, menu.rs and pty.rs: `bool("autocomplete.disable", false)`.
+    #[test]
+    fn should_default_autocomplete_to_not_disabled() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_DISABLE),
+            default(AUTOCOMPLETE_DISABLE),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// doctor.rs, parser.rs and specs.rs: `bool("autocomplete.developerMode", false)`.
+    #[test]
+    fn should_default_developer_mode_to_off() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_DEVELOPER_MODE),
+            default(AUTOCOMPLETE_DEVELOPER_MODE),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// engine.rs: `bool("autocomplete.fuzzySearch", false)`.
+    #[test]
+    fn should_default_fuzzy_search_to_off() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_FUZZY_SEARCH),
+            default(AUTOCOMPLETE_FUZZY_SEARCH),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// engine.rs: `bool("autocomplete.firstTokenCompletion", false)`.
+    #[test]
+    fn should_default_first_token_completion_to_off() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION),
+            default(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// engine.rs: `bool("autocomplete.hideAutoExecuteSuggestion", false)`.
+    #[test]
+    fn should_default_to_showing_auto_execute_suggestions() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION),
+            default(AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// engine.rs, menu.rs and pty.rs: `bool("autocomplete.onlyShowOnTab", false)`.
+    #[test]
+    fn should_default_to_opening_the_menu_without_tab() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
+            default(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// engine.rs: `bool("autocomplete.immediatelyExecuteAfterSpace", false)`.
+    #[test]
+    fn should_default_to_no_execute_row_after_a_space() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE),
+            default(AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// engine.rs: `bool("autocomplete.immediatelyRunDangerousCommands", false)`.
+    #[test]
+    fn should_default_to_no_execute_row_for_dangerous_commands() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS),
+            default(AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// engine.rs: `bool("autocomplete.alwaysSuggestCurrentToken", false)`.
+    #[test]
+    fn should_default_to_not_suggesting_the_current_token() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN),
+            default(AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// engine.rs: `bool("autocomplete.preferVerboseSuggestions", false)`.
+    #[test]
+    fn should_default_to_short_suggestions() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS),
+            default(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// menu.rs: `bool("autocomplete.alwaysShowDescription", false)`.
+    #[test]
+    fn should_default_the_description_pop_out_to_closed() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION),
+            default(AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// menu.rs: `bool("autocomplete.scrollWrapAround", false)`.
+    #[test]
+    fn should_default_the_menu_to_not_wrap_around() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_SCROLL_WRAP_AROUND),
+            default(AUTOCOMPLETE_SCROLL_WRAP_AROUND),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// menu.rs: `bool("autocomplete.navigateToHistory", false)`.
+    #[test]
+    fn should_default_to_hiding_the_menu_instead_of_navigating_to_history() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(AUTOCOMPLETE_NAVIGATE_TO_HISTORY),
+            default(AUTOCOMPLETE_NAVIGATE_TO_HISTORY),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// render.rs: `string("autocomplete.theme").unwrap_or("dark")`; the theme command prints `dark` too.
+    #[test]
+    fn should_default_the_theme_to_dark() {
+        let settings = Settings::default();
+
+        let read = settings.string(AUTOCOMPLETE_THEME);
+
+        assert_eq!(read, Some("dark"));
+    }
+
+    /// inline.rs and cli.rs: `string("inline.source").unwrap_or("history+specs")`.
+    #[test]
+    fn should_default_the_ghost_text_source_to_history_then_specs() {
+        let settings = Settings::default();
+
+        let read = settings.string(INLINE_SOURCE);
+
+        assert_eq!(read, Some("history+specs"));
+    }
+
+    /// engine.rs: `string("beta.history.mode").unwrap_or("off")`.
+    #[test]
+    fn should_default_the_dropdown_history_mode_to_off() {
+        let settings = Settings::default();
+
+        let read = settings.string(BETA_HISTORY_MODE);
+
+        assert_eq!(read, Some("off"));
+    }
+
+    /// engine.rs ranks by recency unless `string("autocomplete.sortMethod") == Some("alphabetical")`; an unset key
+    /// was `None` there and is `most recent` now, and both rank by recency.
+    #[test]
+    fn should_default_the_sort_method_to_most_recent() {
+        let settings = Settings::default();
+
+        let read = settings.string(AUTOCOMPLETE_SORT_METHOD);
+
+        assert_eq!(read, Some("most recent"));
+    }
+
+    /// parser.rs: `str_list("autocomplete.disableForCommands")` is empty when unset.
+    #[test]
+    fn should_default_to_completing_every_command() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.str_list(AUTOCOMPLETE_DISABLE_FOR_COMMANDS),
+            default(AUTOCOMPLETE_DISABLE_FOR_COMMANDS),
+        );
+
+        assert_eq!(read, (Vec::<String>::new(), Some("[]")));
     }
 }
