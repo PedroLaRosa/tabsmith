@@ -623,6 +623,19 @@ mod tests {
     }
 
     #[test]
+    fn should_apply_the_layer_rules_again_after_a_test_only_variant() {
+        let source = "pub(crate) enum MenuEvent {\n    \
+                      #[cfg(test)]\n    \
+                      Probe,\n    \
+                      Open(serde_json::Value),\n\
+                      }\n";
+
+        let found = violations_in("dropdown/domain/menu_event.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 4, rule: Rule::DomainLayer }]);
+    }
+
+    #[test]
     fn should_apply_the_layer_rules_again_once_the_block_around_a_test_only_variant_closes() {
         let source = "pub(crate) enum MenuEvent {\n    \
                       #[cfg(test)]\n    \
