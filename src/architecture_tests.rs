@@ -123,13 +123,15 @@ struct TestOnlyItem {
     /// Brace depth at the attribute; `None` outside a test-only item.
     depth: Option<usize>,
     has_body: bool,
+    /// `(` and `[` opened in the item and not closed yet: a `,` inside a multi-line signature does not end it.
+    open_groups: isize,
 }
 
 impl TestOnlyItem {
     /// Before the line's braces are read: a test-only attribute opens an item at the current brace depth.
     fn open_at(&mut self, code: &str, depth: usize) {
         if self.depth.is_none() && is_test_only_attribute(code) {
-            *self = TestOnlyItem { depth: Some(depth), has_body: false };
+            *self = TestOnlyItem { depth: Some(depth), has_body: false, open_groups: 0 };
         }
     }
 
@@ -139,7 +141,12 @@ impl TestOnlyItem {
             return false;
         };
         self.has_body |= code.contains('{');
-        let ends = if self.has_body { depth <= start } else { code.trim_end().ends_with([';', ',']) };
+        self.open_groups += code.matches(['(', '[']).count() as isize - code.matches([')', ']']).count() as isize;
+        let ends = if self.has_body {
+            depth <= start
+        } else {
+            self.open_groups <= 0 && code.trim_end().ends_with([';', ','])
+        };
         if ends {
             self.depth = None;
         }
@@ -611,6 +618,21 @@ mod tests {
                 Violation { line: 6, rule: Rule::DomainLayer },
             ]
         );
+    }
+
+    #[test]
+    fn should_not_apply_the_layer_rules_inside_a_multi_line_test_only_signature() {
+        let source = "#[cfg(test)]\n\
+                      fn fixture(\n    \
+                      expected: serde_json::Value,\n    \
+                      actual: serde_json::Value,\n\
+                      ) -> bool {\n    \
+                      expected == actual\n\
+                      }\n";
+
+        let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(found, vec![]);
     }
 
     #[test]
