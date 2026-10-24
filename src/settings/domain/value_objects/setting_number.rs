@@ -17,7 +17,10 @@ impl From<u64> for SettingNumber {
 
 impl From<i64> for SettingNumber {
     fn from(number: i64) -> Self {
-        SettingNumber(Representation::Negative(number))
+        match u64::try_from(number) {
+            Ok(unsigned) => SettingNumber(Representation::Unsigned(unsigned)),
+            Err(_) => SettingNumber(Representation::Negative(number)),
+        }
     }
 }
 
@@ -73,5 +76,14 @@ mod tests {
         let read = (number.as_i64(), number.as_u64(), number.as_f64());
 
         assert_eq!(read, (Some(-3), None, Some(-3.0)));
+    }
+
+    #[test]
+    fn should_read_a_non_negative_i64_as_a_u64_too() {
+        let number = SettingNumber::from(5i64);
+
+        let read = number.as_u64();
+
+        assert_eq!(read, Some(5));
     }
 }
