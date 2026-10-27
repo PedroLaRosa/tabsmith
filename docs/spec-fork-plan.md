@@ -17,9 +17,10 @@ produced by a static pipeline we control and that tabsmith consumes unchanged.
 
 ## Decision
 
-Fork `withfig/autocomplete`, build it ourselves and publish the bundle as a release asset. The output stays in the Fig
-spec format, so the engine and `src/specs.rs` do not change; only `scripts/update-specs.sh` points somewhere else.
-Generated data from other sources may be layered on later as an additive overlay (see "Later"), but is not part of v1.
+Fork `withfig/autocomplete` as `tabsmith-specs`, build it ourselves and publish the bundle as a release asset. The output
+stays in the Fig spec format, so the engine and `src/specs.rs` do not change; only `scripts/update-specs.sh` points
+somewhere else. Generated data from other sources may be layered on later as an additive overlay (see "Later"), but is
+not part of v1. The licensing checklist below lists what the fork must keep and what new specs may come from.
 
 ## Findings
 
@@ -91,14 +92,32 @@ forks by stars) are 0 commits ahead.
 - **Free trust.** Spec generators call `executeCommand` on users' machines. Review each merged PR's generators; static-only
   specs are low risk.
 
+## Licensing checklist
+
+Upstream is MIT, which allows forking, renaming, changing and republishing. Its only condition is keeping the copyright
+notice and licence text with every copy, the compiled bundle included. Not reviewed by a lawyer.
+
+- **LICENSE.** Keep "Copyright (c) 2021 Hercules Labs Inc. (Fig)" and the MIT text unchanged; add our own copyright line
+  below it for our changes.
+- **package.json.** Rename `name` to `tabsmith-specs` and set `"license": "MIT"` (upstream says ISC, which contradicts
+  `LICENSE`).
+- **Name.** MIT grants no trademark rights. "Forked from withfig/autocomplete" is fine; no Fig name or logo in a way that
+  suggests endorsement, and no `@withfig` npm scope.
+- **New specs, by source.** Hand-written from a tool's `--help` or docs: fine (flag and subcommand names are facts;
+  write descriptions in our own words). MIT or Apache-2.0 sources (argc-completions, carapace): fine, keep their
+  copyright notice in the NOTICE. GPL sources (fish completions, GNU man page text): never, they would put the bundle
+  under GPL terms, which clashes with tabsmith's MIT OR Apache-2.0.
+- **Icons.** Upstream's release zips `icons/` too. Brand logos are their owners' trademarks; if any ship, keep the note
+  from `assets/icons/README.md`.
+
 ## Steps
 
 No Rust changes are expected, so the AGENTS.md skill-loading protocol applies only if that changes. Use one Conventional
 Commit per step, in the style of `git log` (`docs/git-convention.md` is referenced by AGENTS.md but does not exist).
 
-1. **Pick the host.** Open question: which account or org owns the fork, and the repo name (suggested `tabsmith-specs`)?
-   Forking is outward-facing, so confirm with the user first. Keep the fork relationship so upstream PR branches stay
-   fetchable.
+1. **Pick the host.** The repo is named `tabsmith-specs`. Open question: which account or org owns it? Forking is
+   outward-facing, so confirm with the user first. Keep the fork relationship so upstream PR branches stay fetchable.
+   Apply the LICENSE, package.json and name items of the licensing checklist in the first commit.
 2. **Prove the build reproduces.** In a new empty directory, clone upstream `master` and run
    `pnpm install --frozen-lockfile --ignore-scripts` (the `prepare` script is `husky install`) and `pnpm build` with node
    20 and pnpm 9.1.0. Compare `build/` with `npm pack @withfig/autocomplete@2.692.3` (file list and hashes). If they
@@ -109,7 +128,7 @@ Commit per step, in the style of `git log` (`docs/git-convention.md` is referenc
    `specs.tar.zst` made the way `scripts/update-specs.sh` does today (`tar -C build -cf - . | zstd -19`), plus the
    LICENSE and a NOTICE saying it is a modified fork. Pin the build tool in the `build` script instead of a floating `npx`.
 4. **Merge the backlog.** Review each PR (generators first, static specs are quick), run `pnpm test`, skip the old
-   conflicting ones unless wanted.
+   conflicting ones unless wanted. For new specs, check the source against the licensing checklist.
 5. **Switch tabsmith.** `scripts/update-specs.sh` downloads the fork's release asset, `SPECS_VERSION` becomes the fork's
    tag, and `assets/SPECS_LICENSE` stays. Update the README "Install"/license lines and SPEC D11 and its `assets/` row.
    SPEC says THIRD_PARTY notices are not shipped yet; decide whether this is the moment.
@@ -127,7 +146,7 @@ terraform, brew). The argc-completions snapshot in its repo is older than Fig's,
 
 ## Open questions
 
-- Fork owner and repo name (step 1).
+- Fork owner (step 1).
 - Merge the 13 old conflicting PRs, or ignore them?
 - Is the overlay worth doing once the fork exists?
 
