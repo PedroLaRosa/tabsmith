@@ -6,17 +6,22 @@ use crate::shell_integration::domain::value_objects::integration_phase::Integrat
 /// The output of `init <shell> <phase>` (SPEC §5.3), without the trailing newline.
 pub(crate) fn render(
     shell: Shell,
-    _phase: IntegrationPhase,
+    phase: IntegrationPhase,
     template: &str,
     binary: &str,
     _parent_shell: impl FnOnce() -> Option<String>,
     _launches: impl FnOnce() -> bool,
 ) -> InitScript {
-    InitScript::new(
+    let mut lines = Vec::new();
+    if phase == IntegrationPhase::Pre {
+        lines.push("set -g SHOULD_TABSMITH_LAUNCH 0".to_string());
+    }
+    lines.push(
         template
             .trim_end_matches('\n')
             .replace("{{BIN}}", &quote(shell, binary)),
-    )
+    );
+    InitScript::new(lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -56,5 +61,22 @@ mod tests {
             script.text(),
             r"body '/opt/tab smith/it\'s/tabsmith' '/opt/tab smith/it\'s/tabsmith'"
         );
+    }
+
+    /// SHOULD_TABSMITH_LAUNCH=0 means launch.
+    #[test]
+    fn should_open_the_fish_pre_script_with_a_zero_launch_flag_when_tabsmith_launches() {
+        let template = "body\n";
+
+        let script = render(
+            Shell::Fish,
+            IntegrationPhase::Pre,
+            template,
+            "tabsmith",
+            || None,
+            || true,
+        );
+
+        assert_eq!(script.text(), "set -g SHOULD_TABSMITH_LAUNCH 0\nbody");
     }
 }
