@@ -2,6 +2,7 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
+use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use std::path::{Path, PathBuf};
 
 /// Integrations of `shell` (SPEC §5.5 table).
@@ -33,14 +34,20 @@ pub(crate) fn integrations(
             let dir = paths.zdotdir().unwrap_or(paths.home());
             vec![dot(dir.join(".zshrc")), dot(dir.join(".zprofile"))]
         }
-        Shell::Fish | Shell::Pwsh => Vec::new(),
+        Shell::Fish => [
+            (IntegrationPhase::Pre, "00_tabsmith_pre.fish"),
+            (IntegrationPhase::Post, "99_tabsmith_post.fish"),
+        ]
+        .into_iter()
+        .map(|(w, f)| Integration::whole_file(shell, paths.fish_config_dir().join("conf.d").join(f), w))
+        .collect(),
+        Shell::Pwsh => Vec::new(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
     use std::collections::HashSet;
 
     fn paths() -> IntegrationPaths {
@@ -118,6 +125,31 @@ mod tests {
             [
                 (Shell::Zsh, PathBuf::from("/home/u/.config/zsh/.zshrc"), None),
                 (Shell::Zsh, PathBuf::from("/home/u/.config/zsh/.zprofile"), None),
+            ]
+        );
+    }
+
+    /// fish has no dotfile blocks: tabsmith owns one `conf.d` file per phase, named so fish sources pre first and
+    /// post last.
+    #[test]
+    fn should_list_one_whole_conf_d_file_per_phase_for_fish() {
+        let paths = paths();
+
+        let fish = integrations(&paths, Shell::Fish, |_| false, unasked_pwsh_profile).unwrap();
+
+        assert_eq!(
+            listed(&fish),
+            [
+                (
+                    Shell::Fish,
+                    PathBuf::from("/home/u/.config/fish/conf.d/00_tabsmith_pre.fish"),
+                    Some(IntegrationPhase::Pre)
+                ),
+                (
+                    Shell::Fish,
+                    PathBuf::from("/home/u/.config/fish/conf.d/99_tabsmith_post.fish"),
+                    Some(IntegrationPhase::Post)
+                ),
             ]
         );
     }
