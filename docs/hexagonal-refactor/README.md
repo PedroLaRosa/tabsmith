@@ -33,7 +33,7 @@ restructuring.
   - a fixer, then another review round, up to 3 rounds.
 - [`phase-4-shell-integration.md`](phase-4-shell-integration.md) and
   [`phase-4-shell-integration.args.json`](phase-4-shell-integration.args.json): Phase 4 research (decisions P1-P18,
-  traps T1-T57), step briefs and launch arguments; it is run in three chunks (steps 1-8, 9-13, 14-18).
+  traps T1-T57), step briefs and launch arguments; it is run in three chunks (steps 1-8, 9-12b, 13-18).
 - [`phase-3-history.md`](phase-3-history.md) and [`phase-3-history.args.json`](phase-3-history.args.json): Phase 3
   research, step briefs and the exact launch arguments.
 - [`source-map/`](source-map/): a read-only pass over all 21 legacy files at `af1b304`. For each file it gives:
