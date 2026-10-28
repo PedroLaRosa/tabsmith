@@ -1,0 +1,44 @@
+#[cfg(test)]
+use std::cell::Cell;
+
+/// The reminder that terminals opened before an install need a restart (`doctor.prompt-restart-terminal` in
+/// `state.json`, which doctor reads and clears).
+pub(crate) trait RestartReminderRepository {
+    /// Best effort: a reminder that cannot be saved is dropped.
+    fn save_pending(&self);
+}
+
+/// Remembers whether it was asked to save the reminder, for tests.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct InMemoryRestartReminderRepository {
+    pending: Cell<bool>,
+}
+
+#[cfg(test)]
+impl InMemoryRestartReminderRepository {
+    pub(crate) fn is_pending(&self) -> bool {
+        self.pending.get()
+    }
+}
+
+#[cfg(test)]
+impl RestartReminderRepository for InMemoryRestartReminderRepository {
+    fn save_pending(&self) {
+        self.pending.set(true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_remember_it_was_asked_to_save_the_reminder() {
+        let repository = InMemoryRestartReminderRepository::default();
+
+        repository.save_pending();
+
+        assert!(repository.is_pending());
+    }
+}
