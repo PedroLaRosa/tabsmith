@@ -10,11 +10,12 @@ pub(crate) fn render(
     template: &str,
     binary: &str,
     _parent_shell: impl FnOnce() -> Option<String>,
-    _launches: impl FnOnce() -> bool,
+    launches: impl FnOnce() -> bool,
 ) -> InitScript {
+    let launch = || if launches() { 0 } else { 1 };
     let mut lines = Vec::new();
     if phase == IntegrationPhase::Pre {
-        lines.push("set -g SHOULD_TABSMITH_LAUNCH 0".to_string());
+        lines.push(format!("set -g SHOULD_TABSMITH_LAUNCH {}", launch()));
     }
     lines.push(
         template
@@ -78,5 +79,21 @@ mod tests {
         );
 
         assert_eq!(script.text(), "set -g SHOULD_TABSMITH_LAUNCH 0\nbody");
+    }
+
+    #[test]
+    fn should_open_the_fish_pre_script_with_a_one_launch_flag_when_tabsmith_does_not_launch() {
+        let template = "body\n";
+
+        let script = render(
+            Shell::Fish,
+            IntegrationPhase::Pre,
+            template,
+            "tabsmith",
+            || None,
+            || false,
+        );
+
+        assert_eq!(script.text(), "set -g SHOULD_TABSMITH_LAUNCH 1\nbody");
     }
 }
