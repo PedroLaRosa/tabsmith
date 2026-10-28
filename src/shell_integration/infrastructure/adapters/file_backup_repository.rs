@@ -38,4 +38,16 @@ mod tests {
             "alias ll='ls -l'\n"
         );
     }
+
+    #[test]
+    fn should_report_a_dotfile_gone_before_its_backup_on_its_own_path() {
+        let temp_dir = TempDir::new("backup-vanished");
+        let zshrc = temp_dir.path().join(".zshrc");
+
+        let error = FileBackupRepository
+            .back_up(&Integration::dotfile(Shell::Zsh, zshrc.clone()), &temp_dir.path().join("backups/100"))
+            .unwrap_err();
+
+        assert!(matches!(error, ShellIntegrationError::FileDoesNotExist(p) if p == zshrc));
+    }
 }
