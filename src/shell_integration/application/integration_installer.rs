@@ -692,4 +692,58 @@ mod tests {
 
         assert!(traces);
     }
+
+    #[test]
+    fn should_find_traces_in_a_tabsmith_line_of_the_dotfile_even_with_trailing_whitespace() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), &format!("export A=1\n{POST_MARKER}  \r\n")).unwrap();
+
+        let traces = bed.installer.has_traces(&paths(), &zshrc);
+
+        assert!(traces);
+    }
+
+    /// Unlike the check, the trace scan does not strip a BOM before the first line.
+    #[test]
+    fn should_not_take_a_marker_behind_a_byte_order_mark_for_a_trace() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), &format!("\u{feff}{PRE_MARKER}\nexport A=1\n")).unwrap();
+
+        let traces = bed.installer.has_traces(&paths(), &zshrc);
+
+        assert!(!traces);
+    }
+
+    #[test]
+    fn should_find_no_traces_in_a_dotfile_it_cannot_read() {
+        let bed = test_bed();
+
+        let traces = bed.installer.has_traces(&paths(), &zshrc());
+
+        assert!(!traces);
+    }
+
+    #[test]
+    fn should_look_only_at_its_own_file_for_traces_of_a_whole_file_integration() {
+        let bed = test_bed();
+        let fish_pre = fish_pre();
+        write_script(&bed, &fish_pre, IntegrationPhase::Pre);
+
+        let traces = bed.installer.has_traces(&paths(), &fish_pre);
+
+        assert!(!traces);
+    }
+
+    #[test]
+    fn should_find_traces_of_a_whole_file_integration_in_its_file() {
+        let bed = test_bed();
+        let fish_pre = fish_pre();
+        bed.dotfiles.write(fish_pre.path(), "edited\n").unwrap();
+
+        let traces = bed.installer.has_traces(&paths(), &fish_pre);
+
+        assert!(traces);
+    }
 }
