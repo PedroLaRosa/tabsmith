@@ -57,6 +57,15 @@ impl Dotfile {
             .collect();
         Dotfile::new(format!("{bom}{}\n", kept.trim()))
     }
+
+    /// A marker or source line (compared without trailing whitespace) on any line of the text as it is: a BOM
+    /// before the first line is not stripped.
+    pub(crate) fn has_own_line(&self, pre_source: &str, post_source: &str) -> bool {
+        self.text.lines().any(|l| {
+            let line = l.trim_end();
+            [PRE_MARKER, POST_MARKER].contains(&line) || [pre_source, post_source].contains(&line)
+        })
+    }
 }
 
 /// `# tabsmith ignore` (case-insensitive): the user opted this file out.
@@ -147,5 +156,15 @@ mod tests {
             uninstalled.text(),
             "#!/bin/zsh\nexport A=1\nalias ll='ls -l'\n"
         );
+    }
+
+    #[test]
+    fn should_tell_a_dotfile_with_an_own_line_from_one_without() {
+        let traced = Dotfile::new(format!("export A=1\n{ZSHRC_POST_SOURCE}\n"));
+        let untouched = Dotfile::new("export A=1\n".to_string());
+
+        let found = [traced, untouched].map(|d| d.has_own_line(ZSHRC_PRE_SOURCE, ZSHRC_POST_SOURCE));
+
+        assert_eq!(found, [true, false]);
     }
 }
