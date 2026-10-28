@@ -138,6 +138,28 @@ mod tests {
         )
     }
 
+    fn zshrc() -> Integration {
+        Integration::dotfile(Shell::Zsh, PathBuf::from("/home/u/.zshrc"))
+    }
+
+    fn fish_pre() -> Integration {
+        Integration::whole_file(
+            Shell::Fish,
+            PathBuf::from("/home/u/.config/fish/conf.d/00_tabsmith_pre.fish"),
+            IntegrationPhase::Pre,
+        )
+    }
+
+    fn source_line(integration: &Integration, phase: IntegrationPhase) -> String {
+        integration.source_line(&paths(), phase)
+    }
+
+    /// The `~/.tabsmith/shell` script file of `phase`, with the exact contents install writes.
+    fn write_script(bed: &TestBed, integration: &Integration, phase: IntegrationPhase) {
+        let script = integration.script(&paths(), phase);
+        bed.dotfiles.write(script.path(), script.contents()).unwrap();
+    }
+
     #[test]
     fn should_list_the_bash_login_files_that_exist_after_bashrc() {
         let bed = test_bed();
@@ -211,6 +233,151 @@ mod tests {
 
         assert!(
             matches!(&checked, Err(ShellIntegrationError::NotInstalled(m)) if m == "/home/u/.zshrc does not source pre integration"),
+            "{checked:?}"
+        );
+    }
+
+    #[test]
+    fn should_find_a_pre_source_line_that_is_not_first_improperly_installed() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
+        bed.dotfiles.write(zshrc.path(), &format!("export A=1\n{pre}\n{post}\n")).unwrap();
+
+        let checked = bed.installer.check(&paths(), &zshrc);
+
+        assert!(
+            matches!(&checked, Err(ShellIntegrationError::Improper(m)) if m == "/home/u/.zshrc does not source pre integration first"),
+            "{checked:?}"
+        );
+    }
+
+    /// The pre script is read before the post line is looked at: a missing pre script wins over a missing post line.
+    #[test]
+    fn should_check_the_pre_script_after_its_line_and_before_the_post_line() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), &format!("{}\n", source_line(&zshrc, IntegrationPhase::Pre))).unwrap();
+
+        let checked = bed.installer.check(&paths(), &zshrc);
+
+        assert!(
+            matches!(&checked, Err(ShellIntegrationError::FileDoesNotExist(p)) if p == Path::new("/home/u/.tabsmith/shell/zshrc.pre.zsh")),
+            "{checked:?}"
+        );
+    }
+
+    #[test]
+    fn should_find_a_dotfile_that_does_not_source_the_post_script_not_installed() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), &format!("{}\nexport A=1\n", source_line(&zshrc, IntegrationPhase::Pre))).unwrap();
+        write_script(&bed, &zshrc, IntegrationPhase::Pre);
+
+        let checked = bed.installer.check(&paths(), &zshrc);
+
+        assert!(
+            matches!(&checked, Err(ShellIntegrationError::NotInstalled(m)) if m == "/home/u/.zshrc does not source post integration"),
+            "{checked:?}"
+        );
+    }
+
+    #[test]
+    fn should_find_a_post_source_line_that_is_not_last_improperly_installed() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
+        bed.dotfiles.write(zshrc.path(), &format!("{pre}\n{post}\nexport A=1\n")).unwrap();
+        write_script(&bed, &zshrc, IntegrationPhase::Pre);
+
+        let checked = bed.installer.check(&paths(), &zshrc);
+
+        assert!(
+            matches!(&checked, Err(ShellIntegrationError::Improper(m)) if m == "/home/u/.zshrc does not source post integration last"),
+            "{checked:?}"
+        );
+    }
+
+    #[test]
+    fn should_find_a_script_file_holding_anything_else_improperly_installed() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
+        bed.dotfiles.write(zshrc.path(), &format!("{pre}\n{post}\n")).unwrap();
+        let pre_script = zshrc.script(&paths(), IntegrationPhase::Pre);
+        bed.dotfiles.write(pre_script.path(), "echo edited\n").unwrap();
+
+        let checked = bed.installer.check(&paths(), &zshrc);
+
+        assert!(
+            matches!(&checked, Err(ShellIntegrationError::Improper(m))
+                if *m == format!("/home/u/.tabsmith/shell/zshrc.pre.zsh should contain:\n{}", pre_script.contents())),
+            "{checked:?}"
+        );
+    }
+
+    /// The lines compared are trimmed, without blank lines and comments.
+    #[test]
+    fn should_find_the_source_lines_first_and_last_among_comments_and_blank_lines_installed() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
+        bed.dotfiles.write(zshrc.path(), &format!("# mine\n\n  {pre}\nexport A=1\n{post}  \n\n# end\n")).unwrap();
+        write_script(&bed, &zshrc, IntegrationPhase::Pre);
+        write_script(&bed, &zshrc, IntegrationPhase::Post);
+
+        let checked = bed.installer.check(&paths(), &zshrc);
+
+        assert!(checked.is_ok(), "{checked:?}");
+    }
+
+    #[test]
+    fn should_take_an_opted_out_dotfile_for_installed() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), "export A=1\n  #  Tabsmith Ignore\n").unwrap();
+
+        let checked = bed.installer.check(&paths(), &zshrc);
+
+        assert!(checked.is_ok(), "{checked:?}");
+    }
+
+    #[test]
+    fn should_fail_the_check_of_a_dotfile_it_cannot_read_on_the_dotfile() {
+        let bed = test_bed();
+
+        let checked = bed.installer.check(&paths(), &zshrc());
+
+        assert!(
+            matches!(&checked, Err(ShellIntegrationError::FileDoesNotExist(p)) if p == Path::new("/home/u/.zshrc")),
+            "{checked:?}"
+        );
+    }
+
+    #[test]
+    fn should_find_a_whole_file_holding_exactly_its_script_installed() {
+        let bed = test_bed();
+        let fish_pre = fish_pre();
+        let script = fish_pre.whole_file_script(&paths()).unwrap();
+        bed.dotfiles.write(fish_pre.path(), script.contents()).unwrap();
+
+        let checked = bed.installer.check(&paths(), &fish_pre);
+
+        assert!(checked.is_ok(), "{checked:?}");
+    }
+
+    #[test]
+    fn should_find_a_whole_file_holding_more_than_its_script_improperly_installed() {
+        let bed = test_bed();
+        let fish_pre = fish_pre();
+        let script = fish_pre.whole_file_script(&paths()).unwrap();
+        bed.dotfiles.write(fish_pre.path(), &format!("{}# edited\n", script.contents())).unwrap();
+
+        let checked = bed.installer.check(&paths(), &fish_pre);
+
+        assert!(
+            matches!(&checked, Err(ShellIntegrationError::Improper(m))
+                if *m == format!("/home/u/.config/fish/conf.d/00_tabsmith_pre.fish should contain:\n{}", script.contents())),
             "{checked:?}"
         );
     }
