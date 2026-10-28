@@ -132,6 +132,7 @@ mod tests {
     use crate::shell_integration::application::ports::shell_environment::RecordingShellEnvironment;
     use crate::shell_integration::domain::repositories::backup_repository::InMemoryBackupRepository;
     use crate::shell_integration::domain::repositories::dotfile_repository::InMemoryDotfileRepository;
+    use crate::shell_integration::domain::value_objects::dotfile::{POST_MARKER, PRE_MARKER};
     use std::path::{Path, PathBuf};
 
     /// The installer over in-memory dotfiles and backups, a clock fixed at 1_700_000_123_999 ms and a recording
@@ -443,5 +444,61 @@ mod tests {
         bed.installer.uninstall(&paths(), &fish_pre).unwrap();
 
         assert!(!bed.dotfiles.exists(fish_pre.path()));
+    }
+
+    #[test]
+    fn should_take_the_tabsmith_lines_out_and_trim_the_blank_lines_around_the_rest_on_uninstall() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
+        bed.dotfiles
+            .write(zshrc.path(), &format!("\n\n{PRE_MARKER}\n{pre}\nexport A=1\n\n{POST_MARKER}\n{post}\n\n"))
+            .unwrap();
+
+        bed.installer.uninstall(&paths(), &zshrc).unwrap();
+
+        assert_eq!(bed.dotfiles.read(zshrc.path()).unwrap(), "export A=1\n");
+    }
+
+    #[test]
+    fn should_rewrite_an_empty_dotfile_as_a_single_newline_on_uninstall() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), "").unwrap();
+
+        bed.installer.uninstall(&paths(), &zshrc).unwrap();
+
+        assert_eq!(bed.dotfiles.read(zshrc.path()).unwrap(), "\n");
+    }
+
+    #[test]
+    fn should_leave_a_dotfile_with_nothing_to_take_out_unwritten_on_uninstall() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), "export A=1\n").unwrap();
+
+        bed.installer.uninstall(&paths(), &zshrc).unwrap();
+
+        assert_eq!(bed.dotfiles.writes(), [PathBuf::from("/home/u/.zshrc")]);
+    }
+
+    #[test]
+    fn should_remove_both_script_files_even_without_the_dotfile_on_uninstall() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        write_script(&bed, &zshrc, IntegrationPhase::Pre);
+        write_script(&bed, &zshrc, IntegrationPhase::Post);
+
+        bed.installer.uninstall(&paths(), &zshrc).unwrap();
+
+        assert_eq!(
+            [
+                "/home/u/.zshrc",
+                "/home/u/.tabsmith/shell/zshrc.pre.zsh",
+                "/home/u/.tabsmith/shell/zshrc.post.zsh",
+            ]
+            .map(|p| bed.dotfiles.exists(Path::new(p))),
+            [false, false, false]
+        );
     }
 }
