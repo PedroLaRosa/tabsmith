@@ -13,6 +13,10 @@ impl InitScript {
     pub(crate) fn text(&self) -> &str {
         &self.text
     }
+
+    pub(crate) fn into_string(self) -> String {
+        self.text
+    }
 }
 
 #[cfg(test)]
@@ -27,5 +31,14 @@ mod tests {
         let text = script.text();
 
         assert_eq!(text, "set -g SHOULD_TABSMITH_LAUNCH 0\nbody 'tabsmith'");
+    }
+
+    #[test]
+    fn should_give_its_text_up_as_a_string() {
+        let script = InitScript::new("$TABSMITH_SHOULD_LAUNCH = 1\nbody".to_string());
+
+        let text = script.into_string();
+
+        assert_eq!(text, "$TABSMITH_SHOULD_LAUNCH = 1\nbody");
     }
 }
