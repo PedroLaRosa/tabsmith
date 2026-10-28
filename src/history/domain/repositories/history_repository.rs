@@ -7,12 +7,14 @@ pub(crate) const HISTORY_IN_MEMORY: usize = 5000;
 
 /// The commands this terminal has seen run (SPEC §3.5).
 pub(crate) trait HistoryRepository {
+    /// Records a finished command; a blank one is not recorded.
     fn append(&self, entry: HistoryEntry);
-    /// Oldest to newest.
+    /// What this history held when it was loaded plus what this process appended since, oldest to newest (an
+    /// append keeps the newest `HISTORY_IN_MEMORY`). Shared rather than copied: ghost text reads it per keystroke.
     fn recent(&self) -> Rc<Vec<HistoryEntry>>;
 }
 
-/// A history kept in memory only.
+/// A history kept in memory only: the history when there is no data directory, and the memory of the JSONL one.
 pub(crate) struct InMemoryHistoryRepository {
     entries: RefCell<Rc<Vec<HistoryEntry>>>,
 }
