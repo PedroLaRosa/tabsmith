@@ -2,7 +2,8 @@
 //! extraction from the model (SPEC §5.1, §5.6), and the filter for bytes sent to the real terminal (SPEC §7.5.4).
 //! OWNER: wrapper agent.
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::types::{now_secs, HistoryEntry, Model};
+use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntryPrimitives};
+use crate::types::{now_secs, Model};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -693,15 +694,14 @@ impl Tracker {
         // The prompt finishes this shell's command (and those of nested shells that exited under it); a nested
         // shell's first prompt leaves the outer command running.
         let exit = self.exit_code.take();
-        let Some(k) = self.pending.iter().rposition(|p| p.pid == self.pid) else {
+        let Some(k) = self.pending.iter().rposition(|p| p.pid() == self.pid) else {
             return self.events.push(Event::NewCmd(None));
         };
         self.submitted = None; // not on a redraw: a transient prompt redraws between Enter and PreExec
         for mut h in self.pending.drain(k..).rev() {
-            h.exit_code = exit;
-            h.end_time = Some(now_secs());
+            h.finish(exit, now_secs());
             // ponytail: an empty command (NoHistory, or nothing scraped) is the "do not record" mark.
-            self.events.push(if h.command.is_empty() {
+            self.events.push(if h.command().is_empty() {
                 Event::CommandEnded
             } else {
                 Event::NewCmd(Some(h))
@@ -735,7 +735,7 @@ impl Tracker {
         } else {
             command
         };
-        self.pending.push(HistoryEntry {
+        self.pending.push(HistoryEntry::new(HistoryEntryPrimitives {
             command,
             shell: self.shell_name.clone().unwrap_or_default(),
             pid: self.pid,
@@ -743,7 +743,7 @@ impl Tracker {
             cwd: self.cwd.as_ref().map(|p| p.display().to_string()),
             start_time: now_secs(),
             ..Default::default()
-        });
+        }));
         self.preexec = true;
         self.pwsh_list_view = false; // a nested shell does not inherit it; the next pwsh prompt re-reports it
         tag(model, None);
@@ -1337,6 +1337,7 @@ mod tests {
         let [Event::NewCmd(Some(h))] = &t.events[..] else {
             panic!("{:?}", t.events)
         };
+        let h = h.to_primitives();
         assert_eq!(
             (h.command.as_str(), h.exit_code, h.pid, h.shell.as_str()),
             ("ls -l", Some(2), Some(42), "zsh")
@@ -1556,7 +1557,7 @@ mod tests {
         assert!(!t.no_history);
         let ev = run(&mut t, &mut m, "ls", false);
         assert!(
-            matches!(&ev[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "ls"),
+            matches!(&ev[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command() == "ls"),
             "{ev:?}"
         );
         // A running command printing the marker cannot hide itself or the next command.
@@ -1575,7 +1576,7 @@ mod tests {
             &format!("{}{}", osc("NoHistory"), precmd(&[], "> ")),
         );
         assert!(
-            matches!(&t.events[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command == "make"),
+            matches!(&t.events[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command() == "make"),
             "{:?}",
             t.events
         );
@@ -1603,7 +1604,7 @@ mod tests {
                 panic!("{:?}", t.events)
             };
             assert_eq!(t.submitted, None);
-            h.command.clone()
+            h.command().to_string()
         };
         // bash/zsh echo the `!!` expansion (and zsh its correction prompt) before PreExec.
         assert_eq!(
@@ -1857,7 +1858,7 @@ mod tests {
             let Some(Event::NewCmd(Some(h))) = std::mem::take(&mut t.events).pop() else {
                 panic!()
             };
-            h.command
+            h.command().to_string()
         };
         // r3-transient-redraw-clears-submitted: zle-line-finish re-expands PS1 (NewCmd) between Enter and PreExec.
         let redraw = format!("\r{}echo !!\r\necho echo second\r\n", prompt("% "));
@@ -1900,7 +1901,7 @@ mod tests {
                 .into_iter()
                 .filter_map(|e| {
                     if let Event::NewCmd(h) = e {
-                        Some(h.map(|h| (h.command, h.exit_code)))
+                        Some(h.map(|h| (h.command().to_string(), h.exit_code())))
                     } else {
                         None
                     }

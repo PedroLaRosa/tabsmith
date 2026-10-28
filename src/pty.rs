@@ -2248,7 +2248,7 @@ mod tests {
             .try_iter()
             .filter_map(|m| {
                 if let EngineMsg::CommandFinished(h) = m {
-                    Some(h.command)
+                    Some(h.command().to_string())
                 } else {
                     None
                 }

@@ -25,9 +25,10 @@ use crate::spec::{Arg, Generator, Script, StrOrFn, Strategy, Suggestion, Trigger
 use crate::specs::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::types::{
-    now_ms, ArgInfo, Completion, EngineMsg, GenKey, HistoryEntry, Item, ItemType, Msg, Phase,
-    Request, SessionCtx,
+    now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, ItemType, Msg, Phase, Request,
+    SessionCtx,
 };
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
@@ -1205,6 +1206,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
@@ -1256,11 +1258,11 @@ mod tests {
     #[test]
     fn llm_history_honours_history_count() {
         // llm-history-count-ignored: only the last `inline.historyCount` usable entries leave the machine
-        let e = |c: &str| HistoryEntry {
+        let e = |c: &str| HistoryEntry::new(HistoryEntryPrimitives {
             command: c.into(),
             exit_code: Some(0),
             ..Default::default()
-        };
+        });
         let entries: Vec<HistoryEntry> = (0..100).map(|i| e(&format!("echo {i}"))).collect();
         let with = |v: Value| {
             settings_from_json(
@@ -1272,7 +1274,7 @@ mod tests {
         };
         let got: Vec<String> = llm_history(&with(json!(2)), &entries)
             .into_iter()
-            .map(|h| h.command)
+            .map(|h| h.command().to_string())
             .collect();
         assert_eq!(got, ["echo 98", "echo 99"]);
         assert!(llm_history(&with(json!(0)), &entries).is_empty());

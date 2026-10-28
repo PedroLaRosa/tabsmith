@@ -1,4 +1,5 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
+use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
@@ -171,20 +172,6 @@ pub struct Request {
     pub cwd: PathBuf,
     pub shell: Shell,
     pub history_mode: bool,
-}
-
-/// One line of `~/.tabsmith/history.jsonl` (SPEC §3.5).
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HistoryEntry {
-    pub command: String,
-    pub shell: String,
-    pub pid: Option<i32>,
-    pub session_id: String,
-    pub cwd: Option<String>,
-    pub start_time: u64,
-    pub end_time: Option<u64>,
-    pub exit_code: Option<i32>,
-    pub hostname: Option<String>,
 }
 
 /// `~/.tabsmith/run/<sid>.json`, written by `tabsmith _ pre-cmd` (SPEC §2.11, D17).

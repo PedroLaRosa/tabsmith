@@ -7,7 +7,9 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::shared::infrastructure::logger;
-use crate::types::{HistoryEntry, Item, ItemType};
+use crate::history::domain::entities::history_entry::HistoryEntry;
+use crate::history::infrastructure::adapters::jsonl_history_repository::HistoryRecord;
+use crate::types::{Item, ItemType};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Write;
@@ -44,7 +46,8 @@ impl History {
         let lines = text.lines().count();
         let mut entries: Vec<HistoryEntry> = text
             .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
+            .filter_map(|l| serde_json::from_str::<HistoryRecord>(l).ok())
+            .map(HistoryEntry::from)
             .collect();
         entries.drain(..entries.len().saturating_sub(HISTORY_IN_MEMORY));
         let mut h = History {
@@ -69,11 +72,11 @@ impl History {
 
     /// Append to memory and to the file (non-empty commands only).
     pub fn append(&mut self, entry: HistoryEntry) {
-        if entry.command.trim().is_empty() {
+        if entry.command().trim().is_empty() {
             return;
         }
         if let Some(path) = &self.path {
-            let line = serde_json::to_string(&entry).unwrap_or_default() + "\n";
+            let line = serde_json::to_string(&HistoryRecord::from(&entry)).unwrap_or_default() + "\n";
             // The data root is gone (`uninstall --purge` while this session runs): don't recreate it.
             let purged = path.parent().is_some_and(|p| !p.is_dir());
             let res = if purged {
@@ -253,14 +256,14 @@ pub fn history_ghost(history: &[HistoryEntry], buffer: &str) -> Option<String> {
     }
     let newest = |ok_only: bool| {
         history.iter().rev().find(|e| {
-            e.command.len() > buffer.len()
-                && e.command.starts_with(buffer)
-                && (!ok_only || e.exit_code == Some(0))
+            e.command().len() > buffer.len()
+                && e.command().starts_with(buffer)
+                && (!ok_only || e.exit_code() == Some(0))
         })
     };
     newest(true)
         .or_else(|| newest(false))
-        .map(|e| e.command[buffer.len()..].to_string())
+        .map(|e| e.command()[buffer.len()..].to_string())
 }
 
 /// Specs source (SPEC §6.11): first non-auto-execute/history item with `delete == 0`, prefix match and non-empty
@@ -396,7 +399,7 @@ fn is_private(s: &str) -> bool {
 }
 
 fn usable(e: &HistoryEntry) -> bool {
-    e.exit_code.is_some() && !is_private(&e.command)
+    e.exit_code().is_some() && !is_private(e.command())
 }
 
 /// History-style prompt (SPEC §8.5): usable entries then the buffer, numbered from 1, oldest dropped until
@@ -408,7 +411,7 @@ fn history_prompt(history: &[HistoryEntry], buffer: &str) -> Option<String> {
     let mut lines: Vec<&str> = history
         .iter()
         .filter(|e| usable(e))
-        .map(|e| e.command.as_str())
+        .map(|e| e.command())
         .collect();
     lines.push(buffer);
     // Every line costs `{:>5}  ` + "\n" = 8 bytes (numbers < 100 000), so drop by arithmetic, then format once.
@@ -631,16 +634,17 @@ fn expand(arg: &str, env: &HashMap<String, String>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::types::Insertion;
+    use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     fn entry(cmd: &str, exit: Option<i32>) -> HistoryEntry {
-        HistoryEntry {
+        HistoryEntry::new(HistoryEntryPrimitives {
             command: cmd.into(),
             shell: "zsh".into(),
             exit_code: exit,
             ..Default::default()
-        }
+        })
     }
 
     fn settings(v: Value) -> Settings {
@@ -745,7 +749,7 @@ mod tests {
             entry("d", Some(2)),
             entry("e", Some(0)),
         ];
-        let cmds: Vec<_> = llm_history(&h, 2).into_iter().map(|e| e.command).collect();
+        let cmds: Vec<_> = llm_history(&h, 2).into_iter().map(|e| e.command().to_string()).collect();
         assert_eq!(cmds, ["d", "e"]);
         assert_eq!(llm_history(&h, 49).len(), 3);
     }
@@ -1066,11 +1070,11 @@ mod tests {
         assert!(h.entries().is_empty());
         h.append(entry("echo hi", Some(0)));
         h.append(entry("   ", Some(0)));
-        h.append(HistoryEntry {
+        h.append(HistoryEntry::new(HistoryEntryPrimitives {
             pid: Some(7),
             cwd: Some("/x".into()),
-            ..entry("ls", None)
-        });
+            ..entry("ls", None).to_primitives()
+        }));
         let again = History::load_from(path.clone());
         assert_eq!(again.entries(), h.entries());
         assert_eq!(again.entries().len(), 2);
@@ -1086,7 +1090,7 @@ mod tests {
         // 10 000 lines (one corrupt) stay; the append that goes past 10 000 rewrites the file with the last 5000.
         let lines = |n: usize| -> String {
             (0..n)
-                .map(|i| serde_json::to_string(&entry(&format!("c{i}"), Some(0))).unwrap() + "\n")
+                .map(|i| serde_json::to_string(&HistoryRecord::from(&entry(&format!("c{i}"), Some(0)))).unwrap() + "\n")
                 .collect()
         };
         std::fs::write(
@@ -1110,9 +1114,9 @@ mod tests {
             .unwrap()
             .contains("\"command\":\"newest\""));
         assert_eq!(h.entries().len(), HISTORY_IN_MEMORY);
-        assert_eq!(h.entries().last().unwrap().command, "newest");
+        assert_eq!(h.entries().last().unwrap().command(), "newest");
         let reloaded = History::load_from(path.clone());
-        assert_eq!(reloaded.entries().first().unwrap().command, "c5000");
+        assert_eq!(reloaded.entries().first().unwrap().command(), "c5000");
         assert_eq!(reloaded.entries().len(), HISTORY_IN_MEMORY);
 
         // A file already past 10 000 lines is compacted at load.
@@ -1122,7 +1126,7 @@ mod tests {
             std::fs::read_to_string(&path).unwrap().lines().count(),
             HISTORY_IN_MEMORY
         );
-        assert_eq!(h.entries().first().unwrap().command, "c5001");
+        assert_eq!(h.entries().first().unwrap().command(), "c5001");
         assert!(!d.join("sub").read_dir().unwrap().any(|e| e
             .unwrap()
             .file_name()

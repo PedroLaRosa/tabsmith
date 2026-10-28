@@ -6,7 +6,8 @@ use crate::parser::{AnnKind, ParseResult};
 use crate::spec::{Arg, CacheCfg, Opt, Repeat, Subcommand, Suggestion, Trigger};
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::types::{GenKey, HistoryEntry, Insertion, Item, ItemType};
+use crate::history::domain::entities::history_entry::HistoryEntry;
+use crate::types::{GenKey, Insertion, Item, ItemType};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -351,7 +352,7 @@ pub fn history_rows(prefix: &str, entries: &[HistoryEntry]) -> Vec<Sugg> {
     let mut names: Vec<&str> = Vec::new();
     let mut freq: HashMap<String, usize> = HashMap::new();
     for e in entries.iter().rev() {
-        let Some(rest) = e.command.strip_prefix(prefix) else {
+        let Some(rest) = e.command().strip_prefix(prefix) else {
             continue;
         };
         let name = rest.trim_end();
@@ -1453,6 +1454,7 @@ pub fn first_token_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::parser::Annotation;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::spec::Directives;
@@ -1887,10 +1889,10 @@ mod tests {
 
     #[test]
     fn history_rows_priority_and_mixing() {
-        let e = |c: &str| HistoryEntry {
+        let e = |c: &str| HistoryEntry::new(HistoryEntryPrimitives {
             command: c.into(),
             ..Default::default()
-        };
+        });
         let hist = [
             e("git checkout main"),
             e("git checkout dev"),
@@ -2355,10 +2357,10 @@ mod tests {
     #[test]
     fn history_rows_skip_multiline_entries() {
         // history-multiline-mangled: inserting them would run (or, stripped, change) the command
-        let e = |c: &str| HistoryEntry {
+        let e = |c: &str| HistoryEntry::new(HistoryEntryPrimitives {
             command: c.into(),
             ..Default::default()
-        };
+        });
         let rows = history_rows(
             "git commit ",
             &[
