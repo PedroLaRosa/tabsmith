@@ -87,6 +87,19 @@ impl IntegrationInstaller {
         }
         Ok(())
     }
+
+    /// Write both `~/.tabsmith/shell/` script files of a dotfile integration.
+    pub(crate) fn write_scripts(
+        &self,
+        paths: &IntegrationPaths,
+        integration: &Integration,
+    ) -> Result<(), ShellIntegrationError> {
+        for when in [IntegrationPhase::Pre, IntegrationPhase::Post] {
+            let script = integration.script(paths, when);
+            self.dotfiles.write(script.path(), script.contents())?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -379,6 +392,22 @@ mod tests {
             matches!(&checked, Err(ShellIntegrationError::Improper(m))
                 if *m == format!("/home/u/.config/fish/conf.d/00_tabsmith_pre.fish should contain:\n{}", script.contents())),
             "{checked:?}"
+        );
+    }
+
+    #[test]
+    fn should_write_the_pre_then_the_post_script_file_of_a_dotfile() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+
+        bed.installer.write_scripts(&paths(), &zshrc).unwrap();
+
+        assert_eq!(
+            bed.dotfiles.writes(),
+            [
+                PathBuf::from("/home/u/.tabsmith/shell/zshrc.pre.zsh"),
+                PathBuf::from("/home/u/.tabsmith/shell/zshrc.post.zsh"),
+            ]
         );
     }
 }
