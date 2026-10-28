@@ -553,4 +553,115 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn should_change_nothing_of_an_installed_integration_on_install() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), "export A=1\n").unwrap();
+        bed.installer.install(&paths(), &zshrc).unwrap();
+        let before = (bed.dotfiles.writes(), bed.backups.backups());
+
+        bed.installer.install(&paths(), &zshrc).unwrap();
+
+        assert_eq!((bed.dotfiles.writes(), bed.backups.backups()), before);
+    }
+
+    #[test]
+    fn should_leave_an_opted_out_dotfile_alone_on_install() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), "# tabsmith ignore\n").unwrap();
+
+        bed.installer.install(&paths(), &zshrc).unwrap();
+
+        assert_eq!(
+            (bed.dotfiles.writes(), bed.backups.backups()),
+            (vec![PathBuf::from("/home/u/.zshrc")], vec![])
+        );
+    }
+
+    #[test]
+    fn should_back_up_an_existing_dotfile_into_the_dir_named_after_the_clock_seconds_on_install() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), "export A=1\n").unwrap();
+
+        bed.installer.install(&paths(), &zshrc).unwrap();
+
+        assert_eq!(
+            bed.backups.backups(),
+            [(PathBuf::from("/home/u/.zshrc"), PathBuf::from("/home/u/.tabsmith/backups/1700000123"))]
+        );
+    }
+
+    #[test]
+    fn should_take_no_backup_of_a_dotfile_that_does_not_exist_on_install() {
+        let bed = test_bed();
+
+        bed.installer.install(&paths(), &zshrc()).unwrap();
+
+        assert_eq!(bed.backups.backups(), []);
+    }
+
+    #[test]
+    fn should_write_the_script_files_before_the_dotfile_on_install() {
+        let bed = test_bed();
+
+        bed.installer.install(&paths(), &zshrc()).unwrap();
+
+        assert_eq!(
+            bed.dotfiles.writes(),
+            [
+                PathBuf::from("/home/u/.tabsmith/shell/zshrc.pre.zsh"),
+                PathBuf::from("/home/u/.tabsmith/shell/zshrc.post.zsh"),
+                PathBuf::from("/home/u/.zshrc"),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_put_the_user_lines_between_the_blocks_on_install() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        bed.dotfiles.write(zshrc.path(), "#!/bin/zsh\nexport A=1\n").unwrap();
+
+        bed.installer.install(&paths(), &zshrc).unwrap();
+
+        assert_eq!(
+            bed.dotfiles.read(zshrc.path()).unwrap(),
+            format!(
+                "#!/bin/zsh\n{PRE_MARKER}\n{}\nexport A=1\n{POST_MARKER}\n{}\n",
+                source_line(&zshrc, IntegrationPhase::Pre),
+                source_line(&zshrc, IntegrationPhase::Post)
+            )
+        );
+    }
+
+    /// Install takes the old blocks out before it adds them again (here the script files were missing).
+    #[test]
+    fn should_replace_the_blocks_already_there_rather_than_add_a_second_pair_on_install() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
+        let installed = format!("{PRE_MARKER}\n{pre}\nexport A=1\n{POST_MARKER}\n{post}\n");
+        bed.dotfiles.write(zshrc.path(), &installed).unwrap();
+
+        bed.installer.install(&paths(), &zshrc).unwrap();
+
+        assert_eq!(bed.dotfiles.read(zshrc.path()).unwrap(), installed);
+    }
+
+    #[test]
+    fn should_write_a_whole_file_integration_as_its_script_on_install() {
+        let bed = test_bed();
+        let fish_pre = fish_pre();
+
+        bed.installer.install(&paths(), &fish_pre).unwrap();
+
+        assert_eq!(
+            bed.dotfiles.read(fish_pre.path()).unwrap(),
+            fish_pre.whole_file_script(&paths()).unwrap().contents()
+        );
+    }
 }
