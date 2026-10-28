@@ -35,7 +35,7 @@ fn keep_newest(entries: &mut Vec<HistoryEntry>) {
 
 impl HistoryRepository for InMemoryHistoryRepository {
     fn append(&self, entry: HistoryEntry) {
-        if entry.command().trim().is_empty() {
+        if entry.is_blank() {
             return;
         }
         let mut shared = self.entries.borrow_mut();

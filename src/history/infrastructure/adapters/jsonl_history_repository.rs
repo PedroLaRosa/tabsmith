@@ -94,12 +94,11 @@ impl JsonlHistoryRepository {
     pub(crate) fn load(path: PathBuf) -> JsonlHistoryRepository {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         let lines = text.lines().count();
-        let mut entries: Vec<HistoryEntry> = text
+        let entries: Vec<HistoryEntry> = text
             .lines()
             .filter_map(|l| serde_json::from_str::<HistoryRecord>(l).ok())
             .map(HistoryEntry::from)
             .collect();
-        entries.drain(..entries.len().saturating_sub(HISTORY_IN_MEMORY));
         let h = JsonlHistoryRepository {
             memory: InMemoryHistoryRepository::new(entries),
             path,
@@ -134,7 +133,7 @@ impl JsonlHistoryRepository {
 impl HistoryRepository for JsonlHistoryRepository {
     /// Append to memory and to the file (non-empty commands only).
     fn append(&self, entry: HistoryEntry) {
-        if entry.command().trim().is_empty() {
+        if entry.is_blank() {
             return;
         }
         let path = &self.path;

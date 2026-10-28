@@ -66,6 +66,11 @@ impl HistoryEntry {
         &self.command
     }
 
+    /// Only whitespace was run: the history does not record it.
+    pub(crate) fn is_blank(&self) -> bool {
+        self.command.trim().is_empty()
+    }
+
     pub(crate) fn pid(&self) -> Option<i32> {
         self.pid
     }
