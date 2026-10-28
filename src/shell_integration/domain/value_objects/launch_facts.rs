@@ -25,6 +25,10 @@ impl LaunchFacts {
     pub(crate) fn is(&self, name: &str, value: &str) -> bool {
         self.env.get(name).is_some_and(|x| x == value)
     }
+
+    pub(crate) fn stdin_is_terminal(&self) -> bool {
+        self.stdin_is_terminal
+    }
 }
 
 #[cfg(test)]
@@ -49,6 +53,7 @@ mod tests {
 
         assert_eq!(set, [true, false]);
     }
+
     /// Warp is told apart by its exact `TERM_PROGRAM`, case included.
     #[test]
     fn should_match_a_variable_only_on_its_exact_value() {
@@ -62,5 +67,14 @@ mod tests {
         ];
 
         assert_eq!(matches, [true, false, false, false]);
+    }
+
+    #[test]
+    fn should_know_whether_stdin_is_a_terminal() {
+        let facts = [facts(&[], true), facts(&[], false)];
+
+        let stdin_is_terminal = facts.map(|f| f.stdin_is_terminal());
+
+        assert_eq!(stdin_is_terminal, [true, false]);
     }
 }
