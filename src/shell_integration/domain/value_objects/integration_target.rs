@@ -58,4 +58,20 @@ mod tests {
 
         assert_eq!(shells, [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::Pwsh]);
     }
+
+    /// `integrations <cmd> all` and `integrations <cmd> dotfiles` without a shell act on the same shells.
+    #[test]
+    fn should_give_every_shell_for_the_all_target_as_for_every_dotfile() {
+        let target = IntegrationTarget::All;
+
+        let shells = [target.shells(|| false), target.shells(|| true)];
+
+        assert_eq!(
+            shells,
+            [
+                vec![Shell::Bash, Shell::Zsh, Shell::Fish],
+                vec![Shell::Bash, Shell::Zsh, Shell::Fish, Shell::Pwsh],
+            ]
+        );
+    }
 }
