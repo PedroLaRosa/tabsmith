@@ -6,7 +6,9 @@ use crate::shell_integration::domain::repositories::backup_repository::BackupRep
 use crate::shell_integration::domain::repositories::dotfile_repository::DotfileRepository;
 use crate::shell_integration::domain::services::integration_catalog;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::shell_integration::domain::value_objects::dotfile::Dotfile;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
+use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -47,6 +49,43 @@ impl IntegrationInstaller {
             |p| self.dotfiles.exists(p),
             || self.environment.pwsh_profile(),
         )
+    }
+
+    /// SPEC §5.5 `is_installed()`: the first failing reason.
+    pub(crate) fn check(
+        &self,
+        paths: &IntegrationPaths,
+        integration: &Integration,
+    ) -> Result<(), ShellIntegrationError> {
+        if let Some(script) = integration.whole_file_script(paths) {
+            return script.check(&self.dotfiles.read(script.path())?);
+        }
+        let dotfile = Dotfile::new(self.dotfiles.read(integration.path())?);
+        if dotfile.is_opted_out() {
+            return Ok(());
+        }
+        let lines = dotfile.sourced_lines();
+        for (when, at, actual) in [
+            (IntegrationPhase::Pre, "first", lines.first()),
+            (IntegrationPhase::Post, "last", lines.last()),
+        ] {
+            let src = integration.source_line(paths, when);
+            if actual.copied() != Some(src.as_str()) {
+                let msg = format!(
+                    "{} does not source {} integration",
+                    integration.path().display(),
+                    when.name()
+                );
+                return Err(if lines.contains(&src.as_str()) {
+                    ShellIntegrationError::Improper(format!("{msg} {at}"))
+                } else {
+                    ShellIntegrationError::NotInstalled(msg)
+                });
+            }
+            let script = integration.script(paths, when);
+            script.check(&self.dotfiles.read(script.path())?)?;
+        }
+        Ok(())
     }
 }
 
@@ -160,5 +199,19 @@ mod tests {
         let error = bed.installer.integrations(&paths(), Shell::Pwsh).unwrap_err();
 
         assert_eq!(error.to_string(), "pwsh printed an empty $PROFILE");
+    }
+
+    #[test]
+    fn should_find_a_dotfile_that_does_not_source_the_pre_script_not_installed() {
+        let bed = test_bed();
+        let zshrc = Integration::dotfile(Shell::Zsh, PathBuf::from("/home/u/.zshrc"));
+        bed.dotfiles.write(zshrc.path(), "export A=1\n").unwrap();
+
+        let checked = bed.installer.check(&paths(), &zshrc);
+
+        assert!(
+            matches!(&checked, Err(ShellIntegrationError::NotInstalled(m)) if m == "/home/u/.zshrc does not source pre integration"),
+            "{checked:?}"
+        );
     }
 }
