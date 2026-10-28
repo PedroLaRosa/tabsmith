@@ -1,146 +1,18 @@
-//! Inline ghost text: history store, local sources, LLM profiles/clients, completion cache, validation (SPEC §8,
+//! Inline ghost text: local sources, LLM profiles/clients, completion cache, validation (SPEC §8,
 //! §3.5, §6.11). OWNER: inline agent. Used by the engine (sources, LLM worker), the CLI (`inline` command) and
 //! doctor (profile checks).
 use crate::settings::domain::services::settings_catalog::INLINE_SOURCE;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
+use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;
 use crate::history::domain::entities::history_entry::HistoryEntry;
-use crate::history::infrastructure::adapters::jsonl_history_repository::HistoryRecord;
 use crate::types::{Item, ItemType};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
-
-const HISTORY_IN_MEMORY: usize = 5000;
-const HISTORY_COMPACT_AT: usize = 10_000;
-
-/// `~/.tabsmith/history.jsonl` (last 5000 entries in memory; file compacted past 10 000 lines).
-pub struct History {
-    entries: Vec<HistoryEntry>,
-    /// Backing file (`None` = memory only).
-    path: Option<PathBuf>,
-    /// Lines in the file as far as this process knows (other sessions append too).
-    lines: usize,
-}
-
-impl History {
-    /// Load the history file (missing/corrupt lines skipped).
-    pub fn load() -> History {
-        match data_directory_from_env().history_file() {
-            Ok(path) => History::load_from(path),
-            Err(e) => {
-                logger::warn(&format!("history: {e:#}"));
-                History::from_entries(Vec::new())
-            }
-        }
-    }
-
-    /// Load (and later append to) an explicit file (tests, `load`).
-    pub fn load_from(path: PathBuf) -> History {
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let lines = text.lines().count();
-        let mut entries: Vec<HistoryEntry> = text
-            .lines()
-            .filter_map(|l| serde_json::from_str::<HistoryRecord>(l).ok())
-            .map(HistoryEntry::from)
-            .collect();
-        entries.drain(..entries.len().saturating_sub(HISTORY_IN_MEMORY));
-        let mut h = History {
-            entries,
-            path: Some(path),
-            lines,
-        };
-        if lines > HISTORY_COMPACT_AT {
-            h.compact();
-        }
-        h
-    }
-
-    /// In-memory history (tests).
-    pub fn from_entries(entries: Vec<HistoryEntry>) -> History {
-        History {
-            entries,
-            path: None,
-            lines: 0,
-        }
-    }
-
-    /// Append to memory and to the file (non-empty commands only).
-    pub fn append(&mut self, entry: HistoryEntry) {
-        if entry.command().trim().is_empty() {
-            return;
-        }
-        if let Some(path) = &self.path {
-            let line = serde_json::to_string(&HistoryRecord::from(&entry)).unwrap_or_default() + "\n";
-            // The data root is gone (`uninstall --purge` while this session runs): don't recreate it.
-            let purged = path.parent().is_some_and(|p| !p.is_dir());
-            let res = if purged {
-                Ok(())
-            } else {
-                open_private(path, true).and_then(|mut f| f.write_all(line.as_bytes()))
-            };
-            match res {
-                Ok(()) if purged => {}
-                Ok(()) => self.lines += 1,
-                Err(e) => {
-                    logger::warn(&format!("history: appending to {}: {e}", path.display()))
-                }
-            }
-        }
-        self.entries.push(entry);
-        self.entries
-            .drain(..self.entries.len().saturating_sub(HISTORY_IN_MEMORY));
-        if self.lines > HISTORY_COMPACT_AT {
-            self.compact();
-        }
-    }
-
-    /// Oldest → newest.
-    pub fn entries(&self) -> &[HistoryEntry] {
-        &self.entries
-    }
-
-    /// Rewrite the file with its last 5000 lines (temp + rename). Re-reads the file so lines appended by other
-    /// sessions survive. ponytail: no lock; a line appended between read and rename is lost.
-    fn compact(&mut self) {
-        let Some(path) = &self.path else { return };
-        let res = (|| {
-            let text = std::fs::read_to_string(path)?;
-            let all: Vec<&str> = text.lines().collect();
-            let keep = &all[all.len().saturating_sub(HISTORY_IN_MEMORY)..];
-            let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-            open_private(&tmp, false)?.write_all((keep.join("\n") + "\n").as_bytes())?;
-            std::fs::rename(&tmp, path)?;
-            Ok::<_, std::io::Error>(keep.len())
-        })();
-        match res {
-            Ok(n) => self.lines = n,
-            Err(e) => logger::warn(&format!("history: compacting {}: {e}", path.display())),
-        }
-    }
-}
-
-/// Open for append or truncate+write; created with mode 0600 on Unix.
-fn open_private(path: &Path, append: bool) -> std::io::Result<std::fs::File> {
-    let mut o = std::fs::OpenOptions::new();
-    o.create(true);
-    if append {
-        o.append(true);
-    } else {
-        o.write(true).truncate(true);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(0o600);
-    }
-    o.open(path)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
@@ -1055,83 +927,5 @@ mod tests {
         let bad =
             settings(json!({"inline.source": "b", "inline.profiles.b": {"provider": "openai"}}));
         assert!(source(&bad).unwrap_err().contains("invalid"));
-    }
-
-    #[test]
-    fn history_file_round_trip_and_compaction() {
-        let temp_dir = TempDir::new("hist");
-        let d = temp_dir.path().to_path_buf();
-        let path = d.join("sub/history.jsonl");
-        // A missing data root (purged while a session runs) is not recreated; the entry stays in memory only.
-        History::load_from(path.clone()).append(entry("gone", Some(0)));
-        assert!(!d.join("sub").exists());
-        std::fs::create_dir_all(d.join("sub")).unwrap();
-        let mut h = History::load_from(path.clone());
-        assert!(h.entries().is_empty());
-        h.append(entry("echo hi", Some(0)));
-        h.append(entry("   ", Some(0)));
-        h.append(HistoryEntry::new(HistoryEntryPrimitives {
-            pid: Some(7),
-            cwd: Some("/x".into()),
-            ..entry("ls", None).to_primitives()
-        }));
-        let again = History::load_from(path.clone());
-        assert_eq!(again.entries(), h.entries());
-        assert_eq!(again.entries().len(), 2);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-
-        // 10 000 lines (one corrupt) stay; the append that goes past 10 000 rewrites the file with the last 5000.
-        let lines = |n: usize| -> String {
-            (0..n)
-                .map(|i| serde_json::to_string(&HistoryRecord::from(&entry(&format!("c{i}"), Some(0)))).unwrap() + "\n")
-                .collect()
-        };
-        std::fs::write(
-            &path,
-            String::from("not json\n") + &lines(HISTORY_COMPACT_AT - 1),
-        )
-        .unwrap();
-        let mut h = History::load_from(path.clone());
-        assert_eq!(h.entries().len(), HISTORY_IN_MEMORY);
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap().lines().count(),
-            HISTORY_COMPACT_AT,
-            "not yet"
-        );
-        h.append(entry("newest", Some(0)));
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(text.lines().count(), HISTORY_IN_MEMORY);
-        assert!(text
-            .lines()
-            .last()
-            .unwrap()
-            .contains("\"command\":\"newest\""));
-        assert_eq!(h.entries().len(), HISTORY_IN_MEMORY);
-        assert_eq!(h.entries().last().unwrap().command(), "newest");
-        let reloaded = History::load_from(path.clone());
-        assert_eq!(reloaded.entries().first().unwrap().command(), "c5000");
-        assert_eq!(reloaded.entries().len(), HISTORY_IN_MEMORY);
-
-        // A file already past 10 000 lines is compacted at load.
-        std::fs::write(&path, lines(HISTORY_COMPACT_AT + 1)).unwrap();
-        let h = History::load_from(path.clone());
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap().lines().count(),
-            HISTORY_IN_MEMORY
-        );
-        assert_eq!(h.entries().first().unwrap().command(), "c5001");
-        assert!(!d.join("sub").read_dir().unwrap().any(|e| e
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .contains("tmp")));
-        std::fs::remove_dir_all(&d).unwrap();
     }
 }

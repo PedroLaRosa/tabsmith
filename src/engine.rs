@@ -5,7 +5,7 @@
 //! Per request: mid-word guard → `shell_parser::current_command` → `Parser::parse` → generator triggers →
 //! reply (phase `Parse`). Triggered generators run as small state machines over `Js` tasks; whenever one
 //! finishes, the latest request is re-ranked and replied again (phase `Generators`).
-use crate::inline::{self, GhostCache, History, Source};
+use crate::inline::{self, GhostCache, Source};
 use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId, TaskResult};
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::logger;
@@ -26,6 +26,8 @@ use crate::specs::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
+use crate::history::domain::repositories::history_repository::HistoryRepository;
+use crate::history::infrastructure::adapters::jsonl_history_repository::load_history;
 use crate::types::{
     now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, ItemType, Msg, Phase, Request,
     SessionCtx,
@@ -287,7 +289,7 @@ struct Engine {
     settings: Settings,
     parser: Parser,
     index: SpecIndex,
-    history: History,
+    history: Rc<dyn HistoryRepository>,
     session: SessionCtx,
     wrapper_env: HashMap<String, String>,
     aliases: Option<(Shell, HashMap<String, String>)>,
@@ -319,7 +321,7 @@ impl Engine {
             tx,
             settings,
             index,
-            History::load(),
+            load_history(&data_directory_from_env()),
             data_directory_from_env().state_file().ok(),
         )
     }
@@ -328,7 +330,7 @@ impl Engine {
         tx: Sender<Msg>,
         settings: Settings,
         index: SpecIndex,
-        history: History,
+        history: Rc<dyn HistoryRepository>,
         state_path: Option<PathBuf>,
     ) -> Engine {
         let recency = state_path.as_deref().map(load_recency).unwrap_or_default();
@@ -1047,7 +1049,7 @@ impl Engine {
         };
         let mode = s.string(BETA_HISTORY_MODE).unwrap_or_default();
         if cur.req.history_mode || mode == "show" || mode == "history_only" {
-            let hist = suggest::history_rows(&cur.prefix, self.history.entries());
+            let hist = suggest::history_rows(&cur.prefix, &self.history.recent());
             list = suggest::mix_history(list, hist, mode == "show" && !cur.req.history_mode);
         }
         let fo = FilterOpts {
@@ -1120,7 +1122,7 @@ impl Engine {
         {
             return None;
         }
-        let history = || inline::history_ghost(self.history.entries(), &req.buffer);
+        let history = || inline::history_ghost(&self.history.recent(), &req.buffer);
         let specs = || items.and_then(inline::spec_ghost);
         match inline::source(&self.settings) {
             Ok(Source::Specs) => specs(),
@@ -1185,7 +1187,7 @@ impl Engine {
             });
             return;
         }
-        let history = llm_history(&self.settings, self.history.entries());
+        let history = llm_history(&self.settings, &self.history.recent());
         let env = self.env().clone();
         let cache = self.ghost_cache.clone();
         let spawned = std::thread::Builder::new()
@@ -1207,6 +1209,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
+    use crate::history::infrastructure::adapters::jsonl_history_repository::JsonlHistoryRepository;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
@@ -1336,7 +1339,7 @@ mod tests {
             tx,
             Settings::default(),
             SpecIndex::default(),
-            History::load_from(dir.path().join("h.jsonl")),
+            Rc::new(JsonlHistoryRepository::load(dir.path().join("h.jsonl"))),
             None,
         );
         let (jtx, jrx) = std::sync::mpsc::channel();
