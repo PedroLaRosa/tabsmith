@@ -13,6 +13,8 @@ pub(crate) trait DotfileRepository {
     /// A missing file is `FileDoesNotExist(path)`.
     fn read(&self, path: &Path) -> Result<String, ShellIntegrationError>;
     fn write(&self, path: &Path, contents: &str) -> Result<(), ShellIntegrationError>;
+    /// Removing a missing file is fine.
+    fn remove(&self, path: &Path) -> Result<(), ShellIntegrationError>;
 }
 
 /// Dotfiles kept in memory, for tests.
@@ -38,6 +40,11 @@ impl DotfileRepository for InMemoryDotfileRepository {
 
     fn write(&self, path: &Path, contents: &str) -> Result<(), ShellIntegrationError> {
         self.files.borrow_mut().insert(path.into(), contents.into());
+        Ok(())
+    }
+
+    fn remove(&self, path: &Path) -> Result<(), ShellIntegrationError> {
+        self.files.borrow_mut().remove(path);
         Ok(())
     }
 }
@@ -74,5 +81,16 @@ mod tests {
         let exist = [Path::new("/home/u/.bashrc"), Path::new("/home/u/.profile")].map(|p| repository.exists(p));
 
         assert_eq!(exist, [true, false]);
+    }
+
+    #[test]
+    fn should_forget_a_removed_dotfile() {
+        let repository = InMemoryDotfileRepository::default();
+        let path = Path::new("/home/u/.tabsmith/shell/bashrc.pre.bash");
+        repository.write(path, "pre").unwrap();
+
+        repository.remove(path).unwrap();
+
+        assert!(!repository.exists(path));
     }
 }
