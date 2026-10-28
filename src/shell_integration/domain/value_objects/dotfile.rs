@@ -102,6 +102,10 @@ mod tests {
         r#"[ -f "${HOME}/.tabsmith/shell/zshrc.pre.zsh" ] && . "${HOME}/.tabsmith/shell/zshrc.pre.zsh""#;
     const ZSHRC_POST_SOURCE: &str =
         r#"[ -f "${HOME}/.tabsmith/shell/zshrc.post.zsh" ] && . "${HOME}/.tabsmith/shell/zshrc.post.zsh""#;
+    const PROFILE_PRE_SOURCE: &str =
+        r#"if (Test-Path "${HOME}/.tabsmith/shell/profile.pre.ps1") { . "${HOME}/.tabsmith/shell/profile.pre.ps1" }"#;
+    const PROFILE_POST_SOURCE: &str =
+        r#"if (Test-Path "${HOME}/.tabsmith/shell/profile.post.ps1") { . "${HOME}/.tabsmith/shell/profile.post.ps1" }"#;
 
     /// Any case and spacing, also right after a BOM.
     #[test]
@@ -166,5 +170,91 @@ mod tests {
         let found = [traced, untouched].map(|d| d.has_own_line(ZSHRC_PRE_SOURCE, ZSHRC_POST_SOURCE));
 
         assert_eq!(found, [true, false]);
+    }
+
+    /// Editors save pwsh profiles with a BOM and CRLF line ends.
+    #[test]
+    fn should_keep_the_bom_first_and_once_and_the_crlf_user_lines_when_adding_the_blocks() {
+        let dotfile = Dotfile::new(
+            "\u{feff}Write-Host USERLINE\r\nSet-PSReadLineOption -PredictionSource History\r\n".to_string(),
+        );
+
+        let installed = dotfile.with_blocks(PROFILE_PRE_SOURCE, PROFILE_POST_SOURCE);
+
+        assert_eq!(
+            installed.text(),
+            format!("\u{feff}{PRE_MARKER}\n{PROFILE_PRE_SOURCE}\nWrite-Host USERLINE\r\nSet-PSReadLineOption -PredictionSource History\r\n{POST_MARKER}\n{PROFILE_POST_SOURCE}\n")
+        );
+    }
+
+    #[test]
+    fn should_end_a_shebang_only_dotfile_with_a_newline_before_the_pre_block() {
+        let dotfile = Dotfile::new("#!/bin/zsh".to_string());
+
+        let installed = dotfile.with_blocks(ZSHRC_PRE_SOURCE, ZSHRC_POST_SOURCE);
+
+        assert_eq!(
+            installed.text(),
+            format!("#!/bin/zsh\n{PRE_MARKER}\n{ZSHRC_PRE_SOURCE}\n{POST_MARKER}\n{ZSHRC_POST_SOURCE}\n")
+        );
+    }
+
+    #[test]
+    fn should_leave_a_single_newline_when_taking_the_blocks_out_of_an_empty_dotfile() {
+        let dotfile = Dotfile::new(String::new());
+
+        let uninstalled = dotfile.without_blocks(ZSHRC_PRE_SOURCE, ZSHRC_POST_SOURCE);
+
+        assert_eq!(uninstalled.text(), "\n");
+    }
+
+    #[test]
+    fn should_drop_the_leading_and_trailing_blank_lines_when_taking_the_blocks_out() {
+        let dotfile = Dotfile::new(format!(
+            "\n\n{PRE_MARKER}\n{ZSHRC_PRE_SOURCE}\nexport A=1\n\n{POST_MARKER}\n{ZSHRC_POST_SOURCE}\n\n\n"
+        ));
+
+        let uninstalled = dotfile.without_blocks(ZSHRC_PRE_SOURCE, ZSHRC_POST_SOURCE);
+
+        assert_eq!(uninstalled.text(), "export A=1\n");
+    }
+
+    /// The BOM stays first; the CRLF user lines stay, but the final line end becomes a plain `\n`.
+    #[test]
+    fn should_keep_the_bom_first_and_the_crlf_user_lines_when_taking_the_blocks_out() {
+        let dotfile = Dotfile::new(format!(
+            "\u{feff}{PRE_MARKER}\n{PROFILE_PRE_SOURCE}\nWrite-Host USERLINE\r\nSet-PSReadLineOption -PredictionSource History\r\n{POST_MARKER}\n{PROFILE_POST_SOURCE}\n"
+        ));
+
+        let uninstalled = dotfile.without_blocks(PROFILE_PRE_SOURCE, PROFILE_POST_SOURCE);
+
+        assert_eq!(
+            uninstalled.text(),
+            "\u{feff}Write-Host USERLINE\r\nSet-PSReadLineOption -PredictionSource History\n"
+        );
+    }
+
+    /// Trailing spaces and a CR after a line install wrote are tolerated; leading spaces are not.
+    #[test]
+    fn should_keep_an_indented_source_line_and_drop_one_with_trailing_whitespace() {
+        let dotfile = Dotfile::new(format!(
+            "export A=1\n  {ZSHRC_PRE_SOURCE}\n{ZSHRC_POST_SOURCE}  \r\n"
+        ));
+
+        let uninstalled = dotfile.without_blocks(ZSHRC_PRE_SOURCE, ZSHRC_POST_SOURCE);
+
+        assert_eq!(
+            uninstalled.text(),
+            format!("export A=1\n  {ZSHRC_PRE_SOURCE}\n")
+        );
+    }
+
+    #[test]
+    fn should_not_take_a_marker_behind_a_bom_for_an_own_line() {
+        let dotfile = Dotfile::new(format!("\u{feff}{PRE_MARKER}\nexport A=1\n"));
+
+        let found = dotfile.has_own_line(ZSHRC_PRE_SOURCE, ZSHRC_POST_SOURCE);
+
+        assert!(!found);
     }
 }
