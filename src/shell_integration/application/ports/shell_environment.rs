@@ -156,4 +156,26 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn should_fail_as_an_environment_error_with_the_message_it_was_given() {
+        let environment = RecordingShellEnvironment::default()
+            .with_current_executable(Err("could not locate the tabsmith executable: entity not found".into()))
+            .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into()));
+
+        let failures = [
+            environment.current_executable().unwrap_err(),
+            environment.pwsh_profile().unwrap_err(),
+        ];
+
+        assert!(
+            matches!(
+                &failures,
+                [ShellIntegrationError::Environment(executable), ShellIntegrationError::Environment(profile)]
+                    if executable == "could not locate the tabsmith executable: entity not found"
+                        && profile == "pwsh printed an empty $PROFILE"
+            ),
+            "{failures:?}"
+        );
+    }
 }
