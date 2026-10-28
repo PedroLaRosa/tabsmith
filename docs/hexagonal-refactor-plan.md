@@ -122,9 +122,11 @@ pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) 
 ### Architecture fitness test (one runnable check that enforces all of the above)
 
 `src/architecture_tests.rs` (`#[cfg(test)]`) walks `src/` with `std::fs` and fails on:
-1. a file in `*/domain/` that uses another layer (`::application`, `::infrastructure`), `crate::bootstrap`, an external
-   crate other than `std`/`core`/`alloc`/`unicode_width`, or `println!`/`eprintln!`/`logger::`;
-2. a file in `*/application/` that uses `::infrastructure`, `crate::bootstrap`, or external crates (same allow-list);
+1. a file in `*/domain/` that uses another layer (`::application`, `::infrastructure`), `crate::bootstrap`, a legacy
+   flat module (`crate::types`, `crate::js`, `crate::engine`, ..), an external crate other than
+   `std`/`core`/`alloc`/`unicode_width`, or `println!`/`eprintln!`/`logger::`;
+2. a file in `*/application/` that uses `::infrastructure`, `crate::bootstrap`, a legacy flat module, or external crates
+   (same allow-list);
 3. a module other than `bootstrap` that references another module's `application::*_use_case` or `::infrastructure`;
 4. `shared/` that references a feature module;
 5. a registered module with a `src/<module>.rs`, or a file in `src/<module>/` other than `mod.rs` and the files inside

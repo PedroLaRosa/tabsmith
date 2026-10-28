@@ -8,6 +8,30 @@ use std::path::{Path, PathBuf};
 /// composition root and is never registered.
 const REGISTERED_MODULES: &[&str] = &["history", "settings", "shared"];
 
+/// The flat files the refactor is emptying (`src/<name>.rs`). Domain and application never use them: they reach
+/// serde, I/O and the QuickJS runtime by the back door.
+// ponytail: a name stays listed after its file is deleted (harmless, nothing can use it then). The legacy `specs.rs`
+// is not listed because the `specs` module takes over its name in Phase 5.
+const LEGACY_MODULES: &[&str] = &[
+    "cli",
+    "doctor",
+    "engine",
+    "icons",
+    "inline",
+    "integrations",
+    "js",
+    "keys",
+    "menu",
+    "parser",
+    "pty",
+    "render",
+    "shell_parser",
+    "spec",
+    "suggest",
+    "tracker",
+    "types",
+];
+
 /// External crates the inner layers may use. std, core and alloc are not in Cargo.toml, so they are never flagged.
 const ALLOWED_EXTERNAL_CRATES: &[&str] = &["unicode_width"];
 
@@ -23,10 +47,12 @@ impl Rule {
     fn description(self) -> &'static str {
         match self {
             Rule::DomainLayer => {
-                "domain uses application, infrastructure, bootstrap, an external crate, an output macro or the logger"
+                "domain uses application, infrastructure, bootstrap, a legacy module, an external crate, an output macro or the \
+                 logger"
             }
             Rule::ApplicationLayer => {
-                "application uses infrastructure, bootstrap, an external crate or an output macro (print!, dbg!, ..)"
+                "application uses infrastructure, bootstrap, a legacy module, an external crate or an output macro (print!, \
+                 dbg!, ..)"
             }
             Rule::ModuleBoundary => "uses another module's use case or infrastructure, or bootstrap",
             Rule::SharedKernel => "shared uses a crate module other than shared",
@@ -279,14 +305,19 @@ fn breaks_domain_layer(code: &str, paths: &[Vec<&str>], external_crates: &[Strin
         || paths.iter().any(|path| path.contains(&"application") || path.contains(&"logger"))
 }
 
-/// std plus unicode-width: no infrastructure, no composition root, no external crate, no output.
+/// std plus unicode-width: no infrastructure, no composition root, no legacy module, no external crate, no output.
 fn breaks_application_layer(code: &str, paths: &[Vec<&str>], external_crates: &[String]) -> bool {
     writes_output(code)
         || paths.iter().any(|path| {
             path.contains(&"infrastructure")
                 || is_the_composition_root(path)
+                || is_a_legacy_module(path)
                 || is_forbidden_external_crate(path[0], external_crates)
         })
+}
+
+fn is_a_legacy_module(path: &[&str]) -> bool {
+    matches!(path, ["crate", root, ..] if LEGACY_MODULES.contains(root))
 }
 
 /// `print!`, `println!`, `eprint!`, `eprintln!` or `dbg!`, bare or by path (`std::println!`).
@@ -677,6 +708,27 @@ mod tests {
             [
                 vec![Violation { line: 1, rule: Rule::DomainLayer }],
                 vec![Violation { line: 1, rule: Rule::ApplicationLayer }],
+            ]
+        );
+    }
+
+    #[test]
+    fn should_flag_a_domain_or_application_file_that_uses_a_legacy_module() {
+        let domain = "use crate::shared::domain::value_objects::shell::Shell;\n\
+                      use crate::types::SessionCtx;\n";
+        let application = "use crate::completion::domain::suggestion::Suggestion;\n\
+                           let engine = crate::engine::spawn(dependencies);\n";
+
+        let found = [
+            violations_in("history/domain/entities/history_entry.rs", domain),
+            violations_in("history/application/record_command_use_case.rs", application),
+        ];
+
+        assert_eq!(
+            found,
+            [
+                vec![Violation { line: 2, rule: Rule::DomainLayer }],
+                vec![Violation { line: 2, rule: Rule::ApplicationLayer }],
             ]
         );
     }
