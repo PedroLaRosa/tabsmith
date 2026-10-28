@@ -17,6 +17,7 @@ use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
+use crate::shell_integration::infrastructure::adapters::os_shell_environment::integration_paths_from;
 use crate::types::now_secs;
 use clap::Args;
 use std::io::IsTerminal;
@@ -184,7 +185,7 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
             return Ok(1);
         }
     }
-    let ctx = integrations::integration_paths_from_env()?;
+    let ctx = integration_paths_from(&data_directory_from_env())?;
     let parent = process_info::parent_exe();
     let current = parent.as_deref().and_then(Shell::from_name);
     let mut r = Run {

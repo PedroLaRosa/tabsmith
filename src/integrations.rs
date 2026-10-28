@@ -3,15 +3,13 @@
 //! OWNER: integrations agent. Shell scripts live in `shell/` and are embedded with `include_str!`.
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::atomic_file::AtomicFile;
-use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::os::executable_lookup::which;
-#[cfg(windows)]
-use crate::shared::infrastructure::os::process_info::is_console;
-use crate::shared::infrastructure::os::process_info::{exe_path, is_root, parent_exe};
-use crate::shared::infrastructure::os::process_runner::output_with_timeout;
+use crate::shared::infrastructure::os::process_info::{is_root, parent_exe};
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
+use crate::shell_integration::application::ports::shell_environment::ShellEnvironment;
 use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::repositories::backup_repository::BackupRepository;
 use crate::shell_integration::domain::repositories::dotfile_repository::DotfileRepository;
@@ -25,17 +23,17 @@ use crate::shell_integration::domain::value_objects::dotfile::Dotfile;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
-use crate::shell_integration::domain::value_objects::launch_facts::LaunchFacts;
 use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
 use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
+use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
+    integration_paths_from, OsShellEnvironment,
+};
 use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
 use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -212,8 +210,8 @@ fn init_output(shell: Shell, when: IntegrationPhase, snapshot: bool) -> Result<S
             shell,
             when,
             template,
-            &exe_path()?,
-            parent_exe,
+            &OsShellEnvironment.current_executable()?,
+            || OsShellEnvironment.parent_shell(),
             || should_launch().0,
         )
     };
@@ -225,17 +223,7 @@ fn init_output(shell: Shell, when: IntegrationPhase, snapshot: bool) -> Result<S
 
 /// Launch decision (SPEC §5.2): (launch?, reason line).
 pub fn should_launch() -> (bool, String) {
-    let env: HashMap<String, String> = std::env::vars_os()
-        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.to_string_lossy().into_owned())))
-        .collect();
-    #[cfg(windows)]
-    let stdin_ok = {
-        use std::os::windows::io::AsRawHandle;
-        is_console(std::io::stdin().as_raw_handle())
-    };
-    #[cfg(not(windows))]
-    let stdin_ok = std::io::stdin().is_terminal();
-    let decision = launch_policy::decide(&LaunchFacts::new(env, stdin_ok));
+    let decision = launch_policy::decide(&OsShellEnvironment.launch_facts());
     (decision.launches(), decision.reason().to_string())
 }
 
@@ -297,57 +285,14 @@ fn prune_run_files(dir: &Path) {
 // ---------------------------------------------------------------------------------------------------------------
 // Dotfile integrations (SPEC §5.5)
 
-/// The integration paths of this user and binary: home, then data root, then the executable, then `ZDOTDIR`, then
-/// `XDG_CONFIG_HOME`; pwsh's `$PROFILE` is left to ask `pwsh`.
-pub(crate) fn integration_paths_from_env() -> anyhow::Result<IntegrationPaths> {
-    let home = user_home_from_env()?;
-    let var = |k: &str| {
-        std::env::var_os(k)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    let data_root = data_directory_from_env().root()?;
-    let binary = exe_path()?;
-    let zdotdir = var("ZDOTDIR");
-    let fish_config_dir = var("XDG_CONFIG_HOME")
-        .unwrap_or_else(|| home.join(".config"))
-        .join("fish");
-    Ok(IntegrationPaths::new(
-        home,
-        data_root,
-        binary,
-        zdotdir,
-        fish_config_dir,
-        None,
-    ))
-}
-
 /// Integrations of `shell` (SPEC §5.5 table), asking `pwsh` for `$PROFILE` when the paths do not know it.
 pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>, ShellIntegrationError> {
     integration_catalog::integrations(
         ctx,
         shell,
         |p| FileDotfileRepository.exists(p),
-        || pwsh_profile().map_err(|e| ShellIntegrationError::Environment(format!("{e:#}"))),
+        || OsShellEnvironment.pwsh_profile(),
     )
-}
-
-/// Prints `$PROFILE` as raw UTF-8 bytes: pwsh's Console.Out would encode it with the (shared, OEM on Windows) console
-/// code page, and changing that code page would outlive the child.
-const PWSH_PROFILE_CMD: &str =
-    "$b = [Text.Encoding]::UTF8.GetBytes($PROFILE); $s = [Console]::OpenStandardOutput(); $s.Write($b, 0, $b.Length); $s.Flush()";
-
-/// `$PROFILE` (CurrentUserCurrentHost) from `pwsh -NoLogo -NoProfile -Command …` (5 s timeout).
-fn pwsh_profile() -> Result<PathBuf> {
-    let out = output_with_timeout(
-        Command::new("pwsh").args(["-NoLogo", "-NoProfile", "-Command", PWSH_PROFILE_CMD]),
-        Duration::from_secs(5),
-    )
-    .context("could not ask pwsh for $PROFILE")?;
-    match out.trim() {
-        "" => bail!("pwsh printed an empty $PROFILE"),
-        p => Ok(PathBuf::from(p)),
-    }
 }
 
 impl Integration {
@@ -517,7 +462,7 @@ fn target_shells(t: &IntegrationTargetArg) -> Vec<Shell> {
 }
 
 pub fn integrations_cmd(cmd: IntegrationsCmd) -> anyhow::Result<i32> {
-    let ctx = integration_paths_from_env()?;
+    let ctx = integration_paths_from(&data_directory_from_env())?;
     let install = |target: &IntegrationTargetArg, silent: bool| -> Result<i32> {
         let installed = install_dotfiles(&ctx, &target_shells(target))?;
         if installed {
@@ -643,7 +588,7 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
     }
     let auto = args.no_confirm
         || confirm("Do you want tabsmith to modify your shell config (you will have to manually do this otherwise)? [Y/n] ")?;
-    let ctx = integration_paths_from_env()?;
+    let ctx = integration_paths_from(&data_directory_from_env())?;
     let shells: Vec<Shell> = Shell::ALL
         .into_iter()
         .filter(|s| which(s.name()).is_some())
@@ -703,7 +648,7 @@ pub fn uninstall(args: UninstallArgs) -> anyhow::Result<i32> {
         return Ok(1);
     }
     Ok(uninstall_all(
-        &integration_paths_from_env()?,
+        &integration_paths_from(&data_directory_from_env())?,
         &default_shells(),
         args.purge,
     ))
@@ -744,6 +689,9 @@ mod tests {
     use crate::shared::domain::services::shell_quoting::quote;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::shell_integration::domain::value_objects::dotfile::{POST_MARKER, PRE_MARKER};
+    use crate::shell_integration::infrastructure::adapters::os_shell_environment::PWSH_PROFILE_CMD;
+    use std::path::PathBuf;
+    use std::process::Command;
 
     const ALL: [(Shell, IntegrationPhase); 8] = [
         (Shell::Bash, IntegrationPhase::Pre),
