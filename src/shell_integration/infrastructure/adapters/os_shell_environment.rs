@@ -4,8 +4,12 @@ use std::path::PathBuf;
 
 /// The `$PROFILE` pwsh printed (trimmed), or why it is unknown.
 fn profile_from(output: std::io::Result<String>) -> Result<PathBuf, ShellIntegrationError> {
-    let out = output
-        .map_err(|e| ShellIntegrationError::Environment(format!("could not ask pwsh for $PROFILE: {e}")))?;
+    let out = output.map_err(|e| {
+        ShellIntegrationError::Environment(format!(
+            "could not ask pwsh for $PROFILE: {}",
+            display_chain(&e)
+        ))
+    })?;
     match out.trim() {
         "" => Err(ShellIntegrationError::Environment(
             "pwsh printed an empty $PROFILE".to_string(),
