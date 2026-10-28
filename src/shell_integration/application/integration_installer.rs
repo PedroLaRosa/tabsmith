@@ -123,6 +123,38 @@ impl IntegrationInstaller {
         self.dotfiles.remove(integration.script(paths, IntegrationPhase::Pre).path())?;
         self.dotfiles.remove(integration.script(paths, IntegrationPhase::Post).path())
     }
+
+    /// SPEC §5.5 install (idempotent); an existing dotfile is first copied to `<data>/backups/<unix-secs>/`.
+    pub(crate) fn install(
+        &self,
+        paths: &IntegrationPaths,
+        integration: &Integration,
+    ) -> Result<(), ShellIntegrationError> {
+        if self.check(paths, integration).is_ok() {
+            return Ok(());
+        }
+        if let Some(script) = integration.whole_file_script(paths) {
+            return self.dotfiles.write(script.path(), script.contents());
+        }
+        let contents = if self.dotfiles.exists(integration.path()) {
+            let dir = paths.data_root().join("backups").join(self.clock.now_secs().to_string());
+            self.backups.back_up(integration, &dir)?;
+            self.uninstall(paths, integration)?;
+            self.dotfiles.read(integration.path())?
+        } else {
+            String::new()
+        };
+        self.write_scripts(paths, integration)?;
+        let dotfile = Dotfile::new(contents);
+        let new = dotfile.with_blocks(
+            &integration.source_line(paths, IntegrationPhase::Pre),
+            &integration.source_line(paths, IntegrationPhase::Post),
+        );
+        if new.text() != dotfile.text() {
+            self.dotfiles.write(integration.path(), new.text())?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +172,7 @@ mod tests {
     struct TestBed {
         installer: IntegrationInstaller,
         dotfiles: Rc<InMemoryDotfileRepository>,
+        backups: Rc<InMemoryBackupRepository>,
         environment: Rc<RecordingShellEnvironment>,
     }
 
@@ -149,16 +182,18 @@ mod tests {
 
     fn test_bed_with(environment: RecordingShellEnvironment) -> TestBed {
         let dotfiles = Rc::new(InMemoryDotfileRepository::default());
+        let backups = Rc::new(InMemoryBackupRepository::default());
         let environment = Rc::new(environment);
         let installer = IntegrationInstaller::new(
             dotfiles.clone(),
-            Rc::new(InMemoryBackupRepository::default()),
+            backups.clone(),
             Arc::new(FixedClock::new(1_700_000_123_999)),
             environment.clone(),
         );
         TestBed {
             installer,
             dotfiles,
+            backups,
             environment,
         }
     }
@@ -499,6 +534,23 @@ mod tests {
             ]
             .map(|p| bed.dotfiles.exists(Path::new(p))),
             [false, false, false]
+        );
+    }
+
+    #[test]
+    fn should_put_the_blocks_into_a_dotfile_that_does_not_exist_on_install() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+
+        bed.installer.install(&paths(), &zshrc).unwrap();
+
+        assert_eq!(
+            bed.dotfiles.read(zshrc.path()).unwrap(),
+            format!(
+                "{PRE_MARKER}\n{}\n{POST_MARKER}\n{}\n",
+                source_line(&zshrc, IntegrationPhase::Pre),
+                source_line(&zshrc, IntegrationPhase::Post)
+            )
         );
     }
 }
