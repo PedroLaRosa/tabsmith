@@ -43,6 +43,20 @@ impl Dotfile {
         );
         Dotfile::new(new)
     }
+
+    /// The lines after the BOM without the markers and source lines (compared without trailing whitespace), the
+    /// rest trimmed and ended with one `\n`.
+    pub(crate) fn without_blocks(&self, pre_source: &str, post_source: &str) -> Dotfile {
+        let (bom, body) = split_bom(&self.text);
+        let kept: String = body
+            .split_inclusive('\n')
+            .filter(|l| {
+                let line = l.trim_end();
+                !([PRE_MARKER, POST_MARKER].contains(&line) || [pre_source, post_source].contains(&line))
+            })
+            .collect();
+        Dotfile::new(format!("{bom}{}\n", kept.trim()))
+    }
 }
 
 /// `# tabsmith ignore` (case-insensitive): the user opted this file out.
@@ -118,6 +132,20 @@ mod tests {
         assert_eq!(
             installed.text(),
             format!("#!/bin/zsh\n{PRE_MARKER}\n{ZSHRC_PRE_SOURCE}\nexport A=1\nalias ll='ls -l'\n{POST_MARKER}\n{ZSHRC_POST_SOURCE}\n")
+        );
+    }
+
+    #[test]
+    fn should_take_the_blocks_out_and_give_back_the_user_lines() {
+        let dotfile = Dotfile::new(format!(
+            "#!/bin/zsh\n{PRE_MARKER}\n{ZSHRC_PRE_SOURCE}\nexport A=1\nalias ll='ls -l'\n{POST_MARKER}\n{ZSHRC_POST_SOURCE}\n"
+        ));
+
+        let uninstalled = dotfile.without_blocks(ZSHRC_PRE_SOURCE, ZSHRC_POST_SOURCE);
+
+        assert_eq!(
+            uninstalled.text(),
+            "#!/bin/zsh\nexport A=1\nalias ll='ls -l'\n"
         );
     }
 }
