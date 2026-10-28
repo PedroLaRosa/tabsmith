@@ -1,6 +1,6 @@
 # Phase 3 (history): preparation
 
-Status: **done** at `7d3b331` (`a3953cf..7d3b331`, gate green). The decisions it took are in the plan's section 9
+Status: **done** at `f485ea7` (`a3953cf..f485ea7`, gate green). The decisions it took are in the plan's section 9
 "Phase 3 notes"; where they differ from the briefs below (the blank-command skip lives in the repository contract,
 no `identity()` method, `HistoryEntry` no longer derives `Default`), the notes win.
 

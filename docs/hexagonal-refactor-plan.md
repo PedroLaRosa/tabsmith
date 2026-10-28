@@ -1,6 +1,6 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2 and 3 are done on branch `refactor/hexagonal-architecture` (gate green at `7d3b331`). Phase 4
+Status: Phases 0, 1, 2 and 3 are done on branch `refactor/hexagonal-architecture` (gate green at `f485ea7`). Phase 4
 is next. Working notes, tools, the per-file source map and the Phase 3 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
@@ -555,8 +555,8 @@ See the Phase 2 notes in section 9.
 2. Add `HistoryRepository` + InMemory, and `JsonlHistoryRepository` with `history_file_round_trip_and_compaction`.
 3. Write `RecordCommandUseCase` test-first; blank commands are skipped.
 
-Done at `7d3b331`: `history` registered in the architecture test, `inline::History` and `types::HistoryEntry`
-deleted, gate green (521 passed). See the Phase 3 notes in section 9.
+Done at `f485ea7`: `history` registered in the architecture test, `inline::History` and `types::HistoryEntry`
+deleted, gate green (524 passed). See the Phase 3 notes in section 9.
 
 ### Phase 4: shell_integration (the first full CLI-only slice; also starts terminal_session's session context)
 1. Domain:
@@ -841,4 +841,9 @@ repeat it. `HistoryModule { history, record_command }` is built on the engine th
 completion and ghost_text once they are modules (Phases 6-7). `history_error.rs` was not added: nothing in the
 module is fallible (load and append log and carry on, as before). `SharedDependencies::from_env()` (shared
 infrastructure) builds the dependencies for both `bootstrap::cli` and the legacy engine, so nothing outside
-`bootstrap` depends on `bootstrap` and the module graph stays acyclic.
+`bootstrap` depends on `bootstrap` and the module graph stays acyclic. The Phase 3 review added a fitness rule:
+a registered module's domain or application may not use a legacy flat module (`LEGACY_MODULES` in
+`architecture_tests.rs`, kept by hand; infrastructure still may, for the bridges). `specs` is not in that list
+because the legacy `specs.rs` shares the planned module's name, so Phase 5 must check by hand that the specs domain
+and application never reach the legacy `crate::specs::` items, and should drop `specs.rs` from the list's story
+once it is deleted. The rules still do not check the plan's `anyhow` rule (section 1, "Errors").
