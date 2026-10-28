@@ -41,6 +41,7 @@ enum Rule {
     ApplicationLayer,
     ModuleBoundary,
     SharedKernel,
+    ModuleDeclarations,
 }
 
 impl Rule {
@@ -56,6 +57,7 @@ impl Rule {
             }
             Rule::ModuleBoundary => "uses another module's use case or infrastructure, or bootstrap",
             Rule::SharedKernel => "shared uses a crate module other than shared",
+            Rule::ModuleDeclarations => "a mod.rs imports or re-exports; it only declares its children",
         }
     }
 }
@@ -172,6 +174,7 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
                     && (crosses_module_boundary(module, &resolved) || reaches_the_composition_root(layer, &resolved)),
             ),
             (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(&paths)),
+            (Rule::ModuleDeclarations, path.ends_with("/mod.rs") && imports_or_re_exports(code)),
         ];
         let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
         found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
@@ -359,6 +362,11 @@ fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
 /// The kernel never imports a feature or legacy module.
 fn leaves_the_shared_kernel(paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| matches!(path.as_slice(), ["crate", module, ..] if *module != "shared"))
+}
+
+/// A `use` item (`use`, `pub(crate) use`, a glob): a mod.rs that re-exports hides the file a path names from rule 3.
+fn imports_or_re_exports(code: &str) -> bool {
+    code.split(|c: char| !is_path_char(c)).any(|word| word == "use")
 }
 
 /// Crate names (`-` read as `_`) from `[dependencies]` and every `[target.*.dependencies]` table.
@@ -951,6 +959,26 @@ mod tests {
         let found = violations_in("settings/infrastructure/settings_module.rs", source);
 
         assert_eq!(found, vec![]);
+    }
+
+    /// A re-export would let another module import a use case by a path without its `*_use_case` file (rule 3).
+    #[test]
+    fn should_flag_a_mod_rs_that_imports_or_re_exports() {
+        let source = "pub(crate) mod record_command_use_case;\n\
+                      pub(crate) use record_command_use_case::RecordCommandUseCase;\n\
+                      pub use adapters::*;\n\
+                      use std::rc::Rc;\n";
+
+        let found = violations_in("history/application/mod.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 2, rule: Rule::ModuleDeclarations },
+                Violation { line: 3, rule: Rule::ModuleDeclarations },
+                Violation { line: 4, rule: Rule::ModuleDeclarations },
+            ]
+        );
     }
 
     #[test]
