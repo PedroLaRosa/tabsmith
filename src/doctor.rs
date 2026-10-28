@@ -1,5 +1,5 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
-use crate::integrations::{self, Ctx, Integration};
+use crate::integrations::{self, Integration};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE, INLINE_ENABLED, INLINE_SOURCE,
 };
@@ -14,6 +14,7 @@ use crate::shared::infrastructure::os::process_info;
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::types::now_secs;
 use clap::Args;
@@ -182,7 +183,7 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<i32> {
             return Ok(1);
         }
     }
-    let ctx = Ctx::from_env()?;
+    let ctx = integrations::integration_paths_from_env()?;
     let parent = process_info::parent_exe();
     let current = parent.as_deref().and_then(Shell::from_name);
     let mut r = Run {
@@ -263,7 +264,7 @@ fn short_path(home: &Path, p: &Path) -> String {
 }
 
 /// `Let's check your dotfiles...`: one check per integration of every shell.
-fn dotfile_checks(ctx: &Ctx, current: Option<Shell>) -> Vec<Check<'_>> {
+fn dotfile_checks(ctx: &IntegrationPaths, current: Option<Shell>) -> Vec<Check<'_>> {
     let mut v = Vec::new();
     for shell in Shell::ALL {
         let kind = if Some(shell) == current {
@@ -288,11 +289,11 @@ fn dotfile_checks(ctx: &Ctx, current: Option<Shell>) -> Vec<Check<'_>> {
     v
 }
 
-fn dotfile_check(ctx: &Ctx, i: Integration, kind: Kind) -> Check<'_> {
+fn dotfile_check(ctx: &IntegrationPaths, i: Integration, kind: Kind) -> Check<'_> {
     let name = format!(
         "{} {} integration check",
         i.shell.name(),
-        short_path(&ctx.home, &i.path)
+        short_path(ctx.home(), &i.path)
     );
     check(name, kind, move || {
         let e = match i.is_installed(ctx) {
@@ -335,12 +336,11 @@ fn dotfile_check(ctx: &Ctx, i: Integration, kind: Kind) -> Check<'_> {
 /// (shell, first single-quoted path) of the script files and fish `conf.d` files of the current integrations of
 /// every shell on PATH. Not every file in `~/.tabsmith/shell`: one of a dotfile deleted since (or of a shell gone
 /// from PATH) is sourced by nothing, and install, the fix, would never rewrite it.
-fn script_bins(ctx: &Ctx) -> Vec<(Shell, String)> {
+fn script_bins(ctx: &IntegrationPaths) -> Vec<(Shell, String)> {
     // pwsh's script files do not depend on $PROFILE: no second `pwsh` spawn to ask for it.
-    let ctx = &Ctx {
-        pwsh_profile: Some(ctx.pwsh_profile.clone().unwrap_or_default()),
-        ..ctx.clone()
-    };
+    let ctx = &ctx
+        .clone()
+        .with_pwsh_profile(ctx.pwsh_profile().map(Path::to_path_buf).unwrap_or_default());
     let mut files = Vec::new();
     for shell in Shell::ALL.into_iter().filter(|s| which(s.name()).is_some()) {
         for i in integrations::integrations(ctx, shell).unwrap_or_default() {
@@ -367,23 +367,23 @@ fn script_bins(ctx: &Ctx) -> Vec<(Shell, String)> {
 }
 
 /// `Let's make sure tabsmith is set up correctly...`
-fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
+fn setup_checks(ctx: &IntegrationPaths) -> Vec<Check<'_>> {
     let settings_path =
-        data_directory_from_env().settings_file().unwrap_or_else(|_| ctx.data.join("settings.json"));
+        data_directory_from_env().settings_file().unwrap_or_else(|_| ctx.data_root().join("settings.json"));
     let specs_index = ctx
-        .data
+        .data_root()
         .join("specs")
         .join(crate::specs::version())
         .join("index.json");
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut v = vec![
         check("tabsmith data dir exists", Kind::Normal, move || {
-            if ctx.data.is_dir() {
+            if ctx.data_root().is_dir() {
                 return Outcome::Ok;
             }
-            let fix: Fix = Box::new(move || Ok(std::fs::create_dir_all(&ctx.data)?));
+            let fix: Fix = Box::new(move || Ok(std::fs::create_dir_all(ctx.data_root())?));
             Outcome::Err {
-                reason: format!("No directory at path {}", ctx.data.display()),
+                reason: format!("No directory at path {}", ctx.data_root().display()),
                 info: vec![],
                 fix: Some(fix),
             }
@@ -394,7 +394,7 @@ fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
             move || {
                 let stale: Vec<(Shell, String)> = script_bins(ctx)
                     .into_iter()
-                    .filter(|(_, b)| *b != ctx.bin)
+                    .filter(|(_, b)| *b != ctx.binary())
                     .collect();
                 let Some((_, old)) = stale.first() else {
                     return Outcome::Ok;
@@ -483,7 +483,7 @@ fn setup_checks(ctx: &Ctx) -> Vec<Check<'_>> {
 }
 
 /// `Let's check if your environment is supported...`
-fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
+fn env_checks<'a>(ctx: &'a IntegrationPaths, parent: Option<&str>) -> Vec<Check<'a>> {
     let var = |k: &str| std::env::var(k).ok();
     let in_cmd = parent.is_some_and(|p| {
         let base = p.rsplit(['/', '\\']).next().unwrap_or(p);
@@ -532,7 +532,7 @@ fn env_checks<'a>(ctx: &'a Ctx, parent: Option<&str>) -> Vec<Check<'a>> {
             session_kind(sid.as_deref(), parent, var("TABSMITH_SHELL").as_deref()),
             move || {
                 let sid = sid.clone().unwrap_or_default();
-                if ctx.data.join("run").join(format!("{sid}.json")).is_file() {
+                if ctx.data_root().join("run").join(format!("{sid}.json")).is_file() {
                     Outcome::Ok
                 } else {
                     Outcome::Warn("Shell has not reported its environment yet (tabsmith _ pre-cmd did not run)".into())
@@ -834,22 +834,19 @@ mod tests {
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(home.join(".bash_profile"), "").unwrap();
-        let c = Ctx {
-            data: home.join(".tabsmith"),
-            bin: "/old/tabsmith".into(),
-            zdotdir: None,
-            fish_dir: home.join(".config/fish"),
-            pwsh_profile: Some(home.join("profile.ps1")),
-            home: home.clone(),
-        };
+        let c = IntegrationPaths::new(
+            home.clone(),
+            home.join(".tabsmith"),
+            "/old/tabsmith".into(),
+            None,
+            home.join(".config/fish"),
+            Some(home.join("profile.ps1")),
+        );
         integrations::install_dotfiles(&c, &[Shell::Bash]).unwrap();
         std::fs::remove_file(home.join(".bash_profile")).unwrap();
-        let moved = Ctx {
-            bin: "/new/tabsmith".into(),
-            ..c
-        };
+        let moved = c.with_binary("/new/tabsmith".into());
         integrations::install_dotfiles(&moved, &[Shell::Bash]).unwrap(); // the check's fix
-        assert!(moved.data.join("shell/bash_profile.pre.bash").exists());
+        assert!(moved.data_root().join("shell/bash_profile.pre.bash").exists());
         if which("bash").is_some() {
             let bins = script_bins(&moved);
             assert!(

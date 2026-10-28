@@ -16,6 +16,7 @@ use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
@@ -350,42 +351,29 @@ fn prune_run_files(dir: &Path) {
 pub const PRE_MARKER: &str = "# tabsmith pre block. Keep at the top of this file.";
 pub const POST_MARKER: &str = "# tabsmith post block. Keep at the bottom of this file.";
 
-/// Everything an integration operation reads, explicit so tests use a temp HOME.
-#[derive(Clone, Debug)]
-pub struct Ctx {
-    /// The user's home directory.
-    pub home: PathBuf,
-    /// `~/.tabsmith`.
-    pub data: PathBuf,
-    /// Absolute path of the tabsmith binary written into the script files.
-    pub bin: String,
-    /// `$ZDOTDIR`, if set.
-    pub zdotdir: Option<PathBuf>,
-    /// fish config dir: `$XDG_CONFIG_HOME/fish` or `~/.config/fish`.
-    pub fish_dir: PathBuf,
-    /// pwsh `$PROFILE`; `None` = ask `pwsh`.
-    pub pwsh_profile: Option<PathBuf>,
-}
-
-impl Ctx {
-    pub fn from_env() -> Result<Ctx> {
-        let home = user_home_from_env()?;
-        let var = |k: &str| {
-            std::env::var_os(k)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
-        Ok(Ctx {
-            data: data_directory_from_env().root()?,
-            bin: exe_path()?,
-            zdotdir: var("ZDOTDIR"),
-            fish_dir: var("XDG_CONFIG_HOME")
-                .unwrap_or_else(|| home.join(".config"))
-                .join("fish"),
-            pwsh_profile: None,
-            home,
-        })
-    }
+/// The integration paths of this user and binary: home, then data root, then the executable, then `ZDOTDIR`, then
+/// `XDG_CONFIG_HOME`; pwsh's `$PROFILE` is left to ask `pwsh`.
+pub(crate) fn integration_paths_from_env() -> anyhow::Result<IntegrationPaths> {
+    let home = user_home_from_env()?;
+    let var = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    let data_root = data_directory_from_env().root()?;
+    let binary = exe_path()?;
+    let zdotdir = var("ZDOTDIR");
+    let fish_config_dir = var("XDG_CONFIG_HOME")
+        .unwrap_or_else(|| home.join(".config"))
+        .join("fish");
+    Ok(IntegrationPaths::new(
+        home,
+        data_root,
+        binary,
+        zdotdir,
+        fish_config_dir,
+        None,
+    ))
 }
 
 fn io_err(path: &Path, e: std::io::Error) -> ShellIntegrationError {
@@ -471,7 +459,7 @@ pub struct Integration {
 }
 
 /// Integrations of `shell` (SPEC §5.5 table).
-pub fn integrations(ctx: &Ctx, shell: Shell) -> Result<Vec<Integration>> {
+pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>> {
     let dot = |path: PathBuf| Integration {
         shell,
         path,
@@ -481,21 +469,21 @@ pub fn integrations(ctx: &Ctx, shell: Shell) -> Result<Vec<Integration>> {
         Shell::Bash => {
             let extra: Vec<PathBuf> = [".profile", ".bash_login", ".bash_profile"]
                 .iter()
-                .map(|f| ctx.home.join(f))
+                .map(|f| ctx.home().join(f))
                 .filter(|p| p.exists())
                 .collect();
             let extra = if extra.is_empty() {
-                vec![ctx.home.join(".profile")]
+                vec![ctx.home().join(".profile")]
             } else {
                 extra
             };
-            std::iter::once(ctx.home.join(".bashrc"))
+            std::iter::once(ctx.home().join(".bashrc"))
                 .chain(extra)
                 .map(dot)
                 .collect()
         }
         Shell::Zsh => {
-            let dir = ctx.zdotdir.as_ref().unwrap_or(&ctx.home);
+            let dir = ctx.zdotdir().unwrap_or(ctx.home());
             vec![dot(dir.join(".zshrc")), dot(dir.join(".zprofile"))]
         }
         Shell::Fish => [
@@ -505,12 +493,12 @@ pub fn integrations(ctx: &Ctx, shell: Shell) -> Result<Vec<Integration>> {
         .into_iter()
         .map(|(w, f)| Integration {
             shell,
-            path: ctx.fish_dir.join("conf.d").join(f),
+            path: ctx.fish_config_dir().join("conf.d").join(f),
             file_when: Some(w),
         })
         .collect(),
-        Shell::Pwsh => vec![dot(match &ctx.pwsh_profile {
-            Some(p) => p.clone(),
+        Shell::Pwsh => vec![dot(match ctx.pwsh_profile() {
+            Some(p) => p.to_path_buf(),
             None => pwsh_profile()?,
         })],
     })
@@ -564,20 +552,20 @@ impl Integration {
     }
 
     /// `~/.tabsmith/shell/<rc>.<when>.<ext>` (dotfile integrations).
-    pub fn script_path(&self, ctx: &Ctx, when: IntegrationPhase) -> PathBuf {
+    pub fn script_path(&self, ctx: &IntegrationPaths, when: IntegrationPhase) -> PathBuf {
         let ext = if self.shell == Shell::Pwsh {
             "ps1"
         } else {
             self.shell.name()
         };
-        ctx.data
+        ctx.data_root()
             .join("shell")
             .join(format!("{}.{}.{ext}", self.rc(), when.name()))
     }
 
     /// Exact bytes of a script file / fish `conf.d` file (SPEC §5.5).
-    pub fn script_contents(&self, ctx: &Ctx, when: IntegrationPhase) -> String {
-        let (b, w, rc) = (quote(self.shell, &ctx.bin), when.name(), self.rc());
+    pub fn script_contents(&self, ctx: &IntegrationPaths, when: IntegrationPhase) -> String {
+        let (b, w, rc) = (quote(self.shell, ctx.binary()), when.name(), self.rc());
         match self.shell {
             Shell::Bash => {
                 format!("[ -n \"$BASH_VERSION\" ] && [ -x {b} ] && eval \"$({b} init bash {w} --rcfile {rc})\"\n")
@@ -596,9 +584,9 @@ impl Integration {
     }
 
     /// The dotfile line that sources a script file; a leading `$HOME` is written as `${HOME}`.
-    fn source_line(&self, ctx: &Ctx, when: IntegrationPhase) -> String {
+    fn source_line(&self, ctx: &IntegrationPaths, when: IntegrationPhase) -> String {
         let p = self.script_path(ctx, when);
-        let p = match p.strip_prefix(&ctx.home) {
+        let p = match p.strip_prefix(ctx.home()) {
             Ok(rel) => {
                 let parts: Vec<_> = rel.iter().map(|c| c.to_string_lossy()).collect();
                 format!("${{HOME}}/{}", parts.join("/"))
@@ -612,7 +600,7 @@ impl Integration {
     }
 
     /// Write both `~/.tabsmith/shell/` script files of a dotfile integration.
-    pub fn write_scripts(&self, ctx: &Ctx) -> Result<(), ShellIntegrationError> {
+    pub fn write_scripts(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         for when in [IntegrationPhase::Pre, IntegrationPhase::Post] {
             write(
                 &self.script_path(ctx, when),
@@ -623,7 +611,7 @@ impl Integration {
     }
 
     /// SPEC §5.5 `is_installed()`: the first failing reason.
-    pub fn is_installed(&self, ctx: &Ctx) -> Result<(), ShellIntegrationError> {
+    pub fn is_installed(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         if let Some(when) = self.file_when {
             return check_file(&self.path, &self.script_contents(ctx, when));
         }
@@ -663,7 +651,7 @@ impl Integration {
     }
 
     /// SPEC §5.5 install (idempotent); an existing dotfile is first copied to `<data>/backups/<unix-secs>/`.
-    pub fn install(&self, ctx: &Ctx) -> Result<(), ShellIntegrationError> {
+    pub fn install(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         if self.is_installed(ctx).is_ok() {
             return Ok(());
         }
@@ -671,7 +659,7 @@ impl Integration {
             return write(&self.path, &self.script_contents(ctx, when));
         }
         let contents = if self.path.exists() {
-            let dir = ctx.data.join("backups").join(now_secs().to_string());
+            let dir = ctx.data_root().join("backups").join(now_secs().to_string());
             std::fs::create_dir_all(&dir).map_err(|e| io_err(&dir, e))?;
             std::fs::copy(&self.path, dir.join(self.file_name()))
                 .map_err(|e| io_err(&self.path, e))?;
@@ -699,7 +687,7 @@ impl Integration {
     }
 
     /// Is `line` one of the four dotfile lines install writes?
-    fn is_own_line(&self, ctx: &Ctx, line: &str) -> bool {
+    fn is_own_line(&self, ctx: &IntegrationPaths, line: &str) -> bool {
         let line = line.trim_end();
         [PRE_MARKER, POST_MARKER].contains(&line)
             || [IntegrationPhase::Pre, IntegrationPhase::Post]
@@ -709,7 +697,7 @@ impl Integration {
 
     /// Anything uninstall would remove is on disk: also true where `is_installed` fails (a moved binary, an edited
     /// script, lines appended after the post block).
-    fn has_traces(&self, ctx: &Ctx) -> bool {
+    fn has_traces(&self, ctx: &IntegrationPaths) -> bool {
         if self.file_when.is_some() {
             return self.path.exists();
         }
@@ -720,7 +708,7 @@ impl Integration {
     }
 
     /// SPEC §5.5 uninstall: drop our exact lines, then delete the script files (missing is fine).
-    pub fn uninstall(&self, ctx: &Ctx) -> Result<(), ShellIntegrationError> {
+    pub fn uninstall(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         if self.file_when.is_some() {
             return remove(&self.path);
         }
@@ -753,10 +741,10 @@ fn default_shells() -> Vec<Shell> {
 /// Run `op` on every integration of `shells` that `pick` selects. Ok(true) if `op` ran at least once; errors
 /// are collected as `"<describe bold>: <message>"` and returned as one (SPEC §2.6).
 fn apply(
-    ctx: &Ctx,
+    ctx: &IntegrationPaths,
     shells: &[Shell],
     pick: impl Fn(&Integration) -> bool,
-    op: impl Fn(&Integration, &Ctx) -> Result<(), ShellIntegrationError>,
+    op: impl Fn(&Integration, &IntegrationPaths) -> Result<(), ShellIntegrationError>,
 ) -> Result<bool> {
     let (mut ran, mut errs) = (false, Vec::new());
     for &shell in shells {
@@ -779,7 +767,7 @@ fn apply(
 }
 
 /// Install every integration of `shells` that is not installed. Ok(true) if something was installed.
-pub fn install_dotfiles(ctx: &Ctx, shells: &[Shell]) -> Result<bool> {
+pub fn install_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool> {
     apply(
         ctx,
         shells,
@@ -790,7 +778,7 @@ pub fn install_dotfiles(ctx: &Ctx, shells: &[Shell]) -> Result<bool> {
 
 /// Uninstall every integration of `shells` with something on disk. Not only the installed ones: `is_installed`
 /// fails exactly when uninstall is needed (a moved binary, lines appended after the post block). Ok(true) if any.
-fn uninstall_dotfiles(ctx: &Ctx, shells: &[Shell]) -> Result<bool> {
+fn uninstall_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool> {
     apply(ctx, shells, |i| i.has_traces(ctx), Integration::uninstall)
 }
 
@@ -802,7 +790,7 @@ fn target_shells(t: &IntegrationTarget) -> Vec<Shell> {
 }
 
 pub fn integrations_cmd(cmd: IntegrationsCmd) -> anyhow::Result<i32> {
-    let ctx = Ctx::from_env()?;
+    let ctx = integration_paths_from_env()?;
     let install = |target: &IntegrationTarget, silent: bool| -> Result<i32> {
         let installed = install_dotfiles(&ctx, &target_shells(target))?;
         if installed {
@@ -846,7 +834,7 @@ pub fn integrations_cmd(cmd: IntegrationsCmd) -> anyhow::Result<i32> {
 }
 
 /// `integrations status` (SPEC §2.6); honours the SHELL argument.
-fn status(ctx: &Ctx, shells: &[Shell], format: OutputFormat) -> Result<i32> {
+fn status(ctx: &IntegrationPaths, shells: &[Shell], format: OutputFormat) -> Result<i32> {
     let (mut rows, mut errs) = (Vec::new(), Vec::new());
     for &shell in shells {
         match integrations(ctx, shell) {
@@ -928,7 +916,7 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
     }
     let auto = args.no_confirm
         || confirm("Do you want tabsmith to modify your shell config (you will have to manually do this otherwise)? [Y/n] ")?;
-    let ctx = Ctx::from_env()?;
+    let ctx = integration_paths_from_env()?;
     let shells: Vec<Shell> = Shell::ALL
         .into_iter()
         .filter(|s| which(s.name()).is_some())
@@ -979,10 +967,10 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
 
 /// Manual install instructions: the exact lines install writes, so doctor and
 /// uninstall recognise them, and their `[ -f … ]` guard keeps a later uninstall from breaking shell startup.
-fn manual_text(ctx: &Ctx, shells: &[Shell]) -> String {
+fn manual_text(ctx: &IntegrationPaths, shells: &[Shell]) -> String {
     let rc = |shell, file: &str| Integration {
         shell,
-        path: ctx.home.join(file),
+        path: ctx.home().join(file),
         file_when: None,
     };
     let mut rcs = vec![
@@ -1010,21 +998,21 @@ pub fn uninstall(args: UninstallArgs) -> anyhow::Result<i32> {
         return Ok(1);
     }
     Ok(uninstall_all(
-        &Ctx::from_env()?,
+        &integration_paths_from_env()?,
         &default_shells(),
         args.purge,
     ))
 }
 
-/// Remove every integration of `shells` (and `ctx.data` on `purge`), carrying on past errors (SPEC §2.9): 1 if any.
-fn uninstall_all(ctx: &Ctx, shells: &[Shell], purge: bool) -> i32 {
+/// Remove every integration of `shells` (and the data root on `purge`), carrying on past errors (SPEC §2.9): 1 if any.
+fn uninstall_all(ctx: &IntegrationPaths, shells: &[Shell], purge: bool) -> i32 {
     let mut failed = apply(ctx, shells, |_| true, Integration::uninstall)
         .map_err(|e| eprintln!("{e:#}"))
         .is_err();
     if purge {
-        match std::fs::remove_dir_all(&ctx.data) {
+        match std::fs::remove_dir_all(ctx.data_root()) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                eprintln!("Could not remove {}: {e}", ctx.data.display());
+                eprintln!("Could not remove {}: {e}", ctx.data_root().display());
                 failed = true;
             }
             _ => {}
@@ -1040,7 +1028,7 @@ fn uninstall_all(ctx: &Ctx, shells: &[Shell], purge: bool) -> i32 {
     }
     println!(
         "Remove the binary with your package manager, or delete {}.",
-        ctx.bin
+        ctx.binary()
     );
     0
 }
@@ -1061,16 +1049,16 @@ mod tests {
         (Shell::Pwsh, IntegrationPhase::Post),
     ];
 
-    fn ctx(dir: &Path) -> Ctx {
+    fn ctx(dir: &Path) -> IntegrationPaths {
         let home = dir.join("home");
-        Ctx {
-            data: home.join(".tabsmith"),
-            bin: "/opt/tab smith/it's/tabsmith".into(), // space and quote exercise the quoting
-            zdotdir: None,
-            fish_dir: home.join(".config/fish"),
-            pwsh_profile: Some(home.join(".config/powershell/Microsoft.PowerShell_profile.ps1")),
-            home,
-        }
+        IntegrationPaths::new(
+            home.clone(),
+            home.join(".tabsmith"),
+            "/opt/tab smith/it's/tabsmith".into(), // space and quote exercise the quoting
+            None,
+            home.join(".config/fish"),
+            Some(home.join(".config/powershell/Microsoft.PowerShell_profile.ps1")),
+        )
     }
 
     fn snapshot_path(shell: Shell, when: IntegrationPhase) -> PathBuf {
@@ -1244,8 +1232,8 @@ mod tests {
         let temp_dir = TempDir::new("dotfile");
         let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
-        std::fs::create_dir_all(&c.home).unwrap();
-        let zshrc = c.home.join(".zshrc");
+        std::fs::create_dir_all(c.home()).unwrap();
+        let zshrc = c.home().join(".zshrc");
         let original = "#!/bin/zsh\nexport A=1\nalias ll='ls -l'\n";
         std::fs::write(&zshrc, original).unwrap();
 
@@ -1271,7 +1259,7 @@ mod tests {
         assert_eq!(lines[lines.len() - 2], POST_MARKER);
         assert!(lines[lines.len() - 1].ends_with(r#". "${HOME}/.tabsmith/shell/zshrc.post.zsh""#));
         assert_eq!(
-            std::fs::read_to_string(c.data.join("shell/zshrc.pre.zsh")).unwrap(),
+            std::fs::read_to_string(c.data_root().join("shell/zshrc.pre.zsh")).unwrap(),
             "[ -x '/opt/tab smith/it'\\''s/tabsmith' ] && eval \"$('/opt/tab smith/it'\\''s/tabsmith' init zsh pre --rcfile zshrc)\"\n"
         );
 
@@ -1280,7 +1268,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), once);
 
         // Backup of the original.
-        let backups: Vec<_> = std::fs::read_dir(c.data.join("backups"))
+        let backups: Vec<_> = std::fs::read_dir(c.data_root().join("backups"))
             .unwrap()
             .flatten()
             .collect();
@@ -1296,8 +1284,8 @@ mod tests {
         // Uninstall restores the original and deletes the script files.
         rc.uninstall(&c).unwrap();
         assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), original);
-        assert!(!c.data.join("shell/zshrc.pre.zsh").exists());
-        assert!(!c.data.join("shell/zshrc.post.zsh").exists());
+        assert!(!c.data_root().join("shell/zshrc.pre.zsh").exists());
+        assert!(!c.data_root().join("shell/zshrc.post.zsh").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1306,7 +1294,7 @@ mod tests {
         let temp_dir = TempDir::new("detect");
         let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
-        let bashrc = c.home.join(".bashrc");
+        let bashrc = c.home().join(".bashrc");
         let rc = Integration {
             shell: Shell::Bash,
             path: bashrc.clone(),
@@ -1339,10 +1327,7 @@ mod tests {
 
         // A moved binary: script bytes differ.
         std::fs::write(&bashrc, &installed).unwrap();
-        let moved = Ctx {
-            bin: "/elsewhere/tabsmith".into(),
-            ..c.clone()
-        };
+        let moved = c.clone().with_binary("/elsewhere/tabsmith".into());
         let e = rc.is_installed(&moved).unwrap_err().to_string();
         assert!(e.contains("bashrc.pre.bash should contain:\n[ -n \"$BASH_VERSION\" ] && [ -x '/elsewhere/tabsmith' ]"), "{e}");
         rc.install(&moved).unwrap();
@@ -1364,7 +1349,7 @@ mod tests {
         let temp_dir = TempDir::new("enum");
         let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
-        std::fs::create_dir_all(&c.home).unwrap();
+        std::fs::create_dir_all(c.home()).unwrap();
         let names = |s| {
             integrations(&c, s)
                 .unwrap()
@@ -1373,7 +1358,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(names(Shell::Bash), [".bashrc", ".profile"]);
-        std::fs::write(c.home.join(".bash_profile"), "").unwrap();
+        std::fs::write(c.home().join(".bash_profile"), "").unwrap();
         assert_eq!(names(Shell::Bash), [".bashrc", ".bash_profile"]);
         assert_eq!(names(Shell::Zsh), [".zshrc", ".zprofile"]);
 
@@ -1388,7 +1373,7 @@ mod tests {
             syntax_ok(Shell::Fish, &i.path);
         }
         assert_eq!(
-            std::fs::read_to_string(c.fish_dir.join("conf.d/00_tabsmith_pre.fish")).unwrap(),
+            std::fs::read_to_string(c.fish_config_dir().join("conf.d/00_tabsmith_pre.fish")).unwrap(),
             "test -x '/opt/tab smith/it\\'s/tabsmith'; and eval ('/opt/tab smith/it\\'s/tabsmith' init fish pre --rcfile 00_tabsmith_pre | string split0)\n"
         );
         for i in &fish {
@@ -1418,7 +1403,7 @@ mod tests {
         assert!(install_dotfiles(&c, &[Shell::Zsh, Shell::Fish]).unwrap());
         assert!(!install_dotfiles(&c, &[Shell::Zsh, Shell::Fish]).unwrap());
         // A dotfile that cannot be written is reported with its description.
-        std::fs::create_dir_all(c.home.join(".bashrc")).unwrap(); // a directory where the file should be
+        std::fs::create_dir_all(c.home().join(".bashrc")).unwrap(); // a directory where the file should be
         let e = format!("{:#}", install_dotfiles(&c, &[Shell::Bash]).unwrap_err());
         assert!(
             e.starts_with("\n\n")
@@ -1644,11 +1629,7 @@ mod tests {
         let home = dir.join("home");
         let fake = fake_bin(&dir.join("bin dir"));
         let bin = fake.display().to_string();
-        let c = Ctx {
-            bin: bin.clone(),
-            fish_dir: home.join(".config/fish"),
-            ..ctx(&dir)
-        };
+        let c = ctx(&dir).with_binary(bin.clone());
         for i in integrations(&c, Shell::Fish).unwrap() {
             i.install(&c).unwrap();
         }
@@ -1952,7 +1933,7 @@ mod tests {
         let dir = temp_dir.path().to_path_buf();
         let bin = fake_bin(&dir.join("Jos\u{e9}")).display().to_string();
         std::fs::write(format!("{bin}.pre"), "$Global:__tsGot = 'Jos\u{e9}'\n").unwrap();
-        let c = Ctx { bin, ..ctx(&dir) };
+        let c = ctx(&dir).with_binary(bin);
         let pwsh = &integrations(&c, Shell::Pwsh).unwrap()[0];
         let pre = dir.join("profile.pre.ps1");
         std::fs::write(&pre, pwsh.script_contents(&c, IntegrationPhase::Pre)).unwrap();
@@ -1995,7 +1976,7 @@ mod tests {
             line.contains("try { [Console]::OutputEncoding = $__tsEnc } catch {}"),
             "{line}"
         );
-        std::fs::write(format!("{}.pre", c.bin), "").unwrap();
+        std::fs::write(format!("{}.pre", c.binary()), "").unwrap();
         let script = format!(
             ". {}; \"ERR=$($Error.Count)\"",
             quote(Shell::Pwsh, &pre.display().to_string())
@@ -2460,10 +2441,7 @@ mod tests {
         let dir = temp_dir.path().to_path_buf();
         let home = dir.join("home");
         let bin = fake_bin(&dir.join("bin")).display().to_string();
-        let c = Ctx {
-            bin: bin.clone(),
-            ..ctx(&dir)
-        };
+        let c = ctx(&dir).with_binary(bin.clone());
         let pwsh = &integrations(&c, Shell::Pwsh).unwrap()[0];
         pwsh.install(&c).unwrap();
         std::fs::write(format!("{bin}.post"), "# post\n").unwrap();
@@ -2907,10 +2885,10 @@ mod tests {
         let c = ctx(&dir);
         let real = dir.join("dotfiles").join("zshrc");
         std::fs::create_dir_all(real.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(&c.home).unwrap();
+        std::fs::create_dir_all(c.home()).unwrap();
         std::fs::write(&real, "export A=1\n").unwrap();
         std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let zshrc = c.home.join(".zshrc");
+        let zshrc = c.home().join(".zshrc");
         std::os::unix::fs::symlink(&real, &zshrc).unwrap();
         let old = dir.join("old-zshrc");
         std::fs::hard_link(&real, &old).unwrap(); // the old inode, as a concurrent reader sees it
@@ -2948,7 +2926,7 @@ mod tests {
             assert!(std::fs::read_to_string(&real).unwrap().contains(PRE_MARKER));
         }
         // A dangling relative symlink (dotfiles checkout not populated yet): the link stays, its target is created.
-        let bashrc = c.home.join(".bashrc");
+        let bashrc = c.home().join(".bashrc");
         std::os::unix::fs::symlink("../dotfiles/bashrc", &bashrc).unwrap();
         let rc = Integration {
             shell: Shell::Bash,
@@ -2975,17 +2953,14 @@ mod tests {
         let c = ctx(&dir);
         let shells = [Shell::Bash, Shell::Fish];
         install_dotfiles(&c, &shells).unwrap();
-        let moved = Ctx {
-            bin: "/elsewhere/tabsmith".into(),
-            ..c.clone()
-        };
+        let moved = c.clone().with_binary("/elsewhere/tabsmith".into());
         let all: Vec<Integration> = shells
             .iter()
             .flat_map(|s| integrations(&moved, *s).unwrap())
             .collect();
         assert!(all.iter().all(|i| i.is_installed(&moved).is_err()));
         assert!(uninstall_dotfiles(&moved, &shells).unwrap());
-        assert!(!std::fs::read_to_string(c.home.join(".bashrc"))
+        assert!(!std::fs::read_to_string(c.home().join(".bashrc"))
             .unwrap()
             .contains("tabsmith"));
         assert!(all.iter().all(|i| !i.has_traces(&moved)), "{all:?}");
@@ -3005,7 +2980,7 @@ mod tests {
         let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         install_dotfiles(&c, &[Shell::Zsh]).unwrap();
-        let zshrc = c.home.join(".zshrc");
+        let zshrc = c.home().join(".zshrc");
         std::fs::set_permissions(&zshrc, std::fs::Permissions::from_mode(0o444)).unwrap();
         assert_eq!(uninstall_all(&c, &[Shell::Zsh], false), 1);
         assert!(std::fs::read_to_string(&zshrc)
@@ -3013,7 +2988,7 @@ mod tests {
             .contains(PRE_MARKER));
         std::fs::set_permissions(&zshrc, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(uninstall_all(&c, &[Shell::Zsh], true), 0);
-        assert!(!c.data.exists());
+        assert!(!c.data_root().exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -3023,7 +2998,7 @@ mod tests {
         let temp_dir = TempDir::new("manual");
         let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
-        std::fs::create_dir_all(&c.home).unwrap();
+        std::fs::create_dir_all(c.home()).unwrap();
         let text = manual_text(&c, &[Shell::Bash, Shell::Zsh]);
         let lines: Vec<&str> = text
             .lines()
@@ -3031,7 +3006,7 @@ mod tests {
             .map(str::trim)
             .collect();
         assert_eq!(lines.len(), 2, "{text}");
-        let zshrc = c.home.join(".zshrc");
+        let zshrc = c.home().join(".zshrc");
         std::fs::write(&zshrc, format!("{}\nexport A=1\n{}\n", lines[0], lines[1])).unwrap();
         let rc = Integration {
             shell: Shell::Zsh,
@@ -3090,11 +3065,11 @@ mod tests {
             files,
             [
                 (
-                    c.data.join("shell").join("profile.pre.ps1"),
+                    c.data_root().join("shell").join("profile.pre.ps1"),
                     "if (Test-Path -LiteralPath '/opt/tab smith/it''s/tabsmith') { $__tsEnc = [Console]::OutputEncoding; $__tsInit = $null; try { try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}; $__tsInit = (& '/opt/tab smith/it''s/tabsmith' init pwsh pre --rcfile profile) -join \"`n\" } finally { try { [Console]::OutputEncoding = $__tsEnc } catch {} }; if ($__tsInit) { Invoke-Expression $__tsInit } }\n".to_string()
                 ),
                 (
-                    c.data.join("shell").join("profile.post.ps1"),
+                    c.data_root().join("shell").join("profile.post.ps1"),
                     "if (Test-Path -LiteralPath '/opt/tab smith/it''s/tabsmith') { $__tsEnc = [Console]::OutputEncoding; $__tsInit = $null; try { try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}; $__tsInit = (& '/opt/tab smith/it''s/tabsmith' init pwsh post --rcfile profile) -join \"`n\" } finally { try { [Console]::OutputEncoding = $__tsEnc } catch {} }; if ($__tsInit) { Invoke-Expression $__tsInit } }\n".to_string()
                 ),
             ]
