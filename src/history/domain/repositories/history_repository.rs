@@ -24,6 +24,9 @@ impl InMemoryHistoryRepository {
 
 impl HistoryRepository for InMemoryHistoryRepository {
     fn append(&self, entry: HistoryEntry) {
+        if entry.command().trim().is_empty() {
+            return;
+        }
         Rc::make_mut(&mut self.entries.borrow_mut()).push(entry);
     }
 
@@ -51,5 +54,14 @@ mod tests {
         repository.append(entry("git status"));
 
         assert_eq!(*repository.recent(), [entry("ls"), entry("git status")]);
+    }
+
+    #[test]
+    fn should_not_record_a_blank_command() {
+        let repository = InMemoryHistoryRepository::new(Vec::new());
+
+        repository.append(entry("   "));
+
+        assert!(repository.recent().is_empty());
     }
 }
