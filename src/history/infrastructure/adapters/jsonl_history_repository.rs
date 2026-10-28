@@ -195,14 +195,18 @@ mod tests {
         })
     }
 
-    fn load(line: &str) -> Option<HistoryEntry> {
-        serde_json::from_str::<HistoryRecord>(line)
-            .ok()
-            .map(HistoryEntry::from)
+    /// What the repository loads from a history file holding `lines`.
+    fn load_file(lines: &[&str]) -> Rc<Vec<HistoryEntry>> {
+        let temp_dir = TempDir::new("hist-wire");
+        let path = temp_dir.path().join("history.jsonl");
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        JsonlHistoryRepository::load(path).recent()
     }
 
     #[test]
     fn should_write_every_field_in_order_with_null_for_absent_values() {
+        let temp_dir = TempDir::new("hist-wire");
+        let path = temp_dir.path().join("history.jsonl");
         let entry = HistoryEntry::new(HistoryEntryPrimitives {
             command: "ls".into(),
             shell: "zsh".into(),
@@ -212,11 +216,11 @@ mod tests {
             ..Default::default()
         });
 
-        let line = serde_json::to_string(&HistoryRecord::from(&entry)).unwrap();
+        JsonlHistoryRepository::load(path.clone()).append(entry);
 
         assert_eq!(
-            line,
-            r#"{"command":"ls","shell":"zsh","pid":7,"session_id":"s1","cwd":null,"start_time":3,"end_time":null,"exit_code":null,"hostname":null}"#
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"command":"ls","shell":"zsh","pid":7,"session_id":"s1","cwd":null,"start_time":3,"end_time":null,"exit_code":null,"hostname":null}"#.to_string() + "\n"
         );
     }
 
@@ -229,26 +233,26 @@ mod tests {
             r#"{"command":"ls","shell":"zsh","session_id":"s1"}"#,
         ];
 
-        let loaded: Vec<Option<HistoryEntry>> = lines.iter().map(|l| load(l)).collect();
+        let loaded = load_file(&lines);
 
-        assert_eq!(loaded, [None, None, None, None]);
+        assert!(loaded.is_empty());
     }
 
     #[test]
     fn should_load_missing_optional_fields_as_none_and_ignore_unknown_fields() {
         let line = r#"{"command":"ls","shell":"zsh","session_id":"s1","start_time":3,"extra":1}"#;
 
-        let entry = load(line);
+        let loaded = load_file(&[line]);
 
         assert_eq!(
-            entry,
-            Some(HistoryEntry::new(HistoryEntryPrimitives {
+            *loaded,
+            [HistoryEntry::new(HistoryEntryPrimitives {
                 command: "ls".into(),
                 shell: "zsh".into(),
                 session_id: "s1".into(),
                 start_time: 3,
                 ..Default::default()
-            }))
+            })]
         );
     }
 
