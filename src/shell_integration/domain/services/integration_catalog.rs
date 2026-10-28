@@ -41,7 +41,10 @@ pub(crate) fn integrations(
         .into_iter()
         .map(|(w, f)| Integration::whole_file(shell, paths.fish_config_dir().join("conf.d").join(f), w))
         .collect(),
-        Shell::Pwsh => vec![dot(pwsh_profile()?)],
+        Shell::Pwsh => vec![dot(match paths.pwsh_profile() {
+            Some(p) => p.to_path_buf(),
+            None => pwsh_profile()?,
+        })],
     })
 }
 
@@ -178,6 +181,24 @@ mod tests {
                 )],
                 1
             )
+        );
+    }
+
+    /// Doctor already knows the profile (or settles for an empty one): pwsh is not spawned again.
+    #[test]
+    fn should_use_the_profile_the_paths_know_without_asking_pwsh() {
+        let paths = paths().with_pwsh_profile(PathBuf::from("/home/u/profile.ps1"));
+        let asked = Cell::new(0);
+
+        let pwsh = integrations(&paths, Shell::Pwsh, |_| false, || {
+            asked.set(asked.get() + 1);
+            Ok(PathBuf::from("/home/u/.config/powershell/Microsoft.PowerShell_profile.ps1"))
+        })
+        .unwrap();
+
+        assert_eq!(
+            (listed(&pwsh), asked.get()),
+            (vec![(Shell::Pwsh, PathBuf::from("/home/u/profile.ps1"), None)], 0)
         );
     }
 }
