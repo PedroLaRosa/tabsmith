@@ -5,7 +5,8 @@ use crate::shell_integration::domain::value_objects::integration_paths::Integrat
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use std::path::{Path, PathBuf};
 
-/// Integrations of `shell` (SPEC §5.5 table).
+/// Integrations of `shell` (SPEC §5.5 table). `exists` tells which bash login files are there; `pwsh_profile` is
+/// asked only for pwsh, and only when the paths do not know `$PROFILE`.
 pub(crate) fn integrations(
     paths: &IntegrationPaths,
     shell: Shell,

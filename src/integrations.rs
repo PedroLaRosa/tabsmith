@@ -16,11 +16,13 @@ use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::domain::entities::integration::Integration;
+use crate::shell_integration::domain::services::integration_catalog;
 use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::dotfile::Dotfile;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
+use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
 use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -73,11 +75,20 @@ pub struct InitArgs {
 }
 
 #[derive(Subcommand, Clone, Debug)]
-pub enum IntegrationTarget {
+pub enum IntegrationTargetArg {
     /// Shell dotfile integrations
     Dotfiles { shell: Option<ShellArg> },
     /// All integrations
     All,
+}
+
+impl From<IntegrationTargetArg> for IntegrationTarget {
+    fn from(t: IntegrationTargetArg) -> IntegrationTarget {
+        match t {
+            IntegrationTargetArg::Dotfiles { shell } => IntegrationTarget::Dotfiles(shell.map(Shell::from)),
+            IntegrationTargetArg::All => IntegrationTarget::All,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -85,7 +96,7 @@ pub enum IntegrationsCmd {
     /// Install an integration
     Install {
         #[command(subcommand)]
-        target: IntegrationTarget,
+        target: IntegrationTargetArg,
         /// Suppress status messages
         #[arg(long, short)]
         silent: bool,
@@ -93,21 +104,21 @@ pub enum IntegrationsCmd {
     /// Uninstall an integration
     Uninstall {
         #[command(subcommand)]
-        target: IntegrationTarget,
+        target: IntegrationTargetArg,
         #[arg(long, short)]
         silent: bool,
     },
     /// Reinstall an integration
     Reinstall {
         #[command(subcommand)]
-        target: IntegrationTarget,
+        target: IntegrationTargetArg,
         #[arg(long, short)]
         silent: bool,
     },
     /// Check the status of an integration
     Status {
         #[command(subcommand)]
-        target: IntegrationTarget,
+        target: IntegrationTargetArg,
         #[arg(long, short, value_enum, default_value_t)]
         format: OutputFormat,
     },
@@ -410,42 +421,14 @@ fn remove(path: &Path) -> Result<(), ShellIntegrationError> {
     }
 }
 
-/// Integrations of `shell` (SPEC §5.5 table).
-pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>> {
-    let dot = |path: PathBuf| Integration::dotfile(shell, path);
-    Ok(match shell {
-        Shell::Bash => {
-            let extra: Vec<PathBuf> = [".profile", ".bash_login", ".bash_profile"]
-                .iter()
-                .map(|f| ctx.home().join(f))
-                .filter(|p| p.exists())
-                .collect();
-            let extra = if extra.is_empty() {
-                vec![ctx.home().join(".profile")]
-            } else {
-                extra
-            };
-            std::iter::once(ctx.home().join(".bashrc"))
-                .chain(extra)
-                .map(dot)
-                .collect()
-        }
-        Shell::Zsh => {
-            let dir = ctx.zdotdir().unwrap_or(ctx.home());
-            vec![dot(dir.join(".zshrc")), dot(dir.join(".zprofile"))]
-        }
-        Shell::Fish => [
-            (IntegrationPhase::Pre, "00_tabsmith_pre.fish"),
-            (IntegrationPhase::Post, "99_tabsmith_post.fish"),
-        ]
-        .into_iter()
-        .map(|(w, f)| Integration::whole_file(shell, ctx.fish_config_dir().join("conf.d").join(f), w))
-        .collect(),
-        Shell::Pwsh => vec![dot(match ctx.pwsh_profile() {
-            Some(p) => p.to_path_buf(),
-            None => pwsh_profile()?,
-        })],
-    })
+/// Integrations of `shell` (SPEC §5.5 table), asking `pwsh` for `$PROFILE` when the paths do not know it.
+pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>, ShellIntegrationError> {
+    integration_catalog::integrations(
+        ctx,
+        shell,
+        |p| p.exists(),
+        || pwsh_profile().map_err(|e| ShellIntegrationError::Environment(format!("{e:#}"))),
+    )
 }
 
 /// Prints `$PROFILE` as raw UTF-8 bytes: pwsh's Console.Out would encode it with the (shared, OEM on Windows) console
@@ -583,11 +566,7 @@ impl Integration {
 
 /// `[bash, zsh, fish]`, plus pwsh when it is on PATH (SPEC §2.6).
 fn default_shells() -> Vec<Shell> {
-    let mut v = vec![Shell::Bash, Shell::Zsh, Shell::Fish];
-    if which("pwsh").is_some() {
-        v.push(Shell::Pwsh);
-    }
-    v
+    IntegrationTarget::All.shells(|| which("pwsh").is_some())
 }
 
 /// Run `op` on every integration of `shells` that `pick` selects. Ok(true) if `op` ran at least once; errors
@@ -634,16 +613,13 @@ fn uninstall_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool> 
     apply(ctx, shells, |i| i.has_traces(ctx), Integration::uninstall)
 }
 
-fn target_shells(t: &IntegrationTarget) -> Vec<Shell> {
-    match t {
-        IntegrationTarget::Dotfiles { shell: Some(s) } => vec![(*s).into()],
-        _ => default_shells(),
-    }
+fn target_shells(t: &IntegrationTargetArg) -> Vec<Shell> {
+    IntegrationTarget::from(t.clone()).shells(|| which("pwsh").is_some())
 }
 
 pub fn integrations_cmd(cmd: IntegrationsCmd) -> anyhow::Result<i32> {
     let ctx = integration_paths_from_env()?;
-    let install = |target: &IntegrationTarget, silent: bool| -> Result<i32> {
+    let install = |target: &IntegrationTargetArg, silent: bool| -> Result<i32> {
         let installed = install_dotfiles(&ctx, &target_shells(target))?;
         if installed {
             mark_restart();
@@ -660,7 +636,7 @@ pub fn integrations_cmd(cmd: IntegrationsCmd) -> anyhow::Result<i32> {
         }
         Ok(0)
     };
-    let uninstall = |target: &IntegrationTarget, silent: bool| -> Result<i32> {
+    let uninstall = |target: &IntegrationTargetArg, silent: bool| -> Result<i32> {
         let done = uninstall_dotfiles(&ctx, &target_shells(target))?;
         if !silent {
             println!(
