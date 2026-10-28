@@ -582,7 +582,8 @@ Each settles a plan gap or a conflict between the researchers. Deviations from t
 - **Phase 5**: switch `bootstrap/bridges.rs` `SpecBundleBridge` to `specs::InstallSpecBundleUseCase`. That use case
   returns a typed error, and `{:#}` on a plain std error prints only its Display (P3, T15): the bridge must render
   the whole chain, e.g. `ShellIntegrationError::SpecBundle(format!("{:#}", anyhow::Error::from(e)))` (bootstrap may
-  use anyhow) or a Display + `: ` + each `source()` renderer like P3's. Check `error: could not extract the completion
+  use anyhow) or `shared::infrastructure::error_chain::display_chain` (P3's renderer, which settings' `warning`
+  also uses since the Phase 4 review; never a third hand-written copy). Check `error: could not extract the completion
   specs: creating <dir>: <io>` byte for byte (today's chain: `ensure_extracted` → `extract_to`'s `with_context`,
   `specs.rs:53`).
 - **Phase 6**: `EngineMsg::Session { env, alias }` already has its target shape (P17); it is renamed with the enum

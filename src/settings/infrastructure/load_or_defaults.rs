@@ -1,8 +1,8 @@
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::settings_error::SettingsError;
 use crate::settings::domain::value_objects::settings::Settings;
+use crate::shared::infrastructure::error_chain::display_chain;
 use crate::shared::infrastructure::logger;
-use std::error::Error;
 
 /// The saved settings, or the defaults when they cannot be loaded (a file mid-edit, no home directory): the pty and
 /// doctor keep working where the settings commands refuse.
@@ -15,13 +15,7 @@ pub(crate) fn load_or_defaults(repository: &dyn SettingsRepository) -> Settings 
 
 /// `settings: ` and the error with each cause after a colon, as anyhow's `{:#}` printed it.
 fn warning(error: &SettingsError) -> String {
-    let mut text = format!("settings: {error}");
-    let mut cause = error.source();
-    while let Some(error) = cause {
-        text += &format!(": {error}");
-        cause = error.source();
-    }
-    text
+    format!("settings: {}", display_chain(error))
 }
 
 #[cfg(test)]

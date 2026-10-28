@@ -206,6 +206,7 @@ shared/infrastructure/
   shared_dependencies.rs                  struct SharedDependencies { data_directory, clock }
   system_clock.rs
   data_directory_from_env.rs              ← TABSMITH_HOME / TABSMITH_SETTINGS_PATH / HOME / USERPROFILE (settings.rs:8-35)
+  error_chain.rs                          display_chain: an error and each source() as anyhow's {:#} (Phase 4 review)
   json_document_store.rs                  ← settings::Store (flat dotted-key JSON file; corrupted detection)
   atomic_file.rs                          unifies Store::save, integrations::write_private, integrations::write
                                           (temp+rename, 0600/0700, keeps symlinks, purge guard)
