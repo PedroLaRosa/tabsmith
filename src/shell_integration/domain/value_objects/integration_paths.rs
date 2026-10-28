@@ -44,6 +44,12 @@ impl IntegrationPaths {
         }
     }
 
+    /// The same paths with the script files running another tabsmith binary (a moved install).
+    #[cfg(test)]
+    pub(crate) fn with_binary(self, binary: String) -> Self {
+        IntegrationPaths { binary, ..self }
+    }
+
     pub(crate) fn home(&self) -> &Path {
         &self.home
     }
@@ -107,6 +113,33 @@ mod tests {
                 Some(Path::new("/home/u/.zsh")),
                 Path::new("/home/u/.config/fish"),
                 Some(Path::new("")),
+            )
+        );
+    }
+
+    /// The tests' "moved binary": the same home and data root, script files that run another tabsmith.
+    #[test]
+    fn should_run_the_binary_it_is_given_and_keep_every_other_path() {
+        let installed = paths();
+
+        let moved = installed.with_binary("/opt/tabsmith".to_string());
+
+        assert_eq!(
+            (
+                moved.home(),
+                moved.data_root(),
+                moved.binary(),
+                moved.zdotdir(),
+                moved.fish_config_dir(),
+                moved.pwsh_profile(),
+            ),
+            (
+                Path::new("/home/u"),
+                Path::new("/home/u/.tabsmith"),
+                "/opt/tabsmith",
+                Some(Path::new("/home/u/.zsh")),
+                Path::new("/home/u/.config/fish"),
+                None,
             )
         );
     }
