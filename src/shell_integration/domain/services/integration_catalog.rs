@@ -29,7 +29,11 @@ pub(crate) fn integrations(
                 .map(dot)
                 .collect()
         }
-        Shell::Zsh | Shell::Fish | Shell::Pwsh => Vec::new(),
+        Shell::Zsh => {
+            let dir = paths.zdotdir().unwrap_or(paths.home());
+            vec![dot(dir.join(".zshrc")), dot(dir.join(".zprofile"))]
+        }
+        Shell::Fish | Shell::Pwsh => Vec::new(),
     })
 }
 
@@ -91,6 +95,29 @@ mod tests {
             [
                 (Shell::Bash, PathBuf::from("/home/u/.bashrc"), None),
                 (Shell::Bash, PathBuf::from("/home/u/.profile"), None),
+            ]
+        );
+    }
+
+    /// zsh reads its dotfiles from `$ZDOTDIR` when it is set.
+    #[test]
+    fn should_list_the_zshrc_then_the_zprofile_in_zdotdir() {
+        let paths = IntegrationPaths::new(
+            PathBuf::from("/home/u"),
+            PathBuf::from("/home/u/.tabsmith"),
+            "/usr/local/bin/tabsmith".into(),
+            Some(PathBuf::from("/home/u/.config/zsh")),
+            PathBuf::from("/home/u/.config/fish"),
+            None,
+        );
+
+        let zsh = integrations(&paths, Shell::Zsh, |_| false, unasked_pwsh_profile).unwrap();
+
+        assert_eq!(
+            listed(&zsh),
+            [
+                (Shell::Zsh, PathBuf::from("/home/u/.config/zsh/.zshrc"), None),
+                (Shell::Zsh, PathBuf::from("/home/u/.config/zsh/.zprofile"), None),
             ]
         );
     }
