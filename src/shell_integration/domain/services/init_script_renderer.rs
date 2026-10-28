@@ -15,7 +15,12 @@ pub(crate) fn render(
     let launch = || if launches() { 0 } else { 1 };
     let mut lines = Vec::new();
     if phase == IntegrationPhase::Pre {
-        lines.push(format!("set -g SHOULD_TABSMITH_LAUNCH {}", launch()));
+        match shell {
+            Shell::Bash | Shell::Zsh | Shell::Fish => {
+                lines.push(format!("set -g SHOULD_TABSMITH_LAUNCH {}", launch()))
+            }
+            Shell::Pwsh => lines.push(format!("$TABSMITH_SHOULD_LAUNCH = {}", launch())),
+        }
     }
     lines.push(
         template
@@ -95,5 +100,21 @@ mod tests {
         );
 
         assert_eq!(script.text(), "set -g SHOULD_TABSMITH_LAUNCH 1\nbody");
+    }
+
+    #[test]
+    fn should_open_the_pwsh_pre_script_with_its_own_launch_variable() {
+        let template = "body\n";
+
+        let script = render(
+            Shell::Pwsh,
+            IntegrationPhase::Pre,
+            template,
+            "tabsmith",
+            || None,
+            || false,
+        );
+
+        assert_eq!(script.text(), "$TABSMITH_SHOULD_LAUNCH = 1\nbody");
     }
 }
