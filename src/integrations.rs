@@ -17,12 +17,14 @@ use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::services::integration_catalog;
+use crate::shell_integration::domain::services::launch_policy;
 use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::dotfile::Dotfile;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
+use crate::shell_integration::domain::value_objects::launch_facts::LaunchFacts;
 use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -253,55 +255,8 @@ pub fn should_launch() -> (bool, String) {
     };
     #[cfg(not(windows))]
     let stdin_ok = std::io::stdin().is_terminal();
-    launch_decision(&env, stdin_ok)
-}
-
-/// SPEC §5.2, first match wins. `stdin_ok`: stdin is a tty (Unix) / a console (Windows).
-pub fn launch_decision(env: &HashMap<String, String>, stdin_ok: bool) -> (bool, String) {
-    let has = |k: &str| env.contains_key(k);
-    let is = |k: &str, v: &str| env.get(k).is_some_and(|x| x == v);
-    let (launch, why) = if has("TABSMITH_FORCE_LAUNCH") {
-        (true, "TABSMITH_FORCE_LAUNCH")
-    } else if has("TABSMITH_TERM_DISABLED") {
-        (false, "TABSMITH_TERM_DISABLED")
-    } else if has("PROCESS_LAUNCHED_BY_TABSMITH") {
-        (false, "PROCESS_LAUNCHED_BY_TABSMITH")
-    } else if has("TABSMITH_TERM") {
-        if has("TMUX") && !has("TABSMITH_TERM_TMUX") {
-            (true, "new tmux pane")
-        } else {
-            (false, "already inside tabsmith")
-        }
-    } else if has("INSIDE_EMACS") {
-        (false, "INSIDE_EMACS")
-    } else if is("TERM_PROGRAM", "WarpTerminal") {
-        (false, "TERM_PROGRAM = WarpTerminal")
-    } else if is("__CFBundleIdentifier", "com.vandyke.SecureCRT") {
-        (false, "__CFBundleIdentifier = com.vandyke.SecureCRT")
-    } else if has("__PWSH_LOGIN_CHECKED") {
-        (false, "__PWSH_LOGIN_CHECKED")
-    } else if has("CI") {
-        (false, "In CI")
-    } else if has("VSCODE_RESOLVING_ENVIRONMENT") {
-        (false, "VSCODE_RESOLVING_ENVIRONMENT")
-    } else if cfg!(unix) && (!has("TERM") || is("TERM", "dumb")) {
-        (false, "TERM is unset or dumb")
-    } else if !stdin_ok {
-        (
-            false,
-            if cfg!(windows) {
-                "stdin is not a console"
-            } else {
-                "stdin is not a tty"
-            },
-        )
-    } else {
-        (true, "launching")
-    };
-    (
-        launch,
-        format!("{} {why}", if launch { "✅" } else { "❌" }),
-    )
+    let decision = launch_policy::decide(&LaunchFacts::new(env, stdin_ok));
+    (decision.launches(), decision.reason().to_string())
 }
 
 pub fn should_launch_cmd() -> anyhow::Result<i32> {
@@ -1211,102 +1166,6 @@ mod tests {
             "{e}"
         );
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[allow(clippy::type_complexity)]
-    fn integrations_should_launch_table() {
-        let base = [("TERM", "xterm-256color")];
-        let cases: &[(&[(&str, &str)], bool, bool, &str)] = &[
-            (&[], true, true, "✅ launching"),
-            (&[], false, false, "❌ stdin is not a tty"),
-            (
-                &[("TABSMITH_FORCE_LAUNCH", "1"), ("CI", "1")],
-                false,
-                true,
-                "✅ TABSMITH_FORCE_LAUNCH",
-            ),
-            (
-                &[("TABSMITH_TERM_DISABLED", "1")],
-                true,
-                false,
-                "❌ TABSMITH_TERM_DISABLED",
-            ),
-            (
-                &[("PROCESS_LAUNCHED_BY_TABSMITH", "1")],
-                true,
-                false,
-                "❌ PROCESS_LAUNCHED_BY_TABSMITH",
-            ),
-            (
-                &[("TABSMITH_TERM", "0.1.0")],
-                true,
-                false,
-                "❌ already inside tabsmith",
-            ),
-            (
-                &[("TABSMITH_TERM", "0.1.0"), ("TMUX", "/tmp/t")],
-                true,
-                true,
-                "✅ new tmux pane",
-            ),
-            (
-                &[
-                    ("TABSMITH_TERM", "0.1.0"),
-                    ("TMUX", "/tmp/t"),
-                    ("TABSMITH_TERM_TMUX", "0.1.0"),
-                ],
-                true,
-                false,
-                "❌ already inside tabsmith",
-            ),
-            (&[("INSIDE_EMACS", "29")], true, false, "❌ INSIDE_EMACS"),
-            (
-                &[("TERM_PROGRAM", "WarpTerminal")],
-                true,
-                false,
-                "❌ TERM_PROGRAM = WarpTerminal",
-            ),
-            (&[("TERM_PROGRAM", "iTerm.app")], true, true, "✅ launching"),
-            (
-                &[("__CFBundleIdentifier", "com.vandyke.SecureCRT")],
-                true,
-                false,
-                "❌ __CFBundleIdentifier = com.vandyke.SecureCRT",
-            ),
-            (
-                &[("__PWSH_LOGIN_CHECKED", "1")],
-                true,
-                false,
-                "❌ __PWSH_LOGIN_CHECKED",
-            ),
-            (&[("CI", "true")], true, false, "❌ In CI"),
-            (
-                &[("VSCODE_RESOLVING_ENVIRONMENT", "1")],
-                true,
-                false,
-                "❌ VSCODE_RESOLVING_ENVIRONMENT",
-            ),
-            (&[("TERM", "dumb")], true, false, "❌ TERM is unset or dumb"),
-            (&[("SSH_TTY", "/dev/ttys001")], true, true, "✅ launching"),
-        ];
-        for (vars, stdin_ok, launch, why) in cases {
-            let env: HashMap<String, String> = base
-                .iter()
-                .chain(vars.iter())
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-            assert_eq!(
-                launch_decision(&env, *stdin_ok),
-                (*launch, why.to_string()),
-                "{vars:?}"
-            );
-        }
-        assert_eq!(
-            launch_decision(&HashMap::new(), true),
-            (false, "❌ TERM is unset or dumb".to_string())
-        );
     }
 
     /// The file modes and the purge guard of this scenario are asserted in shared atomic_file.rs
