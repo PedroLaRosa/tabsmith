@@ -3099,4 +3099,89 @@ mod tests {
         assert!(!old.exists() && new.exists() && sub.exists());
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    /// The text of each failure, with no source: doctor prints a failed fix with `{e:#}`, which would repeat a
+    /// source after the text.
+    #[test]
+    fn should_describe_each_integration_failure() {
+        let path = Path::new("/home/u/.bashrc");
+        let failures = [
+            IntegrationError::NotInstalled("/home/u/.bashrc does not source pre integration".into()),
+            IntegrationError::Improper("/home/u/.bashrc does not source pre integration first".into()),
+            IntegrationError::FileDoesNotExist(path.into()),
+            IntegrationError::PermissionDenied(path.into()),
+            IntegrationError::Io(path.into(), std::io::Error::other("disk full")),
+        ];
+
+        let described: Vec<(String, Option<String>)> = failures
+            .iter()
+            .map(|e| (e.to_string(), std::error::Error::source(e).map(ToString::to_string)))
+            .collect();
+
+        assert_eq!(
+            described,
+            [
+                ("Integration not installed: /home/u/.bashrc does not source pre integration".to_string(), None),
+                ("Improper integration installation: /home/u/.bashrc does not source pre integration first".to_string(), None),
+                ("File does not exist: /home/u/.bashrc".to_string(), None),
+                ("Permission denied: /home/u/.bashrc".to_string(), None),
+                ("/home/u/.bashrc: disk full".to_string(), None),
+            ]
+        );
+    }
+
+    /// pwsh is not installed here, so no script test runs its files locally: their bytes are pinned instead.
+    #[test]
+    fn should_write_the_pwsh_script_files_byte_for_byte() {
+        let temp_dir = TempDir::new("pwshfiles");
+        let c = ctx(temp_dir.path());
+        let pwsh = integrations(&c, Shell::Pwsh).unwrap().remove(0);
+
+        let files: Vec<(PathBuf, String)> = [When::Pre, When::Post]
+            .into_iter()
+            .map(|when| (pwsh.script_path(&c, when), pwsh.script_contents(&c, when)))
+            .collect();
+
+        assert_eq!(
+            files,
+            [
+                (
+                    c.data.join("shell").join("profile.pre.ps1"),
+                    "if (Test-Path -LiteralPath '/opt/tab smith/it''s/tabsmith') { $__tsEnc = [Console]::OutputEncoding; $__tsInit = $null; try { try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}; $__tsInit = (& '/opt/tab smith/it''s/tabsmith' init pwsh pre --rcfile profile) -join \"`n\" } finally { try { [Console]::OutputEncoding = $__tsEnc } catch {} }; if ($__tsInit) { Invoke-Expression $__tsInit } }\n".to_string()
+                ),
+                (
+                    c.data.join("shell").join("profile.post.ps1"),
+                    "if (Test-Path -LiteralPath '/opt/tab smith/it''s/tabsmith') { $__tsEnc = [Console]::OutputEncoding; $__tsInit = $null; try { try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}; $__tsInit = (& '/opt/tab smith/it''s/tabsmith' init pwsh post --rcfile profile) -join \"`n\" } finally { try { [Console]::OutputEncoding = $__tsEnc } catch {} }; if ($__tsInit) { Invoke-Expression $__tsInit } }\n".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// What setup prints when it does not edit the dotfiles: bash and zsh lines (never fish), then a blank line.
+    #[test]
+    fn should_print_the_manual_install_text_for_bash_and_zsh() {
+        let temp_dir = TempDir::new("manual");
+        let c = ctx(temp_dir.path());
+
+        let text = manual_text(&c, &[Shell::Bash, Shell::Zsh]);
+
+        assert_eq!(
+            text,
+            "\nTo install the integrations manually, you will have to add the following to your rc files\nThis step is required for the application to function properly\n\nAt the top of your .bashrc or .zshrc file:\nbash:    [ -f \"${HOME}/.tabsmith/shell/bashrc.pre.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.pre.bash\"\nzsh:     [ -f \"${HOME}/.tabsmith/shell/zshrc.pre.zsh\" ] && . \"${HOME}/.tabsmith/shell/zshrc.pre.zsh\"\n\nAt the bottom of your .bashrc or .zshrc file:\nbash:    [ -f \"${HOME}/.tabsmith/shell/bashrc.post.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.post.bash\"\nzsh:     [ -f \"${HOME}/.tabsmith/shell/zshrc.post.zsh\" ] && . \"${HOME}/.tabsmith/shell/zshrc.post.zsh\"\n\n"
+        );
+    }
+
+    /// With pwsh on PATH the pwsh lines follow the zsh ones, for the pwsh profile.
+    #[test]
+    fn should_print_the_manual_install_text_with_pwsh() {
+        let temp_dir = TempDir::new("manualpwsh");
+        let c = ctx(temp_dir.path());
+
+        let text = manual_text(&c, &[Shell::Bash, Shell::Zsh, Shell::Pwsh]);
+
+        assert_eq!(
+            text,
+            "\nTo install the integrations manually, you will have to add the following to your rc files\nThis step is required for the application to function properly\n\nAt the top of your .bashrc or .zshrc file:\nbash:    [ -f \"${HOME}/.tabsmith/shell/bashrc.pre.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.pre.bash\"\nzsh:     [ -f \"${HOME}/.tabsmith/shell/zshrc.pre.zsh\" ] && . \"${HOME}/.tabsmith/shell/zshrc.pre.zsh\"\npwsh ($PROFILE): if (Test-Path \"${HOME}/.tabsmith/shell/profile.pre.ps1\") { . \"${HOME}/.tabsmith/shell/profile.pre.ps1\" }\n\nAt the bottom of your .bashrc or .zshrc file:\nbash:    [ -f \"${HOME}/.tabsmith/shell/bashrc.post.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.post.bash\"\nzsh:     [ -f \"${HOME}/.tabsmith/shell/zshrc.post.zsh\" ] && . \"${HOME}/.tabsmith/shell/zshrc.post.zsh\"\npwsh ($PROFILE): if (Test-Path \"${HOME}/.tabsmith/shell/profile.post.ps1\") { . \"${HOME}/.tabsmith/shell/profile.post.ps1\" }\n\n"
+        );
+    }
 }
