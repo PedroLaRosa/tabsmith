@@ -1,7 +1,6 @@
 //! Shell integration: `init` scripts, launch decision, dotfile install/uninstall/status, setup/uninstall flows,
 //! and the internal `_ should-launch|get-shell|pre-cmd` commands (SPEC §2.6, §2.7, §2.9, §2.11, §5).
 //! OWNER: integrations agent. Shell scripts live in `shell/` and are embedded with `include_str!`.
-use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::atomic_file::AtomicFile;
 use crate::shared::infrastructure::atomic_file_error::AtomicFileError;
@@ -16,6 +15,7 @@ use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::domain::entities::integration::Integration;
+use crate::shell_integration::domain::services::init_script_renderer;
 use crate::shell_integration::domain::services::integration_catalog;
 use crate::shell_integration::domain::services::launch_policy;
 use crate::shell_integration::domain::services::manual_install_instructions;
@@ -197,34 +197,7 @@ pub fn init_script(shell: Shell, when: IntegrationPhase) -> anyhow::Result<Strin
 
 /// `snapshot` = deterministic output (SPEC §2.7): shell `/bin/zsh`, launch 0, binary `tabsmith`.
 fn init_output(shell: Shell, when: IntegrationPhase, snapshot: bool) -> Result<String> {
-    let bin = if snapshot {
-        "tabsmith".to_string()
-    } else {
-        exe_path()?
-    };
-    let launch = |snap| if snap || should_launch().0 { 0 } else { 1 };
-    let mut lines = Vec::new();
-    if when == IntegrationPhase::Pre {
-        match shell {
-            Shell::Bash | Shell::Zsh => {
-                let parent = if snapshot {
-                    Some("/bin/zsh".to_string())
-                } else {
-                    parent_exe()
-                };
-                if let Some(p) = parent {
-                    lines.push(format!("TABSMITH_SHELL={}", quote(shell, &p)));
-                }
-                lines.push(format!("SHOULD_TABSMITH_LAUNCH={}", launch(snapshot)));
-            }
-            Shell::Fish => lines.push(format!(
-                "set -g SHOULD_TABSMITH_LAUNCH {}",
-                launch(snapshot)
-            )),
-            Shell::Pwsh => lines.push(format!("$TABSMITH_SHOULD_LAUNCH = {}", launch(snapshot))),
-        }
-    }
-    let body = match (shell, when) {
+    let template = match (shell, when) {
         (Shell::Bash | Shell::Zsh, IntegrationPhase::Pre) => PRE_SH,
         (Shell::Bash, IntegrationPhase::Post) => POST_BASH,
         (Shell::Zsh, IntegrationPhase::Post) => POST_ZSH,
@@ -233,11 +206,19 @@ fn init_output(shell: Shell, when: IntegrationPhase, snapshot: bool) -> Result<S
         (Shell::Pwsh, IntegrationPhase::Pre) => PRE_PS1,
         (Shell::Pwsh, IntegrationPhase::Post) => POST_PS1,
     };
-    lines.push(
-        body.trim_end_matches('\n')
-            .replace("{{BIN}}", &quote(shell, &bin)),
-    );
-    Ok(lines.join("\n"))
+    let script = if snapshot {
+        init_script_renderer::render_snapshot(shell, when, template)
+    } else {
+        init_script_renderer::render(
+            shell,
+            when,
+            template,
+            &exe_path()?,
+            parent_exe,
+            || should_launch().0,
+        )
+    };
+    Ok(script.into_string())
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -797,6 +778,7 @@ fn uninstall_all(ctx: &IntegrationPaths, shells: &[Shell], purge: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::domain::services::shell_quoting::quote;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::shell_integration::domain::value_objects::dotfile::{POST_MARKER, PRE_MARKER};
 

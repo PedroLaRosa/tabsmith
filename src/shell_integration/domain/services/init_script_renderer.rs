@@ -3,7 +3,8 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shell_integration::domain::value_objects::init_script::InitScript;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 
-/// The output of `init <shell> <phase>` (SPEC §5.3), without the trailing newline.
+/// The output of `init <shell> <phase>` (SPEC §5.3), without the trailing newline. Both facts are I/O, so they are
+/// asked only when needed: `parent_shell` for a bash or zsh pre script, then `launches` for any pre script.
 pub(crate) fn render(
     shell: Shell,
     phase: IntegrationPhase,
@@ -17,18 +18,21 @@ pub(crate) fn render(
     if phase == IntegrationPhase::Pre {
         match shell {
             Shell::Bash | Shell::Zsh => {
-                if let Some(p) = parent_shell() {
+                let parent = parent_shell();
+                if let Some(p) = parent {
                     lines.push(format!("TABSMITH_SHELL={}", quote(shell, &p)));
                 }
                 lines.push(format!("SHOULD_TABSMITH_LAUNCH={}", launch()));
             }
-            Shell::Fish => lines.push(format!("set -g SHOULD_TABSMITH_LAUNCH {}", launch())),
+            Shell::Fish => lines.push(format!(
+                "set -g SHOULD_TABSMITH_LAUNCH {}",
+                launch()
+            )),
             Shell::Pwsh => lines.push(format!("$TABSMITH_SHOULD_LAUNCH = {}", launch())),
         }
     }
     lines.push(
-        template
-            .trim_end_matches('\n')
+        template.trim_end_matches('\n')
             .replace("{{BIN}}", &quote(shell, binary)),
     );
     InitScript::new(lines.join("\n"))
