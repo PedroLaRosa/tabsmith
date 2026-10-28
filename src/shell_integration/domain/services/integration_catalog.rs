@@ -19,6 +19,11 @@ pub(crate) fn integrations(
                 .map(|f| paths.home().join(f))
                 .filter(|p| exists(p))
                 .collect();
+            let extra = if extra.is_empty() {
+                vec![paths.home().join(".profile")]
+            } else {
+                extra
+            };
             std::iter::once(paths.home().join(".bashrc"))
                 .chain(extra)
                 .map(dot)
@@ -70,6 +75,22 @@ mod tests {
                 (Shell::Bash, PathBuf::from("/home/u/.bashrc"), None),
                 (Shell::Bash, PathBuf::from("/home/u/.profile"), None),
                 (Shell::Bash, PathBuf::from("/home/u/.bash_profile"), None),
+            ]
+        );
+    }
+
+    /// A home without any login file still gets one, `.profile`, so login shells source the integration too.
+    #[test]
+    fn should_list_the_bashrc_and_the_profile_when_no_login_file_exists() {
+        let paths = paths();
+
+        let bash = integrations(&paths, Shell::Bash, |_| false, unasked_pwsh_profile).unwrap();
+
+        assert_eq!(
+            listed(&bash),
+            [
+                (Shell::Bash, PathBuf::from("/home/u/.bashrc"), None),
+                (Shell::Bash, PathBuf::from("/home/u/.profile"), None),
             ]
         );
     }
