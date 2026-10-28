@@ -34,6 +34,18 @@ pub(crate) fn render(
     InitScript::new(lines.join("\n"))
 }
 
+/// The deterministic output (SPEC §2.7): binary `tabsmith`, parent shell `/bin/zsh` (bash too), launching.
+pub(crate) fn render_snapshot(shell: Shell, phase: IntegrationPhase, template: &str) -> InitScript {
+    render(
+        shell,
+        phase,
+        template,
+        "tabsmith",
+        || Some("/bin/zsh".to_string()),
+        || true,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +167,18 @@ mod tests {
         );
 
         assert_eq!(script.text(), "SHOULD_TABSMITH_LAUNCH=1\nbody");
+    }
+
+    /// The snapshot names zsh as the parent even for bash (SPEC §2.7).
+    #[test]
+    fn should_render_a_snapshot_running_tabsmith_from_zsh_and_launching() {
+        let template = "body {{BIN}}\n";
+
+        let script = render_snapshot(Shell::Bash, IntegrationPhase::Pre, template);
+
+        assert_eq!(
+            script.text(),
+            "TABSMITH_SHELL='/bin/zsh'\nSHOULD_TABSMITH_LAUNCH=0\nbody 'tabsmith'"
+        );
     }
 }
