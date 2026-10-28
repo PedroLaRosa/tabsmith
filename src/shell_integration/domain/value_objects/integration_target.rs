@@ -11,7 +11,7 @@ impl IntegrationTarget {
     pub(crate) fn shells(&self, _pwsh_on_path: impl FnOnce() -> bool) -> Vec<Shell> {
         match self {
             IntegrationTarget::Dotfiles(Some(s)) => vec![*s],
-            IntegrationTarget::Dotfiles(None) | IntegrationTarget::All => Vec::new(),
+            IntegrationTarget::Dotfiles(None) | IntegrationTarget::All => vec![Shell::Bash, Shell::Zsh, Shell::Fish],
         }
     }
 }
@@ -32,5 +32,14 @@ mod tests {
         });
 
         assert_eq!((shells, looked_for_pwsh.get()), (vec![Shell::Zsh], false));
+    }
+
+    #[test]
+    fn should_give_bash_zsh_and_fish_for_every_dotfile_when_pwsh_is_not_on_path() {
+        let target = IntegrationTarget::Dotfiles(None);
+
+        let shells = target.shells(|| false);
+
+        assert_eq!(shells, [Shell::Bash, Shell::Zsh, Shell::Fish]);
     }
 }
