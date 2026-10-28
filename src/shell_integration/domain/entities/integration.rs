@@ -129,7 +129,7 @@ impl Integration {
         };
         match self.shell {
             Shell::Pwsh => format!("if (Test-Path \"{p}\") {{ . \"{p}\" }}"),
-            _ => format!("[ -f \"{p}\" ] && . \"{p}\""),
+            Shell::Bash | Shell::Zsh | Shell::Fish => format!("[ -f \"{p}\" ] && . \"{p}\""),
         }
     }
 }
