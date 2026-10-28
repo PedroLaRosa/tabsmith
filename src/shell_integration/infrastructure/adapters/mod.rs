@@ -1,3 +1,4 @@
+pub(crate) mod embedded_shell_scripts;
 pub(crate) mod file_backup_repository;
 pub(crate) mod file_dotfile_repository;
 pub(crate) mod os_shell_environment;
