@@ -9,16 +9,19 @@ pub(crate) fn render(
     phase: IntegrationPhase,
     template: &str,
     binary: &str,
-    _parent_shell: impl FnOnce() -> Option<String>,
+    parent_shell: impl FnOnce() -> Option<String>,
     launches: impl FnOnce() -> bool,
 ) -> InitScript {
     let launch = || if launches() { 0 } else { 1 };
     let mut lines = Vec::new();
     if phase == IntegrationPhase::Pre {
         match shell {
-            Shell::Bash | Shell::Zsh | Shell::Fish => {
-                lines.push(format!("set -g SHOULD_TABSMITH_LAUNCH {}", launch()))
+            Shell::Bash | Shell::Zsh => {
+                let p = parent_shell().unwrap();
+                lines.push(format!("TABSMITH_SHELL={}", quote(shell, &p)));
+                lines.push(format!("SHOULD_TABSMITH_LAUNCH={}", launch()));
             }
+            Shell::Fish => lines.push(format!("set -g SHOULD_TABSMITH_LAUNCH {}", launch())),
             Shell::Pwsh => lines.push(format!("$TABSMITH_SHOULD_LAUNCH = {}", launch())),
         }
     }
@@ -116,5 +119,24 @@ mod tests {
         );
 
         assert_eq!(script.text(), "$TABSMITH_SHOULD_LAUNCH = 1\nbody");
+    }
+
+    #[test]
+    fn should_open_the_bash_pre_script_with_the_parent_shell_quoted_then_the_launch_flag() {
+        let template = "body\n";
+
+        let script = render(
+            Shell::Bash,
+            IntegrationPhase::Pre,
+            template,
+            "tabsmith",
+            || Some("/opt/it's/bash".to_string()),
+            || true,
+        );
+
+        assert_eq!(
+            script.text(),
+            "TABSMITH_SHELL='/opt/it'\\''s/bash'\nSHOULD_TABSMITH_LAUNCH=0\nbody"
+        );
     }
 }
