@@ -22,6 +22,15 @@ pub(crate) trait DotfileRepository {
 #[derive(Default)]
 pub(crate) struct InMemoryDotfileRepository {
     files: RefCell<HashMap<PathBuf, String>>,
+    writes: RefCell<Vec<PathBuf>>,
+}
+
+#[cfg(test)]
+impl InMemoryDotfileRepository {
+    /// The path of every write, in the order they were made.
+    pub(crate) fn writes(&self) -> Vec<PathBuf> {
+        self.writes.borrow().clone()
+    }
 }
 
 #[cfg(test)]
@@ -40,6 +49,7 @@ impl DotfileRepository for InMemoryDotfileRepository {
 
     fn write(&self, path: &Path, contents: &str) -> Result<(), ShellIntegrationError> {
         self.files.borrow_mut().insert(path.into(), contents.into());
+        self.writes.borrow_mut().push(path.into());
         Ok(())
     }
 
@@ -62,6 +72,25 @@ mod tests {
         let contents = repository.read(path).unwrap();
 
         assert_eq!(contents, "alias ll='ls -l'\n");
+    }
+
+    #[test]
+    fn should_list_every_write_in_the_order_it_was_made() {
+        let repository = InMemoryDotfileRepository::default();
+        repository.write(Path::new("/home/u/.tabsmith/shell/zshrc.pre.zsh"), "pre").unwrap();
+        repository.write(Path::new("/home/u/.zshrc"), "one").unwrap();
+        repository.write(Path::new("/home/u/.zshrc"), "two").unwrap();
+
+        let written = repository.writes();
+
+        assert_eq!(
+            written,
+            [
+                PathBuf::from("/home/u/.tabsmith/shell/zshrc.pre.zsh"),
+                PathBuf::from("/home/u/.zshrc"),
+                PathBuf::from("/home/u/.zshrc"),
+            ]
+        );
     }
 
     #[test]
