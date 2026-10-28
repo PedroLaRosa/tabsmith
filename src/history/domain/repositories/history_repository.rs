@@ -20,11 +20,17 @@ pub(crate) struct InMemoryHistoryRepository {
 }
 
 impl InMemoryHistoryRepository {
-    pub(crate) fn new(entries: Vec<HistoryEntry>) -> Self {
+    /// Keeps the newest `HISTORY_IN_MEMORY` of `entries`.
+    pub(crate) fn new(mut entries: Vec<HistoryEntry>) -> Self {
+        keep_newest(&mut entries);
         InMemoryHistoryRepository {
             entries: RefCell::new(Rc::new(entries)),
         }
     }
+}
+
+fn keep_newest(entries: &mut Vec<HistoryEntry>) {
+    entries.drain(..entries.len().saturating_sub(HISTORY_IN_MEMORY));
 }
 
 impl HistoryRepository for InMemoryHistoryRepository {
@@ -35,7 +41,7 @@ impl HistoryRepository for InMemoryHistoryRepository {
         let mut shared = self.entries.borrow_mut();
         let entries = Rc::make_mut(&mut shared);
         entries.push(entry);
-        entries.drain(..entries.len().saturating_sub(HISTORY_IN_MEMORY));
+        keep_newest(entries);
     }
 
     fn recent(&self) -> Rc<Vec<HistoryEntry>> {
@@ -84,6 +90,19 @@ mod tests {
         assert_eq!(
             (recent.len(), recent[0].command(), recent[4999].command()),
             (HISTORY_IN_MEMORY, "c1", "newest")
+        );
+    }
+
+    #[test]
+    fn should_keep_only_the_newest_5000_entries_it_was_built_with() {
+        let more_than_full = (0..5001).map(|i| entry(&format!("c{i}"))).collect();
+
+        let repository = InMemoryHistoryRepository::new(more_than_full);
+
+        let recent = repository.recent();
+        assert_eq!(
+            (recent.len(), recent[0].command(), recent[4999].command()),
+            (HISTORY_IN_MEMORY, "c1", "c5000")
         );
     }
 }
