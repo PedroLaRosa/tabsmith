@@ -265,9 +265,9 @@ fn is_test_only_attribute(code: &str) -> bool {
 /// a `use a::{..}` group gets the `a` prefix, and the name right after `use` is a path even without `::`.
 /// `open_braces` holds each open brace's prefix across lines (empty for a block).
 // ponytail: a line scanner, not a Rust parser. String literals are read as code (a `//` in one cuts the line unless
-// it follows `:`, and an unpaired brace or bracket in one shifts the use-group and test-only item tracking), only
-// `//` comments are skipped, and `super::`-relative paths are not resolved. Switch to a real parser if a false hit or
-// a miss ever shows up.
+// it follows `:`, and an unpaired brace, bracket or parenthesis in one shifts the use-group and test-only item
+// tracking), only `//` comments are skipped, and `super::`-relative paths are not resolved. Switch to a real parser
+// if a false hit or a miss ever shows up.
 fn paths_in<'a>(code: &'a str, open_braces: &mut Vec<Vec<&'a str>>) -> Vec<Vec<&'a str>> {
     let mut paths = Vec::new();
     let mut previous_word = "";
@@ -321,6 +321,8 @@ fn is_a_legacy_module(path: &[&str]) -> bool {
 }
 
 /// `print!`, `println!`, `eprint!`, `eprintln!` or `dbg!`, bare or by path (`std::println!`).
+// ponytail: macro names only. std is allowed, so output through a `std::io` handle (`writeln!(std::io::stderr(),
+// ..)`, `stdout().write_all(..)`) passes; flag `io::stdout`/`io::stderr` paths if domain or application writes one.
 fn writes_output(code: &str) -> bool {
     code.split_inclusive(|c: char| !is_path_char(c)).any(|piece| {
         let name = piece.strip_suffix('!').map(|path| path.rsplit("::").next().unwrap_or(path));
