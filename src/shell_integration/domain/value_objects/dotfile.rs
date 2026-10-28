@@ -13,6 +13,16 @@ impl Dotfile {
     pub(crate) fn is_opted_out(&self) -> bool {
         split_bom(&self.text).1.lines().any(is_ignore_line)
     }
+
+    /// The lines after the BOM, trimmed, without blank lines and `#` comments (the markers are such comments).
+    pub(crate) fn sourced_lines(&self) -> Vec<&str> {
+        split_bom(&self.text)
+            .1
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect()
+    }
 }
 
 /// `# tabsmith ignore` (case-insensitive): the user opted this file out.
@@ -42,5 +52,24 @@ mod tests {
         let opted_out = dotfile.is_opted_out();
 
         assert!(opted_out);
+    }
+
+    /// The lines the shell runs, as the installed check compares them: an indented source line still counts.
+    #[test]
+    fn should_give_the_trimmed_lines_that_are_not_blank_or_comments() {
+        let dotfile = Dotfile::new(
+            "\u{feff}# tabsmith pre block. Keep at the top of this file.\n  [ -f \"${HOME}/.tabsmith/shell/bashrc.pre.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.pre.bash\"\n\necho hi\r\n# tabsmith post block. Keep at the bottom of this file.\n[ -f \"${HOME}/.tabsmith/shell/bashrc.post.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.post.bash\"\n".to_string(),
+        );
+
+        let lines = dotfile.sourced_lines();
+
+        assert_eq!(
+            lines,
+            [
+                "[ -f \"${HOME}/.tabsmith/shell/bashrc.pre.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.pre.bash\"",
+                "echo hi",
+                "[ -f \"${HOME}/.tabsmith/shell/bashrc.post.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.post.bash\"",
+            ]
+        );
     }
 }
