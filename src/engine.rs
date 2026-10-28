@@ -7,8 +7,8 @@
 //! finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
 use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId, TaskResult};
-use crate::bootstrap::cli::shared_dependencies;
 use crate::shared::infrastructure::logger;
+use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
@@ -319,7 +319,7 @@ impl Engine {
                 logger::error(&format!("engine: specs: {e:#}"));
                 SpecIndex::default()
             });
-        let dependencies = shared_dependencies();
+        let dependencies = SharedDependencies::from_env();
         Engine::with(
             tx,
             settings,
