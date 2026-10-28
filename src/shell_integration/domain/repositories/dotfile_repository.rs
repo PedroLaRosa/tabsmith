@@ -93,4 +93,13 @@ mod tests {
 
         assert!(!repository.exists(path));
     }
+
+    #[test]
+    fn should_accept_removing_a_dotfile_that_is_not_there() {
+        let repository = InMemoryDotfileRepository::default();
+
+        let removed = repository.remove(Path::new("/home/u/.config/fish/conf.d/00_tabsmith_pre.fish"));
+
+        assert!(removed.is_ok());
+    }
 }
