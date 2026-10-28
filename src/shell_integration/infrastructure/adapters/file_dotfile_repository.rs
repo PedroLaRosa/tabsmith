@@ -63,4 +63,59 @@ mod tests {
 
         assert!(matches!(error, ShellIntegrationError::FileDoesNotExist(p) if p == path));
     }
+
+    /// Windows refuses to open a directory (access denied), so this holds on Unix only.
+    #[cfg(unix)]
+    #[test]
+    fn should_report_reading_a_directory_as_an_io_failure_on_its_path() {
+        let temp_dir = TempDir::new("dotfile-directory");
+        let path = temp_dir.path().join(".bashrc");
+        std::fs::create_dir(&path).unwrap();
+
+        let error = FileDotfileRepository.read(&path).unwrap_err();
+
+        assert_eq!(
+            (matches!(error, ShellIntegrationError::Io(..)), error.to_string()),
+            (true, format!("{}: Is a directory (os error 21)", path.display()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_report_an_unreadable_dotfile_as_permission_denied() {
+        use crate::shared::infrastructure::os::process_info::is_root;
+        use std::os::unix::fs::PermissionsExt;
+        if is_root() {
+            return; // root reads it anyway
+        }
+        let temp_dir = TempDir::new("dotfile-unreadable");
+        let path = temp_dir.path().join(".zshrc");
+        std::fs::write(&path, "export A=1\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let error = FileDotfileRepository.read(&path).unwrap_err();
+
+        assert!(matches!(error, ShellIntegrationError::PermissionDenied(p) if p == path));
+    }
+
+    #[test]
+    fn should_accept_removing_a_file_that_is_not_there() {
+        let temp_dir = TempDir::new("dotfile-remove-missing");
+
+        let removed = FileDotfileRepository.remove(&temp_dir.path().join("bashrc.pre.bash"));
+
+        assert!(removed.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_not_take_a_dangling_symlink_for_an_existing_dotfile() {
+        let temp_dir = TempDir::new("dotfile-dangling");
+        let path = temp_dir.path().join(".bashrc");
+        std::os::unix::fs::symlink("../dotfiles/bashrc", &path).unwrap();
+
+        let exists = FileDotfileRepository.exists(&path);
+
+        assert!(!exists);
+    }
 }
