@@ -558,7 +558,7 @@ See the Phase 2 notes in section 9.
 Done at `f485ea7`: `history` registered in the architecture test, `inline::History` and `types::HistoryEntry`
 deleted, gate green (524 passed). See the Phase 3 notes in section 9.
 
-### Phase 4: shell_integration (the first full CLI-only slice; also starts terminal_session's session context)
+### Phase 4: shell_integration (the first full CLI-only slice; also starts terminal_session's session context; prepared, not started: [research](hexagonal-refactor/phase-4-shell-integration.md))
 1. Domain:
    - Extract the `Dotfile` VO from `install` / `uninstall` / `is_installed`, test-first, using the existing expectations.
    - Move these services, with their tests: `IntegrationCatalog`, `LaunchPolicy` (with
