@@ -201,4 +201,54 @@ mod tests {
             (vec![(Shell::Pwsh, PathBuf::from("/home/u/profile.ps1"), None)], 0)
         );
     }
+
+    #[test]
+    fn should_list_the_zshrc_then_the_zprofile_in_the_home_without_zdotdir() {
+        let paths = paths();
+
+        let zsh = integrations(&paths, Shell::Zsh, |_| false, unasked_pwsh_profile).unwrap();
+
+        assert_eq!(
+            listed(&zsh),
+            [
+                (Shell::Zsh, PathBuf::from("/home/u/.zshrc"), None),
+                (Shell::Zsh, PathBuf::from("/home/u/.zprofile"), None),
+            ]
+        );
+    }
+
+    /// Only the pwsh integration lives at `$PROFILE`: listing any other shell never spawns pwsh.
+    #[test]
+    fn should_not_ask_pwsh_for_its_profile_when_listing_another_shell() {
+        let paths = paths();
+        let asked = Cell::new(0);
+        let ask = || {
+            asked.set(asked.get() + 1);
+            Ok(PathBuf::from("/home/u/.config/powershell/Microsoft.PowerShell_profile.ps1"))
+        };
+
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            integrations(&paths, shell, |_| false, ask).unwrap();
+        }
+
+        assert_eq!(asked.get(), 0);
+    }
+
+    /// The listing fails with pwsh's own failure, so `status` and doctor print it as the shell's error.
+    #[test]
+    fn should_fail_with_the_failure_of_asking_pwsh_for_its_profile() {
+        let paths = paths();
+
+        let failure = integrations(&paths, Shell::Pwsh, |_| false, || {
+            Err(ShellIntegrationError::Environment(
+                "could not ask pwsh for $PROFILE: timed out after 5s".into(),
+            ))
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            failure,
+            ShellIntegrationError::Environment(m) if m == "could not ask pwsh for $PROFILE: timed out after 5s"
+        ));
+    }
 }
