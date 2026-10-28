@@ -16,6 +16,7 @@ use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::domain::entities::integration::Integration;
+use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::dotfile::Dotfile;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
@@ -816,26 +817,8 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-/// Manual install instructions: the exact lines install writes, so doctor and
-/// uninstall recognise them, and their `[ -f … ]` guard keeps a later uninstall from breaking shell startup.
 fn manual_text(ctx: &IntegrationPaths, shells: &[Shell]) -> String {
-    let rc = |shell, file: &str| Integration::dotfile(shell, ctx.home().join(file));
-    let mut rcs = vec![
-        ("bash:   ", rc(Shell::Bash, ".bashrc")),
-        ("zsh:    ", rc(Shell::Zsh, ".zshrc")),
-    ];
-    if shells.contains(&Shell::Pwsh) {
-        rcs.push(("pwsh ($PROFILE):", rc(Shell::Pwsh, "profile")));
-    }
-    let mut s = String::from("\nTo install the integrations manually, you will have to add the following to your rc files\n");
-    s += "This step is required for the application to function properly\n";
-    for (when, at) in [(IntegrationPhase::Pre, "top"), (IntegrationPhase::Post, "bottom")] {
-        s += &format!("\nAt the {at} of your .bashrc or .zshrc file:\n");
-        for (label, i) in &rcs {
-            s += &format!("{label} {}\n", i.source_line(ctx, when));
-        }
-    }
-    s + "\n"
+    manual_install_instructions::text(ctx, shells)
 }
 
 pub fn uninstall(args: UninstallArgs) -> anyhow::Result<i32> {
@@ -2875,33 +2858,5 @@ mod tests {
         prune_run_files(&dir);
         assert!(!old.exists() && new.exists() && sub.exists());
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// What setup prints when it does not edit the dotfiles: bash and zsh lines (never fish), then a blank line.
-    #[test]
-    fn should_print_the_manual_install_text_for_bash_and_zsh() {
-        let temp_dir = TempDir::new("manual");
-        let c = ctx(temp_dir.path());
-
-        let text = manual_text(&c, &[Shell::Bash, Shell::Zsh]);
-
-        assert_eq!(
-            text,
-            "\nTo install the integrations manually, you will have to add the following to your rc files\nThis step is required for the application to function properly\n\nAt the top of your .bashrc or .zshrc file:\nbash:    [ -f \"${HOME}/.tabsmith/shell/bashrc.pre.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.pre.bash\"\nzsh:     [ -f \"${HOME}/.tabsmith/shell/zshrc.pre.zsh\" ] && . \"${HOME}/.tabsmith/shell/zshrc.pre.zsh\"\n\nAt the bottom of your .bashrc or .zshrc file:\nbash:    [ -f \"${HOME}/.tabsmith/shell/bashrc.post.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.post.bash\"\nzsh:     [ -f \"${HOME}/.tabsmith/shell/zshrc.post.zsh\" ] && . \"${HOME}/.tabsmith/shell/zshrc.post.zsh\"\n\n"
-        );
-    }
-
-    /// With pwsh on PATH the pwsh lines follow the zsh ones, for the pwsh profile.
-    #[test]
-    fn should_print_the_manual_install_text_with_pwsh() {
-        let temp_dir = TempDir::new("manualpwsh");
-        let c = ctx(temp_dir.path());
-
-        let text = manual_text(&c, &[Shell::Bash, Shell::Zsh, Shell::Pwsh]);
-
-        assert_eq!(
-            text,
-            "\nTo install the integrations manually, you will have to add the following to your rc files\nThis step is required for the application to function properly\n\nAt the top of your .bashrc or .zshrc file:\nbash:    [ -f \"${HOME}/.tabsmith/shell/bashrc.pre.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.pre.bash\"\nzsh:     [ -f \"${HOME}/.tabsmith/shell/zshrc.pre.zsh\" ] && . \"${HOME}/.tabsmith/shell/zshrc.pre.zsh\"\npwsh ($PROFILE): if (Test-Path \"${HOME}/.tabsmith/shell/profile.pre.ps1\") { . \"${HOME}/.tabsmith/shell/profile.pre.ps1\" }\n\nAt the bottom of your .bashrc or .zshrc file:\nbash:    [ -f \"${HOME}/.tabsmith/shell/bashrc.post.bash\" ] && . \"${HOME}/.tabsmith/shell/bashrc.post.bash\"\nzsh:     [ -f \"${HOME}/.tabsmith/shell/zshrc.post.zsh\" ] && . \"${HOME}/.tabsmith/shell/zshrc.post.zsh\"\npwsh ($PROFILE): if (Test-Path \"${HOME}/.tabsmith/shell/profile.post.ps1\") { . \"${HOME}/.tabsmith/shell/profile.post.ps1\" }\n\n"
-        );
     }
 }
