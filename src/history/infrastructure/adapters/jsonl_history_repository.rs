@@ -2,7 +2,6 @@ use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntry
 use crate::history::domain::repositories::history_repository::{
     HistoryRepository, InMemoryHistoryRepository, HISTORY_IN_MEMORY,
 };
-use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use crate::shared::infrastructure::logger;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
@@ -81,17 +80,6 @@ impl From<HistoryRecord> for HistoryEntry {
 }
 
 const HISTORY_COMPACT_AT: usize = 10_000;
-
-/// The history file under the data directory, or a memory-only history when there is no data directory.
-pub(crate) fn load_history(data_directory: &DataDirectory) -> Rc<dyn HistoryRepository> {
-    match data_directory.history_file() {
-        Ok(path) => Rc::new(JsonlHistoryRepository::load(path)),
-        Err(e) => {
-            logger::warn(&format!("history: {e:#}"));
-            Rc::new(InMemoryHistoryRepository::new(Vec::new()))
-        }
-    }
-}
 
 /// `~/.tabsmith/history.jsonl` (last 5000 entries in memory; file compacted past 10 000 lines).
 pub(crate) struct JsonlHistoryRepository {

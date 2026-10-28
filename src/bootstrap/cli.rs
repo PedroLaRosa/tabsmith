@@ -136,7 +136,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
 }
 
 /// What every module is built from. Never fails: an unknown home only fails the paths a command asks for.
-fn shared_dependencies() -> SharedDependencies {
+pub(crate) fn shared_dependencies() -> SharedDependencies {
     SharedDependencies {
         data_directory: data_directory_from_env(),
         clock: Arc::new(SystemClock),

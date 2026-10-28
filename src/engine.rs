@@ -7,7 +7,7 @@
 //! finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
 use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId, TaskResult};
-use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::bootstrap::cli::shared_dependencies;
 use crate::shared::infrastructure::logger;
 use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
 use crate::settings::domain::services::settings_catalog::{
@@ -27,7 +27,8 @@ use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query,
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::history::domain::repositories::history_repository::HistoryRepository;
-use crate::history::infrastructure::adapters::jsonl_history_repository::load_history;
+use crate::history::application::record_command_use_case::RecordCommandUseCase;
+use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
     now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, ItemType, Msg, Phase, Request,
     SessionCtx,
@@ -290,6 +291,7 @@ struct Engine {
     parser: Parser,
     index: SpecIndex,
     history: Rc<dyn HistoryRepository>,
+    record_command: RecordCommandUseCase,
     session: SessionCtx,
     wrapper_env: HashMap<String, String>,
     aliases: Option<(Shell, HashMap<String, String>)>,
@@ -317,12 +319,13 @@ impl Engine {
                 logger::error(&format!("engine: specs: {e:#}"));
                 SpecIndex::default()
             });
+        let dependencies = shared_dependencies();
         Engine::with(
             tx,
             settings,
             index,
-            load_history(&data_directory_from_env()),
-            data_directory_from_env().state_file().ok(),
+            build_history_module(&dependencies),
+            dependencies.data_directory.state_file().ok(),
         )
     }
 
@@ -330,9 +333,13 @@ impl Engine {
         tx: Sender<Msg>,
         settings: Settings,
         index: SpecIndex,
-        history: Rc<dyn HistoryRepository>,
+        history_module: HistoryModule,
         state_path: Option<PathBuf>,
     ) -> Engine {
+        let HistoryModule {
+            history,
+            record_command,
+        } = history_module;
         let recency = state_path.as_deref().map(load_recency).unwrap_or_default();
         Engine {
             tx,
@@ -341,6 +348,7 @@ impl Engine {
             parser: Parser::new(),
             index,
             history,
+            record_command,
             session: SessionCtx::default(),
             wrapper_env: std::env::vars().collect(),
             aliases: None,
@@ -400,7 +408,7 @@ impl Engine {
             EngineMsg::Complete(r) => *pending = Some(r),
             EngineMsg::CommandFinished(_) | EngineMsg::CommandEnded => {
                 if let EngineMsg::CommandFinished(e) = m {
-                    self.history.append(e);
+                    self.record_command.execute(e);
                 }
                 if let Ok(mut c) = self.ghost_cache.lock() {
                     c.clear();
@@ -1339,7 +1347,9 @@ mod tests {
             tx,
             Settings::default(),
             SpecIndex::default(),
-            Rc::new(JsonlHistoryRepository::load(dir.path().join("h.jsonl"))),
+            HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
+                dir.path().join("h.jsonl"),
+            ))),
             None,
         );
         let (jtx, jrx) = std::sync::mpsc::channel();
