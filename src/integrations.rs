@@ -15,6 +15,8 @@ use crate::shared::infrastructure::os::process_info::{exe_path, is_root, parent_
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
+use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -44,16 +46,16 @@ impl From<ShellArg> for Shell {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum When {
+pub enum IntegrationPhaseArg {
     Pre,
     Post,
 }
 
-impl When {
-    pub fn name(self) -> &'static str {
-        match self {
-            When::Pre => "pre",
-            When::Post => "post",
+impl From<IntegrationPhaseArg> for IntegrationPhase {
+    fn from(w: IntegrationPhaseArg) -> IntegrationPhase {
+        match w {
+            IntegrationPhaseArg::Pre => IntegrationPhase::Pre,
+            IntegrationPhaseArg::Post => IntegrationPhase::Post,
         }
     }
 }
@@ -61,7 +63,7 @@ impl When {
 #[derive(Args)]
 pub struct InitArgs {
     pub shell: ShellArg,
-    pub when: When,
+    pub when: IntegrationPhaseArg,
     #[arg(long)]
     pub rcfile: Option<String>,
 }
@@ -156,10 +158,10 @@ pub fn init_cmd(args: InitArgs) -> anyhow::Result<i32> {
         logger::debug(&format!(
             "init {:?} {} --rcfile {rc}",
             args.shell,
-            args.when.name()
+            IntegrationPhase::from(args.when).name()
         ));
     }
-    let out = match init_script(args.shell.into(), args.when) {
+    let out = match init_script(args.shell.into(), args.when.into()) {
         Ok(s) => s,
         Err(e) => format!("# Could not load source: {e:#}"),
     };
@@ -168,7 +170,7 @@ pub fn init_cmd(args: InitArgs) -> anyhow::Result<i32> {
 }
 
 /// The integration code `init <shell> <when>` prints (SPEC §5.3), without the trailing newline.
-pub fn init_script(shell: Shell, when: When) -> anyhow::Result<String> {
+pub fn init_script(shell: Shell, when: IntegrationPhase) -> anyhow::Result<String> {
     init_output(
         shell,
         when,
@@ -177,7 +179,7 @@ pub fn init_script(shell: Shell, when: When) -> anyhow::Result<String> {
 }
 
 /// `snapshot` = deterministic output (SPEC §2.7): shell `/bin/zsh`, launch 0, binary `tabsmith`.
-fn init_output(shell: Shell, when: When, snapshot: bool) -> Result<String> {
+fn init_output(shell: Shell, when: IntegrationPhase, snapshot: bool) -> Result<String> {
     let bin = if snapshot {
         "tabsmith".to_string()
     } else {
@@ -185,7 +187,7 @@ fn init_output(shell: Shell, when: When, snapshot: bool) -> Result<String> {
     };
     let launch = |snap| if snap || should_launch().0 { 0 } else { 1 };
     let mut lines = Vec::new();
-    if when == When::Pre {
+    if when == IntegrationPhase::Pre {
         match shell {
             Shell::Bash | Shell::Zsh => {
                 let parent = if snapshot {
@@ -206,13 +208,13 @@ fn init_output(shell: Shell, when: When, snapshot: bool) -> Result<String> {
         }
     }
     let body = match (shell, when) {
-        (Shell::Bash | Shell::Zsh, When::Pre) => PRE_SH,
-        (Shell::Bash, When::Post) => POST_BASH,
-        (Shell::Zsh, When::Post) => POST_ZSH,
-        (Shell::Fish, When::Pre) => PRE_FISH,
-        (Shell::Fish, When::Post) => POST_FISH,
-        (Shell::Pwsh, When::Pre) => PRE_PS1,
-        (Shell::Pwsh, When::Post) => POST_PS1,
+        (Shell::Bash | Shell::Zsh, IntegrationPhase::Pre) => PRE_SH,
+        (Shell::Bash, IntegrationPhase::Post) => POST_BASH,
+        (Shell::Zsh, IntegrationPhase::Post) => POST_ZSH,
+        (Shell::Fish, IntegrationPhase::Pre) => PRE_FISH,
+        (Shell::Fish, IntegrationPhase::Post) => POST_FISH,
+        (Shell::Pwsh, IntegrationPhase::Pre) => PRE_PS1,
+        (Shell::Pwsh, IntegrationPhase::Post) => POST_PS1,
     };
     lines.push(
         body.trim_end_matches('\n')
@@ -386,49 +388,21 @@ impl Ctx {
     }
 }
 
-/// `is_installed()` / `install()` failure (SPEC §5.5 display strings).
-#[derive(Debug)]
-pub enum IntegrationError {
-    NotInstalled(String),
-    Improper(String),
-    FileDoesNotExist(PathBuf),
-    PermissionDenied(PathBuf),
-    Io(PathBuf, std::io::Error),
-}
-
-impl std::fmt::Display for IntegrationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IntegrationError::NotInstalled(m) => write!(f, "Integration not installed: {m}"),
-            IntegrationError::Improper(m) => write!(f, "Improper integration installation: {m}"),
-            IntegrationError::FileDoesNotExist(p) => {
-                write!(f, "File does not exist: {}", p.display())
-            }
-            IntegrationError::PermissionDenied(p) => {
-                write!(f, "Permission denied: {}", p.display())
-            }
-            IntegrationError::Io(p, e) => write!(f, "{}: {e}", p.display()),
-        }
-    }
-}
-
-impl std::error::Error for IntegrationError {}
-
-fn io_err(path: &Path, e: std::io::Error) -> IntegrationError {
+fn io_err(path: &Path, e: std::io::Error) -> ShellIntegrationError {
     match e.kind() {
-        std::io::ErrorKind::NotFound => IntegrationError::FileDoesNotExist(path.into()),
-        std::io::ErrorKind::PermissionDenied => IntegrationError::PermissionDenied(path.into()),
-        _ => IntegrationError::Io(path.into(), e),
+        std::io::ErrorKind::NotFound => ShellIntegrationError::FileDoesNotExist(path.into()),
+        std::io::ErrorKind::PermissionDenied => ShellIntegrationError::PermissionDenied(path.into()),
+        _ => ShellIntegrationError::Io(path.into(), e),
     }
 }
 
-fn read(path: &Path) -> Result<String, IntegrationError> {
+fn read(path: &Path) -> Result<String, ShellIntegrationError> {
     std::fs::read_to_string(path).map_err(|e| io_err(path, e))
 }
 
-/// See [`AtomicFile::write_keeping_permissions`]; its failures keep their IntegrationError (the parent directory or
+/// See [`AtomicFile::write_keeping_permissions`]; its failures keep their ShellIntegrationError (the parent directory or
 /// the dotfile path, as before).
-fn write(path: &Path, contents: &str) -> Result<(), IntegrationError> {
+fn write(path: &Path, contents: &str) -> Result<(), ShellIntegrationError> {
     AtomicFile::new(path)
         .write_keeping_permissions(contents.as_bytes())
         .map_err(|e| match e {
@@ -441,7 +415,7 @@ fn write(path: &Path, contents: &str) -> Result<(), IntegrationError> {
 }
 
 /// Delete a file; missing is fine.
-fn remove(path: &Path) -> Result<(), IntegrationError> {
+fn remove(path: &Path) -> Result<(), ShellIntegrationError> {
     match std::fs::remove_file(path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(io_err(path, e)),
         _ => Ok(()),
@@ -449,11 +423,11 @@ fn remove(path: &Path) -> Result<(), IntegrationError> {
 }
 
 /// The file must hold exactly `expected`.
-fn check_file(path: &Path, expected: &str) -> Result<(), IntegrationError> {
+fn check_file(path: &Path, expected: &str) -> Result<(), ShellIntegrationError> {
     if read(path)? == expected {
         Ok(())
     } else {
-        Err(IntegrationError::Improper(format!(
+        Err(ShellIntegrationError::Improper(format!(
             "{} should contain:\n{expected}",
             path.display()
         )))
@@ -493,7 +467,7 @@ pub struct Integration {
     /// The dotfile that gets the pre/post blocks, or the whole fish `conf.d` file.
     pub path: PathBuf,
     /// `Some` for a whole-file integration (fish `conf.d`), `None` for a dotfile.
-    pub file_when: Option<When>,
+    pub file_when: Option<IntegrationPhase>,
 }
 
 /// Integrations of `shell` (SPEC §5.5 table).
@@ -525,8 +499,8 @@ pub fn integrations(ctx: &Ctx, shell: Shell) -> Result<Vec<Integration>> {
             vec![dot(dir.join(".zshrc")), dot(dir.join(".zprofile"))]
         }
         Shell::Fish => [
-            (When::Pre, "00_tabsmith_pre.fish"),
-            (When::Post, "99_tabsmith_post.fish"),
+            (IntegrationPhase::Pre, "00_tabsmith_pre.fish"),
+            (IntegrationPhase::Post, "99_tabsmith_post.fish"),
         ]
         .into_iter()
         .map(|(w, f)| Integration {
@@ -590,7 +564,7 @@ impl Integration {
     }
 
     /// `~/.tabsmith/shell/<rc>.<when>.<ext>` (dotfile integrations).
-    pub fn script_path(&self, ctx: &Ctx, when: When) -> PathBuf {
+    pub fn script_path(&self, ctx: &Ctx, when: IntegrationPhase) -> PathBuf {
         let ext = if self.shell == Shell::Pwsh {
             "ps1"
         } else {
@@ -602,7 +576,7 @@ impl Integration {
     }
 
     /// Exact bytes of a script file / fish `conf.d` file (SPEC §5.5).
-    pub fn script_contents(&self, ctx: &Ctx, when: When) -> String {
+    pub fn script_contents(&self, ctx: &Ctx, when: IntegrationPhase) -> String {
         let (b, w, rc) = (quote(self.shell, &ctx.bin), when.name(), self.rc());
         match self.shell {
             Shell::Bash => {
@@ -622,7 +596,7 @@ impl Integration {
     }
 
     /// The dotfile line that sources a script file; a leading `$HOME` is written as `${HOME}`.
-    fn source_line(&self, ctx: &Ctx, when: When) -> String {
+    fn source_line(&self, ctx: &Ctx, when: IntegrationPhase) -> String {
         let p = self.script_path(ctx, when);
         let p = match p.strip_prefix(&ctx.home) {
             Ok(rel) => {
@@ -638,8 +612,8 @@ impl Integration {
     }
 
     /// Write both `~/.tabsmith/shell/` script files of a dotfile integration.
-    pub fn write_scripts(&self, ctx: &Ctx) -> Result<(), IntegrationError> {
-        for when in [When::Pre, When::Post] {
+    pub fn write_scripts(&self, ctx: &Ctx) -> Result<(), ShellIntegrationError> {
+        for when in [IntegrationPhase::Pre, IntegrationPhase::Post] {
             write(
                 &self.script_path(ctx, when),
                 &self.script_contents(ctx, when),
@@ -649,7 +623,7 @@ impl Integration {
     }
 
     /// SPEC §5.5 `is_installed()`: the first failing reason.
-    pub fn is_installed(&self, ctx: &Ctx) -> Result<(), IntegrationError> {
+    pub fn is_installed(&self, ctx: &Ctx) -> Result<(), ShellIntegrationError> {
         if let Some(when) = self.file_when {
             return check_file(&self.path, &self.script_contents(ctx, when));
         }
@@ -664,8 +638,8 @@ impl Integration {
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
             .collect();
         for (when, at, actual) in [
-            (When::Pre, "first", lines.first()),
-            (When::Post, "last", lines.last()),
+            (IntegrationPhase::Pre, "first", lines.first()),
+            (IntegrationPhase::Post, "last", lines.last()),
         ] {
             let src = self.source_line(ctx, when);
             if actual.copied() != Some(src.as_str()) {
@@ -675,9 +649,9 @@ impl Integration {
                     when.name()
                 );
                 return Err(if lines.contains(&src.as_str()) {
-                    IntegrationError::Improper(format!("{msg} {at}"))
+                    ShellIntegrationError::Improper(format!("{msg} {at}"))
                 } else {
-                    IntegrationError::NotInstalled(msg)
+                    ShellIntegrationError::NotInstalled(msg)
                 });
             }
             check_file(
@@ -689,7 +663,7 @@ impl Integration {
     }
 
     /// SPEC §5.5 install (idempotent); an existing dotfile is first copied to `<data>/backups/<unix-secs>/`.
-    pub fn install(&self, ctx: &Ctx) -> Result<(), IntegrationError> {
+    pub fn install(&self, ctx: &Ctx) -> Result<(), ShellIntegrationError> {
         if self.is_installed(ctx).is_ok() {
             return Ok(());
         }
@@ -711,12 +685,12 @@ impl Integration {
         let (shebang, rest) = split_shebang(body);
         let new = format!(
             "{bom}{shebang}{PRE_MARKER}\n{}\n{rest}",
-            self.source_line(ctx, When::Pre)
+            self.source_line(ctx, IntegrationPhase::Pre)
         );
         let new = format!(
             "{}\n{POST_MARKER}\n{}\n",
             new.trim_end_matches('\n'),
-            self.source_line(ctx, When::Post)
+            self.source_line(ctx, IntegrationPhase::Post)
         );
         if new != contents {
             write(&self.path, &new)?;
@@ -728,7 +702,7 @@ impl Integration {
     fn is_own_line(&self, ctx: &Ctx, line: &str) -> bool {
         let line = line.trim_end();
         [PRE_MARKER, POST_MARKER].contains(&line)
-            || [When::Pre, When::Post]
+            || [IntegrationPhase::Pre, IntegrationPhase::Post]
                 .into_iter()
                 .any(|w| self.source_line(ctx, w) == line)
     }
@@ -739,14 +713,14 @@ impl Integration {
         if self.file_when.is_some() {
             return self.path.exists();
         }
-        [When::Pre, When::Post]
+        [IntegrationPhase::Pre, IntegrationPhase::Post]
             .into_iter()
             .any(|w| self.script_path(ctx, w).exists())
             || read(&self.path).is_ok_and(|t| t.lines().any(|l| self.is_own_line(ctx, l)))
     }
 
     /// SPEC §5.5 uninstall: drop our exact lines, then delete the script files (missing is fine).
-    pub fn uninstall(&self, ctx: &Ctx) -> Result<(), IntegrationError> {
+    pub fn uninstall(&self, ctx: &Ctx) -> Result<(), ShellIntegrationError> {
         if self.file_when.is_some() {
             return remove(&self.path);
         }
@@ -762,8 +736,8 @@ impl Integration {
                 write(&self.path, &new)?;
             }
         }
-        remove(&self.script_path(ctx, When::Pre))?;
-        remove(&self.script_path(ctx, When::Post))
+        remove(&self.script_path(ctx, IntegrationPhase::Pre))?;
+        remove(&self.script_path(ctx, IntegrationPhase::Post))
     }
 }
 
@@ -782,7 +756,7 @@ fn apply(
     ctx: &Ctx,
     shells: &[Shell],
     pick: impl Fn(&Integration) -> bool,
-    op: impl Fn(&Integration, &Ctx) -> Result<(), IntegrationError>,
+    op: impl Fn(&Integration, &Ctx) -> Result<(), ShellIntegrationError>,
 ) -> Result<bool> {
     let (mut ran, mut errs) = (false, Vec::new());
     for &shell in shells {
@@ -1020,7 +994,7 @@ fn manual_text(ctx: &Ctx, shells: &[Shell]) -> String {
     }
     let mut s = String::from("\nTo install the integrations manually, you will have to add the following to your rc files\n");
     s += "This step is required for the application to function properly\n";
-    for (when, at) in [(When::Pre, "top"), (When::Post, "bottom")] {
+    for (when, at) in [(IntegrationPhase::Pre, "top"), (IntegrationPhase::Post, "bottom")] {
         s += &format!("\nAt the {at} of your .bashrc or .zshrc file:\n");
         for (label, i) in &rcs {
             s += &format!("{label} {}\n", i.source_line(ctx, when));
@@ -1076,15 +1050,15 @@ mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
-    const ALL: [(Shell, When); 8] = [
-        (Shell::Bash, When::Pre),
-        (Shell::Bash, When::Post),
-        (Shell::Zsh, When::Pre),
-        (Shell::Zsh, When::Post),
-        (Shell::Fish, When::Pre),
-        (Shell::Fish, When::Post),
-        (Shell::Pwsh, When::Pre),
-        (Shell::Pwsh, When::Post),
+    const ALL: [(Shell, IntegrationPhase); 8] = [
+        (Shell::Bash, IntegrationPhase::Pre),
+        (Shell::Bash, IntegrationPhase::Post),
+        (Shell::Zsh, IntegrationPhase::Pre),
+        (Shell::Zsh, IntegrationPhase::Post),
+        (Shell::Fish, IntegrationPhase::Pre),
+        (Shell::Fish, IntegrationPhase::Post),
+        (Shell::Pwsh, IntegrationPhase::Pre),
+        (Shell::Pwsh, IntegrationPhase::Post),
     ];
 
     fn ctx(dir: &Path) -> Ctx {
@@ -1099,14 +1073,14 @@ mod tests {
         }
     }
 
-    fn snapshot_path(shell: Shell, when: When) -> PathBuf {
+    fn snapshot_path(shell: Shell, when: IntegrationPhase) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/snapshots")
             .join(format!("init_{}_{}.snap", shell.name(), when.name()))
     }
 
     /// `init` output under TABSMITH_INIT_SNAPSHOT_TEST, as printed (with the trailing newline).
-    fn snapshot(shell: Shell, when: When) -> String {
+    fn snapshot(shell: Shell, when: IntegrationPhase) -> String {
         init_output(shell, when, true).unwrap() + "\n"
     }
 
@@ -1172,11 +1146,11 @@ mod tests {
             );
             assert!(!got.contains("{{BIN}}"));
         }
-        assert!(snapshot(Shell::Zsh, When::Pre)
+        assert!(snapshot(Shell::Zsh, IntegrationPhase::Pre)
             .starts_with("TABSMITH_SHELL='/bin/zsh'\nSHOULD_TABSMITH_LAUNCH=0\n"));
-        assert!(snapshot(Shell::Fish, When::Pre).starts_with("set -g SHOULD_TABSMITH_LAUNCH 0\n"));
-        assert!(snapshot(Shell::Pwsh, When::Pre).starts_with("$TABSMITH_SHOULD_LAUNCH = 0\n"));
-        assert!(snapshot(Shell::Pwsh, When::Pre).contains("& 'tabsmith' _ pty"));
+        assert!(snapshot(Shell::Fish, IntegrationPhase::Pre).starts_with("set -g SHOULD_TABSMITH_LAUNCH 0\n"));
+        assert!(snapshot(Shell::Pwsh, IntegrationPhase::Pre).starts_with("$TABSMITH_SHOULD_LAUNCH = 0\n"));
+        assert!(snapshot(Shell::Pwsh, IntegrationPhase::Pre).contains("& 'tabsmith' _ pty"));
     }
 
     #[test]
@@ -1222,7 +1196,7 @@ mod tests {
                 continue;
             }
             let f = dir.join(format!("post.{prog}"));
-            std::fs::write(&f, snapshot(shell, When::Post)).unwrap();
+            std::fs::write(&f, snapshot(shell, IntegrationPhase::Post)).unwrap();
             let out = Command::new(prog)
                 .args(args)
                 .arg(script)
@@ -1282,7 +1256,7 @@ mod tests {
         };
         assert!(matches!(
             rc.is_installed(&c),
-            Err(IntegrationError::NotInstalled(_))
+            Err(ShellIntegrationError::NotInstalled(_))
         ));
         rc.install(&c).unwrap();
         rc.is_installed(&c).unwrap();
@@ -1340,7 +1314,7 @@ mod tests {
         };
         assert!(matches!(
             rc.is_installed(&c),
-            Err(IntegrationError::FileDoesNotExist(_))
+            Err(ShellIntegrationError::FileDoesNotExist(_))
         ));
 
         rc.install(&c).unwrap(); // creates the file
@@ -1654,7 +1628,7 @@ mod tests {
     }
 
     /// `init` output for `fake` (the snapshot with its binary swapped).
-    fn init_for(shell: Shell, when: When, bin: &str) -> String {
+    fn init_for(shell: Shell, when: IntegrationPhase, bin: &str) -> String {
         snapshot(shell, when).replace(&quote(shell, "tabsmith"), &quote(shell, bin))
     }
 
@@ -1678,10 +1652,10 @@ mod tests {
         for i in integrations(&c, Shell::Fish).unwrap() {
             i.install(&c).unwrap();
         }
-        std::fs::write(format!("{bin}.pre"), init_for(Shell::Fish, When::Pre, &bin)).unwrap();
+        std::fs::write(format!("{bin}.pre"), init_for(Shell::Fish, IntegrationPhase::Pre, &bin)).unwrap();
         std::fs::write(
             format!("{bin}.post"),
-            init_for(Shell::Fish, When::Post, &bin),
+            init_for(Shell::Fish, IntegrationPhase::Post, &bin),
         )
         .unwrap();
         let env: &[(&str, &Path)] = &[("HOME", &home), ("XDG_CONFIG_HOME", &home.join(".config"))];
@@ -1704,7 +1678,7 @@ mod tests {
         );
 
         // Inside the wrapper (launch decision 1, a session id): the post block reads the real tty.
-        let pre = init_for(Shell::Fish, When::Pre, &bin)
+        let pre = init_for(Shell::Fish, IntegrationPhase::Pre, &bin)
             .replace("SHOULD_TABSMITH_LAUNCH 0", "SHOULD_TABSMITH_LAUNCH 1");
         std::fs::write(format!("{bin}.pre"), pre).unwrap();
         let env = [env, &[("TABSMITH_SESSION_ID", Path::new("abc"))]].concat();
@@ -1728,7 +1702,7 @@ mod tests {
         let temp_dir = TempDir::new("bashpc");
         let dir = temp_dir.path().to_path_buf();
         let f = dir.join("post.bash");
-        std::fs::write(&f, snapshot(Shell::Bash, When::Post)).unwrap();
+        std::fs::write(&f, snapshot(Shell::Bash, IntegrationPhase::Post)).unwrap();
         let script = r#"PS1='$ '; source "$F"; __bp_a() { :; }; __bp_b() { :; }
             pc() { local c; for c in "${PROMPT_COMMAND[@]}"; do eval "$c"; done; }
             prompts() { for _ in 1 2 3 4; do pc; printf '\nLEN=%s\n' "${#PS1}"; done; local IFS='|'; printf 'PC=%q\n' "${PROMPT_COMMAND[*]}"; }
@@ -1781,7 +1755,7 @@ mod tests {
         let temp_dir = TempDir::new("pwshpost");
         let dir = temp_dir.path().to_path_buf();
         let f = dir.join("post.ps1");
-        std::fs::write(&f, snapshot(Shell::Pwsh, When::Post)).unwrap();
+        std::fs::write(&f, snapshot(Shell::Pwsh, IntegrationPhase::Post)).unwrap();
         let script = format!(
             "$Global:__l = 'echo hi'; function Global:PSConsoleHostReadLine {{ $Global:__l }}; . {}; $a = PSConsoleHostReadLine; $b = PSConsoleHostReadLine; $Global:__l = ''; $null = PSConsoleHostReadLine; \"`nGOT=$a|$b ERR=$($Error.Count)\"; prompt",
             quote(Shell::Pwsh, &f.display().to_string())
@@ -1832,7 +1806,7 @@ mod tests {
         let Some(s) = run_post(
             "pwsh",
             &["-NoProfile", "-Command"],
-            &snapshot(Shell::Pwsh, When::Post),
+            &snapshot(Shell::Pwsh, IntegrationPhase::Post),
             script,
             &dir,
         ) else {
@@ -1922,7 +1896,7 @@ mod tests {
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let f = dir.join("post.ps1");
-        std::fs::write(&f, snapshot(Shell::Pwsh, When::Post)).unwrap();
+        std::fs::write(&f, snapshot(Shell::Pwsh, IntegrationPhase::Post)).unwrap();
         let env: &[(&str, &Path)] = &[
             ("HOME", &home),
             ("F", &f),
@@ -1981,7 +1955,7 @@ mod tests {
         let c = Ctx { bin, ..ctx(&dir) };
         let pwsh = &integrations(&c, Shell::Pwsh).unwrap()[0];
         let pre = dir.join("profile.pre.ps1");
-        std::fs::write(&pre, pwsh.script_contents(&c, When::Pre)).unwrap();
+        std::fs::write(&pre, pwsh.script_contents(&c, IntegrationPhase::Pre)).unwrap();
         let oem = "[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(850)";
         let script = format!(
             "{oem}; . {}; $cp = [Console]::OutputEncoding.CodePage; [Console]::OutputEncoding = [Text.UTF8Encoding]::new(); \"$cp $($Global:__tsGot -eq ('Jos' + [char]0xE9))\"",
@@ -2010,7 +1984,7 @@ mod tests {
         );
 
         // Both encoding setters tolerate a missing console (Windows); empty init output runs nothing, no error.
-        let line = pwsh.script_contents(&c, When::Pre);
+        let line = pwsh.script_contents(&c, IntegrationPhase::Pre);
         assert!(
             line.contains(
                 "try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}"
@@ -2126,7 +2100,7 @@ mod tests {
         if let Some(s) = run_post(
             "zsh",
             &["-f", "-c"],
-            &snapshot(Shell::Zsh, When::Post),
+            &snapshot(Shell::Zsh, IntegrationPhase::Post),
             script,
             &dir,
         ) {
@@ -2162,7 +2136,7 @@ mod tests {
         if let Some(s) = run_post(
             "bash",
             &["--norc", "--noprofile", "-c"],
-            &snapshot(Shell::Bash, When::Post),
+            &snapshot(Shell::Bash, IntegrationPhase::Post),
             script,
             &dir,
         ) {
@@ -2186,7 +2160,7 @@ mod tests {
             &f,
             init_for(
                 Shell::Bash,
-                When::Post,
+                IntegrationPhase::Post,
                 &fake_bin(&dir.join("bin")).display().to_string(),
             ),
         )
@@ -2389,7 +2363,7 @@ mod tests {
         if let Some(s) = run_post(
             "fish",
             &["--no-config", "-c"],
-            &init_for(Shell::Fish, When::Post, &bin),
+            &init_for(Shell::Fish, IntegrationPhase::Post, &bin),
             script,
             &dir,
         ) {
@@ -2441,7 +2415,7 @@ mod tests {
                 continue;
             }
             let f = dir.join(format!("post.{}", shell.name()));
-            std::fs::write(&f, init_for(shell, When::Post, &bin)).unwrap();
+            std::fs::write(&f, init_for(shell, IntegrationPhase::Post, &bin)).unwrap();
             let env: &[(&str, &Path)] = &[
                 ("HOME", &home),
                 ("ZDOTDIR", &home),
@@ -2499,7 +2473,7 @@ mod tests {
         let launched = || std::fs::remove_file(format!("{bin}.launched")).is_ok();
 
         let set_wrapper = |w: &str| {
-            std::fs::write(format!("{bin}.pre"), init_for(Shell::Pwsh, When::Pre, w)).unwrap()
+            std::fs::write(format!("{bin}.pre"), init_for(Shell::Pwsh, IntegrationPhase::Pre, w)).unwrap()
         };
         set_wrapper(&bin);
         let d = dir.display().to_string();
@@ -2570,7 +2544,7 @@ mod tests {
             &f,
             init_for(
                 Shell::Zsh,
-                When::Post,
+                IntegrationPhase::Post,
                 &fake_bin(&dir.join("bin")).display().to_string(),
             ),
         )
@@ -2624,7 +2598,7 @@ mod tests {
             &f,
             init_for(
                 Shell::Zsh,
-                When::Post,
+                IntegrationPhase::Post,
                 &fake_bin(&dir.join("bin")).display().to_string(),
             ),
         )
@@ -2685,7 +2659,7 @@ mod tests {
             if let Some(s) = run_post(
                 "zsh",
                 &["-f", "-c"],
-                &snapshot(Shell::Zsh, When::Post),
+                &snapshot(Shell::Zsh, IntegrationPhase::Post),
                 &zsh,
                 &dir,
             ) {
@@ -2700,7 +2674,7 @@ mod tests {
             if let Some(s) = run_post(
                 "bash",
                 &["--norc", "--noprofile", "-c"],
-                &snapshot(Shell::Bash, When::Post),
+                &snapshot(Shell::Bash, IntegrationPhase::Post),
                 &bash,
                 &dir,
             ) {
@@ -2742,7 +2716,7 @@ mod tests {
         let pre = dir.join("pre.sh");
         std::fs::write(
             &pre,
-            init_for(Shell::Bash, When::Pre, &fake.display().to_string()),
+            init_for(Shell::Bash, IntegrationPhase::Pre, &fake.display().to_string()),
         )
         .unwrap();
         let cases = [
@@ -2799,7 +2773,7 @@ mod tests {
             &f,
             init_for(
                 Shell::Zsh,
-                When::Post,
+                IntegrationPhase::Post,
                 &fake_bin(&dir.join("bin")).display().to_string(),
             ),
         )
@@ -2840,7 +2814,7 @@ mod tests {
         let dir = temp_dir.path().to_path_buf();
         let bin = fake_bin(&dir.join("bin")).display().to_string();
         let f = dir.join("post.bash");
-        std::fs::write(&f, init_for(Shell::Bash, When::Post, &bin)).unwrap();
+        std::fs::write(&f, init_for(Shell::Bash, IntegrationPhase::Post, &bin)).unwrap();
         let rc = dir.join("bashrc");
         std::fs::write(
             &rc,
@@ -2892,7 +2866,7 @@ mod tests {
         let dir = temp_dir.path().to_path_buf();
         let bin = fake_bin(&dir.join("bin")).display().to_string();
         let f = dir.join("post.bash");
-        std::fs::write(&f, init_for(Shell::Bash, When::Post, &bin)).unwrap();
+        std::fs::write(&f, init_for(Shell::Bash, IntegrationPhase::Post, &bin)).unwrap();
         let rc = dir.join("bashrc");
         let user = r#"_show_ps() { _ps="${PIPESTATUS[*]}"; }; PROMPT_COMMAND=_show_ps; PS1='[ps=$_ps] $ '"#;
         std::fs::write(&rc, format!("HISTFILE=/dev/null; {user}; source \"$F\"\n")).unwrap();
@@ -2969,7 +2943,7 @@ mod tests {
             std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o444)).unwrap();
             assert!(matches!(
                 rc.uninstall(&c),
-                Err(IntegrationError::PermissionDenied(_))
+                Err(ShellIntegrationError::PermissionDenied(_))
             ));
             assert!(std::fs::read_to_string(&real).unwrap().contains(PRE_MARKER));
         }
@@ -3100,36 +3074,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// The text of each failure, with no source: doctor prints a failed fix with `{e:#}`, which would repeat a
-    /// source after the text.
-    #[test]
-    fn should_describe_each_integration_failure() {
-        let path = Path::new("/home/u/.bashrc");
-        let failures = [
-            IntegrationError::NotInstalled("/home/u/.bashrc does not source pre integration".into()),
-            IntegrationError::Improper("/home/u/.bashrc does not source pre integration first".into()),
-            IntegrationError::FileDoesNotExist(path.into()),
-            IntegrationError::PermissionDenied(path.into()),
-            IntegrationError::Io(path.into(), std::io::Error::other("disk full")),
-        ];
-
-        let described: Vec<(String, Option<String>)> = failures
-            .iter()
-            .map(|e| (e.to_string(), std::error::Error::source(e).map(ToString::to_string)))
-            .collect();
-
-        assert_eq!(
-            described,
-            [
-                ("Integration not installed: /home/u/.bashrc does not source pre integration".to_string(), None),
-                ("Improper integration installation: /home/u/.bashrc does not source pre integration first".to_string(), None),
-                ("File does not exist: /home/u/.bashrc".to_string(), None),
-                ("Permission denied: /home/u/.bashrc".to_string(), None),
-                ("/home/u/.bashrc: disk full".to_string(), None),
-            ]
-        );
-    }
-
     /// pwsh is not installed here, so no script test runs its files locally: their bytes are pinned instead.
     #[test]
     fn should_write_the_pwsh_script_files_byte_for_byte() {
@@ -3137,7 +3081,7 @@ mod tests {
         let c = ctx(temp_dir.path());
         let pwsh = integrations(&c, Shell::Pwsh).unwrap().remove(0);
 
-        let files: Vec<(PathBuf, String)> = [When::Pre, When::Post]
+        let files: Vec<(PathBuf, String)> = [IntegrationPhase::Pre, IntegrationPhase::Post]
             .into_iter()
             .map(|when| (pwsh.script_path(&c, when), pwsh.script_contents(&c, when)))
             .collect();

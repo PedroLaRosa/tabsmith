@@ -1,5 +1,5 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
-use crate::integrations::{self, Ctx, Integration, IntegrationError, When};
+use crate::integrations::{self, Ctx, Integration};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE, INLINE_ENABLED, INLINE_SOURCE,
 };
@@ -13,6 +13,8 @@ use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info;
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
+use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::types::now_secs;
 use clap::Args;
 use std::io::IsTerminal;
@@ -306,10 +308,10 @@ fn dotfile_check(ctx: &Ctx, i: Integration, kind: Kind) -> Check<'_> {
             "Run {cmd} to reinstall shell integrations for {shell}"
         )];
         let reason = match &e {
-            IntegrationError::NotInstalled(m) | IntegrationError::Improper(m) => m.clone(),
+            ShellIntegrationError::NotInstalled(m) | ShellIntegrationError::Improper(m) => m.clone(),
             e => e.to_string(),
         };
-        if matches!(e, IntegrationError::PermissionDenied(_)) {
+        if matches!(e, ShellIntegrationError::PermissionDenied(_)) {
             return Outcome::Err {
                 reason,
                 info,
@@ -345,7 +347,7 @@ fn script_bins(ctx: &Ctx) -> Vec<(Shell, String)> {
             match i.file_when {
                 Some(_) => files.push((shell, i.path)),
                 None => {
-                    files.extend([When::Pre, When::Post].map(|w| (shell, i.script_path(ctx, w))))
+                    files.extend([IntegrationPhase::Pre, IntegrationPhase::Post].map(|w| (shell, i.script_path(ctx, w))))
                 }
             }
         }

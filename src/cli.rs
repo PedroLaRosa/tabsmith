@@ -1,7 +1,6 @@
 //! Small user-facing commands: theme, inline, diagnostic, debug (SPEC §2.4–2.5, §2.10).
 //! OWNER: cli agent.
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
-use crate::integrations::When;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::services::settings_catalog::{
@@ -15,6 +14,7 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{bold, sgr, stdout_tty};
+use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use serde::Deserialize;
@@ -567,7 +567,7 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
     let exe = env_shell
         .filter(|s| Shell::from_name(s) == Some(shell))
         .unwrap_or_else(|| shell.name().to_string());
-    let post = crate::integrations::init_script(shell, When::Post)? + "\n";
+    let post = crate::integrations::init_script(shell, IntegrationPhase::Post)? + "\n";
     let (dir, cmd) = debug_shell_files(&data_directory_from_env().root()?, shell, &exe, &post)?;
     if shell == Shell::Zsh {
         std::env::set_var("ZDOTDIR", &dir);
