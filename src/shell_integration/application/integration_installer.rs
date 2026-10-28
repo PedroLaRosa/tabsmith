@@ -100,6 +100,29 @@ impl IntegrationInstaller {
         }
         Ok(())
     }
+
+    /// SPEC §5.5 uninstall: drop our exact lines, then delete the script files (missing is fine).
+    pub(crate) fn uninstall(
+        &self,
+        paths: &IntegrationPaths,
+        integration: &Integration,
+    ) -> Result<(), ShellIntegrationError> {
+        if integration.whole_file_phase().is_some() {
+            return self.dotfiles.remove(integration.path());
+        }
+        if self.dotfiles.exists(integration.path()) {
+            let dotfile = Dotfile::new(self.dotfiles.read(integration.path())?);
+            let kept = dotfile.without_blocks(
+                &integration.source_line(paths, IntegrationPhase::Pre),
+                &integration.source_line(paths, IntegrationPhase::Post),
+            );
+            if kept.text() != dotfile.text() {
+                self.dotfiles.write(integration.path(), kept.text())?;
+            }
+        }
+        self.dotfiles.remove(integration.script(paths, IntegrationPhase::Pre).path())?;
+        self.dotfiles.remove(integration.script(paths, IntegrationPhase::Post).path())
+    }
 }
 
 #[cfg(test)]
@@ -409,5 +432,16 @@ mod tests {
                 PathBuf::from("/home/u/.tabsmith/shell/zshrc.post.zsh"),
             ]
         );
+    }
+
+    #[test]
+    fn should_remove_the_file_of_a_whole_file_integration_on_uninstall() {
+        let bed = test_bed();
+        let fish_pre = fish_pre();
+        bed.dotfiles.write(fish_pre.path(), "anything\n").unwrap();
+
+        bed.installer.uninstall(&paths(), &fish_pre).unwrap();
+
+        assert!(!bed.dotfiles.exists(fish_pre.path()));
     }
 }
