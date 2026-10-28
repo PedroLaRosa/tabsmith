@@ -39,3 +39,25 @@ fn load_history_repository(data_directory: &DataDirectory) -> Rc<dyn HistoryRepo
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntryPrimitives};
+
+    fn entry(command: &str) -> HistoryEntry {
+        HistoryEntry::new(HistoryEntryPrimitives {
+            command: command.into(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn should_read_back_the_command_it_records() {
+        let module = HistoryModule::new(Rc::new(InMemoryHistoryRepository::new(Vec::new())));
+
+        module.record_command.execute(entry("git status"));
+
+        assert_eq!(*module.history.recent(), [entry("git status")]);
+    }
+}
