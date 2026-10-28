@@ -41,4 +41,13 @@ mod tests {
 
         assert!(repository.is_pending());
     }
+
+    #[test]
+    fn should_have_no_reminder_pending_until_asked() {
+        let repository = InMemoryRestartReminderRepository::default();
+
+        let pending = repository.is_pending();
+
+        assert!(!pending);
+    }
 }
