@@ -50,10 +50,7 @@ impl Dotfile {
         let (bom, body) = split_bom(&self.text);
         let kept: String = body
             .split_inclusive('\n')
-            .filter(|l| {
-                let line = l.trim_end();
-                !([PRE_MARKER, POST_MARKER].contains(&line) || [pre_source, post_source].contains(&line))
-            })
+            .filter(|l| !is_own_line(l, pre_source, post_source))
             .collect();
         Dotfile::new(format!("{bom}{}\n", kept.trim()))
     }
@@ -61,11 +58,16 @@ impl Dotfile {
     /// A marker or source line (compared without trailing whitespace) on any line of the text as it is: a BOM
     /// before the first line is not stripped.
     pub(crate) fn has_own_line(&self, pre_source: &str, post_source: &str) -> bool {
-        self.text.lines().any(|l| {
-            let line = l.trim_end();
-            [PRE_MARKER, POST_MARKER].contains(&line) || [pre_source, post_source].contains(&line)
-        })
+        self.text
+            .lines()
+            .any(|l| is_own_line(l, pre_source, post_source))
     }
+}
+
+/// Is `line` one of the four lines install writes? Trailing whitespace is tolerated, leading whitespace is not.
+fn is_own_line(line: &str, pre_source: &str, post_source: &str) -> bool {
+    let line = line.trim_end();
+    [PRE_MARKER, POST_MARKER].contains(&line) || [pre_source, post_source].contains(&line)
 }
 
 /// `# tabsmith ignore` (case-insensitive): the user opted this file out.
