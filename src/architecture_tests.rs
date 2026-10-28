@@ -93,8 +93,8 @@ const MISPLACED_FILE: &str =
 
 /// The files of `module` that the layer rules, which read the layer from the folder name, would never check. The
 /// plan's layout keeps a module in `src/<module>/`, with only `mod.rs` outside a layer folder.
-// ponytail: that `mod.rs` gets rules 3-4 only, since it is meant to hold just the layer declarations; flag any other
-// line in it if code ever lands there.
+// ponytail: that `mod.rs` gets rules 3-4 and 6 only, since it is meant to hold just the layer declarations; rule 6
+// flags a `use` in any mod.rs, so flag other items (a fn, a struct) there too if code ever lands in one.
 fn misplaced_files(src: &Path, module: &str) -> Vec<String> {
     let root_file = src.join(format!("{module}.rs"));
     let module_files = rust_files(&src.join(module));
@@ -140,7 +140,7 @@ fn relative_path(src: &Path, file: &Path) -> String {
 }
 
 /// The rules `source` breaks, line by line; `path` is relative to `src` and `/`-separated (`<module>/<layer>/..`).
-/// Test-only code keeps the shared kernel rule only.
+/// Test-only code keeps the shared kernel and mod.rs rules only.
 fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Violation> {
     let mut components = path.split('/');
     let module = components.next().unwrap_or_default();
