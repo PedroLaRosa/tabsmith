@@ -20,6 +20,11 @@ impl LaunchFacts {
     pub(crate) fn has(&self, name: &str) -> bool {
         self.env.contains_key(name)
     }
+
+    /// Set to exactly `value` (case-sensitive).
+    pub(crate) fn is(&self, name: &str, value: &str) -> bool {
+        self.env.get(name).is_some_and(|x| x == value)
+    }
 }
 
 #[cfg(test)]
@@ -43,5 +48,19 @@ mod tests {
         let set = [facts.has("CI"), facts.has("TMUX")];
 
         assert_eq!(set, [true, false]);
+    }
+    /// Warp is told apart by its exact `TERM_PROGRAM`, case included.
+    #[test]
+    fn should_match_a_variable_only_on_its_exact_value() {
+        let facts = facts(&[("TERM_PROGRAM", "WarpTerminal")], true);
+
+        let matches = [
+            facts.is("TERM_PROGRAM", "WarpTerminal"),
+            facts.is("TERM_PROGRAM", "warpterminal"),
+            facts.is("TERM_PROGRAM", "Warp"),
+            facts.is("__CFBundleIdentifier", "WarpTerminal"),
+        ];
+
+        assert_eq!(matches, [true, false, false, false]);
     }
 }
