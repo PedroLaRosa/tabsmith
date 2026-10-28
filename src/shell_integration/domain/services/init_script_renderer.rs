@@ -49,6 +49,27 @@ pub(crate) fn render_snapshot(shell: Shell, phase: IntegrationPhase, template: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    /// The facts `render` asked for, in order (each one is I/O for `init`).
+    fn facts_asked_while_rendering(shell: Shell, phase: IntegrationPhase) -> Vec<&'static str> {
+        let asked = RefCell::new(Vec::new());
+        render(
+            shell,
+            phase,
+            "body\n",
+            "tabsmith",
+            || {
+                asked.borrow_mut().push("parent shell");
+                Some("/bin/zsh".to_string())
+            },
+            || {
+                asked.borrow_mut().push("launch decision");
+                true
+            },
+        );
+        asked.into_inner()
+    }
 
     #[test]
     fn should_render_the_post_template_without_its_trailing_newlines_and_add_none() {
@@ -180,5 +201,55 @@ mod tests {
             script.text(),
             "TABSMITH_SHELL='/bin/zsh'\nSHOULD_TABSMITH_LAUNCH=0\nbody 'tabsmith'"
         );
+    }
+
+    #[test]
+    fn should_ask_neither_the_parent_shell_nor_the_launch_decision_for_a_post_script() {
+        let shells = [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::Pwsh];
+
+        let asked = shells.map(|shell| facts_asked_while_rendering(shell, IntegrationPhase::Post));
+
+        assert_eq!(asked, [vec![], vec![], vec![], vec![]] as [Vec<&str>; 4]);
+    }
+
+    #[test]
+    fn should_ask_only_the_launch_decision_for_the_fish_and_pwsh_pre_scripts() {
+        let shells = [Shell::Fish, Shell::Pwsh];
+
+        let asked = shells.map(|shell| facts_asked_while_rendering(shell, IntegrationPhase::Pre));
+
+        assert_eq!(asked, [vec!["launch decision"], vec!["launch decision"]]);
+    }
+
+    #[test]
+    fn should_ask_the_parent_shell_before_the_launch_decision_for_the_bash_and_zsh_pre_scripts() {
+        let shells = [Shell::Bash, Shell::Zsh];
+
+        let asked = shells.map(|shell| facts_asked_while_rendering(shell, IntegrationPhase::Pre));
+
+        assert_eq!(
+            asked,
+            [
+                vec!["parent shell", "launch decision"],
+                vec!["parent shell", "launch decision"],
+            ]
+        );
+    }
+
+    /// `trim_end_matches('\n')`: a CR before the last LF and the blank lines inside stay.
+    #[test]
+    fn should_trim_only_the_line_feeds_at_the_end_of_the_template() {
+        let template = "\nfirst\n\nlast\r\n\n";
+
+        let script = render(
+            Shell::Zsh,
+            IntegrationPhase::Post,
+            template,
+            "tabsmith",
+            || None,
+            || true,
+        );
+
+        assert_eq!(script.text(), "\nfirst\n\nlast\r");
     }
 }
