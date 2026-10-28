@@ -14,9 +14,17 @@ impl IntegrationScript {
         IntegrationScript { path, contents }
     }
 
-    /// `actual` is what the file holds.
-    pub(crate) fn check(&self, _actual: &str) -> Result<(), ShellIntegrationError> {
-        Ok(())
+    /// The file must hold exactly the contents; `actual` is what it holds.
+    pub(crate) fn check(&self, actual: &str) -> Result<(), ShellIntegrationError> {
+        if actual == self.contents {
+            Ok(())
+        } else {
+            Err(ShellIntegrationError::Improper(format!(
+                "{} should contain:\n{}",
+                self.path.display(),
+                self.contents
+            )))
+        }
     }
 }
 
@@ -40,5 +48,20 @@ mod tests {
         );
 
         assert!(checked.is_ok(), "{checked:?}");
+    }
+
+    /// A moved binary: the file still runs the old one.
+    #[test]
+    fn should_be_improper_when_the_file_holds_anything_else_and_say_what_it_should_contain() {
+        let script = bashrc_pre_script();
+
+        let checked = script.check(
+            "[ -n \"$BASH_VERSION\" ] && [ -x /elsewhere/tabsmith ] && eval \"$(/elsewhere/tabsmith init bash pre --rcfile bashrc)\"\n",
+        );
+
+        assert_eq!(
+            checked.unwrap_err().to_string(),
+            "Improper integration installation: /home/u/.tabsmith/shell/bashrc.pre.bash should contain:\n[ -n \"$BASH_VERSION\" ] && [ -x /usr/local/bin/tabsmith ] && eval \"$(/usr/local/bin/tabsmith init bash pre --rcfile bashrc)\"\n"
+        );
     }
 }
