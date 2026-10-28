@@ -3,9 +3,7 @@
 //! OWNER: integrations agent. Shell scripts live in `shell/` and are embedded with `include_str!`.
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::atomic_file::AtomicFile;
-use crate::shared::infrastructure::atomic_file_error::AtomicFileError;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
-use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::os::executable_lookup::which;
 #[cfg(windows)]
@@ -15,6 +13,9 @@ use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::domain::entities::integration::Integration;
+use crate::shell_integration::domain::repositories::backup_repository::BackupRepository;
+use crate::shell_integration::domain::repositories::dotfile_repository::DotfileRepository;
+use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
 use crate::shell_integration::domain::services::init_script_renderer;
 use crate::shell_integration::domain::services::integration_catalog;
 use crate::shell_integration::domain::services::launch_policy;
@@ -25,6 +26,9 @@ use crate::shell_integration::domain::value_objects::integration_paths::Integrat
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
 use crate::shell_integration::domain::value_objects::launch_facts::LaunchFacts;
+use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
+use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
+use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
 use crate::types::{now_ms, now_secs, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -151,12 +155,7 @@ pub struct UninstallArgs {
 
 /// Mark that existing terminals need a restart (state `doctor.prompt-restart-terminal`, printed by doctor).
 pub fn mark_restart() {
-    let state_file = data_directory_from_env().state_file();
-    if let Some(mut s) = state_file.ok().and_then(|path| JsonDocumentStore::load(&path).ok()) {
-        s.map
-            .insert("doctor.prompt-restart-terminal".into(), true.into());
-        let _ = s.save();
-    }
+    StateRestartReminderRepository::new(data_directory_from_env()).save_pending();
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -323,46 +322,12 @@ pub(crate) fn integration_paths_from_env() -> anyhow::Result<IntegrationPaths> {
     ))
 }
 
-fn io_err(path: &Path, e: std::io::Error) -> ShellIntegrationError {
-    match e.kind() {
-        std::io::ErrorKind::NotFound => ShellIntegrationError::FileDoesNotExist(path.into()),
-        std::io::ErrorKind::PermissionDenied => ShellIntegrationError::PermissionDenied(path.into()),
-        _ => ShellIntegrationError::Io(path.into(), e),
-    }
-}
-
-fn read(path: &Path) -> Result<String, ShellIntegrationError> {
-    std::fs::read_to_string(path).map_err(|e| io_err(path, e))
-}
-
-/// See [`AtomicFile::write_keeping_permissions`]; its failures keep their ShellIntegrationError (the parent directory or
-/// the dotfile path, as before).
-fn write(path: &Path, contents: &str) -> Result<(), ShellIntegrationError> {
-    AtomicFile::new(path)
-        .write_keeping_permissions(contents.as_bytes())
-        .map_err(|e| match e {
-            AtomicFileError::Io { path: failed, source } | AtomicFileError::Rename { path: failed, source } => {
-                io_err(&failed, source)
-            }
-            // Not produced by this write (it never needs a parent); mapped to stay exhaustive.
-            no_parent @ AtomicFileError::NoParentDirectory => io_err(path, std::io::Error::other(no_parent)),
-        })
-}
-
-/// Delete a file; missing is fine.
-fn remove(path: &Path) -> Result<(), ShellIntegrationError> {
-    match std::fs::remove_file(path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(io_err(path, e)),
-        _ => Ok(()),
-    }
-}
-
 /// Integrations of `shell` (SPEC §5.5 table), asking `pwsh` for `$PROFILE` when the paths do not know it.
 pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>, ShellIntegrationError> {
     integration_catalog::integrations(
         ctx,
         shell,
-        |p| p.exists(),
+        |p| FileDotfileRepository.exists(p),
         || pwsh_profile().map_err(|e| ShellIntegrationError::Environment(format!("{e:#}"))),
     )
 }
@@ -390,7 +355,7 @@ impl Integration {
     pub(crate) fn write_scripts(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         for when in [IntegrationPhase::Pre, IntegrationPhase::Post] {
             let script = self.script(ctx, when);
-            write(script.path(), script.contents())?;
+            FileDotfileRepository.write(script.path(), script.contents())?;
         }
         Ok(())
     }
@@ -398,9 +363,9 @@ impl Integration {
     /// SPEC §5.5 `is_installed()`: the first failing reason.
     pub(crate) fn is_installed(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         if let Some(script) = self.whole_file_script(ctx) {
-            return script.check(&read(script.path())?);
+            return script.check(&FileDotfileRepository.read(script.path())?);
         }
-        let dotfile = Dotfile::new(read(self.path())?);
+        let dotfile = Dotfile::new(FileDotfileRepository.read(self.path())?);
         if dotfile.is_opted_out() {
             return Ok(());
         }
@@ -423,7 +388,7 @@ impl Integration {
                 });
             }
             let script = self.script(ctx, when);
-            script.check(&read(script.path())?)?;
+            script.check(&FileDotfileRepository.read(script.path())?)?;
         }
         Ok(())
     }
@@ -434,15 +399,13 @@ impl Integration {
             return Ok(());
         }
         if let Some(script) = self.whole_file_script(ctx) {
-            return write(script.path(), script.contents());
+            return FileDotfileRepository.write(script.path(), script.contents());
         }
-        let contents = if self.path().exists() {
+        let contents = if FileDotfileRepository.exists(self.path()) {
             let dir = ctx.data_root().join("backups").join(now_secs().to_string());
-            std::fs::create_dir_all(&dir).map_err(|e| io_err(&dir, e))?;
-            std::fs::copy(self.path(), dir.join(self.file_name()))
-                .map_err(|e| io_err(self.path(), e))?;
+            FileBackupRepository.back_up(self, &dir)?;
             self.uninstall(ctx)?;
-            read(self.path())?
+            FileDotfileRepository.read(self.path())?
         } else {
             String::new()
         };
@@ -453,7 +416,7 @@ impl Integration {
             &self.source_line(ctx, IntegrationPhase::Post),
         );
         if new.text() != dotfile.text() {
-            write(self.path(), new.text())?;
+            FileDotfileRepository.write(self.path(), new.text())?;
         }
         Ok(())
     }
@@ -462,12 +425,12 @@ impl Integration {
     /// script, lines appended after the post block).
     pub(crate) fn has_traces(&self, ctx: &IntegrationPaths) -> bool {
         if self.whole_file_phase().is_some() {
-            return self.path().exists();
+            return FileDotfileRepository.exists(self.path());
         }
         [IntegrationPhase::Pre, IntegrationPhase::Post]
             .into_iter()
-            .any(|w| self.script(ctx, w).path().exists())
-            || read(self.path()).is_ok_and(|t| {
+            .any(|w| FileDotfileRepository.exists(self.script(ctx, w).path()))
+            || FileDotfileRepository.read(self.path()).is_ok_and(|t| {
                 Dotfile::new(t).has_own_line(
                     &self.source_line(ctx, IntegrationPhase::Pre),
                     &self.source_line(ctx, IntegrationPhase::Post),
@@ -478,20 +441,20 @@ impl Integration {
     /// SPEC §5.5 uninstall: drop our exact lines, then delete the script files (missing is fine).
     pub(crate) fn uninstall(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         if self.whole_file_phase().is_some() {
-            return remove(self.path());
+            return FileDotfileRepository.remove(self.path());
         }
-        if self.path().exists() {
-            let dotfile = Dotfile::new(read(self.path())?);
+        if FileDotfileRepository.exists(self.path()) {
+            let dotfile = Dotfile::new(FileDotfileRepository.read(self.path())?);
             let kept = dotfile.without_blocks(
                 &self.source_line(ctx, IntegrationPhase::Pre),
                 &self.source_line(ctx, IntegrationPhase::Post),
             );
             if kept.text() != dotfile.text() {
-                write(self.path(), kept.text())?;
+                FileDotfileRepository.write(self.path(), kept.text())?;
             }
         }
-        remove(self.script(ctx, IntegrationPhase::Pre).path())?;
-        remove(self.script(ctx, IntegrationPhase::Post).path())
+        FileDotfileRepository.remove(self.script(ctx, IntegrationPhase::Pre).path())?;
+        FileDotfileRepository.remove(self.script(ctx, IntegrationPhase::Post).path())
     }
 
     /// The exact bytes of the `~/.tabsmith/shell` script file of `phase`.
