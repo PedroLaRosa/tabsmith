@@ -34,6 +34,7 @@ fn display_chain(error: &(dyn Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::domain::shared_error::SharedError;
     use crate::shared::infrastructure::os::executable_path_error::ExecutablePathError;
     use std::io;
 
@@ -68,6 +69,63 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "could not locate the tabsmith executable: entity not found"
+        );
+    }
+
+    /// `output_with_timeout`'s own error (`process_runner.rs` pins the same text).
+    #[test]
+    fn should_report_a_pwsh_still_running_at_the_timeout_under_the_pwsh_context() {
+        let timed_out = io::Error::new(io::ErrorKind::TimedOut, "timed out after 0s");
+
+        let error = profile_from(Err(timed_out)).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "could not ask pwsh for $PROFILE: timed out after 0s"
+        );
+    }
+
+    #[test]
+    fn should_render_every_cause_under_the_pwsh_context_as_anyhow_does() {
+        let nested = || {
+            io::Error::other(ExecutablePathError::from(io::Error::from(
+                io::ErrorKind::NotFound,
+            )))
+        };
+
+        let error = profile_from(Err(nested())).unwrap_err();
+
+        let anyhow_text = format!(
+            "{:#}",
+            anyhow::Error::from(nested()).context("could not ask pwsh for $PROFILE")
+        );
+        assert_eq!(error.to_string(), anyhow_text);
+    }
+
+    #[test]
+    fn should_give_the_profile_pwsh_printed_without_its_line_ending() {
+        let printed = Ok("/home/u/.config/powershell/Microsoft.PowerShell_profile.ps1\r\n".to_string());
+
+        let profile = profile_from(printed).unwrap();
+
+        assert_eq!(
+            profile,
+            PathBuf::from("/home/u/.config/powershell/Microsoft.PowerShell_profile.ps1")
+        );
+    }
+
+    #[test]
+    fn should_report_an_unknown_home_by_the_shared_error_text_alone() {
+        let unknown = [SharedError::UserHomeNotFound, SharedError::HomeDirectoryNotFound];
+
+        let messages = unknown.map(|e| environment_error(e).to_string());
+
+        assert_eq!(
+            messages,
+            [
+                "could not determine the home directory",
+                "could not determine the home directory (set HOME or TABSMITH_HOME)",
+            ]
         );
     }
 }
