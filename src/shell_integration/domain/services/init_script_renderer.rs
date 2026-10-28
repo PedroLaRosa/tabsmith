@@ -17,8 +17,9 @@ pub(crate) fn render(
     if phase == IntegrationPhase::Pre {
         match shell {
             Shell::Bash | Shell::Zsh => {
-                let p = parent_shell().unwrap();
-                lines.push(format!("TABSMITH_SHELL={}", quote(shell, &p)));
+                if let Some(p) = parent_shell() {
+                    lines.push(format!("TABSMITH_SHELL={}", quote(shell, &p)));
+                }
                 lines.push(format!("SHOULD_TABSMITH_LAUNCH={}", launch()));
             }
             Shell::Fish => lines.push(format!("set -g SHOULD_TABSMITH_LAUNCH {}", launch())),
@@ -138,5 +139,21 @@ mod tests {
             script.text(),
             "TABSMITH_SHELL='/opt/it'\\''s/bash'\nSHOULD_TABSMITH_LAUNCH=0\nbody"
         );
+    }
+
+    #[test]
+    fn should_leave_the_parent_shell_out_of_the_zsh_pre_script_when_it_is_unknown() {
+        let template = "body\n";
+
+        let script = render(
+            Shell::Zsh,
+            IntegrationPhase::Pre,
+            template,
+            "tabsmith",
+            || None,
+            || false,
+        );
+
+        assert_eq!(script.text(), "SHOULD_TABSMITH_LAUNCH=1\nbody");
     }
 }
