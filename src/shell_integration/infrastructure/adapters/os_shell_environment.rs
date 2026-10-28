@@ -1,5 +1,6 @@
 use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
+use crate::shared::infrastructure::error_chain::display_chain;
 #[cfg(windows)]
 use crate::shared::infrastructure::os::process_info::is_console;
 use crate::shared::infrastructure::os::process_info::{exe_path, parent_exe};
@@ -104,14 +105,6 @@ fn profile_from(output: std::io::Result<String>) -> Result<PathBuf, ShellIntegra
 /// A fact of the environment that could not be found out, with its causes rendered once (P3).
 fn environment_error(error: impl Error + 'static) -> ShellIntegrationError {
     ShellIntegrationError::Environment(display_chain(&error))
-}
-
-/// `error` as anyhow's `{:#}` prints it: its Display, then `: ` and the Display of each `source()` in turn.
-fn display_chain(error: &(dyn Error + 'static)) -> String {
-    std::iter::successors(Some(error), |&e| e.source())
-        .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .join(": ")
 }
 
 #[cfg(test)]

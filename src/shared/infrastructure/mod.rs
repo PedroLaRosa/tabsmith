@@ -1,6 +1,7 @@
 pub(crate) mod atomic_file;
 pub(crate) mod atomic_file_error;
 pub(crate) mod data_directory_from_env;
+pub(crate) mod error_chain;
 pub(crate) mod json_document_store;
 pub(crate) mod json_document_store_error;
 pub(crate) mod logger;
