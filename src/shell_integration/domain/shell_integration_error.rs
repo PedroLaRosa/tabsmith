@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-/// `is_installed()` / `install()` failure (SPEC §5.5 display strings).
+/// `is_installed()` / `install()` failure (SPEC §5.5 display strings), or a fact of the environment an integration
+/// command needs that could not be found out.
 #[derive(Debug)]
 pub(crate) enum ShellIntegrationError {
     NotInstalled(String),
@@ -8,6 +9,8 @@ pub(crate) enum ShellIntegrationError {
     FileDoesNotExist(PathBuf),
     PermissionDenied(PathBuf),
     Io(PathBuf, std::io::Error),
+    /// The home, the tabsmith binary or pwsh's `$PROFILE` is unknown; the message already holds its causes.
+    Environment(String),
 }
 
 impl std::fmt::Display for ShellIntegrationError {
@@ -22,6 +25,7 @@ impl std::fmt::Display for ShellIntegrationError {
                 write!(f, "Permission denied: {}", p.display())
             }
             ShellIntegrationError::Io(p, e) => write!(f, "{}: {e}", p.display()),
+            ShellIntegrationError::Environment(m) => f.write_str(m),
         }
     }
 }
@@ -60,6 +64,24 @@ mod tests {
                 ("Permission denied: /home/u/.bashrc".to_string(), None),
                 ("/home/u/.bashrc: disk full".to_string(), None),
             ]
+        );
+    }
+
+    /// Home, binary or pwsh `$PROFILE` unknown: the message already holds its causes, so `{}` and `{:#}` print it
+    /// whole and nothing follows it as a source.
+    #[test]
+    fn should_describe_an_environment_failure_by_its_message_alone() {
+        let failure = ShellIntegrationError::Environment("could not ask pwsh for $PROFILE: timed out after 5s".into());
+
+        let described = (failure.to_string(), format!("{failure:#}"), std::error::Error::source(&failure).is_none());
+
+        assert_eq!(
+            described,
+            (
+                "could not ask pwsh for $PROFILE: timed out after 5s".to_string(),
+                "could not ask pwsh for $PROFILE: timed out after 5s".to_string(),
+                true
+            )
         );
     }
 }
