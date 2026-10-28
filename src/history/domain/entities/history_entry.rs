@@ -1,6 +1,6 @@
 /// One executed command (SPEC §3.5). The glossary's identity is (session id, start time), but equality stays
 /// structural: entries of one session started within the same second share an identity.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HistoryEntry {
     command: String,
     shell: String,

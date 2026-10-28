@@ -26,11 +26,11 @@ impl HistoryModule {
 
 /// Loads the history file only when the module is built (the engine thread), so an unknown home never fails earlier.
 pub(crate) fn build_history_module(dependencies: &SharedDependencies) -> HistoryModule {
-    HistoryModule::new(history_repository(&dependencies.data_directory))
+    HistoryModule::new(load_history_repository(&dependencies.data_directory))
 }
 
 /// The history file under the data directory, or a memory-only history when there is no data directory.
-fn history_repository(data_directory: &DataDirectory) -> Rc<dyn HistoryRepository> {
+fn load_history_repository(data_directory: &DataDirectory) -> Rc<dyn HistoryRepository> {
     match data_directory.history_file() {
         Ok(path) => Rc::new(JsonlHistoryRepository::load(path)),
         Err(e) => {
