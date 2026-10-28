@@ -8,10 +8,17 @@ pub(crate) enum IntegrationTarget {
 }
 
 impl IntegrationTarget {
-    pub(crate) fn shells(&self, _pwsh_on_path: impl FnOnce() -> bool) -> Vec<Shell> {
+    /// The shell named, else `[bash, zsh, fish]`, plus pwsh when it is on PATH (SPEC §2.6).
+    pub(crate) fn shells(&self, pwsh_on_path: impl FnOnce() -> bool) -> Vec<Shell> {
         match self {
             IntegrationTarget::Dotfiles(Some(s)) => vec![*s],
-            IntegrationTarget::Dotfiles(None) | IntegrationTarget::All => vec![Shell::Bash, Shell::Zsh, Shell::Fish],
+            IntegrationTarget::Dotfiles(None) | IntegrationTarget::All => {
+                let mut v = vec![Shell::Bash, Shell::Zsh, Shell::Fish];
+                if pwsh_on_path() {
+                    v.push(Shell::Pwsh);
+                }
+                v
+            }
         }
     }
 }
@@ -41,5 +48,14 @@ mod tests {
         let shells = target.shells(|| false);
 
         assert_eq!(shells, [Shell::Bash, Shell::Zsh, Shell::Fish]);
+    }
+
+    #[test]
+    fn should_add_pwsh_for_every_dotfile_when_it_is_on_path() {
+        let target = IntegrationTarget::Dotfiles(None);
+
+        let shells = target.shells(|| true);
+
+        assert_eq!(shells, [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::Pwsh]);
     }
 }
