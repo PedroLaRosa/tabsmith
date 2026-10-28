@@ -15,7 +15,9 @@ use crate::shared::infrastructure::os::process_info::{exe_path, is_root, parent_
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
+use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::shell_integration::domain::value_objects::dotfile::Dotfile;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::types::{now_ms, now_secs, SessionCtx};
@@ -348,9 +350,6 @@ fn prune_run_files(dir: &Path) {
 // ---------------------------------------------------------------------------------------------------------------
 // Dotfile integrations (SPEC §5.5)
 
-pub const PRE_MARKER: &str = "# tabsmith pre block. Keep at the top of this file.";
-pub const POST_MARKER: &str = "# tabsmith post block. Keep at the bottom of this file.";
-
 /// The integration paths of this user and binary: home, then data root, then the executable, then `ZDOTDIR`, then
 /// `XDG_CONFIG_HOME`; pwsh's `$PROFILE` is left to ask `pwsh`.
 pub(crate) fn integration_paths_from_env() -> anyhow::Result<IntegrationPaths> {
@@ -410,61 +409,9 @@ fn remove(path: &Path) -> Result<(), ShellIntegrationError> {
     }
 }
 
-/// The file must hold exactly `expected`.
-fn check_file(path: &Path, expected: &str) -> Result<(), ShellIntegrationError> {
-    if read(path)? == expected {
-        Ok(())
-    } else {
-        Err(ShellIntegrationError::Improper(format!(
-            "{} should contain:\n{expected}",
-            path.display()
-        )))
-    }
-}
-
-/// `# tabsmith ignore` (case-insensitive): the user opted this file out.
-fn is_ignore_line(line: &str) -> bool {
-    line.trim_start().strip_prefix('#').is_some_and(|r| {
-        r.trim_start()
-            .to_ascii_lowercase()
-            .starts_with("tabsmith ignore")
-    })
-}
-
-/// (UTF-8 BOM or "", the text after it): editors save pwsh profiles with a BOM, which must stay the first bytes.
-fn split_bom(s: &str) -> (&str, &str) {
-    s.strip_prefix('\u{feff}')
-        .map_or(("", s), |b| ("\u{feff}", b))
-}
-
-/// First line kept on top iff it starts with `#!`.
-fn split_shebang(s: &str) -> (String, &str) {
-    if !s.starts_with("#!") {
-        return (String::new(), s);
-    }
-    match s.find('\n') {
-        Some(i) => (s[..=i].to_string(), &s[i + 1..]),
-        None => (format!("{s}\n"), ""),
-    }
-}
-
-/// One installable integration of a shell.
-#[derive(Clone, Debug)]
-pub struct Integration {
-    pub shell: Shell,
-    /// The dotfile that gets the pre/post blocks, or the whole fish `conf.d` file.
-    pub path: PathBuf,
-    /// `Some` for a whole-file integration (fish `conf.d`), `None` for a dotfile.
-    pub file_when: Option<IntegrationPhase>,
-}
-
 /// Integrations of `shell` (SPEC §5.5 table).
 pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>> {
-    let dot = |path: PathBuf| Integration {
-        shell,
-        path,
-        file_when: None,
-    };
+    let dot = |path: PathBuf| Integration::dotfile(shell, path);
     Ok(match shell {
         Shell::Bash => {
             let extra: Vec<PathBuf> = [".profile", ".bash_login", ".bash_profile"]
@@ -491,11 +438,7 @@ pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integrat
             (IntegrationPhase::Post, "99_tabsmith_post.fish"),
         ]
         .into_iter()
-        .map(|(w, f)| Integration {
-            shell,
-            path: ctx.fish_config_dir().join("conf.d").join(f),
-            file_when: Some(w),
-        })
+        .map(|(w, f)| Integration::whole_file(shell, ctx.fish_config_dir().join("conf.d").join(f), w))
         .collect(),
         Shell::Pwsh => vec![dot(match ctx.pwsh_profile() {
             Some(p) => p.to_path_buf(),
@@ -523,108 +466,25 @@ fn pwsh_profile() -> Result<PathBuf> {
 }
 
 impl Integration {
-    /// `bash pre post into .bashrc` / `fish pre` (SPEC §2.6).
-    pub fn describe(&self) -> String {
-        match self.file_when {
-            Some(w) => format!("{} {}", self.shell.name(), w.name()),
-            None => format!("{} pre post into {}", self.shell.name(), self.file_name()),
-        }
-    }
-
-    pub fn file_name(&self) -> String {
-        self.path
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    }
-
-    /// `--rcfile` value: `bashrc`, `zprofile`, `00_tabsmith_pre`, `profile` (pwsh).
-    fn rc(&self) -> String {
-        if self.shell == Shell::Pwsh {
-            return "profile".into();
-        }
-        self.file_name()
-            .trim_start_matches('.')
-            .split('.')
-            .next()
-            .unwrap_or_default()
-            .to_string()
-    }
-
-    /// `~/.tabsmith/shell/<rc>.<when>.<ext>` (dotfile integrations).
-    pub fn script_path(&self, ctx: &IntegrationPaths, when: IntegrationPhase) -> PathBuf {
-        let ext = if self.shell == Shell::Pwsh {
-            "ps1"
-        } else {
-            self.shell.name()
-        };
-        ctx.data_root()
-            .join("shell")
-            .join(format!("{}.{}.{ext}", self.rc(), when.name()))
-    }
-
-    /// Exact bytes of a script file / fish `conf.d` file (SPEC §5.5).
-    pub fn script_contents(&self, ctx: &IntegrationPaths, when: IntegrationPhase) -> String {
-        let (b, w, rc) = (quote(self.shell, ctx.binary()), when.name(), self.rc());
-        match self.shell {
-            Shell::Bash => {
-                format!("[ -n \"$BASH_VERSION\" ] && [ -x {b} ] && eval \"$({b} init bash {w} --rcfile {rc})\"\n")
-            }
-            Shell::Zsh => format!("[ -x {b} ] && eval \"$({b} init zsh {w} --rcfile {rc})\"\n"),
-            // `eval (… | string split0)`, not `| source`: `source` hands the pipe to the script as stdin, so the pre
-            // script's `test -t 0` fails and the wrapper never starts.
-            Shell::Fish => format!("test -x {b}; and eval ({b} init fish {w} --rcfile {rc} | string split0)\n"),
-            // pwsh decodes native output with [Console]::OutputEncoding (the OEM code page on Windows): read the
-            // UTF-8 init output as UTF-8, then put the user's encoding back before running it. Without a console
-            // (Windows) both setters throw: ignore that, and run nothing when init printed nothing.
-            Shell::Pwsh => format!(
-                "if (Test-Path -LiteralPath {b}) {{ $__tsEnc = [Console]::OutputEncoding; $__tsInit = $null; try {{ try {{ [Console]::OutputEncoding = [Text.UTF8Encoding]::new() }} catch {{}}; $__tsInit = (& {b} init pwsh {w} --rcfile profile) -join \"`n\" }} finally {{ try {{ [Console]::OutputEncoding = $__tsEnc }} catch {{}} }}; if ($__tsInit) {{ Invoke-Expression $__tsInit }} }}\n"
-            ),
-        }
-    }
-
-    /// The dotfile line that sources a script file; a leading `$HOME` is written as `${HOME}`.
-    fn source_line(&self, ctx: &IntegrationPaths, when: IntegrationPhase) -> String {
-        let p = self.script_path(ctx, when);
-        let p = match p.strip_prefix(ctx.home()) {
-            Ok(rel) => {
-                let parts: Vec<_> = rel.iter().map(|c| c.to_string_lossy()).collect();
-                format!("${{HOME}}/{}", parts.join("/"))
-            }
-            Err(_) => p.display().to_string(),
-        };
-        match self.shell {
-            Shell::Pwsh => format!("if (Test-Path \"{p}\") {{ . \"{p}\" }}"),
-            _ => format!("[ -f \"{p}\" ] && . \"{p}\""),
-        }
-    }
-
     /// Write both `~/.tabsmith/shell/` script files of a dotfile integration.
-    pub fn write_scripts(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
+    pub(crate) fn write_scripts(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         for when in [IntegrationPhase::Pre, IntegrationPhase::Post] {
-            write(
-                &self.script_path(ctx, when),
-                &self.script_contents(ctx, when),
-            )?;
+            let script = self.script(ctx, when);
+            write(script.path(), script.contents())?;
         }
         Ok(())
     }
 
     /// SPEC §5.5 `is_installed()`: the first failing reason.
-    pub fn is_installed(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        if let Some(when) = self.file_when {
-            return check_file(&self.path, &self.script_contents(ctx, when));
+    pub(crate) fn is_installed(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
+        if let Some(script) = self.whole_file_script(ctx) {
+            return script.check(&read(script.path())?);
         }
-        let text = read(&self.path)?;
-        let text = split_bom(&text).1;
-        if text.lines().any(is_ignore_line) {
+        let dotfile = Dotfile::new(read(self.path())?);
+        if dotfile.is_opted_out() {
             return Ok(());
         }
-        let lines: Vec<&str> = text
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .collect();
+        let lines = dotfile.sourced_lines();
         for (when, at, actual) in [
             (IntegrationPhase::Pre, "first", lines.first()),
             (IntegrationPhase::Post, "last", lines.last()),
@@ -633,7 +493,7 @@ impl Integration {
             if actual.copied() != Some(src.as_str()) {
                 let msg = format!(
                     "{} does not source {} integration",
-                    self.path.display(),
+                    self.path().display(),
                     when.name()
                 );
                 return Err(if lines.contains(&src.as_str()) {
@@ -642,90 +502,81 @@ impl Integration {
                     ShellIntegrationError::NotInstalled(msg)
                 });
             }
-            check_file(
-                &self.script_path(ctx, when),
-                &self.script_contents(ctx, when),
-            )?;
+            let script = self.script(ctx, when);
+            script.check(&read(script.path())?)?;
         }
         Ok(())
     }
 
     /// SPEC §5.5 install (idempotent); an existing dotfile is first copied to `<data>/backups/<unix-secs>/`.
-    pub fn install(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
+    pub(crate) fn install(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
         if self.is_installed(ctx).is_ok() {
             return Ok(());
         }
-        if let Some(when) = self.file_when {
-            return write(&self.path, &self.script_contents(ctx, when));
+        if let Some(script) = self.whole_file_script(ctx) {
+            return write(script.path(), script.contents());
         }
-        let contents = if self.path.exists() {
+        let contents = if self.path().exists() {
             let dir = ctx.data_root().join("backups").join(now_secs().to_string());
             std::fs::create_dir_all(&dir).map_err(|e| io_err(&dir, e))?;
-            std::fs::copy(&self.path, dir.join(self.file_name()))
-                .map_err(|e| io_err(&self.path, e))?;
+            std::fs::copy(self.path(), dir.join(self.file_name()))
+                .map_err(|e| io_err(self.path(), e))?;
             self.uninstall(ctx)?;
-            read(&self.path)?
+            read(self.path())?
         } else {
             String::new()
         };
         self.write_scripts(ctx)?;
-        let (bom, body) = split_bom(&contents);
-        let (shebang, rest) = split_shebang(body);
-        let new = format!(
-            "{bom}{shebang}{PRE_MARKER}\n{}\n{rest}",
-            self.source_line(ctx, IntegrationPhase::Pre)
+        let dotfile = Dotfile::new(contents);
+        let new = dotfile.with_blocks(
+            &self.source_line(ctx, IntegrationPhase::Pre),
+            &self.source_line(ctx, IntegrationPhase::Post),
         );
-        let new = format!(
-            "{}\n{POST_MARKER}\n{}\n",
-            new.trim_end_matches('\n'),
-            self.source_line(ctx, IntegrationPhase::Post)
-        );
-        if new != contents {
-            write(&self.path, &new)?;
+        if new.text() != dotfile.text() {
+            write(self.path(), new.text())?;
         }
         Ok(())
     }
 
-    /// Is `line` one of the four dotfile lines install writes?
-    fn is_own_line(&self, ctx: &IntegrationPaths, line: &str) -> bool {
-        let line = line.trim_end();
-        [PRE_MARKER, POST_MARKER].contains(&line)
-            || [IntegrationPhase::Pre, IntegrationPhase::Post]
-                .into_iter()
-                .any(|w| self.source_line(ctx, w) == line)
-    }
-
     /// Anything uninstall would remove is on disk: also true where `is_installed` fails (a moved binary, an edited
     /// script, lines appended after the post block).
-    fn has_traces(&self, ctx: &IntegrationPaths) -> bool {
-        if self.file_when.is_some() {
-            return self.path.exists();
+    pub(crate) fn has_traces(&self, ctx: &IntegrationPaths) -> bool {
+        if self.whole_file_phase().is_some() {
+            return self.path().exists();
         }
         [IntegrationPhase::Pre, IntegrationPhase::Post]
             .into_iter()
-            .any(|w| self.script_path(ctx, w).exists())
-            || read(&self.path).is_ok_and(|t| t.lines().any(|l| self.is_own_line(ctx, l)))
+            .any(|w| self.script(ctx, w).path().exists())
+            || read(self.path()).is_ok_and(|t| {
+                Dotfile::new(t).has_own_line(
+                    &self.source_line(ctx, IntegrationPhase::Pre),
+                    &self.source_line(ctx, IntegrationPhase::Post),
+                )
+            })
     }
 
     /// SPEC §5.5 uninstall: drop our exact lines, then delete the script files (missing is fine).
-    pub fn uninstall(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        if self.file_when.is_some() {
-            return remove(&self.path);
+    pub(crate) fn uninstall(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
+        if self.whole_file_phase().is_some() {
+            return remove(self.path());
         }
-        if self.path.exists() {
-            let text = read(&self.path)?;
-            let (bom, body) = split_bom(&text);
-            let kept: String = body
-                .split_inclusive('\n')
-                .filter(|l| !self.is_own_line(ctx, l))
-                .collect();
-            let new = format!("{bom}{}\n", kept.trim());
-            if new != text {
-                write(&self.path, &new)?;
+        if self.path().exists() {
+            let dotfile = Dotfile::new(read(self.path())?);
+            let kept = dotfile.without_blocks(
+                &self.source_line(ctx, IntegrationPhase::Pre),
+                &self.source_line(ctx, IntegrationPhase::Post),
+            );
+            if kept.text() != dotfile.text() {
+                write(self.path(), kept.text())?;
             }
         }
-        remove(&self.script_path(ctx, IntegrationPhase::Pre))?;
-        remove(&self.script_path(ctx, IntegrationPhase::Post))
+        remove(self.script(ctx, IntegrationPhase::Pre).path())?;
+        remove(self.script(ctx, IntegrationPhase::Post).path())
+    }
+
+    /// The exact bytes of the `~/.tabsmith/shell` script file of `phase`.
+    pub(crate) fn script_contents(&self, paths: &IntegrationPaths, phase: IntegrationPhase) -> String {
+        self.script(paths, phase).contents().to_string()
     }
 }
 
@@ -861,7 +712,7 @@ fn status(ctx: &IntegrationPaths, shells: &[Shell], format: OutputFormat) -> Res
     }
     let v = serde_json::json!({
         "integrations": rows.iter().map(|(ok, i)| serde_json::json!({
-            "installed": ok, "description": i.describe(), "shell": i.shell.name(), "file_name": i.file_name(),
+            "installed": ok, "description": i.describe(), "shell": i.shell().name(), "file_name": i.file_name(),
         })).collect::<Vec<_>>(),
         "errors": errs.iter().map(|(s, e)| serde_json::json!({
             "shell": s.name(), "error": {"title": e, "message": null},
@@ -950,7 +801,7 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
         let r = apply(
             &ctx,
             &shells,
-            |i| i.file_when.is_none(),
+            |i| i.whole_file_phase().is_none(),
             Integration::write_scripts,
         );
         if let Err(e) = r {
@@ -968,11 +819,7 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
 /// Manual install instructions: the exact lines install writes, so doctor and
 /// uninstall recognise them, and their `[ -f … ]` guard keeps a later uninstall from breaking shell startup.
 fn manual_text(ctx: &IntegrationPaths, shells: &[Shell]) -> String {
-    let rc = |shell, file: &str| Integration {
-        shell,
-        path: ctx.home().join(file),
-        file_when: None,
-    };
+    let rc = |shell, file: &str| Integration::dotfile(shell, ctx.home().join(file));
     let mut rcs = vec![
         ("bash:   ", rc(Shell::Bash, ".bashrc")),
         ("zsh:    ", rc(Shell::Zsh, ".zshrc")),
@@ -1037,6 +884,7 @@ fn uninstall_all(ctx: &IntegrationPaths, shells: &[Shell], purge: bool) -> i32 {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use crate::shell_integration::domain::value_objects::dotfile::{POST_MARKER, PRE_MARKER};
 
     const ALL: [(Shell, IntegrationPhase); 8] = [
         (Shell::Bash, IntegrationPhase::Pre),
@@ -1237,11 +1085,7 @@ mod tests {
         let original = "#!/bin/zsh\nexport A=1\nalias ll='ls -l'\n";
         std::fs::write(&zshrc, original).unwrap();
 
-        let rc = Integration {
-            shell: Shell::Zsh,
-            path: zshrc.clone(),
-            file_when: None,
-        };
+        let rc = Integration::dotfile(Shell::Zsh, zshrc.clone());
         assert!(matches!(
             rc.is_installed(&c),
             Err(ShellIntegrationError::NotInstalled(_))
@@ -1295,11 +1139,7 @@ mod tests {
         let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         let bashrc = c.home().join(".bashrc");
-        let rc = Integration {
-            shell: Shell::Bash,
-            path: bashrc.clone(),
-            file_when: None,
-        };
+        let rc = Integration::dotfile(Shell::Bash, bashrc.clone());
         assert!(matches!(
             rc.is_installed(&c),
             Err(ShellIntegrationError::FileDoesNotExist(_))
@@ -1370,7 +1210,7 @@ mod tests {
         for i in &fish {
             i.install(&c).unwrap();
             i.is_installed(&c).unwrap();
-            syntax_ok(Shell::Fish, &i.path);
+            syntax_ok(Shell::Fish, i.path());
         }
         assert_eq!(
             std::fs::read_to_string(c.fish_config_dir().join("conf.d/00_tabsmith_pre.fish")).unwrap(),
@@ -1378,7 +1218,7 @@ mod tests {
         );
         for i in &fish {
             i.uninstall(&c).unwrap();
-            assert!(!i.path.exists());
+            assert!(!i.path().exists());
         }
 
         // pwsh: the profile directory is created; script files are `profile.<when>.ps1`.
@@ -1389,9 +1229,9 @@ mod tests {
         );
         pwsh.install(&c).unwrap();
         pwsh.is_installed(&c).unwrap();
-        let text = std::fs::read_to_string(&pwsh.path).unwrap();
+        let text = std::fs::read_to_string(pwsh.path()).unwrap();
         assert!(text.contains(r#"if (Test-Path "${HOME}/.tabsmith/shell/profile.pre.ps1") { . "${HOME}/.tabsmith/shell/profile.pre.ps1" }"#));
-        syntax_ok(Shell::Pwsh, &pwsh.path);
+        syntax_ok(Shell::Pwsh, pwsh.path());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2002,11 +1842,11 @@ mod tests {
         let dir = temp_dir.path().to_path_buf();
         let c = ctx(&dir);
         let pwsh = &integrations(&c, Shell::Pwsh).unwrap()[0];
-        std::fs::create_dir_all(pwsh.path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(pwsh.path().parent().unwrap()).unwrap();
         let user = "Write-Host USERLINE\r\nSet-PSReadLineOption -PredictionSource History\r\n";
-        std::fs::write(&pwsh.path, format!("\u{feff}{user}")).unwrap();
+        std::fs::write(pwsh.path(), format!("\u{feff}{user}")).unwrap();
         pwsh.install(&c).unwrap();
-        let once = std::fs::read_to_string(&pwsh.path).unwrap();
+        let once = std::fs::read_to_string(pwsh.path()).unwrap();
         assert!(
             once.starts_with(&format!("\u{feff}{PRE_MARKER}\n"))
                 && once.matches('\u{feff}').count() == 1,
@@ -2018,24 +1858,24 @@ mod tests {
         );
         pwsh.is_installed(&c).unwrap();
         pwsh.install(&c).unwrap();
-        assert_eq!(std::fs::read_to_string(&pwsh.path).unwrap(), once);
-        syntax_ok(Shell::Pwsh, &pwsh.path);
+        assert_eq!(std::fs::read_to_string(pwsh.path()).unwrap(), once);
+        syntax_ok(Shell::Pwsh, pwsh.path());
 
         // An editor re-saves a plain install with a BOM: still installed; a forced reinstall keeps one block.
         pwsh.uninstall(&c).unwrap();
-        let back = std::fs::read_to_string(&pwsh.path).unwrap();
+        let back = std::fs::read_to_string(pwsh.path()).unwrap();
         assert!(
             back.starts_with("\u{feff}Write-Host USERLINE\r\n") && !back.contains("tabsmith"),
             "{back:?}"
         );
-        std::fs::write(&pwsh.path, user).unwrap();
+        std::fs::write(pwsh.path(), user).unwrap();
         pwsh.install(&c).unwrap();
-        let plain = std::fs::read_to_string(&pwsh.path).unwrap();
-        std::fs::write(&pwsh.path, format!("\u{feff}{plain}")).unwrap();
+        let plain = std::fs::read_to_string(pwsh.path()).unwrap();
+        std::fs::write(pwsh.path(), format!("\u{feff}{plain}")).unwrap();
         pwsh.is_installed(&c).unwrap();
         pwsh.uninstall(&c).unwrap();
         pwsh.install(&c).unwrap();
-        let again = std::fs::read_to_string(&pwsh.path).unwrap();
+        let again = std::fs::read_to_string(pwsh.path()).unwrap();
         assert_eq!(again, format!("\u{feff}{plain}"));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2892,11 +2732,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, &zshrc).unwrap();
         let old = dir.join("old-zshrc");
         std::fs::hard_link(&real, &old).unwrap(); // the old inode, as a concurrent reader sees it
-        let rc = Integration {
-            shell: Shell::Zsh,
-            path: zshrc.clone(),
-            file_when: None,
-        };
+        let rc = Integration::dotfile(Shell::Zsh, zshrc.clone());
         rc.install(&c).unwrap();
         assert_eq!(
             std::fs::read_to_string(&old).unwrap(),
@@ -2928,11 +2764,7 @@ mod tests {
         // A dangling relative symlink (dotfiles checkout not populated yet): the link stays, its target is created.
         let bashrc = c.home().join(".bashrc");
         std::os::unix::fs::symlink("../dotfiles/bashrc", &bashrc).unwrap();
-        let rc = Integration {
-            shell: Shell::Bash,
-            path: bashrc.clone(),
-            file_when: None,
-        };
+        let rc = Integration::dotfile(Shell::Bash, bashrc.clone());
         rc.install(&c).unwrap();
         assert!(std::fs::symlink_metadata(&bashrc)
             .unwrap()
@@ -3008,11 +2840,7 @@ mod tests {
         assert_eq!(lines.len(), 2, "{text}");
         let zshrc = c.home().join(".zshrc");
         std::fs::write(&zshrc, format!("{}\nexport A=1\n{}\n", lines[0], lines[1])).unwrap();
-        let rc = Integration {
-            shell: Shell::Zsh,
-            path: zshrc.clone(),
-            file_when: None,
-        };
+        let rc = Integration::dotfile(Shell::Zsh, zshrc.clone());
         rc.write_scripts(&c).unwrap(); // what setup's manual path writes
         rc.is_installed(&c).unwrap();
         rc.uninstall(&c).unwrap();
@@ -3047,33 +2875,6 @@ mod tests {
         prune_run_files(&dir);
         assert!(!old.exists() && new.exists() && sub.exists());
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// pwsh is not installed here, so no script test runs its files locally: their bytes are pinned instead.
-    #[test]
-    fn should_write_the_pwsh_script_files_byte_for_byte() {
-        let temp_dir = TempDir::new("pwshfiles");
-        let c = ctx(temp_dir.path());
-        let pwsh = integrations(&c, Shell::Pwsh).unwrap().remove(0);
-
-        let files: Vec<(PathBuf, String)> = [IntegrationPhase::Pre, IntegrationPhase::Post]
-            .into_iter()
-            .map(|when| (pwsh.script_path(&c, when), pwsh.script_contents(&c, when)))
-            .collect();
-
-        assert_eq!(
-            files,
-            [
-                (
-                    c.data_root().join("shell").join("profile.pre.ps1"),
-                    "if (Test-Path -LiteralPath '/opt/tab smith/it''s/tabsmith') { $__tsEnc = [Console]::OutputEncoding; $__tsInit = $null; try { try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}; $__tsInit = (& '/opt/tab smith/it''s/tabsmith' init pwsh pre --rcfile profile) -join \"`n\" } finally { try { [Console]::OutputEncoding = $__tsEnc } catch {} }; if ($__tsInit) { Invoke-Expression $__tsInit } }\n".to_string()
-                ),
-                (
-                    c.data_root().join("shell").join("profile.post.ps1"),
-                    "if (Test-Path -LiteralPath '/opt/tab smith/it''s/tabsmith') { $__tsEnc = [Console]::OutputEncoding; $__tsInit = $null; try { try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}; $__tsInit = (& '/opt/tab smith/it''s/tabsmith' init pwsh post --rcfile profile) -join \"`n\" } finally { try { [Console]::OutputEncoding = $__tsEnc } catch {} }; if ($__tsInit) { Invoke-Expression $__tsInit } }\n".to_string()
-                ),
-            ]
-        );
     }
 
     /// What setup prints when it does not edit the dotfiles: bash and zsh lines (never fish), then a blank line.

@@ -1,5 +1,5 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
-use crate::integrations::{self, Integration};
+use crate::integrations;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE, INLINE_ENABLED, INLINE_SOURCE,
 };
@@ -13,6 +13,7 @@ use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info;
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
+use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
@@ -292,15 +293,15 @@ fn dotfile_checks(ctx: &IntegrationPaths, current: Option<Shell>) -> Vec<Check<'
 fn dotfile_check(ctx: &IntegrationPaths, i: Integration, kind: Kind) -> Check<'_> {
     let name = format!(
         "{} {} integration check",
-        i.shell.name(),
-        short_path(ctx.home(), &i.path)
+        i.shell().name(),
+        short_path(ctx.home(), i.path())
     );
     check(name, kind, move || {
         let e = match i.is_installed(ctx) {
             Ok(()) => return Outcome::Ok,
             Err(e) => e,
         };
-        let shell = i.shell.name();
+        let shell = i.shell().name();
         let cmd = paint(
             "35",
             &format!("tabsmith integrations install dotfiles {shell}"),
@@ -344,10 +345,10 @@ fn script_bins(ctx: &IntegrationPaths) -> Vec<(Shell, String)> {
     let mut files = Vec::new();
     for shell in Shell::ALL.into_iter().filter(|s| which(s.name()).is_some()) {
         for i in integrations::integrations(ctx, shell).unwrap_or_default() {
-            match i.file_when {
-                Some(_) => files.push((shell, i.path)),
+            match i.whole_file_phase() {
+                Some(_) => files.push((shell, i.path().to_path_buf())),
                 None => {
-                    files.extend([IntegrationPhase::Pre, IntegrationPhase::Post].map(|w| (shell, i.script_path(ctx, w))))
+                    files.extend([IntegrationPhase::Pre, IntegrationPhase::Post].map(|w| (shell, i.script(ctx, w).path().to_path_buf())))
                 }
             }
         }

@@ -1,5 +1,5 @@
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A file tabsmith writes for an integration, `~/.tabsmith/shell/<rc>.<phase>.<ext>` or a whole fish `conf.d` file:
 /// its path and exact contents.
@@ -12,6 +12,14 @@ pub(crate) struct IntegrationScript {
 impl IntegrationScript {
     pub(crate) fn new(path: PathBuf, contents: String) -> Self {
         IntegrationScript { path, contents }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn contents(&self) -> &str {
+        &self.contents
     }
 
     /// The file must hold exactly the contents; `actual` is what it holds.
