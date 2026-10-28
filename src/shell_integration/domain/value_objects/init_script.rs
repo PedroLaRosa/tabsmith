@@ -10,6 +10,7 @@ impl InitScript {
         InitScript { text }
     }
 
+    #[cfg(test)]
     pub(crate) fn text(&self) -> &str {
         &self.text
     }
