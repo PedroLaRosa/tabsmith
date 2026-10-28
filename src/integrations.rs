@@ -9,6 +9,7 @@ use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info::{is_root, parent_exe};
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
+use crate::shell_integration::application::ports::init_script_templates::InitScriptTemplates;
 use crate::shell_integration::application::ports::shell_environment::ShellEnvironment;
 use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::repositories::backup_repository::BackupRepository;
@@ -23,6 +24,7 @@ use crate::shell_integration::domain::value_objects::dotfile::Dotfile;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
+use crate::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
 use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
 use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
@@ -159,14 +161,6 @@ pub fn mark_restart() {
 // ---------------------------------------------------------------------------------------------------------------
 // init (SPEC §2.7, §5.3)
 
-const PRE_SH: &str = include_str!("../shell/pre.sh");
-const POST_ZSH: &str = include_str!("../shell/post.zsh");
-const POST_BASH: &str = include_str!("../shell/post.bash");
-const PRE_FISH: &str = include_str!("../shell/pre.fish");
-const POST_FISH: &str = include_str!("../shell/post.fish");
-const PRE_PS1: &str = include_str!("../shell/pre.ps1");
-const POST_PS1: &str = include_str!("../shell/post.ps1");
-
 pub fn init_cmd(args: InitArgs) -> anyhow::Result<i32> {
     if let Some(rc) = &args.rcfile {
         logger::debug(&format!(
@@ -194,15 +188,7 @@ pub fn init_script(shell: Shell, when: IntegrationPhase) -> anyhow::Result<Strin
 
 /// `snapshot` = deterministic output (SPEC §2.7): shell `/bin/zsh`, launch 0, binary `tabsmith`.
 fn init_output(shell: Shell, when: IntegrationPhase, snapshot: bool) -> Result<String> {
-    let template = match (shell, when) {
-        (Shell::Bash | Shell::Zsh, IntegrationPhase::Pre) => PRE_SH,
-        (Shell::Bash, IntegrationPhase::Post) => POST_BASH,
-        (Shell::Zsh, IntegrationPhase::Post) => POST_ZSH,
-        (Shell::Fish, IntegrationPhase::Pre) => PRE_FISH,
-        (Shell::Fish, IntegrationPhase::Post) => POST_FISH,
-        (Shell::Pwsh, IntegrationPhase::Pre) => PRE_PS1,
-        (Shell::Pwsh, IntegrationPhase::Post) => POST_PS1,
-    };
+    let template = EmbeddedShellScripts.template(shell, when);
     let script = if snapshot {
         init_script_renderer::render_snapshot(shell, when, template)
     } else {
