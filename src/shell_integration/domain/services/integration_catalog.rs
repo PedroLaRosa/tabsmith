@@ -10,7 +10,7 @@ pub(crate) fn integrations(
     paths: &IntegrationPaths,
     shell: Shell,
     exists: impl Fn(&Path) -> bool,
-    _pwsh_profile: impl FnOnce() -> Result<PathBuf, ShellIntegrationError>,
+    pwsh_profile: impl FnOnce() -> Result<PathBuf, ShellIntegrationError>,
 ) -> Result<Vec<Integration>, ShellIntegrationError> {
     let dot = |path: PathBuf| Integration::dotfile(shell, path);
     Ok(match shell {
@@ -41,13 +41,14 @@ pub(crate) fn integrations(
         .into_iter()
         .map(|(w, f)| Integration::whole_file(shell, paths.fish_config_dir().join("conf.d").join(f), w))
         .collect(),
-        Shell::Pwsh => Vec::new(),
+        Shell::Pwsh => vec![dot(pwsh_profile()?)],
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::collections::HashSet;
 
     fn paths() -> IntegrationPaths {
@@ -151,6 +152,32 @@ mod tests {
                     Some(IntegrationPhase::Post)
                 ),
             ]
+        );
+    }
+
+    /// Asking `pwsh` spawns it (up to 5 s), so it is asked once per listing, and only when the paths do not know
+    /// `$PROFILE` yet.
+    #[test]
+    fn should_ask_pwsh_once_for_the_profile_the_paths_do_not_know() {
+        let paths = paths();
+        let asked = Cell::new(0);
+
+        let pwsh = integrations(&paths, Shell::Pwsh, |_| false, || {
+            asked.set(asked.get() + 1);
+            Ok(PathBuf::from("/home/u/.config/powershell/Microsoft.PowerShell_profile.ps1"))
+        })
+        .unwrap();
+
+        assert_eq!(
+            (listed(&pwsh), asked.get()),
+            (
+                vec![(
+                    Shell::Pwsh,
+                    PathBuf::from("/home/u/.config/powershell/Microsoft.PowerShell_profile.ps1"),
+                    None
+                )],
+                1
+            )
         );
     }
 }
