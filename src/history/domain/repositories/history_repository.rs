@@ -2,6 +2,9 @@ use crate::history::domain::entities::history_entry::HistoryEntry;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// How many entries a history keeps in memory: what ghost text, history rows and the LLM can see.
+pub(crate) const HISTORY_IN_MEMORY: usize = 5000;
+
 /// The commands this terminal has seen run (SPEC §3.5).
 pub(crate) trait HistoryRepository {
     fn append(&self, entry: HistoryEntry);
@@ -27,7 +30,10 @@ impl HistoryRepository for InMemoryHistoryRepository {
         if entry.command().trim().is_empty() {
             return;
         }
-        Rc::make_mut(&mut self.entries.borrow_mut()).push(entry);
+        let mut shared = self.entries.borrow_mut();
+        let entries = Rc::make_mut(&mut shared);
+        entries.push(entry);
+        entries.drain(..entries.len().saturating_sub(HISTORY_IN_MEMORY));
     }
 
     fn recent(&self) -> Rc<Vec<HistoryEntry>> {
@@ -63,5 +69,19 @@ mod tests {
         repository.append(entry("   "));
 
         assert!(repository.recent().is_empty());
+    }
+
+    #[test]
+    fn should_keep_only_the_newest_5000_entries() {
+        let full = (0..5000).map(|i| entry(&format!("c{i}"))).collect();
+        let repository = InMemoryHistoryRepository::new(full);
+
+        repository.append(entry("newest"));
+
+        let recent = repository.recent();
+        assert_eq!(
+            (recent.len(), recent[0].command(), recent[4999].command()),
+            (HISTORY_IN_MEMORY, "c1", "newest")
+        );
     }
 }
