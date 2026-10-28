@@ -29,19 +29,7 @@ pub(crate) fn text(paths: &IntegrationPaths, shells: &[Shell]) -> String {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-    use std::path::Path;
-
-    fn ctx(dir: &Path) -> IntegrationPaths {
-        let home = dir.join("home");
-        IntegrationPaths::new(
-            home.clone(),
-            home.join(".tabsmith"),
-            "/opt/tab smith/it's/tabsmith".into(), // space and quote exercise the quoting
-            None,
-            home.join(".config/fish"),
-            Some(home.join(".config/powershell/Microsoft.PowerShell_profile.ps1")),
-        )
-    }
+    use crate::shell_integration::infrastructure::testing::integration_fixtures::ctx;
 
     /// What setup prints when it does not edit the dotfiles: bash and zsh lines (never fish), then a blank line.
     #[test]

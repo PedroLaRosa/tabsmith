@@ -138,18 +138,7 @@ impl Integration {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-
-    fn ctx(dir: &Path) -> IntegrationPaths {
-        let home = dir.join("home");
-        IntegrationPaths::new(
-            home.clone(),
-            home.join(".tabsmith"),
-            "/opt/tab smith/it's/tabsmith".into(), // space and quote exercise the quoting
-            None,
-            home.join(".config/fish"),
-            Some(home.join(".config/powershell/Microsoft.PowerShell_profile.ps1")),
-        )
-    }
+    use crate::shell_integration::infrastructure::testing::integration_fixtures::ctx;
 
     /// pwsh is not installed here, so no script test runs its files locally: their bytes are pinned instead.
     #[test]

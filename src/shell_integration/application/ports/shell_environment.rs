@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn should_answer_with_the_facts_it_was_given() {
         let environment = RecordingShellEnvironment::default()
-            .with_current_executable(Ok("/usr/local/bin/tabsmith".into()))
+            .with_current_executable(Ok("/opt/tabsmith/bin/tabsmith".into()))
             .with_parent_shell(Some("/bin/zsh".into()))
             .with_launch_facts(HashMap::from([("CI".into(), "true".into())]), true)
             .with_pwsh_profile(Ok(PathBuf::from("/home/u/profile.ps1")));
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(
             answers,
             (
-                "/usr/local/bin/tabsmith".to_string(),
+                "/opt/tabsmith/bin/tabsmith".to_string(),
                 Some("/bin/zsh".to_string()),
                 (true, true),
                 PathBuf::from("/home/u/profile.ps1"),
