@@ -64,17 +64,27 @@ mod tests {
     struct TestBed {
         installer: IntegrationInstaller,
         dotfiles: Rc<InMemoryDotfileRepository>,
+        environment: Rc<RecordingShellEnvironment>,
     }
 
     fn test_bed() -> TestBed {
+        test_bed_with(RecordingShellEnvironment::default())
+    }
+
+    fn test_bed_with(environment: RecordingShellEnvironment) -> TestBed {
         let dotfiles = Rc::new(InMemoryDotfileRepository::default());
+        let environment = Rc::new(environment);
         let installer = IntegrationInstaller::new(
             dotfiles.clone(),
             Rc::new(InMemoryBackupRepository::default()),
             Arc::new(FixedClock::new(1_700_000_123_999)),
-            Rc::new(RecordingShellEnvironment::default()),
+            environment.clone(),
         );
-        TestBed { installer, dotfiles }
+        TestBed {
+            installer,
+            dotfiles,
+            environment,
+        }
     }
 
     /// No pwsh `$PROFILE` known, so listing pwsh asks the environment.
@@ -100,5 +110,55 @@ mod tests {
             listed.iter().map(Integration::path).collect::<Vec<_>>(),
             [Path::new("/home/u/.bashrc"), Path::new("/home/u/.bash_profile")]
         );
+    }
+
+    /// Never cached: every listing of pwsh asks again, and no other shell asks (T26).
+    #[test]
+    fn should_ask_pwsh_for_its_profile_on_each_listing_of_pwsh_and_for_no_other_shell() {
+        let bed = test_bed();
+
+        for shell in [Shell::Bash, Shell::Pwsh, Shell::Zsh, Shell::Fish, Shell::Pwsh] {
+            bed.installer.integrations(&paths(), shell).unwrap();
+        }
+
+        assert_eq!(bed.environment.asked(), ["pwsh_profile", "pwsh_profile"]);
+    }
+
+    #[test]
+    fn should_list_the_profile_pwsh_gives_as_its_one_dotfile() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default().with_pwsh_profile(Ok(PathBuf::from("/home/u/pwsh/profile.ps1"))),
+        );
+
+        let listed = bed.installer.integrations(&paths(), Shell::Pwsh).unwrap();
+
+        assert_eq!(
+            listed.iter().map(Integration::path).collect::<Vec<_>>(),
+            [Path::new("/home/u/pwsh/profile.ps1")]
+        );
+    }
+
+    #[test]
+    fn should_not_ask_pwsh_for_the_profile_the_paths_know() {
+        let bed = test_bed();
+        let paths = paths().with_pwsh_profile(PathBuf::from("/home/u/known.ps1"));
+
+        let listed = bed.installer.integrations(&paths, Shell::Pwsh).unwrap();
+
+        assert_eq!(
+            (listed[0].path(), bed.environment.asked()),
+            (Path::new("/home/u/known.ps1"), vec![])
+        );
+    }
+
+    #[test]
+    fn should_fail_to_list_pwsh_when_pwsh_cannot_give_its_profile() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+        );
+
+        let error = bed.installer.integrations(&paths(), Shell::Pwsh).unwrap_err();
+
+        assert_eq!(error.to_string(), "pwsh printed an empty $PROFILE");
     }
 }
