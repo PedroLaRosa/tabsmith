@@ -155,6 +155,23 @@ impl IntegrationInstaller {
         }
         Ok(())
     }
+
+    /// Anything uninstall would remove is on disk: also true where `is_installed` fails (a moved binary, an edited
+    /// script, lines appended after the post block).
+    pub(crate) fn has_traces(&self, paths: &IntegrationPaths, integration: &Integration) -> bool {
+        if integration.whole_file_phase().is_some() {
+            return self.dotfiles.exists(integration.path());
+        }
+        [IntegrationPhase::Pre, IntegrationPhase::Post]
+            .into_iter()
+            .any(|w| self.dotfiles.exists(integration.script(paths, w).path()))
+            || self.dotfiles.read(integration.path()).is_ok_and(|t| {
+                Dotfile::new(t).has_own_line(
+                    &integration.source_line(paths, IntegrationPhase::Pre),
+                    &integration.source_line(paths, IntegrationPhase::Post),
+                )
+            })
+    }
 }
 
 #[cfg(test)]
@@ -663,5 +680,16 @@ mod tests {
             bed.dotfiles.read(fish_pre.path()).unwrap(),
             fish_pre.whole_file_script(&paths()).unwrap().contents()
         );
+    }
+
+    #[test]
+    fn should_find_traces_of_a_script_file_left_behind() {
+        let bed = test_bed();
+        let zshrc = zshrc();
+        write_script(&bed, &zshrc, IntegrationPhase::Post);
+
+        let traces = bed.installer.has_traces(&paths(), &zshrc);
+
+        assert!(traces);
     }
 }
