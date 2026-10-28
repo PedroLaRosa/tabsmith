@@ -1,7 +1,8 @@
 # Phase 3 (history): preparation
 
-Status: **not started.** One run was launched at `c7b796e` and stopped before it edited or committed anything, so
-Phase 3 starts from the end of Phase 2 (`c7b796e`, gate green).
+Status: **done** at `7d3b331` (`a3953cf..7d3b331`, gate green). The decisions it took are in the plan's section 9
+"Phase 3 notes"; where they differ from the briefs below (the blank-command skip lives in the repository contract,
+no `identity()` method, `HistoryEntry` no longer derives `Default`), the notes win.
 
 Plan reference: [the plan](../hexagonal-refactor-plan.md), section 5 "Phase 3: history" and the `history` layout
 in section 4. Detailed traps per legacy file: [`source-map/inline.md`](source-map/inline.md) (owner of `History`

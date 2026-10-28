@@ -11,14 +11,14 @@ implementation session needs that the plan does not.
 | 0 baseline | done | `af1b304` |
 | 1 composition root, fitness test, shared kernel | done | `af1b304..52dcf85` |
 | 2 settings | done | `52dcf85..c7b796e` |
-| 3 history | prepared, not started | see [`phase-3-history.md`](phase-3-history.md) |
+| 3 history | done | `a3953cf..7d3b331`, see [`phase-3-history.md`](phase-3-history.md) |
 | 4-11 | not started | |
 
-At `c7b796e`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 512 passed, 0 failed, 1 ignored (the
+At `7d3b331`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 521 passed, 0 failed, 1 ignored (the
 baseline was 283). clippy shows 3 warnings (baseline 3). The 131-command golden CLI capture is byte-identical to
-the baseline. The test lock has 0 baseline tests missing. 53 baseline tests are CHANGED, each one a reviewed
+the baseline. The test lock has 0 baseline tests missing. 63 baseline tests are CHANGED, each one a reviewed
 restructuring.
-`REGISTERED_MODULES` = `settings`, `shared`.
+`REGISTERED_MODULES` = `history`, `settings`, `shared`.
 
 ## Files here
 

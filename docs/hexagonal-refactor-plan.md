@@ -1,7 +1,7 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1 and 2 are done on branch `refactor/hexagonal-architecture` (gate green at `c7b796e`). Phase 3 is
-prepared but not started. Working notes, tools, the per-file source map and the Phase 3 research are in
+Status: Phases 0, 1, 2 and 3 are done on branch `refactor/hexagonal-architecture` (gate green at `7d3b331`). Phase 4
+is next. Working notes, tools, the per-file source map and the Phase 3 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -548,10 +548,13 @@ Phase 2.
 Done at `c7b796e`: `settings` registered in the architecture test, `settings.rs` deleted, gate green (512 tests).
 See the Phase 2 notes in section 9.
 
-### Phase 3: history (prepared, not started: [research](hexagonal-refactor/phase-3-history.md))
+### Phase 3: history (done: [research](hexagonal-refactor/phase-3-history.md))
 1. Make `HistoryEntry` an entity without serde, and give the adapter a `HistoryRecord` struct.
 2. Add `HistoryRepository` + InMemory, and `JsonlHistoryRepository` with `history_file_round_trip_and_compaction`.
 3. Write `RecordCommandUseCase` test-first; blank commands are skipped.
+
+Done at `7d3b331`: `history` registered in the architecture test, `inline::History` and `types::HistoryEntry`
+deleted, gate green (521 passed). See the Phase 3 notes in section 9.
 
 ### Phase 4: shell_integration (the first full CLI-only slice; also starts terminal_session's session context)
 1. Domain:
@@ -820,3 +823,20 @@ still fails on a missing home before any other step, as `settings::settings_path
 `settings::user_home` became `shared::infrastructure::data_directory_from_env::user_home_from_env` with
 `SharedError::UserHomeNotFound` (its plain message, no `TABSMITH_HOME` hint), and the `home`/`settings_path`/
 `state_path`/`Store` family was deleted in Phase 2, not Phase 11, because shims never cross phases.
+
+Phase 3 notes: `HistoryEntry` is built only through `HistoryEntry::new(HistoryEntryPrimitives)`; the primitives
+struct lives in `history_entry.rs`, keeps `Default` for test literals and is what `to_primitives()` returns, while
+the entity derives only `Clone`, `Debug`, `PartialEq`. Its one transition is `finish(exit_code, end_time)` (the
+tracker's old field writes). Equality stays structural and no `identity()` method was added: nothing reads the
+glossary identity (session id, start time) yet. The JSONL wire format lives in the adapter's private serde
+`HistoryRecord`. `HISTORY_IN_MEMORY` (5000) is in the domain next to `HistoryRepository`, because the production
+memory-only fallback (`InMemoryHistoryRepository`, no data directory) keeps the same cap; `HISTORY_COMPACT_AT` stays
+in the adapter. `recent()` returns `Rc<Vec<HistoryEntry>>`, the load-time snapshot plus this process's appends,
+shared rather than copied because ghost text reads it per keystroke; it never re-reads the file. The blank-command
+skip belongs to the `HistoryRepository` contract (InMemory and JSONL both skip), so `RecordCommandUseCase` does not
+repeat it. `HistoryModule { history, record_command }` is built on the engine thread by `build_history_module`;
+`history` is the shared read side (ghost text, history rows, LLM context) that only bootstrap may hand to
+completion and ghost_text once they are modules (Phases 6-7). `history_error.rs` was not added: nothing in the
+module is fallible (load and append log and carry on, as before). `SharedDependencies::from_env()` (shared
+infrastructure) builds the dependencies for both `bootstrap::cli` and the legacy engine, so nothing outside
+`bootstrap` depends on `bootstrap` and the module graph stays acyclic.
