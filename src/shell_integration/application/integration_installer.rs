@@ -183,10 +183,10 @@ impl IntegrationInstaller {
         pick: impl Fn(&Integration) -> bool,
         op: impl Fn(&Integration) -> Result<(), ShellIntegrationError>,
     ) -> Result<bool, Vec<IntegrationFailure>> {
-        let (mut ran, mut errs) = (false, Vec::new());
+        let (mut ran, mut failures) = (false, Vec::new());
         for &shell in shells {
             match self.integrations(paths, shell) {
-                Err(e) => errs.push(IntegrationFailure::Listing {
+                Err(e) => failures.push(IntegrationFailure::Listing {
                     shell: shell.name().to_string(),
                     reason: e.to_string(),
                 }),
@@ -194,7 +194,7 @@ impl IntegrationInstaller {
                     for i in list.iter().filter(|i| pick(i)) {
                         ran = true;
                         if let Err(e) = op(i) {
-                            errs.push(IntegrationFailure::Operation {
+                            failures.push(IntegrationFailure::Operation {
                                 description: i.describe(),
                                 reason: e.to_string(),
                             });
@@ -203,8 +203,8 @@ impl IntegrationInstaller {
                 }
             }
         }
-        if !errs.is_empty() {
-            return Err(errs);
+        if !failures.is_empty() {
+            return Err(failures);
         }
         Ok(ran)
     }
