@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 /// The user's dotfiles and the files tabsmith writes for an integration (script files, fish `conf.d` files).
 pub(crate) trait DotfileRepository {
+    /// A missing file is `FileDoesNotExist(path)`.
     fn read(&self, path: &Path) -> Result<String, ShellIntegrationError>;
     fn write(&self, path: &Path, contents: &str) -> Result<(), ShellIntegrationError>;
 }
@@ -23,7 +24,11 @@ pub(crate) struct InMemoryDotfileRepository {
 #[cfg(test)]
 impl DotfileRepository for InMemoryDotfileRepository {
     fn read(&self, path: &Path) -> Result<String, ShellIntegrationError> {
-        Ok(self.files.borrow()[path].clone())
+        self.files
+            .borrow()
+            .get(path)
+            .cloned()
+            .ok_or_else(|| ShellIntegrationError::FileDoesNotExist(path.into()))
     }
 
     fn write(&self, path: &Path, contents: &str) -> Result<(), ShellIntegrationError> {
@@ -45,5 +50,14 @@ mod tests {
         let contents = repository.read(path).unwrap();
 
         assert_eq!(contents, "alias ll='ls -l'\n");
+    }
+
+    #[test]
+    fn should_report_a_dotfile_never_written_as_missing() {
+        let repository = InMemoryDotfileRepository::default();
+
+        let error = repository.read(Path::new("/home/u/.zshrc")).unwrap_err();
+
+        assert!(matches!(error, ShellIntegrationError::FileDoesNotExist(p) if p == Path::new("/home/u/.zshrc")));
     }
 }
