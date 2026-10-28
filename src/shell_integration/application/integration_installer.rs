@@ -1,5 +1,6 @@
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::shell_integration::application::integration_failure::IntegrationFailure;
 use crate::shell_integration::application::ports::shell_environment::ShellEnvironment;
 use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::repositories::backup_repository::BackupRepository;
@@ -171,6 +172,41 @@ impl IntegrationInstaller {
                     &integration.source_line(paths, IntegrationPhase::Post),
                 )
             })
+    }
+
+    /// Run `op` on every integration of `shells` that `pick` selects, carrying on past failures (SPEC §2.6). Ok(true)
+    /// if `op` ran at least once; any failure, listing a shell or running `op`, discards that and they are returned.
+    pub(crate) fn apply(
+        &self,
+        paths: &IntegrationPaths,
+        shells: &[Shell],
+        pick: impl Fn(&Integration) -> bool,
+        op: impl Fn(&Integration) -> Result<(), ShellIntegrationError>,
+    ) -> Result<bool, Vec<IntegrationFailure>> {
+        let (mut ran, mut errs) = (false, Vec::new());
+        for &shell in shells {
+            match self.integrations(paths, shell) {
+                Err(e) => errs.push(IntegrationFailure::Listing {
+                    shell: shell.name().to_string(),
+                    reason: e.to_string(),
+                }),
+                Ok(list) => {
+                    for i in list.iter().filter(|i| pick(i)) {
+                        ran = true;
+                        if let Err(e) = op(i) {
+                            errs.push(IntegrationFailure::Operation {
+                                description: i.describe(),
+                                reason: e.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if !errs.is_empty() {
+            return Err(errs);
+        }
+        Ok(ran)
     }
 }
 
@@ -745,5 +781,14 @@ mod tests {
         let traces = bed.installer.has_traces(&paths(), &fish_pre);
 
         assert!(traces);
+    }
+
+    #[test]
+    fn should_report_that_the_operation_ran_when_it_ran_on_a_picked_integration() {
+        let bed = test_bed();
+
+        let ran = bed.installer.apply(&paths(), &[Shell::Zsh], |i| i.file_name() == ".zprofile", |_| Ok(()));
+
+        assert!(matches!(ran, Ok(true)), "{ran:?}");
     }
 }
