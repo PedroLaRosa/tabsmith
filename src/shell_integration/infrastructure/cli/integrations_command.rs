@@ -217,4 +217,40 @@ mod tests {
             )]
         );
     }
+
+    #[test]
+    fn should_give_the_status_as_json_indented_by_two_spaces_when_pretty() {
+        let report = status_report();
+
+        let lines = status_lines(&report, OutputFormat::JsonPretty, false).unwrap();
+
+        assert_eq!(
+            lines,
+            [r#"{
+  "errors": [
+    {
+      "error": {
+        "message": null,
+        "title": "pwsh printed an empty $PROFILE"
+      },
+      "shell": "pwsh"
+    }
+  ],
+  "integrations": [
+    {
+      "description": "zsh pre post into .zshrc",
+      "file_name": ".zshrc",
+      "installed": true,
+      "shell": "zsh"
+    },
+    {
+      "description": "fish pre",
+      "file_name": "00_tabsmith_pre.fish",
+      "installed": false,
+      "shell": "fish"
+    }
+  ]
+}"#]
+        );
+    }
 }
