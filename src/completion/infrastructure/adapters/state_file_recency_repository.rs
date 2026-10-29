@@ -175,6 +175,17 @@ mod tests {
     }
 
     #[test]
+    fn should_write_nothing_on_flush_without_a_pending_save() {
+        let temp_dir = TempDir::new("recency-idle");
+        let path = temp_dir.path().join("state.json");
+        let repository = StateFileRecencyRepository::new(Some(path.clone()));
+
+        repository.flush();
+
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn should_write_the_latest_recency_on_flush_after_a_save() {
         let temp_dir = TempDir::new("recency-flush");
         let path = temp_dir.path().join("state.json");
@@ -188,5 +199,17 @@ mod tests {
         repository.flush();
 
         assert_eq!(StateFileRecencyRepository::new(Some(path)).load(), recency);
+    }
+
+    #[test]
+    fn should_keep_a_session_without_a_state_file_in_memory() {
+        let repository = StateFileRecencyRepository::new(None);
+        let mut recency = SuggestionRecency::default();
+        recency.record("git".into(), "checkout".into(), 1_700_000_000_000);
+
+        repository.save(&recency);
+        repository.flush();
+
+        assert_eq!(repository.load(), SuggestionRecency::default());
     }
 }
