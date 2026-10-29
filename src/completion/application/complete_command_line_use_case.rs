@@ -233,11 +233,18 @@ impl CompleteCommandLineUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::completion::application::ports::executable_catalog::FixedExecutableCatalog;
     use crate::completion::application::test_fixtures::{request, CompletionDoubles};
+    use crate::completion::domain::value_objects::generator_key::GeneratorKey;
+    use crate::settings::domain::value_objects::setting_value::SettingValue;
+    use crate::settings::domain::value_objects::settings::Settings;
     use crate::specs::application::ports::spec_runtime::InMemorySpecRuntime;
     use crate::specs::domain::entities::subcommand::Subcommand;
     use crate::specs::domain::repositories::spec_repository::InMemorySpecRepository;
-    use crate::settings::domain::value_objects::settings::Settings;
+    use crate::specs::domain::value_objects::arg::Arg;
+    use crate::specs::domain::value_objects::generator::Generator;
+    use std::collections::HashSet;
+    use std::time::Duration;
 
     fn command(names: &[&str]) -> Subcommand {
         Subcommand::default().with_names(names.iter().map(|name| name.to_string()).collect())
@@ -247,8 +254,20 @@ mod tests {
         Rc::new(command(&["git"]).with_subcommands(vec![Rc::new(command(&["commit"])), Rc::new(command(&["status"]))]))
     }
 
-    fn rows(result: &CompletionResult) -> Vec<&str> {
-        result.suggestions().iter().map(|row| row.first_name()).collect()
+    fn rows(result: &CompletionResult) -> Vec<String> {
+        result.suggestions().iter().map(|row| row.first_name().to_string()).collect()
+    }
+
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn first_token_completion() -> Settings {
+        Settings::default().with(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION, SettingValue::Bool(true))
+    }
+
+    fn served_fuzzy(session: &CompletionSession) -> bool {
+        session.served().is_some_and(|served| served.fuzzy())
     }
 
     #[test]
@@ -261,6 +280,146 @@ mod tests {
             .execute(&mut session, &request(1, "git co"), &mut |_| {})
             .unwrap();
 
-        assert_eq!((result.phase(), result.is_error(), rows(&result)), (CompletionPhase::Parse, false, vec!["commit"]));
+        assert_eq!((result.phase(), result.is_error(), rows(&result)), (CompletionPhase::Parse, false, owned(&["commit"])));
+    }
+
+    #[test]
+    fn should_reply_an_error_for_a_cursor_inside_a_word() {
+        let doubles = CompletionDoubles::new(InMemorySpecRepository::with(&[("git", &git())]), InMemorySpecRuntime::default());
+        let use_case = doubles.complete_command_line(SpecIndex::default());
+        let mut session = doubles.session(Settings::default());
+        use_case.execute(&mut session, &request(1, "git co"), &mut |_| {});
+        let inside_a_word = CompletionRequest {
+            cursor: 5,
+            ..request(2, "git commit")
+        };
+
+        let result = use_case.execute(&mut session, &inside_a_word, &mut |_| {}).unwrap();
+
+        assert_eq!(
+            (result.is_error(), result.phase(), result.cursor(), session.served().is_none()),
+            (true, CompletionPhase::Parse, 5, true)
+        );
+    }
+
+    #[test]
+    fn should_reply_an_error_and_report_no_suggestions_for_a_command_without_a_spec() {
+        let doubles = CompletionDoubles::new(InMemorySpecRepository::default(), InMemorySpecRuntime::default());
+        let mut session = doubles.session(Settings::default());
+        let mut notices = Vec::new();
+
+        let result = doubles
+            .complete_command_line(SpecIndex::default())
+            .execute(&mut session, &request(1, "missing --flag"), &mut |notice| notices.push(notice))
+            .unwrap();
+
+        assert_eq!(
+            (result.is_error(), notices),
+            (true, vec![CompletionNotice::NoSuggestions("failed loading spec for missing".into())])
+        );
+    }
+
+    #[test]
+    fn should_reply_nothing_when_a_newer_request_interrupts_the_parse() {
+        let generated = Rc::new(command(&["g"]).with_generate_spec(Some(1)));
+        let doubles = CompletionDoubles::new(
+            InMemorySpecRepository::with(&[("git", &git()), ("g", &generated)]),
+            InMemorySpecRuntime::default().answering(1, |_| Err(SpecError::Aborted)),
+        );
+        let use_case = doubles.complete_command_line(SpecIndex::default());
+        let mut session = doubles.session(Settings::default());
+        use_case.execute(&mut session, &request(1, "git co"), &mut |_| {});
+        let mut notices = Vec::new();
+
+        let result = use_case.execute(&mut session, &request(2, "g x"), &mut |notice| notices.push(notice));
+
+        assert_eq!(
+            (result.is_none(), notices, session.served().map(|served| served.request_id())),
+            (true, vec![], Some(1))
+        );
+    }
+
+    #[test]
+    fn should_start_the_generators_of_a_new_argument_and_report_them_loading() {
+        let argument = Rc::new(Arg::default().with_generators(vec![Generator::default().with_custom(Some(1))]));
+        let tool = Rc::new(command(&["tool"]).with_args(vec![argument.clone()]));
+        let doubles = CompletionDoubles::new(InMemorySpecRepository::with(&[("tool", &tool)]), InMemorySpecRuntime::default());
+        let mut session = doubles.session(Settings::default());
+
+        let result = doubles
+            .complete_command_line(SpecIndex::default())
+            .execute(&mut session, &request(1, "tool "), &mut |_| {})
+            .unwrap();
+
+        assert_eq!(
+            (result.is_loading(), result.triggered_generators(), session.has_running_generators()),
+            (true, &[GeneratorKey::for_arg(&argument, 0)][..], true)
+        );
+    }
+
+    #[test]
+    fn should_keep_the_toggled_fuzzy_search_until_the_argument_changes() {
+        let tool = Rc::new(command(&["tool"]).with_args(vec![Rc::new(Arg::default()), Rc::new(Arg::default())]));
+        let doubles = CompletionDoubles::new(InMemorySpecRepository::with(&[("tool", &tool)]), InMemorySpecRuntime::default());
+        let use_case = doubles.complete_command_line(SpecIndex::default());
+        let mut session = doubles.session(Settings::default());
+        use_case.execute(&mut session, &request(1, "tool "), &mut |_| {});
+        session.toggle_fuzzy_search();
+        use_case.execute(&mut session, &request(2, "tool x"), &mut |_| {});
+        let typing = served_fuzzy(&session);
+        use_case.execute(&mut session, &request(3, "tool xy"), &mut |_| {});
+        let still_typing = served_fuzzy(&session);
+
+        use_case.execute(&mut session, &request(4, "tool xy "), &mut |_| {});
+
+        assert_eq!((typing, still_typing, served_fuzzy(&session)), (true, true, false));
+    }
+
+    #[test]
+    fn should_reply_first_token_suggestions_for_a_single_word() {
+        let doubles = CompletionDoubles {
+            executables: Rc::new(FixedExecutableCatalog::new(vec!["ma".into(), "mk".into()])),
+            ..CompletionDoubles::new(InMemorySpecRepository::default(), InMemorySpecRuntime::default())
+        };
+        let index = SpecIndex::new(vec!["mk".into(), "mz/sub".into()], HashSet::new());
+        let mut session = doubles.session(first_token_completion());
+        session.apply_session_context(HashMap::new(), Some("alias mka='make all'".into()));
+
+        let result = doubles
+            .complete_command_line(index)
+            .execute(&mut session, &request(1, "m"), &mut |_| {})
+            .unwrap();
+
+        // the alias ranks first by its priority; the spec name comes before the executables, each name once
+        assert_eq!(rows(&result), ["mka", "mk", "ma"]);
+    }
+
+    #[test]
+    fn should_scan_the_path_only_on_a_first_token_cache_miss() {
+        let doubles = CompletionDoubles::new(InMemorySpecRepository::default(), InMemorySpecRuntime::default());
+        let use_case = doubles.complete_command_line(SpecIndex::default());
+        let mut session = doubles.session(first_token_completion());
+        use_case.execute(&mut session, &request(1, "m"), &mut |_| {});
+        use_case.execute(&mut session, &request(2, "mk"), &mut |_| {});
+        let scans_within_ten_seconds = doubles.executables.scans();
+        doubles.clock.advance(Duration::from_secs(10));
+
+        use_case.execute(&mut session, &request(3, "mk"), &mut |_| {});
+
+        assert_eq!((scans_within_ten_seconds, doubles.executables.scans()), (1, 2));
+    }
+
+    #[test]
+    fn should_rank_recently_inserted_suggestions_first() {
+        let git = Rc::new(command(&["git"]).with_subcommands(vec![Rc::new(command(&["commit"])), Rc::new(command(&["checkout"]))]));
+        let doubles = CompletionDoubles::new(InMemorySpecRepository::with(&[("git", &git)]), InMemorySpecRuntime::default());
+        let use_case = doubles.complete_command_line(SpecIndex::default());
+        let mut session = doubles.session(Settings::default());
+        let before = rows(&use_case.execute(&mut session, &request(1, "git "), &mut |_| {}).unwrap());
+        session.record_insertion("git".into(), "commit".into(), doubles.clock.now_ms());
+
+        let result = use_case.execute(&mut session, &request(2, "git "), &mut |_| {}).unwrap();
+
+        assert_eq!((before, rows(&result)), (owned(&["checkout", "commit"]), owned(&["commit", "checkout"])));
     }
 }
