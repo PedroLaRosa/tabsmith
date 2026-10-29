@@ -1,7 +1,7 @@
 //! Completion-spec model and normalisation from the JSON produced by the JS host (SPEC §6.2).
 //! Functions inside specs arrive as `{"$fn": <id>}` and are kept as [`FnId`]s, called through `crate::js::Js`.
 //! OWNER: parser agent (struct shapes are shared with the suggest agent — extend, don't rename).
-use crate::types::ItemType;
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,7 +24,7 @@ pub struct Suggestion {
     pub insert_value: Option<String>,
     pub description: Option<String>,
     /// `None` → caller decides (static arg suggestions/generator results default to Arg).
-    pub kind: Option<ItemType>,
+    pub kind: Option<SuggestionKind>,
     pub priority: Option<f64>,
     pub hidden: bool,
     pub is_dangerous: bool,
@@ -256,13 +256,28 @@ pub fn suggestion_from_json(v: &Value) -> Option<Suggestion> {
         kind: v
             .get("type")
             .and_then(Value::as_str)
-            .map(ItemType::from_fig),
+            .map(from_fig),
         priority: v.get("priority").and_then(Value::as_f64),
         hidden: b(v, "hidden"),
         is_dangerous: b(v, "isDangerous"),
         template_type: v.get("context").and_then(|c| s(c, "templateType")),
         icon: s(v, "icon"),
     })
+}
+
+/// Fig type string → type (`mixin` → Special, unknown → Arg).
+fn from_fig(s: &str) -> SuggestionKind {
+    match s {
+        "subcommand" => SuggestionKind::Subcommand,
+        "option" => SuggestionKind::Option,
+        "file" => SuggestionKind::File,
+        "folder" => SuggestionKind::Folder,
+        "special" | "mixin" => SuggestionKind::Special,
+        "shortcut" => SuggestionKind::Shortcut,
+        "history" => SuggestionKind::History,
+        "auto-execute" => SuggestionKind::AutoExecute,
+        _ => SuggestionKind::Arg,
+    }
 }
 
 /// Result of a function `loadSpec` (SPEC §6.2): `SpecLocation[]`, one location (`{name, type}`) or a Subcommand.
@@ -622,7 +637,7 @@ mod tests {
         let short = &s.additional_suggestions[0];
         assert_eq!(
             (short.kind, short.insert_value.as_deref()),
-            (Some(ItemType::Shortcut), Some("commit -m '{cursor}'"))
+            (Some(SuggestionKind::Shortcut), Some("commit -m '{cursor}'"))
         );
         assert_eq!(opt(&s, "-C").is_repeatable, Repeat::Unlimited);
         assert_eq!(opt(&s, "-c").is_repeatable, Repeat::Times(3));
@@ -752,7 +767,7 @@ mod tests {
                 o.template_type.as_deref(),
                 o.priority
             ),
-            (2, Some(ItemType::Folder), Some("folders"), Some(80.0))
+            (2, Some(SuggestionKind::Folder), Some("folders"), Some(80.0))
         );
         assert!(suggestion_from_json(&json!({"description": "no name"})).is_none());
         assert!(suggestion_from_json(&json!(3)).is_none());

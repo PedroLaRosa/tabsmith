@@ -8,7 +8,8 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;
 use crate::history::domain::entities::history_entry::HistoryEntry;
-use crate::types::{Item, ItemType};
+use crate::types::Item;
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
@@ -144,7 +145,7 @@ pub fn spec_ghost(items: &[Item]) -> Option<String> {
     items.iter().find_map(|i| {
         let text = i.insert.text.strip_suffix(' ').unwrap_or(&i.insert.text);
         // accepting a ghost types its text and leaves the cursor at the end: rows that move it back are skipped
-        let ok = !matches!(i.kind, ItemType::AutoExecute | ItemType::History)
+        let ok = !matches!(i.kind, SuggestionKind::AutoExecute | SuggestionKind::History)
             && i.insert.delete == 0
             && i.insert.cursor_back <= i.insert.text.len() - text.len()
             && i.prefix_match
@@ -794,7 +795,7 @@ mod tests {
         assert_eq!(history_ghost(&h2, "git st").as_deref(), Some("atus"));
     }
 
-    fn item(kind: ItemType, delete: usize, text: &str, prefix: bool) -> Item {
+    fn item(kind: SuggestionKind, delete: usize, text: &str, prefix: bool) -> Item {
         Item {
             names: vec!["n".into()],
             display_name: None,
@@ -822,24 +823,24 @@ mod tests {
     #[test]
     fn spec_ghost_rules() {
         let items = [
-            item(ItemType::AutoExecute, 0, "x", true),
-            item(ItemType::History, 0, "y", true),
-            item(ItemType::Subcommand, 2, "checkout ", true),
-            item(ItemType::Subcommand, 0, "erry-pick ", false),
-            item(ItemType::Option, 0, " ", true),
-            item(ItemType::Subcommand, 0, "eckout ", true),
-            item(ItemType::Subcommand, 0, "erry ", true),
+            item(SuggestionKind::AutoExecute, 0, "x", true),
+            item(SuggestionKind::History, 0, "y", true),
+            item(SuggestionKind::Subcommand, 2, "checkout ", true),
+            item(SuggestionKind::Subcommand, 0, "erry-pick ", false),
+            item(SuggestionKind::Option, 0, " ", true),
+            item(SuggestionKind::Subcommand, 0, "eckout ", true),
+            item(SuggestionKind::Subcommand, 0, "erry ", true),
         ];
         assert_eq!(spec_ghost(&items).as_deref(), Some("eckout"));
         assert_eq!(spec_ghost(&items[..5]), None);
         assert_eq!(
-            spec_ghost(&[item(ItemType::Arg, 0, "a  ", true)]).as_deref(),
+            spec_ghost(&[item(SuggestionKind::Arg, 0, "a  ", true)]).as_deref(),
             Some("a ")
         );
         // spec-ghost-ignores-cursor: `commit -m '{cursor}'` would leave the cursor outside the quotes; `--out=`
         // (cursor right after `=`, before the auto-space) is fine
         let with_back = |text: &str, back| {
-            let mut i = item(ItemType::Arg, 0, text, true);
+            let mut i = item(SuggestionKind::Arg, 0, text, true);
             i.insert.cursor_back = back;
             i
         };

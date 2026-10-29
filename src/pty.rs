@@ -1793,7 +1793,8 @@ mod tests {
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
-    use crate::types::{Item, ItemType};
+    use crate::types::Item;
+    use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
     use alacritty_terminal::event::VoidListener;
 
     const SID: &str = "0123456789abcdef0123456789abcdef";
@@ -1883,7 +1884,7 @@ mod tests {
     fn subs(q: &str) -> Vec<Item> {
         ["cherry-pick", "checkout"]
             .iter()
-            .map(|n| item(n, ItemType::Subcommand, q))
+            .map(|n| item(n, SuggestionKind::Subcommand, q))
             .collect()
     }
 
@@ -1938,8 +1939,8 @@ mod tests {
             "cat ",
             1,
             vec![
-                item("a.txt", ItemType::File, ""),
-                item("b.txt", ItemType::File, ""),
+                item("a.txt", SuggestionKind::File, ""),
+                item("b.txt", SuggestionKind::File, ""),
             ],
         );
         c.req = s.req;
@@ -1956,8 +1957,8 @@ mod tests {
         // Tab + Enter (and Tab + Tab) in one read: the second insertion builds on the first one's result.
         let files = || {
             vec![
-                item("abcd1.txt", ItemType::File, "ab"),
-                item("abcd2.txt", ItemType::File, "ab"),
+                item("abcd1.txt", SuggestionKind::File, "ab"),
+                item("abcd2.txt", SuggestionKind::File, "ab"),
             ]
         };
         for (keys, want) in [(&b"\t\r"[..], "cat abcd1.txt"), (b"\t\t", "cat abcd")] {
@@ -2135,7 +2136,7 @@ mod tests {
         let mut c = comp(
             "git status --short ",
             2,
-            vec![item("my file.txt", ItemType::File, "")],
+            vec![item("my file.txt", SuggestionKind::File, "")],
         );
         c.req = s.req;
         s.on_completion(c);
@@ -2217,7 +2218,7 @@ mod tests {
         prompt(&mut s, "git chec");
         let items = ["checkout", "checkout-index"]
             .iter()
-            .map(|n| item(n, ItemType::Subcommand, "chec"))
+            .map(|n| item(n, SuggestionKind::Subcommand, "chec"))
             .collect();
         reply(&mut s, items, Some("kout feature-login"));
         s.on_input(b"\t");

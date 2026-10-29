@@ -30,8 +30,9 @@ use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
-    now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, ItemType, Msg, Phase, Request,
+    now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, Msg, Phase, Request,
 };
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -186,7 +187,7 @@ fn script_string(s: &str, is_dangerous: bool) -> Suggestion {
     Suggestion {
         names: vec![s.to_string()],
         insert_value: Some(s.to_string()),
-        kind: Some(ItemType::Arg),
+        kind: Some(SuggestionKind::Arg),
         is_dangerous,
         ..Default::default()
     }

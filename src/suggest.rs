@@ -7,7 +7,8 @@ use crate::spec::{Arg, CacheCfg, Opt, Repeat, Subcommand, Suggestion, Trigger};
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
-use crate::types::{GenKey, Insertion, Item, ItemType};
+use crate::types::{GenKey, Insertion, Item};
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::{json, Value};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -56,8 +57,8 @@ pub struct Sugg {
     pub display_name: Option<String>,
     pub insert_value: Option<String>,
     pub description: Option<String>,
-    pub kind: ItemType,
-    pub original_kind: Option<ItemType>,
+    pub kind: SuggestionKind,
+    pub original_kind: Option<SuggestionKind>,
     /// 0 = unset (`0` and unset are treated alike).
     pub priority: f64,
     pub hidden: bool,
@@ -74,7 +75,7 @@ pub struct Sugg {
 }
 
 impl Sugg {
-    pub fn new(name: impl Into<String>, kind: ItemType) -> Sugg {
+    pub fn new(name: impl Into<String>, kind: SuggestionKind) -> Sugg {
         Sugg {
             names: vec![name.into()],
             display_name: None,
@@ -114,7 +115,7 @@ impl Sugg {
             // SPEC §6.7.1 should_add_space
             should_add_space: mandatory
                 || s.requires_subcommand.unwrap_or(!s.subcommands.is_empty()),
-            ..Sugg::new("", ItemType::Subcommand)
+            ..Sugg::new("", SuggestionKind::Subcommand)
         }
     }
 
@@ -140,7 +141,7 @@ impl Sugg {
             args: o.args.clone(),
             should_add_space: o.args.first().is_some_and(|a| !a.is_optional),
             separator,
-            ..Sugg::new("", ItemType::Option)
+            ..Sugg::new("", SuggestionKind::Option)
         }
     }
 
@@ -163,7 +164,7 @@ impl Sugg {
             generator,
             template_type: s.template_type.clone(),
             icon: s.icon.clone(),
-            ..Sugg::new("", s.kind.unwrap_or(ItemType::Arg))
+            ..Sugg::new("", s.kind.unwrap_or(SuggestionKind::Arg))
         }
     }
 }
@@ -312,7 +313,7 @@ fn option_chain(list: Vec<Sugg>, options: &[Sugg], chain: &str, options_flag: bo
     };
     let mut list: Vec<Sugg> = list
         .into_iter()
-        .filter(|s| matches!(s.kind, ItemType::Option | ItemType::Arg))
+        .filter(|s| matches!(s.kind, SuggestionKind::Option | SuggestionKind::Arg))
         .collect();
     if !options_flag {
         if let Some(o) = options
@@ -323,7 +324,7 @@ fn option_chain(list: Vec<Sugg>, options: &[Sugg], chain: &str, options_flag: bo
         }
     }
     for s in &mut list {
-        if s.kind == ItemType::Arg {
+        if s.kind == SuggestionKind::Arg {
             s.query = Query::Value(String::new());
             continue;
         }
@@ -376,7 +377,7 @@ pub fn history_rows(prefix: &str, entries: &[HistoryEntry]) -> Vec<Sugg> {
         .filter(|n| seen.insert(*n))
         .map(|n| {
             let f = freq.get(&first_word(n)).copied().unwrap_or(0);
-            let mut s = Sugg::new(n, ItemType::History);
+            let mut s = Sugg::new(n, SuggestionKind::History);
             s.description = Some("past command".into());
             s.insert_value = Some(n.to_string());
             s.priority = if f > 1 {
@@ -438,7 +439,7 @@ pub fn update_priorities(list: &mut [Sugg], recency: Option<&HashMap<String, u64
             .filter(|&ms| ms != 0);
         let boost = rec.map_or(0.0, |ms| ms as f64 / 1e13);
         let mut p = if s.priority == 0.0 { 50.0 } else { s.priority }; // 0 is treated as unset, i.e. 50
-        if s.kind != ItemType::AutoExecute {
+        if s.kind != SuggestionKind::AutoExecute {
             p = p.clamp(0.0, 100.0);
         }
         s.priority = if rec.is_some() && (50.0..=75.0).contains(&p) {
@@ -583,8 +584,8 @@ pub fn partial(names: &[String], q: &str, fuzzy: bool) -> Option<(f64, bool)> {
     })
 }
 
-fn auto_exec(name: &str, description: &str, original: Option<ItemType>) -> Sugg {
-    let mut s = Sugg::new(name, ItemType::AutoExecute);
+fn auto_exec(name: &str, description: &str, original: Option<SuggestionKind>) -> Sugg {
+    let mut s = Sugg::new(name, SuggestionKind::AutoExecute);
     s.original_kind = original;
     s.insert_value = Some("\n".into());
     s.description = Some(description.into());
@@ -612,7 +613,7 @@ pub fn filter(list: Vec<Sugg>, search_term: &str, o: &FilterOpts) -> Vec<(Sugg, 
     let mut added = false;
     for s in list {
         let q = s.query.of(search_term);
-        let folder = s.kind == ItemType::Folder;
+        let folder = s.kind == SuggestionKind::Folder;
         let qx = if folder { format!("{q}/") } else { q.clone() }.to_lowercase();
         if let Some(exact) = s.names.iter().find(|n| n.to_lowercase() == qx).cloned() {
             let plain = s.names.first().is_none_or(|n| n.is_empty())
@@ -625,7 +626,7 @@ pub fn filter(list: Vec<Sugg>, search_term: &str, o: &FilterOpts) -> Vec<(Sugg, 
                 && s.args.first().is_none_or(|a| a.is_optional)
             {
                 let mut x = s.clone();
-                x.kind = ItemType::AutoExecute;
+                x.kind = SuggestionKind::AutoExecute;
                 x.original_kind = Some(s.kind);
                 if folder {
                     x.names = vec![exact.strip_suffix('/').unwrap_or(&exact).to_string()];
@@ -669,7 +670,7 @@ pub fn filter(list: Vec<Sugg>, search_term: &str, o: &FilterOpts) -> Vec<(Sugg, 
             out.insert(
                 0,
                 (
-                    auto_exec(name, "Enter the current directory", Some(ItemType::Folder)),
+                    auto_exec(name, "Enter the current directory", Some(SuggestionKind::Folder)),
                     false,
                 ),
             );
@@ -743,7 +744,7 @@ pub struct InsCtx<'a> {
 /// `getNameMatch`: which alias to insert.
 fn name_match(s: &Sugg, q: &str, fuzzy: bool, verbose: bool) -> Option<String> {
     let pick = |names: Vec<&String>| -> Option<String> {
-        if verbose && matches!(s.kind, ItemType::Option | ItemType::Subcommand) {
+        if verbose && matches!(s.kind, SuggestionKind::Option | SuggestionKind::Subcommand) {
             let mut best: Option<&String> = None;
             for n in names {
                 if n.chars().count() > best.map_or(0, |b| b.chars().count()) {
@@ -888,7 +889,7 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
     let raw: Vec<char> = c.raw.chars().collect();
     let (logical, open) = unquote(&raw, c.shell);
     // special (`help` template) rows replace the typed prefix like any other row
-    let delete = if s.kind == ItemType::AutoExecute {
+    let delete = if s.kind == SuggestionKind::AutoExecute {
         0
     } else if q == c.search_term {
         raw.len()
@@ -921,8 +922,8 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
         .filter(|&(_, i)| i < raw.len() - delete)
         .map(|(q, _)| q);
     let (folder, path) = (
-        s.kind == ItemType::Folder,
-        matches!(s.kind, ItemType::File | ItemType::Folder),
+        s.kind == SuggestionKind::Folder,
+        matches!(s.kind, SuggestionKind::File | SuggestionKind::Folder),
     );
     let mut text = match &s.insert_value {
         Some(v) if !path => v.clone(),
@@ -933,7 +934,7 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
                     // a file closes the quote; a folder leaves it open for the next segment
                     (Some(qc), sh) => {
                         let mut t = escape_in_quote(&m, qc, sh);
-                        t.extend((s.kind == ItemType::File).then_some(qc));
+                        t.extend((s.kind == SuggestionKind::File).then_some(qc));
                         t
                     }
                     (None, Shell::Pwsh) => escape_pwsh(&m, folder, quote, path),
@@ -1303,9 +1304,9 @@ pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<Suggestion> 
             Some(Suggestion {
                 insert_value: Some(n.clone()),
                 kind: Some(if folder {
-                    ItemType::Folder
+                    SuggestionKind::Folder
                 } else {
-                    ItemType::File
+                    SuggestionKind::File
                 }),
                 is_dangerous,
                 template_type: Some(if folder { "folders" } else { "filepaths" }.into()),
@@ -1338,24 +1339,24 @@ pub fn help_items(pr: &ParseResult) -> Vec<Suggestion> {
         .map(|n| Suggestion {
             names: vec![n.clone()],
             insert_value: Some(n.clone()),
-            kind: Some(ItemType::Special),
+            kind: Some(SuggestionKind::Special),
             template_type: Some("help".into()),
             ..Default::default()
         })
         .collect()
 }
 
-fn fig_type(k: ItemType) -> &'static str {
+fn fig_type(k: SuggestionKind) -> &'static str {
     match k {
-        ItemType::Subcommand => "subcommand",
-        ItemType::Option => "option",
-        ItemType::Arg => "arg",
-        ItemType::File => "file",
-        ItemType::Folder => "folder",
-        ItemType::Special => "special",
-        ItemType::Shortcut => "shortcut",
-        ItemType::History => "history",
-        ItemType::AutoExecute => "auto-execute",
+        SuggestionKind::Subcommand => "subcommand",
+        SuggestionKind::Option => "option",
+        SuggestionKind::Arg => "arg",
+        SuggestionKind::File => "file",
+        SuggestionKind::Folder => "folder",
+        SuggestionKind::Special => "special",
+        SuggestionKind::Shortcut => "shortcut",
+        SuggestionKind::History => "history",
+        SuggestionKind::AutoExecute => "auto-execute",
     }
 }
 
@@ -1365,7 +1366,7 @@ pub fn template_json(items: &[Suggestion]) -> Value {
         items
             .iter()
             .map(|s| {
-                json!({"name": s.names.first(), "type": fig_type(s.kind.unwrap_or(ItemType::Arg)),
+                json!({"name": s.names.first(), "type": fig_type(s.kind.unwrap_or(SuggestionKind::Arg)),
                        "insertValue": s.insert_value, "isDangerous": s.is_dangerous,
                        "context": {"templateType": s.template_type}})
             })
@@ -1424,7 +1425,7 @@ pub fn first_token_items(
 ) -> Vec<Sugg> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    let mut push = |name: &str, kind: ItemType, priority: f64, description: Option<&String>| {
+    let mut push = |name: &str, kind: SuggestionKind, priority: f64, description: Option<&String>| {
         if !name.is_empty() && seen.insert(name.to_string()) {
             let mut s = Sugg::new(name, kind);
             s.priority = priority;
@@ -1433,19 +1434,19 @@ pub fn first_token_items(
         }
     };
     for n in specs.iter().filter(|n| is_root_spec(n)) {
-        push(n, ItemType::Subcommand, 40.0, None);
+        push(n, SuggestionKind::Subcommand, 40.0, None);
     }
     let mut al: Vec<_> = aliases.iter().collect();
     al.sort();
     for (k, v) in al {
-        push(k, ItemType::Shortcut, 100.0, Some(v));
+        push(k, SuggestionKind::Shortcut, 100.0, Some(v));
     }
     for dir in path
         .map(|p| std::env::split_paths(p).collect::<Vec<_>>())
         .unwrap_or_default()
     {
         for exe in executables(&dir, pathext) {
-            push(&exe, ItemType::Subcommand, 40.0, None);
+            push(&exe, SuggestionKind::Subcommand, 40.0, None);
         }
     }
     out
@@ -1519,7 +1520,7 @@ mod tests {
             .map(|(s, _)| {
                 format!(
                     "{}{}",
-                    if s.kind == ItemType::AutoExecute {
+                    if s.kind == SuggestionKind::AutoExecute {
                         "!"
                     } else {
                         ""
@@ -1570,9 +1571,9 @@ mod tests {
 
     #[test]
     fn bucket_order_and_auto_execute() {
-        let file = Sugg::new("foo", ItemType::File);
-        let folder = Sugg::new("foo/", ItemType::Folder);
-        let partial_row = Sugg::new("foobar", ItemType::Arg);
+        let file = Sugg::new("foo", SuggestionKind::File);
+        let folder = Sugg::new("foo/", SuggestionKind::Folder);
+        let partial_row = Sugg::new("foobar", SuggestionKind::Arg);
         let list = vec![partial_row, folder, file];
         assert_eq!(
             names(&filter(list.clone(), "foo", &opts())),
@@ -1585,7 +1586,7 @@ mod tests {
         };
         assert_eq!(names(&filter(list, "foo", &o)), ["foo", "foo/", "foobar"]);
         // dangerous / mandatory arg → no auto-execute row; dangerous allowed by setting
-        let mut d = Sugg::new("rm", ItemType::Subcommand);
+        let mut d = Sugg::new("rm", SuggestionKind::Subcommand);
         d.is_dangerous = true;
         assert_eq!(names(&filter(vec![d.clone()], "rm", &opts())), ["rm"]);
         let o = FilterOpts {
@@ -1593,7 +1594,7 @@ mod tests {
             ..opts()
         };
         assert_eq!(names(&filter(vec![d], "rm", &o)), ["!rm", "rm"]);
-        let mut m = Sugg::new("commit", ItemType::Subcommand);
+        let mut m = Sugg::new("commit", SuggestionKind::Subcommand);
         m.args = vec![arg(false)];
         assert_eq!(
             names(&filter(vec![m.clone()], "commit", &opts())),
@@ -1605,22 +1606,22 @@ mod tests {
             ["!commit", "commit"]
         );
         // insertValue differing from the name → no auto-execute
-        let mut iv = Sugg::new("x", ItemType::Arg);
+        let mut iv = Sugg::new("x", SuggestionKind::Arg);
         iv.insert_value = Some("y".into());
         assert_eq!(names(&filter(vec![iv], "x", &opts())), ["x"]);
         // folder exact match: auto-execute named without "/"
-        let out = filter(vec![Sugg::new("src/", ItemType::Folder)], "src", &opts());
+        let out = filter(vec![Sugg::new("src/", SuggestionKind::Folder)], "src", &opts());
         assert_eq!(names(&out), ["!src", "src/"]);
         assert_eq!(out[0].0.description.as_deref(), Some("folder"));
     }
 
     #[test]
     fn partial_sorted_by_score_then_priority() {
-        let mut a = Sugg::new("CHeck", ItemType::Arg);
+        let mut a = Sugg::new("CHeck", SuggestionKind::Arg);
         a.priority = 90.0;
-        let mut b = Sugg::new("check", ItemType::Arg);
+        let mut b = Sugg::new("check", SuggestionKind::Arg);
         b.priority = 10.0;
-        let mut c = Sugg::new("chmod", ItemType::Arg);
+        let mut c = Sugg::new("chmod", SuggestionKind::Arg);
         c.priority = 80.0;
         // check/chmod tie on score −2 → priority decides; CHeck is −3
         assert_eq!(
@@ -1634,8 +1635,8 @@ mod tests {
         // spec-ghost-on-empty-token: `git ` must not ghost the alphabetically first subcommand
         let subs = || {
             vec![
-                Sugg::new("abort", ItemType::Subcommand),
-                Sugg::new("add", ItemType::Subcommand),
+                Sugg::new("abort", SuggestionKind::Subcommand),
+                Sugg::new("add", SuggestionKind::Subcommand),
             ]
         };
         let ghost = |search: &str| {
@@ -1652,21 +1653,21 @@ mod tests {
     #[test]
     fn directory_and_current_token_rows() {
         let row = |s: &str| {
-            let mut x = Sugg::new(s, ItemType::Folder);
+            let mut x = Sugg::new(s, SuggestionKind::Folder);
             x.template_type = Some("folders".into());
             x.query = Query::Str("/".into());
             x
         };
         let out = filter(vec![row("../"), row("./x/")], ".", &opts());
         assert_eq!(out[0].0.first(), ".");
-        assert_eq!(out[0].0.original_kind, Some(ItemType::Folder));
+        assert_eq!(out[0].0.original_kind, Some(SuggestionKind::Folder));
         let out = filter(vec![row("lib/")], "src/", &opts());
         assert_eq!(names(&out), ["!↪", "lib/"]);
         let o = FilterOpts {
             suggest_current_token: true,
             ..opts()
         };
-        let out = filter(vec![Sugg::new("main", ItemType::Arg)], "ma", &o);
+        let out = filter(vec![Sugg::new("main", SuggestionKind::Arg)], "ma", &o);
         assert_eq!(names(&out), ["!ma", "main"]);
         assert_eq!(
             out[0].0.description.as_deref(),
@@ -1677,14 +1678,14 @@ mod tests {
             ..opts()
         };
         assert_eq!(
-            names(&filter(vec![Sugg::new("a", ItemType::Arg)], "", &o)),
+            names(&filter(vec![Sugg::new("a", SuggestionKind::Arg)], "", &o)),
             ["!↪", "a"]
         );
     }
 
     #[test]
     fn dedupe_only_up_to_50() {
-        let mut d = Sugg::new("dup", ItemType::Arg);
+        let mut d = Sugg::new("dup", SuggestionKind::Arg);
         d.display_name = Some("dup".into());
         // name and display name both match → pushed twice, deduped
         let out = rank(vec![d.clone()], "du", None, &opts());
@@ -1702,10 +1703,10 @@ mod tests {
         ]
         .into();
         let mut list = vec![
-            Sugg::new("a", ItemType::Arg),
-            Sugg::new("b", ItemType::Arg),
-            Sugg::new("c", ItemType::Arg),
-            Sugg::new("../", ItemType::Folder),
+            Sugg::new("a", SuggestionKind::Arg),
+            Sugg::new("b", SuggestionKind::Arg),
+            Sugg::new("c", SuggestionKind::Arg),
+            Sugg::new("../", SuggestionKind::Folder),
         ];
         list[1].priority = 80.0;
         list[2].priority = 0.0;
@@ -1715,11 +1716,11 @@ mod tests {
         assert_eq!(list[2].priority, 50.0);
         assert_eq!(list[3].priority, 50.0);
         // alphabetical → no recency map
-        let mut list = vec![Sugg::new("a", ItemType::Arg)];
+        let mut list = vec![Sugg::new("a", SuggestionKind::Arg)];
         update_priorities(&mut list, None);
         assert_eq!(list[0].priority, 50.0);
         // auto-execute is not clamped
-        let mut list = vec![Sugg::new("↪", ItemType::AutoExecute)];
+        let mut list = vec![Sugg::new("↪", SuggestionKind::AutoExecute)];
         list[0].priority = 150.0;
         update_priorities(&mut list, None);
         assert_eq!(list[0].priority, 150.0);
@@ -1912,8 +1913,8 @@ mod tests {
         );
         assert_eq!(rows[0].insert_value.as_deref(), Some("checkout main"));
         let spec = vec![
-            Sugg::new("checkout", ItemType::Subcommand),
-            Sugg::new("status", ItemType::Subcommand),
+            Sugg::new("checkout", SuggestionKind::Subcommand),
+            Sugg::new("status", SuggestionKind::Subcommand),
         ];
         let mixed = mix_history(spec.clone(), rows.clone(), true);
         let got: Vec<(&str, f64)> = mixed.iter().map(|s| (s.first(), s.priority)).collect();
@@ -1931,11 +1932,11 @@ mod tests {
 
     #[test]
     fn insertion_examples() {
-        let mut status = Sugg::new("status", ItemType::Subcommand);
+        let mut status = Sugg::new("status", SuggestionKind::Subcommand);
         status.should_add_space = true;
         let i = insertion(&status, &ctx("st", "st", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (0, "atus "));
-        let mut checkout = Sugg::new("checkout", ItemType::Subcommand);
+        let mut checkout = Sugg::new("checkout", SuggestionKind::Subcommand);
         checkout.should_add_space = true;
         assert_eq!(
             insertion(&checkout, &ctx("ch", "ch", Shell::Zsh)).text,
@@ -1945,7 +1946,7 @@ mod tests {
         let i = insertion(&checkout, &ctx("CH", "CH", Shell::Zsh));
         assert_eq!((i.delete, i.text.as_str()), (2, "checkout "));
         // requiresSeparator + mandatory arg: `--out= ` with the cursor right after `=`
-        let mut out = Sugg::new("--out", ItemType::Option);
+        let mut out = Sugg::new("--out", SuggestionKind::Option);
         out.separator = Some("=".into());
         out.should_add_space = true;
         let i = insertion(&out, &ctx("", "", Shell::Bash));
@@ -1975,52 +1976,52 @@ mod tests {
         };
         assert_eq!(insertion(&checkout, &c).text, "eckout");
         // escaped space in the raw token
-        let mut dir = Sugg::new("my dir/", ItemType::Folder);
+        let mut dir = Sugg::new("my dir/", SuggestionKind::Folder);
         dir.insert_value = Some("my dir/".into());
         dir.query = Query::Str("/".into());
         let i = insertion(&dir, &ctx("my di", "my\\ di", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (6, "my\\ dir/"));
         // quoted raw token
-        let mut file = Sugg::new("my file", ItemType::File);
+        let mut file = Sugg::new("my file", SuggestionKind::File);
         file.query = Query::Str("/".into());
         let i = insertion(&file, &ctx("my fi", "'my fi", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (6, "'my file'"));
         // getQueryTerm "/": only the part after the last "/" is deleted / not retyped
-        let mut main = Sugg::new("main.rs", ItemType::File);
+        let mut main = Sugg::new("main.rs", SuggestionKind::File);
         main.query = Query::Str("/".into());
         let i = insertion(&main, &ctx("src/ma", "src/ma", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (0, "in.rs"));
         // POSIX special chars → single quotes, embedded quote escaped
         let i = insertion(
-            &Sugg::new("it's", ItemType::File),
+            &Sugg::new("it's", SuggestionKind::File),
             &ctx("", "", Shell::Bash),
         );
         assert_eq!(i.text, "'it'\\''s'");
         let i = insertion(
-            &Sugg::new("a(b)/", ItemType::Folder),
+            &Sugg::new("a(b)/", SuggestionKind::Folder),
             &ctx("", "", Shell::Bash),
         );
         assert_eq!(i.text, "'a(b)'/");
         // pwsh
         let i = insertion(
-            &Sugg::new("my file", ItemType::File),
+            &Sugg::new("my file", SuggestionKind::File),
             &ctx("", "", Shell::Pwsh),
         );
         assert_eq!(i.text, "'my file'");
         let i = insertion(
-            &Sugg::new("it's", ItemType::File),
+            &Sugg::new("it's", SuggestionKind::File),
             &ctx("", "", Shell::Pwsh),
         );
         assert_eq!(i.text, "'it''s'");
         let i = insertion(
-            &Sugg::new("my dir/", ItemType::Folder),
+            &Sugg::new("my dir/", SuggestionKind::Folder),
             &ctx("", "", Shell::Pwsh),
         );
         assert_eq!((i.text.as_str(), i.cursor_back), ("my` dir/", 0));
         let i = insertion(&out, &ctx("", "", Shell::Pwsh));
         assert_eq!((i.text.as_str(), i.cursor_back), ("--out= ", 1));
         // insertValue verbatim with {cursor}; "\n" → execute; auto-execute deletes nothing
-        let mut iv = Sugg::new("x", ItemType::Arg);
+        let mut iv = Sugg::new("x", SuggestionKind::Arg);
         iv.insert_value = Some("a{cursor}b\n\n".into());
         assert_eq!(
             insertion(&iv, &ctx("x", "x", Shell::Bash)),
@@ -2042,13 +2043,13 @@ mod tests {
             }
         );
         // option chain arg rows: query "" → nothing deleted
-        let mut a = Sugg::new("val", ItemType::Arg);
+        let mut a = Sugg::new("val", SuggestionKind::Arg);
         a.query = Query::Value(String::new());
         assert_eq!(insertion(&a, &ctx("-la", "-la", Shell::Bash)).delete, 0);
         // preferVerboseSuggestions
         let o = Sugg {
             names: vec!["-m".into(), "--message".into()],
-            ..Sugg::new("", ItemType::Option)
+            ..Sugg::new("", SuggestionKind::Option)
         };
         assert_eq!(insertion(&o, &ctx("", "", Shell::Bash)).text, "-m");
         let c = InsCtx {
@@ -2063,7 +2064,7 @@ mod tests {
     #[test]
     fn insertion_review_regressions() {
         // composite-optarg-delete: the parser hands over only the value (`al` of `--color=al`)
-        let always = Sugg::new("always", ItemType::Arg);
+        let always = Sugg::new("always", SuggestionKind::Arg);
         assert_eq!(
             insertion(&always, &ctx("al", "al", Shell::Zsh)),
             Insertion {
@@ -2075,8 +2076,8 @@ mod tests {
         );
         // insert-control-chars: CR/LF/ESC/DEL never reach the PTY; a trailing "\n" still means execute
         for (kind, name) in [
-            (ItemType::File, "a\rtouch${IFS}PWNED\r"),
-            (ItemType::Arg, "x\x1b[2J\nrm\x7f"),
+            (SuggestionKind::File, "a\rtouch${IFS}PWNED\r"),
+            (SuggestionKind::Arg, "x\x1b[2J\nrm\x7f"),
         ] {
             let i = insertion(&Sugg::new(name, kind), &ctx("", "", Shell::Bash));
             assert!(
@@ -2084,7 +2085,7 @@ mod tests {
                 "{name:?} → {i:?}"
             );
         }
-        let mut generator = Sugg::new("x", ItemType::Arg);
+        let mut generator = Sugg::new("x", SuggestionKind::Arg);
         generator.insert_value = Some("dev\rrm -rf ~\n".into());
         assert_eq!(
             insertion(&generator, &ctx("", "", Shell::Bash)),
@@ -2096,7 +2097,7 @@ mod tests {
             }
         );
         // special-rows-no-delete: `help` rows replace the typed prefix instead of doubling it
-        let build = Sugg::new("build", ItemType::Special);
+        let build = Sugg::new("build", SuggestionKind::Special);
         assert_eq!(insertion(&build, &ctx("bu", "bu", Shell::Bash)).text, "ild");
         let i = insertion(&build, &ctx("BU", "BU", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (2, "build"));
@@ -2105,19 +2106,19 @@ mod tests {
             query: Query::Path { backslash: false },
             ..Sugg::new(name, kind)
         };
-        let file = path("x y.txt", ItemType::File);
+        let file = path("x y.txt", SuggestionKind::File);
         let i = insertion(&file, &ctx("my dir/x", "\"my dir/x", Shell::Zsh));
         assert_eq!((i.delete, i.text.as_str()), (0, " y.txt\""));
         let i = insertion(&file, &ctx("my dir/x", "'my dir/x", Shell::Bash));
         assert_eq!((i.delete, i.text.as_str()), (0, " y.txt'"));
         let i = insertion(
-            &path("sub dir/", ItemType::Folder),
+            &path("sub dir/", SuggestionKind::Folder),
             &ctx("my dir/", "\"my dir/", Shell::Bash),
         );
         assert_eq!((i.delete, i.text.as_str()), (0, "sub dir/")); // folders leave the quote open
         assert_eq!(
             insertion(
-                &path("a\"b$`\\", ItemType::File),
+                &path("a\"b$`\\", SuggestionKind::File),
                 &ctx("d/", "\"d/", Shell::Bash)
             )
             .text,
@@ -2125,7 +2126,7 @@ mod tests {
         );
         assert_eq!(
             insertion(
-                &path("it's", ItemType::File),
+                &path("it's", SuggestionKind::File),
                 &ctx("d/", "'d/", Shell::Bash)
             )
             .text,
@@ -2133,7 +2134,7 @@ mod tests {
         );
         assert_eq!(
             insertion(
-                &path("it's", ItemType::File),
+                &path("it's", SuggestionKind::File),
                 &ctx("d/", "'d/", Shell::Pwsh)
             )
             .text,
@@ -2141,7 +2142,7 @@ mod tests {
         );
         assert_eq!(
             insertion(
-                &path("a\"$b", ItemType::File),
+                &path("a\"$b", SuggestionKind::File),
                 &ctx("d/", "\"d/", Shell::Pwsh)
             )
             .text,
@@ -2168,15 +2169,15 @@ mod tests {
         // posix-escape-misses-shell-metachars / path-metachar-injection: names never become live shell syntax
         for sh in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             for (name, kind) in [
-                ("zz;id", ItemType::Arg),
-                ("a$b.txt", ItemType::File),
-                ("a`id`b", ItemType::File),
-                ("x{1,2}.txt", ItemType::File),
-                ("notes;touch${IFS}PWNED.txt", ItemType::File),
-                ("semi;colon dir.txt", ItemType::File),
-                ("~x", ItemType::File),
-                ("=cmd", ItemType::File),
-                ("a=~b", ItemType::File),
+                ("zz;id", SuggestionKind::Arg),
+                ("a$b.txt", SuggestionKind::File),
+                ("a`id`b", SuggestionKind::File),
+                ("x{1,2}.txt", SuggestionKind::File),
+                ("notes;touch${IFS}PWNED.txt", SuggestionKind::File),
+                ("semi;colon dir.txt", SuggestionKind::File),
+                ("~x", SuggestionKind::File),
+                ("=cmd", SuggestionKind::File),
+                ("a=~b", SuggestionKind::File),
             ] {
                 assert_eq!(
                     text(Sugg::new(name, kind), sh),
@@ -2184,20 +2185,20 @@ mod tests {
                     "{sh:?} {name}"
                 );
             }
-            assert_eq!(text(Sugg::new("$b;x/", ItemType::Folder), sh), "'$b;x'/");
+            assert_eq!(text(Sugg::new("$b;x/", SuggestionKind::Folder), sh), "'$b;x'/");
             assert_eq!(
-                text(Sugg::new("a b-c_d.e+f,g:h@i%j=k~", ItemType::File), sh),
+                text(Sugg::new("a b-c_d.e+f,g:h@i%j=k~", SuggestionKind::File), sh),
                 "a\\ b-c_d.e+f,g:h@i%j=k~"
             );
         }
         assert_eq!(
-            text(Sugg::new("it's\\", ItemType::File), Shell::Fish),
+            text(Sugg::new("it's\\", SuggestionKind::File), Shell::Fish),
             "'it\\'s\\\\'"
         );
         // a separator stays outside the escaping (`--out=` + cursor), even when the name needs quotes
         let sep = Sugg {
             separator: Some("=".into()),
-            ..Sugg::new("--a;b", ItemType::Option)
+            ..Sugg::new("--a;b", SuggestionKind::Option)
         };
         assert_eq!(
             insertion(&sep, &ctx("", "", Shell::Bash)),
@@ -2210,27 +2211,27 @@ mod tests {
         );
         // pwsh-quotes-variable-refs: a `$NAME` row stays a variable reference; a file named so is still quoted
         for sh in [Shell::Bash, Shell::Fish, Shell::Pwsh] {
-            let i = insertion(&Sugg::new("$HOME", ItemType::Arg), &ctx("$HO", "$HO", sh));
+            let i = insertion(&Sugg::new("$HOME", SuggestionKind::Arg), &ctx("$HO", "$HO", sh));
             assert_eq!((i.delete, i.text.as_str()), (0, "ME"), "{sh:?}");
-            assert_eq!(text(Sugg::new("$foo", ItemType::File), sh), "'$foo'");
+            assert_eq!(text(Sugg::new("$foo", SuggestionKind::File), sh), "'$foo'");
         }
         assert_eq!(
-            text(Sugg::new("$env:PATH", ItemType::Arg), Shell::Pwsh),
+            text(Sugg::new("$env:PATH", SuggestionKind::Arg), Shell::Pwsh),
             "$env:PATH"
         );
         assert_eq!(
-            text(Sugg::new("a$b.txt", ItemType::File), Shell::Pwsh),
+            text(Sugg::new("a$b.txt", SuggestionKind::File), Shell::Pwsh),
             "'a$b.txt'"
         );
         // pwsh-unicode-smart-quote-injection: pwsh ends a '…' string at ’ too, so smart single quotes are doubled
         assert_eq!(
-            text(Sugg::new("r’;x;’.txt", ItemType::File), Shell::Pwsh),
+            text(Sugg::new("r’;x;’.txt", SuggestionKind::File), Shell::Pwsh),
             "'r’’;x;’’.txt'"
         );
         // pwsh-quoted-folder-midword-guard: folders are backtick-escaped bare words (cursor at the end), and a
         // quoted file can follow in the same word
         let i = insertion(
-            &Sugg::new("dir with space/", ItemType::Folder),
+            &Sugg::new("dir with space/", SuggestionKind::Folder),
             &ctx("di", "'di", Shell::Pwsh),
         );
         assert_eq!(
@@ -2238,12 +2239,12 @@ mod tests {
             (3, "dir` with` space/", 0)
         );
         assert_eq!(
-            text(Sugg::new("a$b'(c)/", ItemType::Folder), Shell::Pwsh),
+            text(Sugg::new("a$b'(c)/", SuggestionKind::Folder), Shell::Pwsh),
             "a`$b`'`(c`)/"
         );
         let file = Sugg {
             query: Query::Path { backslash: true },
-            ..Sugg::new("a b.txt", ItemType::File)
+            ..Sugg::new("a b.txt", SuggestionKind::File)
         };
         let i = insertion(
             &file,
@@ -2262,13 +2263,13 @@ mod tests {
             ("'dir with space/sub d", Shell::Pwsh),
         ] {
             let i = insertion(
-                &fq("sub dir/", ItemType::Folder, "sub d"),
+                &fq("sub dir/", SuggestionKind::Folder, "sub d"),
                 &ctx("dir with space/sub d", raw, sh),
             );
             assert_eq!((i.delete, i.text.as_str()), (0, "ir/"), "{raw} {sh:?}");
         }
         let i = insertion(
-            &fq("my file.py", ItemType::File, "my fi"),
+            &fq("my file.py", SuggestionKind::File, "my fi"),
             &ctx(
                 "dir with space/my fi",
                 "\"dir with space/my fi",
@@ -2277,7 +2278,7 @@ mod tests {
         );
         assert_eq!((i.delete, i.text.as_str()), (0, "le.py\""));
         let i = insertion(
-            &fq("my file.py", ItemType::File, "my fi"),
+            &fq("my file.py", SuggestionKind::File, "my fi"),
             &ctx(
                 "dir with space/my fi",
                 "dir\\ with\\ space/my\\ fi",
@@ -2286,7 +2287,7 @@ mod tests {
         );
         assert_eq!((i.delete, i.text.as_str()), (6, "my\\ file.py"));
         let i = insertion(
-            &fq("my file.py", ItemType::File, "my fi"),
+            &fq("my file.py", SuggestionKind::File, "my fi"),
             &ctx(
                 "dir with space/my fi",
                 "dir` with` space/my` fi",
@@ -2295,14 +2296,14 @@ mod tests {
         );
         assert_eq!((i.delete, i.text.as_str()), (6, "'my file.py'"));
         let i = insertion(
-            &fq("it's.txt", ItemType::File, "it's"),
+            &fq("it's.txt", SuggestionKind::File, "it's"),
             &ctx("d/it's", "'d/it''s", Shell::Pwsh),
         );
         assert_eq!((i.delete, i.text.as_str()), (5, "it''s.txt'"));
         // dq-bang-history-expansion: `!` inside bash/zsh double quotes; fish has no backtick escape there
         let path = |name: &str| Sugg {
             query: Query::Path { backslash: false },
-            ..Sugg::new(name, ItemType::File)
+            ..Sugg::new(name, SuggestionKind::File)
         };
         for sh in [Shell::Bash, Shell::Zsh] {
             assert_eq!(
@@ -2320,8 +2321,8 @@ mod tests {
         );
         // r3-escape-quotes-spec-tilde: a spec row's leading `~`/`%` is shell syntax (`cd ~`, `kill %1`)
         for sh in [Shell::Bash, Shell::Zsh, Shell::Fish] {
-            assert_eq!(text(Sugg::new("~", ItemType::Arg), sh), "~", "{sh:?}");
-            assert_eq!(text(Sugg::new("%1", ItemType::Arg), sh), "%1", "{sh:?}");
+            assert_eq!(text(Sugg::new("~", SuggestionKind::Arg), sh), "~", "{sh:?}");
+            assert_eq!(text(Sugg::new("%1", SuggestionKind::Arg), sh), "%1", "{sh:?}");
         }
         // pwsh-unicode-smart-quote-injection: PowerShell also ends strings at ‘ ’ ‚ ‛ (single) and “ ” „ (double):
         // they force quoting (shell_quoting::quote escapes them), are backtick-escaped in folders and open `"`
@@ -2331,7 +2332,7 @@ mod tests {
             "report’;New-Item -Name TS -ItemType File;’.txt",
             "a‘b‚c‛d“e”f„g",
         ] {
-            for kind in [ItemType::File, ItemType::Arg] {
+            for kind in [SuggestionKind::File, SuggestionKind::Arg] {
                 assert_eq!(
                     text(Sugg::new(name, kind), Shell::Pwsh),
                     sq(name),
@@ -2345,7 +2346,7 @@ mod tests {
             );
         }
         assert_eq!(
-            text(Sugg::new("x’;calc;‘/", ItemType::Folder), Shell::Pwsh),
+            text(Sugg::new("x’;calc;‘/", SuggestionKind::Folder), Shell::Pwsh),
             "x`’`;calc`;`‘/"
         );
         assert_eq!(
@@ -2376,7 +2377,7 @@ mod tests {
 
     #[test]
     fn item_highlight_and_hint() {
-        let mut s = Sugg::new("-m", ItemType::Option);
+        let mut s = Sugg::new("-m", SuggestionKind::Option);
         s.names.push("--message".into());
         s.args = vec![
             Rc::new(Arg {
@@ -2394,7 +2395,7 @@ mod tests {
         assert_eq!(it.title(), "-m, --message");
         assert_eq!(it.highlight, [4, 5, 6]);
         assert_eq!(it.args_hint, "<msg> [more...]");
-        let s = Sugg::new("Fuzzy Search", ItemType::Arg);
+        let s = Sugg::new("Fuzzy Search", SuggestionKind::Arg);
         let it = to_item(
             s,
             false,
@@ -2454,7 +2455,7 @@ mod tests {
             ("ma".into(), "c".into(), "ma".into())
         );
         assert_eq!(Query::Path { backslash: false }.of("a\\b/c\\d"), "c\\d");
-        let mut main = Sugg::new("main.rs", ItemType::File);
+        let mut main = Sugg::new("main.rs", SuggestionKind::File);
         main.query = q;
         let i = insertion(&main, &ctx("src\\ma", "src\\ma", Shell::Pwsh));
         assert_eq!((i.delete, i.text.as_str()), (0, "in.rs"));
@@ -2518,17 +2519,17 @@ mod tests {
         let aliases: HashMap<String, String> =
             [("gst".to_string(), "git status".to_string())].into();
         let items = first_token_items(&specs, &aliases, d.to_str(), None);
-        let got: Vec<(&str, ItemType, f64)> = items
+        let got: Vec<(&str, SuggestionKind, f64)> = items
             .iter()
             .map(|s| (s.first(), s.kind, s.priority))
             .collect();
         assert_eq!(
             got,
             [
-                ("git", ItemType::Subcommand, 40.0),
-                ("@scope/cli", ItemType::Subcommand, 40.0),
-                ("gst", ItemType::Shortcut, 100.0),
-                ("mytool", ItemType::Subcommand, 40.0)
+                ("git", SuggestionKind::Subcommand, 40.0),
+                ("@scope/cli", SuggestionKind::Subcommand, 40.0),
+                ("gst", SuggestionKind::Shortcut, 100.0),
+                ("mytool", SuggestionKind::Subcommand, 40.0)
             ]
         );
         assert_eq!(items[2].description.as_deref(), Some("git status"));

@@ -4,40 +4,10 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::system_clock::SystemClock;
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-/// Suggestion row type (Fig `type`, plus internal `history` and `auto-execute`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ItemType {
-    Subcommand,
-    Option,
-    Arg,
-    File,
-    Folder,
-    Special,
-    Shortcut,
-    History,
-    AutoExecute,
-}
-
-impl ItemType {
-    /// Fig type string → type (`mixin` → Special, unknown → Arg).
-    pub fn from_fig(s: &str) -> ItemType {
-        match s {
-            "subcommand" => ItemType::Subcommand,
-            "option" => ItemType::Option,
-            "file" => ItemType::File,
-            "folder" => ItemType::Folder,
-            "special" | "mixin" => ItemType::Special,
-            "shortcut" => ItemType::Shortcut,
-            "history" => ItemType::History,
-            "auto-execute" => ItemType::AutoExecute,
-            _ => ItemType::Arg,
-        }
-    }
-}
 
 /// Bytes-level description of an insertion (SPEC §6.8, §7.3). Counts are in chars.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -61,9 +31,9 @@ pub struct Item {
     pub names: Vec<String>,
     pub display_name: Option<String>,
     pub description: Option<String>,
-    pub kind: ItemType,
+    pub kind: SuggestionKind,
     /// For auto-execute rows: the type of the row it was derived from.
-    pub original_kind: Option<ItemType>,
+    pub original_kind: Option<SuggestionKind>,
     pub priority: f64,
     pub is_dangerous: bool,
     /// e.g. `<file> [mode]...` (SPEC §7.4.2), empty if none.

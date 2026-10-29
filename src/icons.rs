@@ -5,7 +5,8 @@ use std::fmt::Write;
 
 use unicode_width::UnicodeWidthChar;
 
-use crate::types::{Item, ItemType};
+use crate::types::Item;
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
 macro_rules! pngs {
     ($($name:literal),* $(,)?) => {
@@ -196,31 +197,31 @@ fn spec_image(s: &str) -> Option<Slot> {
 }
 
 /// Default icon per row type. History rows keep their 📚 from the history source.
-fn type_image(kind: ItemType) -> Slot {
+fn type_image(kind: SuggestionKind) -> Slot {
     match kind {
-        ItemType::Subcommand => png_slot("command"),
-        ItemType::Option => png_slot("option"),
-        ItemType::Arg => png_slot("box"),
-        ItemType::Special => badge_slot(Some((0x62, 0x8d, 0xad)), "➡️"),
-        ItemType::Shortcut => badge_slot(Some((0x34, 0x98, 0xdb)), "💡"),
-        ItemType::AutoExecute => png_slot("carrot"),
-        ItemType::File => png_slot("file"),
-        ItemType::Folder => png_slot("folder"),
-        ItemType::History => text("📚"),
+        SuggestionKind::Subcommand => png_slot("command"),
+        SuggestionKind::Option => png_slot("option"),
+        SuggestionKind::Arg => png_slot("box"),
+        SuggestionKind::Special => badge_slot(Some((0x62, 0x8d, 0xad)), "➡️"),
+        SuggestionKind::Shortcut => badge_slot(Some((0x34, 0x98, 0xdb)), "💡"),
+        SuggestionKind::AutoExecute => png_slot("carrot"),
+        SuggestionKind::File => png_slot("file"),
+        SuggestionKind::Folder => png_slot("folder"),
+        SuggestionKind::History => text("📚"),
     }
 }
 
 /// Single-character fallback, right-aligned in the two-column slot (SPEC §7.4.2).
-fn ascii_slot(kind: ItemType) -> Slot {
+fn ascii_slot(kind: SuggestionKind) -> Slot {
     let c = match kind {
-        ItemType::Subcommand => '>',
-        ItemType::Option => '-',
-        ItemType::Arg | ItemType::Special => '*',
-        ItemType::File => 'f',
-        ItemType::Folder => 'd',
-        ItemType::History => 'h',
-        ItemType::Shortcut => '@',
-        ItemType::AutoExecute => '↪',
+        SuggestionKind::Subcommand => '>',
+        SuggestionKind::Option => '-',
+        SuggestionKind::Arg | SuggestionKind::Special => '*',
+        SuggestionKind::File => 'f',
+        SuggestionKind::Folder => 'd',
+        SuggestionKind::History => 'h',
+        SuggestionKind::Shortcut => '@',
+        SuggestionKind::AutoExecute => '↪',
     };
     text(&format!(" {c}"))
 }
@@ -443,7 +444,7 @@ mod tests {
         // The current-branch star is an emoji: text in both modes.
         assert_eq!(
             slot(
-                &it(Some("\u{2b50}\u{fe0f}"), ItemType::Subcommand),
+                &it(Some("\u{2b50}\u{fe0f}"), SuggestionKind::Subcommand),
                 Graphics::Direct
             )
             .text,
@@ -451,7 +452,7 @@ mod tests {
         );
         // A named icon is its PNG; an unknown name is the plain template.
         let s = slot(
-            &it(Some("fig://icon?type=git"), ItemType::Subcommand),
+            &it(Some("fig://icon?type=git"), SuggestionKind::Subcommand),
             Graphics::Direct,
         );
         assert_eq!(
@@ -461,7 +462,7 @@ mod tests {
                 .map(|i| i as u32 + 1)
         );
         let s = slot(
-            &it(Some("fig://icon?type=txt"), ItemType::Subcommand),
+            &it(Some("fig://icon?type=txt"), SuggestionKind::Subcommand),
             Graphics::Direct,
         );
         assert_eq!(
@@ -474,7 +475,7 @@ mod tests {
         let s = slot(
             &it(
                 Some("fig://template?color=2ecc71&badge=\u{1f525}"),
-                ItemType::Arg,
+                SuggestionKind::Arg,
             ),
             Graphics::Direct,
         );
@@ -490,21 +491,21 @@ mod tests {
                 )
         );
         // Type defaults with images; ASCII without.
-        assert!(slot(&it(None, ItemType::Option), Graphics::Direct)
+        assert!(slot(&it(None, SuggestionKind::Option), Graphics::Direct)
             .image
             .is_some());
-        assert_eq!(slot(&it(None, ItemType::Option), Graphics::Off).text, " -");
-        assert!(slot(&it(None, ItemType::Option), Graphics::Off)
+        assert_eq!(slot(&it(None, SuggestionKind::Option), Graphics::Off).text, " -");
+        assert!(slot(&it(None, SuggestionKind::Option), Graphics::Off)
             .image
             .is_none());
         assert_eq!(
-            slot(&it(None, ItemType::History), Graphics::Direct).text,
+            slot(&it(None, SuggestionKind::History), Graphics::Direct).text,
             "📚"
         );
         // Narrow emoji and remote URLs fall back to the type.
         assert_eq!(
             slot(
-                &it(Some("\u{2699}\u{fe0f}"), ItemType::Arg),
+                &it(Some("\u{2699}\u{fe0f}"), SuggestionKind::Arg),
                 Graphics::Direct
             )
             .text,
@@ -512,22 +513,22 @@ mod tests {
         );
         assert_eq!(
             slot(
-                &it(Some("https://fig.io/x.png"), ItemType::Arg),
+                &it(Some("https://fig.io/x.png"), SuggestionKind::Arg),
                 Graphics::Off
             )
             .text,
             " *"
         );
         for k in [
-            ItemType::Subcommand,
-            ItemType::Option,
-            ItemType::Arg,
-            ItemType::Special,
-            ItemType::File,
-            ItemType::Folder,
-            ItemType::History,
-            ItemType::Shortcut,
-            ItemType::AutoExecute,
+            SuggestionKind::Subcommand,
+            SuggestionKind::Option,
+            SuggestionKind::Arg,
+            SuggestionKind::Special,
+            SuggestionKind::File,
+            SuggestionKind::Folder,
+            SuggestionKind::History,
+            SuggestionKind::Shortcut,
+            SuggestionKind::AutoExecute,
         ] {
             assert_eq!(
                 width(&slot(&it(None, k), Graphics::Direct).text),
@@ -546,7 +547,7 @@ mod tests {
             ..item("x", kind, "")
         };
         // A PNG: two placeholder cells, its id in a 256-colour foreground.
-        let s = slot(&it(None, ItemType::Option), Graphics::Tmux);
+        let s = slot(&it(None, SuggestionKind::Option), Graphics::Tmux);
         let id = s.image.as_ref().map(|i| i.id).unwrap();
         assert!(id < 256);
         assert_eq!(s.text.matches('\u{10eeee}').count(), 2);
@@ -554,7 +555,7 @@ mod tests {
         assert_eq!(color(id), format!(";38;5;{id}"));
         // A tinted template: 24-bit colour plus the top-byte diacritic.
         let s = slot(
-            &it(Some("fig://template?color=2ecc71"), ItemType::Arg),
+            &it(Some("fig://template?color=2ecc71"), SuggestionKind::Arg),
             Graphics::Tmux,
         );
         assert_eq!(
@@ -563,7 +564,7 @@ mod tests {
         );
         assert_eq!(color(0x0100_0000 | 0x2ecc71), ";38;2;46;204;113");
         // A badge cannot sit on a placeholder: text alone.
-        let s = slot(&it(None, ItemType::Shortcut), Graphics::Tmux);
+        let s = slot(&it(None, SuggestionKind::Shortcut), Graphics::Tmux);
         assert!(s.image.is_none() && s.text == "💡");
         // Every chunk is wrapped for tmux, ESC doubled inside.
         let t = transmit(

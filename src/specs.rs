@@ -1,5 +1,6 @@
 //! The embedded Fig spec bundle: extraction, index and name → file resolution (SPEC §9.1, §6.3).
 //! OWNER: host agent.
+pub(crate) mod domain;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER,
 };

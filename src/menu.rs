@@ -7,7 +7,8 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_SCROLL_WRAP_AROUND,
 };
 use crate::settings::domain::value_objects::settings::Settings;
-use crate::types::{ArgInfo, Completion, GenKey, Insertion, Item, ItemType, Phase};
+use crate::types::{ArgInfo, Completion, GenKey, Insertion, Item, Phase};
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,11 +75,11 @@ fn same_item(a: &Item, b: &Item) -> bool {
 }
 
 /// Whether the types match (`../` only matches `../`; file and folder match each other).
-fn matching_type(a: &Item, b_first: &str, b_kind: ItemType) -> bool {
+fn matching_type(a: &Item, b_first: &str, b_kind: SuggestionKind) -> bool {
     if a.first_name() == "../" {
         return b_first == "../";
     }
-    let file_like = |k| matches!(k, ItemType::File | ItemType::Folder);
+    let file_like = |k| matches!(k, SuggestionKind::File | SuggestionKind::Folder);
     (file_like(a.kind) && file_like(b_kind)) || a.kind == b_kind
 }
 
@@ -358,7 +359,7 @@ impl Menu {
     fn insert_full(&mut self, idx: usize, execute: bool) -> Vec<Effect> {
         let item = &self.items[idx];
         let mut ins = item.insert.clone();
-        if execute && item.kind != ItemType::AutoExecute {
+        if execute && item.kind != SuggestionKind::AutoExecute {
             ins.execute = true;
         }
         let name = item.first_name();
@@ -385,13 +386,13 @@ impl Menu {
         if self.items.len() == 1 {
             return Some(self.insert_full(self.selected, false));
         }
-        let auto = sel.kind == ItemType::AutoExecute;
+        let auto = sel.kind == SuggestionKind::AutoExecute;
         let kind = if auto { sel.original_kind? } else { sel.kind };
-        if matches!(kind, ItemType::Special | ItemType::AutoExecute) {
+        if matches!(kind, SuggestionKind::Special | SuggestionKind::AutoExecute) {
             return None;
         }
         let mut sel_first = sel.first_name().to_string();
-        if auto && kind == ItemType::Folder && !sel_first.ends_with('/') {
+        if auto && kind == SuggestionKind::Folder && !sel_first.ends_with('/') {
             sel_first.push('/');
         }
         let q = sel.query.to_lowercase();
@@ -469,7 +470,7 @@ pub(crate) mod tests {
     use crate::types::ArgInfo;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
-    pub fn item(name: &str, kind: ItemType, query: &str) -> Item {
+    pub fn item(name: &str, kind: SuggestionKind, query: &str) -> Item {
         let typed = name.starts_with(query) && !query.is_empty();
         Item {
             names: vec![name.to_string()],
@@ -536,7 +537,7 @@ pub(crate) mod tests {
         ["checkout", "cherry-pick", "clone", "commit"]
             .iter()
             .filter(|n| n.starts_with(q))
-            .map(|n| item(n, ItemType::Subcommand, q))
+            .map(|n| item(n, SuggestionKind::Subcommand, q))
             .collect()
     }
 
@@ -590,7 +591,7 @@ pub(crate) mod tests {
         );
         assert_eq!(m.vis(), Vis::HiddenByInsertion);
         m.on_completion(
-            comp("git checkout ", 3, vec![item("main", ItemType::Arg, "")]),
+            comp("git checkout ", 3, vec![item("main", SuggestionKind::Arg, "")]),
             &s,
         );
         assert_eq!(
@@ -615,13 +616,13 @@ pub(crate) mod tests {
                 5,
                 vec![Item {
                     generator: Some(7),
-                    ..item("src/", ItemType::Folder, "")
+                    ..item("src/", SuggestionKind::Folder, "")
                 }],
             ),
             &s,
         );
         m.handle(Action::InsertSelected, &s);
-        let mut c = comp("git c src/", 5, vec![item("main.rs", ItemType::File, "")]);
+        let mut c = comp("git c src/", 5, vec![item("main.rs", SuggestionKind::File, "")]);
         c.triggered_generators = vec![7];
         m.on_completion(c, &s);
         assert_eq!(m.vis(), Vis::Visible);
@@ -634,7 +635,7 @@ pub(crate) mod tests {
         assert!(m.handle(Action::HideAutocomplete, &s).is_empty());
         assert_eq!(m.vis(), Vis::HiddenUntilShown);
         m.on_completion(comp("git co", 2, subs("co")), &s);
-        m.on_completion(comp("git co ", 3, vec![item("x", ItemType::Arg, "")]), &s);
+        m.on_completion(comp("git co ", 3, vec![item("x", SuggestionKind::Arg, "")]), &s);
         assert_eq!(m.vis(), Vis::HiddenUntilShown);
         assert!(!m.shown(&s));
         // Items are still recomputed (globally interceptable keys like showAutocomplete work).
@@ -680,7 +681,7 @@ pub(crate) mod tests {
         assert_eq!(m.items().len(), 1);
         // Up recalls `echo hi`: a large change hides the menu; Tab must not type `kout` into it.
         m.on_completion(
-            comp("echo hi", 3, vec![item("hi.txt", ItemType::File, "hi")]),
+            comp("echo hi", 3, vec![item("hi.txt", SuggestionKind::File, "hi")]),
             &s,
         );
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
@@ -752,7 +753,7 @@ pub(crate) mod tests {
         m.on_completion(comp("git co", 2, subs("co")), &s);
         assert_eq!(m.vis(), Vis::Visible, "stays open within the argument");
         m.on_completion(
-            comp("git co ", 3, vec![item("main", ItemType::Arg, "")]),
+            comp("git co ", 3, vec![item("main", SuggestionKind::Arg, "")]),
             &s,
         );
         assert_eq!(
@@ -851,7 +852,7 @@ pub(crate) mod tests {
         let fx = prefix_fx(&mut with(
             ["checkout", "cherry-pick"]
                 .iter()
-                .map(|n| item(n, ItemType::Subcommand, "CH"))
+                .map(|n| item(n, SuggestionKind::Subcommand, "CH"))
                 .collect(),
         ));
         assert!(
@@ -869,9 +870,9 @@ pub(crate) mod tests {
 
         // Mixed types: only items of the selected item's type count; file and folder match each other.
         let mut m = with(vec![
-            item("src/", ItemType::Folder, "s"),
-            item("setup.py", ItemType::File, "s"),
-            item("--src-dir", ItemType::Option, "s"),
+            item("src/", SuggestionKind::Folder, "s"),
+            item("setup.py", SuggestionKind::File, "s"),
+            item("--src-dir", SuggestionKind::Option, "s"),
         ]);
         assert_eq!(
             prefix_fx(&mut m),
@@ -879,9 +880,9 @@ pub(crate) mod tests {
             "lcp of src/ and setup.py is the query"
         );
         let mut m = with(vec![
-            item("src/", ItemType::Folder, "s"),
-            item("srv/", ItemType::Folder, "s"),
-            item("stuff", ItemType::Subcommand, "s"),
+            item("src/", SuggestionKind::Folder, "s"),
+            item("srv/", SuggestionKind::Folder, "s"),
+            item("stuff", SuggestionKind::Subcommand, "s"),
         ]);
         let fx = prefix_fx(&mut m);
         assert!(
@@ -890,8 +891,8 @@ pub(crate) mod tests {
 
         // `../` only matches `../`: with `..foo/` selected, `../` is not a candidate → full insertion.
         let mut m = with(vec![
-            item("..foo/", ItemType::Folder, ""),
-            item("../", ItemType::Folder, ""),
+            item("..foo/", SuggestionKind::Folder, ""),
+            item("../", SuggestionKind::Folder, ""),
         ]);
         assert!(matches!(
             &prefix_fx(&mut m)[..],
@@ -900,8 +901,8 @@ pub(crate) mod tests {
 
         // Shared prefix equal to the full insertion → full insertion (foo vs foobar, foo selected).
         let mut m = with(vec![
-            item("foo", ItemType::Arg, "f"),
-            item("foobar", ItemType::Arg, "f"),
+            item("foo", SuggestionKind::Arg, "f"),
+            item("foobar", SuggestionKind::Arg, "f"),
         ]);
         assert!(matches!(
             &prefix_fx(&mut m)[..],
@@ -916,7 +917,7 @@ pub(crate) mod tests {
                 cursor_back: 0,
                 execute: false,
             },
-            ..item(n, ItemType::Folder, "my d")
+            ..item(n, SuggestionKind::Folder, "my d")
         };
         let fx = prefix_fx(&mut with(vec![mk("my dir/"), mk("my dirt/")]));
         assert!(
@@ -931,7 +932,7 @@ pub(crate) mod tests {
                 cursor_back: 0,
                 execute: false,
             },
-            ..item(n, ItemType::File, q)
+            ..item(n, SuggestionKind::File, q)
         };
         let mut m = with(vec![
             quoted("zz;a", "z", "'zz;a'"),
@@ -941,8 +942,8 @@ pub(crate) mod tests {
         // r3-common-prefix-var-ref-bell: `$XDG_` of `$XDG_CONFIG_HOME` rows is typed (the engine leaves a variable
         // reference bare); files `$foo1.txt` (quoted by the engine) still ring.
         let fx = prefix_fx(&mut with(vec![
-            item("$XDG_CONFIG_HOME", ItemType::Arg, "$XDG"),
-            item("$XDG_DATA_HOME", ItemType::Arg, "$XDG"),
+            item("$XDG_CONFIG_HOME", SuggestionKind::Arg, "$XDG"),
+            item("$XDG_DATA_HOME", SuggestionKind::Arg, "$XDG"),
         ]));
         assert!(
             matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, full: false, .. }] if text == "_"),
@@ -971,10 +972,10 @@ pub(crate) mod tests {
         // Auto-execute / special → failure.
         let mut m = with(vec![
             Item {
-                original_kind: Some(ItemType::Special),
-                ..item("↪", ItemType::AutoExecute, "")
+                original_kind: Some(SuggestionKind::Special),
+                ..item("↪", SuggestionKind::AutoExecute, "")
             },
-            item("x", ItemType::Arg, ""),
+            item("x", SuggestionKind::Arg, ""),
         ]);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
         // …and `OrNavigateDown` falls back to navigation.
@@ -1006,7 +1007,7 @@ pub(crate) mod tests {
         ));
         let mut m = typed(&s);
         m.on_completion(
-            comp("git c ", 3, vec![item("↪", ItemType::AutoExecute, "")]),
+            comp("git c ", 3, vec![item("↪", SuggestionKind::AutoExecute, "")]),
             &s,
         );
         assert!(matches!(

@@ -5,7 +5,8 @@ use crate::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::{AUTOCOMPLETE_THEME, AUTOCOMPLETE_WIDTH};
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
-use crate::types::{Item, ItemType, Model};
+use crate::types::{Item, Model};
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -602,8 +603,8 @@ fn describe(menu: &Menu) -> (String, String) {
         .filter(|d| !d.trim().is_empty())
         .map(String::from)
         .or_else(|| match sel.map(|s| s.kind) {
-            Some(ItemType::File) => Some("file".into()),
-            Some(ItemType::Folder) => Some("folder".into()),
+            Some(SuggestionKind::File) => Some("file".into()),
+            Some(SuggestionKind::Folder) => Some("folder".into()),
             _ => None,
         });
     match (own, menu.arg_hint()) {
@@ -967,7 +968,7 @@ mod tests {
     fn subs() -> Vec<Item> {
         let mut v: Vec<Item> = ["checkout", "cherry-pick", "clone", "commit"]
             .iter()
-            .map(|n| item(n, ItemType::Subcommand, "c"))
+            .map(|n| item(n, SuggestionKind::Subcommand, "c"))
             .collect();
         v[0].args_hint = "<br>".into();
         v[1].names.push("cp".into());
@@ -1284,7 +1285,7 @@ mod tests {
     fn row_contents() {
         let s = settings(r#"{"autocomplete.width": 20}"#);
         let r = Renderer::new(Theme::dark(), true);
-        let mut it = item("checkout-a-very-long-name", ItemType::Subcommand, "ch");
+        let mut it = item("checkout-a-very-long-name", SuggestionKind::Subcommand, "ch");
         it.args_hint = "<branch>".into();
         let (row, _, _) = r.list_row(&it, false, 20);
         let text: String = strip(&row);
@@ -1296,7 +1297,7 @@ mod tests {
             row.contains(&format!("{}ch", r.pen((180, 180, 180), (95, 89, 56), ""))),
             "highlighted query"
         );
-        let (row, _, _) = r.list_row(&item("co", ItemType::Option, "c"), true, 20);
+        let (row, _, _) = r.list_row(&item("co", SuggestionKind::Option, "c"), true, 20);
         assert_eq!(strip(&row), "  - co              ");
         assert_eq!(width(&strip(&row)), 20);
         let m = menu(subs(), &s);
