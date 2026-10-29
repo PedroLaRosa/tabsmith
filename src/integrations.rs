@@ -20,10 +20,10 @@ use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
 };
 use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
 use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
+use crate::shell_integration::infrastructure::cli::user_confirmation::confirm;
 use crate::types::{now_ms, SessionCtx};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Args;
-use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -122,29 +122,6 @@ pub fn install_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool
 
 // ---------------------------------------------------------------------------------------------------------------
 // setup / uninstall (SPEC §2.9)
-
-/// `[Y/n]` prompt on a tty.
-fn confirm(prompt: &str) -> Result<bool> {
-    if !std::io::stdin().is_terminal() {
-        bail!("You must run with --no-confirm if unattended");
-    }
-    print!("{prompt}");
-    std::io::stdout().flush()?;
-    answer(std::io::stdin().lock())
-}
-
-/// The `[Y/n]` answer on `input`: empty, `y` or `yes` = yes; end of input (Ctrl-D) = no.
-fn answer(mut input: impl std::io::BufRead) -> Result<bool> {
-    let mut line = String::new();
-    if input.read_line(&mut line)? == 0 {
-        println!();
-        return Ok(false);
-    }
-    Ok(matches!(
-        line.trim().to_ascii_lowercase().as_str(),
-        "" | "y" | "yes"
-    ))
-}
 
 pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
     if is_root() && !args.force {
@@ -289,14 +266,6 @@ mod tests {
             ("1", Some("ll='ls -l'"), 7)
         );
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// Ctrl-D (end of input) at a [Y/n] prompt is no, never yes.
-    #[test]
-    fn integrations_confirm_eof_is_no() {
-        assert!(!answer(&b""[..]).unwrap());
-        assert!(answer(&b"\n"[..]).unwrap() && answer(&b"Yes\n"[..]).unwrap());
-        assert!(!answer(&b"n\n"[..]).unwrap());
     }
 
     /// A dotfile uninstall cannot clean (read-only) makes `uninstall` fail with 1, not claim success.
