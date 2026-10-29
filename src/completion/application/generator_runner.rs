@@ -8,6 +8,7 @@ use crate::completion::domain::services::generator_trigger_policy::{
 };
 use crate::completion::domain::services::path_template;
 use crate::completion::domain::value_objects::cache_lookup::CacheLookup;
+use crate::completion::domain::value_objects::generator_command::GeneratorCommand;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::generator_outcome::GeneratorOutcome;
 use crate::completion::domain::value_objects::generator_step::GeneratorStep;
@@ -154,10 +155,7 @@ impl GeneratorRunner {
                 self.clock.now_instant() + Duration::from_millis(budget),
             );
             let outcome = match debounce {
-                Some(ms) => {
-                    run.wait_on(self.runtime.start_sleep(ms), GeneratorStep::Debounce);
-                    GeneratorOutcome::Pending
-                }
+                Some(ms) => self.start(&mut run, GeneratorCommand::StartSleep(ms), GeneratorStep::Debounce),
                 None => self.begin(session, &mut run),
             };
             self.settle(session, run, outcome, report);
@@ -231,6 +229,18 @@ impl GeneratorRunner {
         session.settle(run, outcome)
     }
 
+    /// Run a transition's command: settle with its outcome, or start its task and wait on it in `step`.
+    fn start(&self, run: &mut GeneratorRun, command: GeneratorCommand, step: GeneratorStep) -> GeneratorOutcome {
+        let task = match command {
+            GeneratorCommand::Settle(outcome) => return outcome,
+            GeneratorCommand::StartCall(call, context) => self.runtime.start(call, Some(&context)),
+            GeneratorCommand::StartExec(request, context) => self.runtime.start_exec(request, &context),
+            GeneratorCommand::StartSleep(ms) => self.runtime.start_sleep(ms),
+        };
+        run.wait_on(task, step);
+        GeneratorOutcome::Pending
+    }
+
     /// First step after the (optional) debounce: template, script or custom.
     fn begin(&self, session: &mut CompletionSession, run: &mut GeneratorRun) -> GeneratorOutcome {
         let arg = run.arg().clone();
@@ -247,21 +257,8 @@ impl GeneratorRunner {
                 );
                 items = self.directories.list(&dir, files, run.context().is_dangerous());
             }
-            items.extend(run.help().iter().cloned()); // `history` template: [] (F6)
-            return match g.filter_template_suggestions() {
-                Some(f) => {
-                    let task = self.runtime.start(
-                        SpecFunctionCall::FilterTemplateSuggestions {
-                            function: f,
-                            suggestions: TemplateSuggestions::Listed(items),
-                        },
-                        Some(run.context()),
-                    );
-                    run.wait_on(task, GeneratorStep::Filter);
-                    GeneratorOutcome::Pending
-                }
-                None => GeneratorOutcome::Done(items),
-            };
+            let command = run.template_command(g, items);
+            return self.start(run, command, GeneratorStep::Filter);
         }
         if run.context().cwd().is_empty() {
             return GeneratorOutcome::Done(Vec::new()); // no context for script/custom generators
