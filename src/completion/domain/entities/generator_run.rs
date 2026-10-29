@@ -2,10 +2,12 @@ use crate::completion::domain::value_objects::generator_command::GeneratorComman
 use crate::completion::domain::value_objects::generator_outcome::GeneratorOutcome;
 use crate::completion::domain::value_objects::generator_step::GeneratorStep;
 use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::custom_generator_result::CustomGeneratorResult;
 use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
+use crate::specs::domain::value_objects::spec_value::SpecValue;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
 use std::rc::Rc;
@@ -168,12 +170,31 @@ impl GeneratorRun {
             self.context().clone(),
         )
     }
+
+    /// A custom generator's read `result`: a templated one goes to `filterTemplateSuggestions` as its raw `value`.
+    pub(crate) fn custom_command(
+        &self,
+        generator: &Generator,
+        value: SpecValue,
+        result: CustomGeneratorResult,
+    ) -> GeneratorCommand {
+        match generator.filter_template_suggestions() {
+            Some(f) if result.is_templated() => GeneratorCommand::StartCall(
+                SpecFunctionCall::FilterTemplateSuggestions {
+                    function: f,
+                    suggestions: TemplateSuggestions::Returned(value),
+                },
+                self.context().clone(),
+            ),
+            _ => GeneratorCommand::Settle(GeneratorOutcome::Done(result.suggestions().clone())), // undefined → []
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
     fn run_of(generator: &Generator, help: Vec<SpecSuggestion>) -> GeneratorRun {
         let arg = Rc::new(Arg::default().with_generators(vec![generator.clone()]));
@@ -261,5 +282,42 @@ mod tests {
             panic!("expected no rows to settle, got {command:?}");
         };
         assert_eq!(rows, Vec::new());
+    }
+
+    fn custom_value(name: &str) -> SpecValue {
+        let item = BTreeMap::from([("name".to_string(), SpecValue::Text(name.into()))]);
+        SpecValue::List(vec![SpecValue::Object(item)])
+    }
+
+    #[test]
+    fn should_filter_a_templated_custom_result_with_its_raw_value() {
+        let generator = Generator::default().with_custom(Some(1)).with_filter_template_suggestions(Some(3));
+        let run = run_of(&generator, Vec::new());
+        let templated = CustomGeneratorResult::new(true, vec![row("main")]);
+
+        let command = run.custom_command(&generator, custom_value("main"), templated);
+
+        let GeneratorCommand::StartCall(call, _) = command else {
+            panic!("expected a filter call, got {command:?}");
+        };
+        let filter = SpecFunctionCall::FilterTemplateSuggestions {
+            function: 3,
+            suggestions: TemplateSuggestions::Returned(custom_value("main")),
+        };
+        assert_eq!(call, filter);
+    }
+
+    #[test]
+    fn should_settle_an_untemplated_custom_result_with_its_rows() {
+        let generator = Generator::default().with_custom(Some(1)).with_filter_template_suggestions(Some(3));
+        let run = run_of(&generator, Vec::new());
+        let untemplated = CustomGeneratorResult::new(false, vec![row("main")]);
+
+        let command = run.custom_command(&generator, custom_value("main"), untemplated);
+
+        let GeneratorCommand::Settle(GeneratorOutcome::Done(rows)) = command else {
+            panic!("expected the rows to settle, got {command:?}");
+        };
+        assert_eq!(rows, vec![row("main")]);
     }
 }
