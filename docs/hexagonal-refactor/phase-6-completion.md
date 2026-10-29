@@ -1119,7 +1119,8 @@ demand.
   `bootstrap/engine_server.rs`) marked `// legacy ghost text: Phase 7.6 replaces this block` holds:
   1. `local_ghost_text(&self, result: &CompletionResult) -> Option<String>`: the body of `ghost` (1188-1202) over
      `session.settings()`, `history.recent()`, `result.buffer()`, `result.cursor()` and
-     `inline::spec_ghost(result.suggestions())`;
+     `inline::spec_ghost(result.suggestions())` (6.2b left `CompletionResult::suggestions()` `#[cfg(test)]` by
+     D7: drop that attribute, keep the name, in the commit that first reads it here);
   2. `request_llm_ghost_text(&mut self, req, buffer, cwd, shell)`: `llm` (1247-1275) verbatim, settings and env from
      the session, the private `llm_history` (267-270) and the field `ghost_cache: Arc<Mutex<inline::GhostCache>>`;
   3. `clear_ghost_text_cache(&self)`: the clear of 463-465, called between `record_command` and

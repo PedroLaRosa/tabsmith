@@ -58,7 +58,7 @@ pub fn after_sep(s: &str, backslash: bool) -> usize {
         .map_or(0, |i| i + 1)
 }
 
-/// A suggestion row inside the pipeline (Fig `Suggestion` + internal fields), before it becomes a `Suggestion`.
+/// A suggestion row inside the pipeline (a spec's `SpecSuggestion` + internal fields), before it becomes a `Suggestion`.
 #[derive(Clone, Debug)]
 pub struct Sugg {
     pub names: Vec<String>,
