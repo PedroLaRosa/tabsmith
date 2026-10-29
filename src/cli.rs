@@ -14,13 +14,18 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{bold, sgr, stdout_tty};
+use crate::shell_integration::application::render_init_script_use_case::RenderInitScriptUseCase;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
+use crate::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
+use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
+use crate::shell_integration::infrastructure::cli::init_command::{init_script, ShellArg};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
+use std::rc::Rc;
 
 #[derive(Args)]
 pub struct ThemeArgs {
@@ -65,7 +70,7 @@ pub enum DebugCmd {
     KeyTester,
     /// Start a shell with only the tabsmith integration loaded
     Shell {
-        shell: Option<crate::integrations::ShellArg>,
+        shell: Option<ShellArg>,
     },
     /// Show log file paths and the end of pty.log
     Logs,
@@ -567,7 +572,11 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
     let exe = env_shell
         .filter(|s| Shell::from_name(s) == Some(shell))
         .unwrap_or_else(|| shell.name().to_string());
-    let post = crate::integrations::init_script(shell, IntegrationPhase::Post)? + "\n";
+    let post = init_script(
+        &RenderInitScriptUseCase::new(Rc::new(OsShellEnvironment), Rc::new(EmbeddedShellScripts)),
+        shell,
+        IntegrationPhase::Post,
+    )? + "\n";
     let (dir, cmd) = debug_shell_files(&data_directory_from_env().root()?, shell, &exe, &post)?;
     if shell == Shell::Zsh {
         std::env::set_var("ZDOTDIR", &dir);

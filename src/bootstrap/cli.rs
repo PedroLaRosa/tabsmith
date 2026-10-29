@@ -1,14 +1,20 @@
 //! Composition root for the command line: the clap root, the dispatch to each command handler, and the
 //! commands that only need the root (`version`, `completion`) plus the error printer.
 
+use crate::bootstrap::bridges::SpecBundleBridge;
 use crate::settings::infrastructure::cli::settings_command::{run_settings_command, SettingsArgs};
 use crate::settings::infrastructure::settings_module::build_settings_module;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::terminal_style::epaint;
+use crate::shell_integration::infrastructure::cli::init_command::{run_init_command, InitArgs};
+use crate::shell_integration::infrastructure::shell_integration_module::{
+    build_shell_integration_module, ShellIntegrationModule,
+};
 use crate::{cli, doctor, integrations, pty};
 use anyhow::Result;
 use clap::{ArgAction, Args, Parser, Subcommand};
 use std::io::Write;
+use std::rc::Rc;
 
 #[derive(Parser)]
 #[command(
@@ -37,7 +43,7 @@ enum Command {
     #[command(subcommand)]
     Integrations(integrations::IntegrationsCmd),
     /// Generate the dotfiles for the given shell
-    Init(integrations::InitArgs),
+    Init(InitArgs),
     /// Fix and diagnose common issues
     Doctor(doctor::DoctorArgs),
     /// Setup cli components
@@ -112,7 +118,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         Some(Command::Theme(a)) => cli::theme(a),
         Some(Command::Inline(c)) => cli::inline(c),
         Some(Command::Integrations(c)) => integrations::integrations_cmd(c),
-        Some(Command::Init(a)) => integrations::init_cmd(a),
+        Some(Command::Init(a)) => run_init_command(a, &shell_integration_module()),
         Some(Command::Doctor(a)) => doctor::run(a),
         Some(Command::Setup(a)) => integrations::setup(a),
         Some(Command::Uninstall(a)) => integrations::uninstall(a),
@@ -130,6 +136,11 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
             InternalCmd::PreCmd { alias } => integrations::pre_cmd(alias),
         },
     }
+}
+
+/// The shell integration commands' module, built for the one command that runs.
+fn shell_integration_module() -> ShellIntegrationModule {
+    build_shell_integration_module(&SharedDependencies::from_env(), Rc::new(SpecBundleBridge))
 }
 
 /// `tabsmith settings --help` as the root command prints it, with the global `-v`.

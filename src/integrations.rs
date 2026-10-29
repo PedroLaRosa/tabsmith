@@ -4,80 +4,34 @@
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::atomic_file::AtomicFile;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
-use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info::{is_root, parent_exe};
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::application::integration_installer::IntegrationInstaller;
-use crate::shell_integration::application::ports::init_script_templates::InitScriptTemplates;
 use crate::shell_integration::application::ports::shell_environment::ShellEnvironment;
 use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
-use crate::shell_integration::domain::services::init_script_renderer;
 use crate::shell_integration::domain::services::launch_policy;
 use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
-use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
-use crate::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
 use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
 use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
     integration_paths_from, OsShellEnvironment,
 };
 use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
+use crate::shell_integration::infrastructure::cli::init_command::ShellArg;
 use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
 use crate::types::{now_ms, SessionCtx};
 use anyhow::{bail, Context, Result};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum ShellArg {
-    Bash,
-    Zsh,
-    Fish,
-    Pwsh,
-}
-
-impl From<ShellArg> for Shell {
-    fn from(s: ShellArg) -> Shell {
-        match s {
-            ShellArg::Bash => Shell::Bash,
-            ShellArg::Zsh => Shell::Zsh,
-            ShellArg::Fish => Shell::Fish,
-            ShellArg::Pwsh => Shell::Pwsh,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum IntegrationPhaseArg {
-    Pre,
-    Post,
-}
-
-impl From<IntegrationPhaseArg> for IntegrationPhase {
-    fn from(w: IntegrationPhaseArg) -> IntegrationPhase {
-        match w {
-            IntegrationPhaseArg::Pre => IntegrationPhase::Pre,
-            IntegrationPhaseArg::Post => IntegrationPhase::Post,
-        }
-    }
-}
-
-#[derive(Args)]
-pub struct InitArgs {
-    pub shell: ShellArg,
-    pub when: IntegrationPhaseArg,
-    #[arg(long)]
-    pub rcfile: Option<String>,
-}
 
 #[derive(Subcommand, Clone, Debug)]
 pub enum IntegrationTargetArg {
@@ -155,52 +109,6 @@ pub struct UninstallArgs {
 /// Mark that existing terminals need a restart (state `doctor.prompt-restart-terminal`, printed by doctor).
 pub fn mark_restart() {
     StateRestartReminderRepository::new(data_directory_from_env()).save_pending();
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// init (SPEC §2.7, §5.3)
-
-pub fn init_cmd(args: InitArgs) -> anyhow::Result<i32> {
-    if let Some(rc) = &args.rcfile {
-        logger::debug(&format!(
-            "init {:?} {} --rcfile {rc}",
-            args.shell,
-            IntegrationPhase::from(args.when).name()
-        ));
-    }
-    let out = match init_script(args.shell.into(), args.when.into()) {
-        Ok(s) => s,
-        Err(e) => format!("# Could not load source: {e:#}"),
-    };
-    let _ = writeln!(std::io::stdout(), "{out}");
-    Ok(0)
-}
-
-/// The integration code `init <shell> <when>` prints (SPEC §5.3), without the trailing newline.
-pub fn init_script(shell: Shell, when: IntegrationPhase) -> anyhow::Result<String> {
-    init_output(
-        shell,
-        when,
-        std::env::var_os("TABSMITH_INIT_SNAPSHOT_TEST").is_some(),
-    )
-}
-
-/// `snapshot` = deterministic output (SPEC §2.7): shell `/bin/zsh`, launch 0, binary `tabsmith`.
-pub(crate) fn init_output(shell: Shell, when: IntegrationPhase, snapshot: bool) -> Result<String> {
-    let template = EmbeddedShellScripts.template(shell, when);
-    let script = if snapshot {
-        init_script_renderer::render_snapshot(shell, when, template)
-    } else {
-        init_script_renderer::render(
-            shell,
-            when,
-            template,
-            &OsShellEnvironment.current_executable()?,
-            || OsShellEnvironment.parent_shell(),
-            || should_launch().0,
-        )
-    };
-    Ok(script.into_string())
 }
 
 // ---------------------------------------------------------------------------------------------------------------

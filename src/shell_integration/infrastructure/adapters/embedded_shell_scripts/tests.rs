@@ -1,13 +1,14 @@
 //! Embedded shell scripts tests: the `shell/` files each shell and phase gets, the `init` snapshots, and the
 //! scripts run in real shells (each skipped when its shell is not installed).
 use super::EmbeddedShellScripts;
-use crate::integrations::init_output;
 use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::testing::temp_dir::TempDir;
 use crate::shell_integration::application::ports::init_script_templates::InitScriptTemplates;
+use crate::shell_integration::application::render_init_script_use_case::RenderInitScriptUseCase;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
+use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
 #[cfg(unix)]
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::PWSH_PROFILE_CMD;
 #[cfg(unix)]
@@ -15,6 +16,7 @@ use crate::shell_integration::infrastructure::testing::integration_fixtures::{ct
 use crate::shell_integration::infrastructure::testing::integration_fixtures::syntax_ok;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
 
 /// Bash and zsh share `pre.sh`; every other shell and phase has a `shell/` file of its own.
 #[test]
@@ -62,7 +64,11 @@ fn snapshot_path(shell: Shell, when: IntegrationPhase) -> PathBuf {
 
 /// `init` output under TABSMITH_INIT_SNAPSHOT_TEST, as printed (with the trailing newline).
 fn snapshot(shell: Shell, when: IntegrationPhase) -> String {
-    init_output(shell, when, true).unwrap() + "\n"
+    RenderInitScriptUseCase::new(Rc::new(OsShellEnvironment), Rc::new(EmbeddedShellScripts))
+        .execute(shell, when, true)
+        .unwrap()
+        .into_string()
+        + "\n"
 }
 
 #[test]
