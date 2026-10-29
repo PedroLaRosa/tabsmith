@@ -1,7 +1,7 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2 and 3 are done on branch `refactor/hexagonal-architecture` (gate green at `f485ea7`). Phase 4
-is next. Working notes, tools, the per-file source map and the Phase 3 research are in
+Status: Phases 0, 1, 2, 3 and 4 are done on branch `refactor/hexagonal-architecture` (gate green at `03024f0`).
+Phase 5 is next. Working notes, tools, the per-file source map and the Phase 3 and 4 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -565,7 +565,7 @@ See the Phase 2 notes in section 9.
 Done at `f485ea7`: `history` registered in the architecture test, `inline::History` and `types::HistoryEntry`
 deleted, gate green (524 passed). See the Phase 3 notes in section 9.
 
-### Phase 4: shell_integration (the first full CLI-only slice; also starts terminal_session's session context; prepared, not started: [research](hexagonal-refactor/phase-4-shell-integration.md))
+### Phase 4: shell_integration (the first full CLI-only slice; also starts terminal_session's session context; done: [research](hexagonal-refactor/phase-4-shell-integration.md))
 1. Domain:
    - Extract the `Dotfile` VO from `install` / `uninstall` / `is_installed`, test-first, using the existing expectations.
    - Move these services, with their tests: `IntegrationCatalog`, `LaunchPolicy` (with
@@ -579,6 +579,10 @@ deleted, gate green (524 passed). See the Phase 3 notes in section 9.
    - `SessionContext`, `SessionId`, `SessionContextRepository` and `FileSessionContextRepository`;
    - `ReportSessionContextUseCase` and `cli/pre_cmd_command.rs`.
 6. Delete `integrations.rs`.
+
+Done at `03024f0`: `shell_integration` registered in the architecture test, `integrations.rs` and `types::SessionCtx`
+deleted, gate green (758 passed). terminal_session stays unregistered until Phase 9. See the Phase 4 notes in
+section 9.
 
 ### Phase 5: specs
 1. **Model.** Move the VOs and entities from `spec.rs` under glossary names. Build `FigSpecMapper` with the 8 spec
@@ -854,3 +858,94 @@ a registered module's domain or application may not use a legacy flat module (`L
 because the legacy `specs.rs` shares the planned module's name, so Phase 5 must check by hand that the specs domain
 and application never reach the legacy `crate::specs::` items, and should drop `specs.rs` from the list's story
 once it is deleted. The rules still do not check the plan's `anyhow` rule (section 1, "Errors").
+
+Phase 4 notes (decisions P1-P18 of [`phase-4-shell-integration.md`](hexagonal-refactor/phase-4-shell-integration.md),
+which cites the code behind each):
+
+- **Files section 4 lists that the phase did not create**: `domain/value_objects/integration_status.rs`,
+  `domain/value_objects/restart_reminder.rs`, `application/ports/user_confirmation.rs` and
+  `infrastructure/adapters/stdin_user_confirmation.rs`.
+  - One `ShellIntegrationError` covers checks and operations (P2). A check returns `Result<(),
+    ShellIntegrationError>` (installed is `is_ok()`), Display is the user text and no variant has a `source()`.
+    `IntegrationStatus` is the status-row DTO in `application/integration_status.rs`, not a domain VO. The
+    `Environment` and `SpecBundle` variants carry their cause chain pre-rendered (P3) by
+    `shared::infrastructure::error_chain::display_chain` (the Phase 4 review moved it to shared; settings'
+    `load_or_defaults` uses it too), so `{}`, `{:#}` and anyhow's `{:#}` print the same text.
+  - No `RestartReminder` VO (P7): `RestartReminderRepository::save_pending` (best effort) is all the module needs.
+  - No `UserConfirmation` port (P8). The root refusal, the `[Y/n]` prompt (`confirm`/`answer` in
+    `infrastructure/cli/user_confirmation.rs`), the paths resolution and the shell sets stay in the CLI handlers in
+    the old order: the prompt comes before the paths are resolved, so a port would have no application caller.
+    `ShellEnvironment` is smaller than planned (binary, parent shell, launch facts, pwsh `$PROFILE`); the handlers
+    call the shared `which`/`is_root` directly.
+- **Added beyond section 4**: the `InitScriptTemplates` port (the application cannot reach the embedded scripts any
+  other way), the `IntegrationInstaller` application service (P6, shared by the use cases, never a use case itself),
+  the DTOs `IntegrationFailure`, `IntegrationStatusReport`, `SetupProgress` and `UninstallProgress` (P9-P10: setup
+  and uninstall report each event through a callback, so every line prints at its old place),
+  `adapters/file_data_directory_purger.rs`, the test-only `infrastructure/testing/integration_fixtures.rs` (P15) and
+  `bootstrap/bridges.rs` (`SpecBundleBridge` over `specs::ensure_extracted`). `build_shell_integration_module`
+  takes the `SpecBundleInstaller` as a second parameter (P12); bootstrap builds the module in each command arm that
+  needs it. `SessionContextRepository` has `last_modified` beside `save`/`find`/`remove`/`prune_older_than` (P17):
+  the pty reloads a context only when its file's modification time changed. `embedded_shell_scripts/tests.rs` holds
+  24 moved script tests (the plan said 22 real-shell tests plus the snapshot tests).
+- **Accessors in place of `to_primitives()`**: `Integration` (P5) and `SessionContext` (P17) keep read-only
+  accessors instead of section 1's `to_primitives()`. `GetIntegrationStatusUseCase` maps `describe()`,
+  `shell().name()` and `file_name()` into each `IntegrationStatus` row, which also carries the check result (not an
+  entity property, so a `to_primitives()` would not replace the mapping); the file adapter maps `SessionContext`
+  into its private serde `SessionContextRecord` (precedent: `Settings::entries()`).
+- **`IntegrationPaths`** (P1) replaces `integrations::Ctx`, which had no home in the plan: home, data root, binary,
+  `ZDOTDIR`, fish config dir, and pwsh `$PROFILE` when known. `integration_paths_from` (`os_shell_environment.rs`)
+  resolves it through `ShellIntegrationModule::locate_integration_paths()` at the moments the old code built `Ctx`.
+  The script and backup dirs are still joined onto `data_root()` as before, so `DataDirectory::shell_dir()` and
+  `backups_dir()` stay unused: carrying them would take `IntegrationPaths::new` to 8 parameters (a clippy warning,
+  no budget) and change the test fixture, and deleting them would delete two Phase 1 tests.
+- **clap** (P4, D4): `When` and the clap `IntegrationTarget` became the mirrors `IntegrationPhaseArg` and
+  `IntegrationTargetArg` over the domain `IntegrationPhase` and `IntegrationTarget`; `ShellArg`, `InitArgs`,
+  `SetupArgs`, `UninstallArgs` and `IntegrationsCmd` keep their names. Setup's shell set (`Shell::ALL` filtered by
+  `which`) stays apart from `IntegrationTarget::All`. Legacy `cli::debug_shell` keeps its signature and renders
+  through `init_command::init_script` (P11). `_ get-shell` has no use case: no plan use case covers it.
+- **Fitness rules**: the Phase 4 review added rule 7 (no `use` item in `src/main.rs`, whose private imports every
+  module could reach as `crate::<name>`; `main` calls by full path), turned rule 6 into an allow-list (a `mod.rs`
+  holds only attributes and child declarations, so no `type` alias or wrapper fn either) and made rules 1-2 read the
+  crate an `extern crate .. as ..` line links. Rule 3 flags only `*_use_case` and `infrastructure` paths, so it
+  cannot see the `IntegrationInstaller` application service; legacy `doctor.rs` builds one (P14), so Phase 10 greps
+  diagnostics for it by hand. The rules still do not check the `anyhow` rule: at the end of Phase 4 a grep finds it
+  in shell_integration only in `infrastructure/cli` and test code.
+- **terminal_session** is not registered (Phase 9 finishes it); each step checked it locally. `_ pre-cmd` runs
+  through `infrastructure/cli/pre_cmd_command.rs` and `ReportSessionContextUseCase` (save, then prune the contexts
+  unchanged for a day). `types::SessionCtx` is gone: `EngineMsg::Session { env, alias }` already has its Phase 6
+  shape (`ts` was never read), the engine keeps `session_env`/`session_alias`, and the pty holds a `SessionId` and a
+  `Box<dyn SessionContextRepository>` over the file adapter. `SessionId` accepts what `_ pre-cmd` accepted
+  (non-empty, ASCII letters, digits, `-` and `_`), not only the hex ids the wrapper generates (D1).
+- **Env reads at dispatch**: bootstrap evaluates `SharedDependencies::from_env()` (env vars only, no I/O) when it
+  dispatches `init`, `integrations`, `setup`, `uninstall`, `_ should-launch` and `_ pre-cmd`, so setup and uninstall
+  read the data directory env before their prompt and `_ pre-cmd` before its id check. Paths still resolve when a
+  command needs them (D3), and every output is unchanged. `integrations reinstall` asks `which pwsh` once instead of
+  once per half.
+- **Checks**: `scripts/hexagonal-refactor/integrations-diff.sh` and `precmd-diff.sh` (P16) diff scrubbed transcripts
+  of the integration commands and of `_ pre-cmd` against the baseline binary; both stayed empty through the phase.
+  The local tag `phase4-start` marks the phase start for `testlock.py`: 15 tests are CHANGED against it, each one a
+  restructuring in the research's "Test moves" table. The phase ran on macOS only: the pwsh script tests (pwsh is not
+  installed here), every `cfg(windows)` path and the new ungated tests first run in CI.
+- **History**: 16 Phase 4 commit subjects are over the 72-character limit and stay in history (no rewrite):
+  f5b1b99, 9f5ff3a, c6cede1, 2cfa53b, d78fd05, d39adaa, a9aa205, b33b9e6, b78bf3b, bc3929d, 2875954, 8191e36,
+  c6b6533, ea2dc6b, 10a30a5 and 140fad1. `29fce49` is over the clippy budget (4 warnings); the next commit fixes it.
+- **Hand-offs** (details in the research's "Hand-off notes for later phases"):
+  - Phase 5: switch `SpecBundleBridge` to `specs::InstallSpecBundleUseCase`. Its typed error prints only its Display
+    under `{:#}`, so the bridge renders the whole chain with `display_chain` (never a third hand-written copy); check
+    `error: could not extract the completion specs: creating <dir>: <io>` byte for byte.
+  - Phase 6: `EngineMsg::Session { env, alias }` is renamed with the enum (bootstrap's `EngineMessage`), and
+    `ApplySessionContextUseCase` takes over the engine's `session_env`/`session_alias`,
+    `session_update_refreshes_first_token_items` and the five Phase 4 engine tests on the session context.
+  - Phase 9: `debug_shell_command` (terminal_session) may not call shell_integration: bootstrap passes it a render
+    callback built over `init_command::init_script` (precedent `print_root_help`), and the shell is still read from
+    `$SHELL` inside the handler. `DebugCmd` moves to `bootstrap/cli.rs` and imports `ShellArg` from `init_command`.
+    The pty's `Box<dyn SessionContextRepository>` becomes the injected port, `session_id()` generation moves, and
+    terminal_session is registered.
+  - Phase 10: doctor's own `IntegrationInstaller` wiring, its two unconditional restart-reminder marks and its raw
+    session check move into diagnostics through the `CheckFixer`/`SystemFactsProbe` bridges.
+    `RestartReminderRepository` gains `find`/`delete` for doctor's reader and clearer (still through
+    `JsonDocumentStore`, keeping the other keys). `SystemFacts` carries each check result as `Result<(),
+    ShellIntegrationError>`, which is neither `Clone` nor `PartialEq` (`Io` holds a `std::io::Error`).
+  - Phase 11: use or delete `DataDirectory::shell_dir()`/`backups_dir()` (with their two tests) and update the
+    glossary's `DataDirectory` row. `LEGACY_MODULES` still lists `integrations` (harmless); `types::now_ms` is still
+    used by the engine.

@@ -33,14 +33,28 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
 | `Integration` | Entity | One installable integration: shell + dotfile path (+ whole-file phase for fish `conf.d`). | `integrations::Integration` |
-| `IntegrationPhase` | VO | `Pre` (top of the dotfile) or `Post` (bottom). | `When` |
-| `IntegrationTarget` | VO | Dotfiles of one shell, or all. | `IntegrationTarget` |
-| `IntegrationStatus` | VO | Installed, NotInstalled, Improper, FileDoesNotExist, PermissionDenied (+ reason). | `IntegrationError` |
-| `Dotfile` | VO | Text of an rc file. Knows BOM, shebang, `# tabsmith ignore`, and how to insert, remove and check the pre/post blocks. | logic inside `install`, `uninstall`, `is_installed` |
-| `IntegrationScript` | VO | `~/.tabsmith/shell/<rc>.<phase>.<ext>`: path + exact contents. | `script_path`, `script_contents` |
+| `IntegrationPhase` | VO | `Pre` (top of the dotfile) or `Post` (bottom). | `When` (clap mirror `IntegrationPhaseArg` in the CLI) |
+| `IntegrationTarget` | VO | Dotfiles of one shell, or all: `Dotfiles(shell)` is that shell; `Dotfiles` without a shell and `All` are bash, zsh, fish, plus pwsh when it is on PATH. | `IntegrationTarget` (clap; now `IntegrationTargetArg` in the CLI) |
+| `IntegrationStatus` | DTO | One row of `integrations status`: installed or not, description, shell name, dotfile name. (Why a check failed is a `ShellIntegrationError`.) | the `(bool, Integration)` rows of `status` |
+| `Dotfile` | VO | Text of an rc file. Knows BOM, shebang, `# tabsmith ignore`, and how to insert, remove and check the pre/post blocks. pre block = `PRE_MARKER` + pre source line at the top (after BOM and shebang); post block = `POST_MARKER` + post source line at the bottom; source line `[ -f "<script>" ] && . "<script>"` (pwsh `if (Test-Path "<script>") { . "<script>" }`, a leading home written `${HOME}`); opt-out line `# tabsmith ignore`. | logic inside `install`, `uninstall`, `is_installed` |
+| `IntegrationScript` | VO | A file tabsmith writes for an integration, `~/.tabsmith/shell/<rc>.<phase>.<ext>` or a whole fish `conf.d` file: path, exact contents, and the `should contain` check. | `script_path`, `script_contents`, `check_file` |
 | `InitScript` | VO | Rendered `tabsmith init <shell> <phase>` output. | `init_output` |
 | `LaunchFacts` / `LaunchDecision` | VO | Env + tty facts in; launch yes/no + reason out. | `launch_decision` args, `(bool, String)` |
-| `RestartReminder` | VO | "Ask the user to restart the terminal" flag in `state.json`. | `mark_restart`, `doctor.prompt-restart-terminal` |
+| `RestartReminder` | Flag (repository) | `doctor.prompt-restart-terminal` in `state.json`: saved best effort by `RestartReminderRepository` after an install; doctor reads and clears it. | `mark_restart`, `doctor.prompt-restart-terminal` |
+| `IntegrationPaths` | VO | Where one integration command reads and writes: the user's home, tabsmith's data root, the tabsmith binary the script files run, zsh's `ZDOTDIR`, fish's config dir, and pwsh's `$PROFILE` when already known (otherwise asked from `pwsh` only when a pwsh integration is listed). Resolved when a command first needs it: home, data root, binary. | `integrations::Ctx` |
+| `ShellIntegrationError` | Domain error | Why an integration check or operation failed: `NotInstalled(reason)`, `Improper(reason)`, `FileDoesNotExist(path)`, `PermissionDenied(path)`, `Io(path, error)` shown as `<path>: <error>`, `Environment(message)` (home, tabsmith binary or pwsh `$PROFILE` unknown; message includes its causes), `SpecBundle(message)` (setup could not extract the completion specs). Display is the user-facing text; no source. | `integrations::IntegrationError` + the anyhow errors of `Ctx::from_env`, `exe_path`, `pwsh_profile` and setup's spec extraction |
+| `IntegrationCatalog` | Domain service | The integrations of a shell (SPEC §5.5 table), from which bash dotfiles exist and pwsh's `$PROFILE`. | `integrations::integrations` |
+| `LaunchPolicy` | Domain service | SPEC §5.2 first-match launch rules: `LaunchFacts` in, `LaunchDecision` (with its `✅`/`❌` reason line) out. | `launch_decision` |
+| `InitScriptRenderer` | Domain service | The `init` output: header lines (parent shell, launch flag) plus the shell's template with `{{BIN}}` quoted for that shell. | `init_output` minus its I/O |
+| `ManualInstallInstructions` | Domain service | The exact lines `setup` prints for a manual install (the lines install writes). | `manual_text` |
+| `IntegrationInstaller` | Application service | Lists a shell's integrations, checks, installs, uninstalls and writes the script files of one `Integration` through the dotfile and backup repositories, and runs one of those operations over several shells, collecting `IntegrationFailure`s. Shared by the use cases; never a use case itself. | `Integration::{is_installed, install, uninstall, write_scripts, has_traces}`, `apply` |
+| `IntegrationFailure` | DTO | One failure of a run over integrations: a shell whose integrations could not be listed, or one integration (its description) whose operation failed, with the reason. | the strings `apply` collected |
+| `IntegrationStatusReport` | DTO | What `integrations status` shows: one `IntegrationStatus` per integration, then the shells whose integrations could not be listed. | `status`'s rows and errors |
+| `SetupProgress` / `UninstallProgress` | DTO | What `setup` / `uninstall` report while they run (installed or not, automatic install failed, manual instructions, script files failed / integrations failed, data directory not removed). | the `println!`/`eprintln!`s of `setup` and `uninstall_all` |
+| `ShellEnvironment` | Port | Facts the integration commands read from the running system: the tabsmith binary, the parent shell, the `LaunchFacts` (env + stdin tty/console), pwsh's `$PROFILE`. | `exe_path`, `parent_exe`, `should_launch`'s reads, `pwsh_profile` |
+| `InitScriptTemplates` | Port | The shell code `init` prints for a shell and phase, still holding `{{BIN}}` (the embedded `shell/*` files; bash and zsh share one pre script). | `PRE_SH` … `POST_PS1` |
+| `SpecBundleInstaller` | Port | Makes sure the completion specs are extracted (setup's last step); implemented by bootstrap. | `specs::ensure_extracted` called by `setup` |
+| `DataDirectoryPurger` | Port | Deletes tabsmith's data directory for `uninstall --purge`; a missing one is fine. | `remove_dir_all(ctx.data)` |
 
 ## specs
 | Term | Kind | Meaning | Replaces |
@@ -120,8 +134,8 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
 | `TerminalSession` | Aggregate | The wrapper's view of the running shell: request counter, menu, insertion lock, echo hold, ghost, timers, exit state. | `pty::Session` (minus plumbing) |
-| `SessionId` | VO | Session identifier shared with the shell scripts. | `session_id()` |
-| `SessionContext` | Entity | Env + aliases reported by `_ pre-cmd`; identity `SessionId`. | `types::SessionCtx` |
+| `SessionId` | VO | Session identifier shared with the shell scripts: the `TABSMITH_SESSION_ID` the wrapper exports and the `run/<id>.json` file name. Valid when non-empty and made only of ASCII letters, digits, `-` and `_`, exactly what `_ pre-cmd` accepts; not narrowed to the hex ids the wrapper generates (D1). | `session_id()` + the `_ pre-cmd` id filter |
+| `SessionContext` | Entity | The env (UTF-8 entries only) and alias text a shell last reported through `_ pre-cmd`, stamped with the report time in ms. Identity `SessionId` (the file name, not a field of the file). An empty env means 'use the wrapper's env'; an empty alias text means no aliases. | `types::SessionCtx` |
 | `MarkerSplitter` | Entity | Stateful splitter of PTY bytes into output and OSC 697 markers. | `tracker::Splitter` |
 | `ShellMarker` / `OutputPiece` | VO | A parsed OSC 697 marker; bytes / marker / window name. | marker strings, `Piece` |
 | `MarkerTracker` | Entity | Prompt/command cycle from markers: cwd, shell, pid, exit code, integration lock, pending commands, deferral. | `tracker::Tracker` state |
@@ -144,7 +158,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `CheckSeverity` | VO | Normal, Soft, Skip. | `Kind` |
 | `CheckOutcome` | VO | Ok, Warn(reason), Err(reason, info, fix). | `Outcome` |
 | `CheckFix` | VO | CreateDataDirectory, InstallIntegration, ReinstallIntegrations, ResetSettings, InstallSpecBundle. | `Fix` closures |
-| `SystemFacts` | VO | Snapshot of env, OS, tool versions, file existence and integration statuses that checks evaluate. | direct I/O inside checks |
+| `SystemFacts` | VO | Snapshot of env, OS, tool versions, file existence and each integration's check result (`Result<(), ShellIntegrationError>`) that checks evaluate. | direct I/O inside checks |
 | `ToolVersion` | VO | Parsed `bash`/`fish` version. | `version_of` |
 | `DiagnosticReport` / `DiagnosticSection` | VO | `tabsmith diagnostic` content. | `Section` |
 
@@ -152,7 +166,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | Word | Name for each meaning |
 |---|---|
 | lock | `InsertionLock` (wait for echo) · integration lock (OSC 697 Lock/Unlock, a field of `MarkerTracker`) |
-| prompt | shell prompt · `LlmPrompt` · `UserConfirmation` (y/n question) |
+| prompt | shell prompt · `LlmPrompt` · the `[Y/n]` confirmation `setup`/`uninstall` ask (`confirm`/`answer` in shell_integration's `infrastructure/cli/user_confirmation.rs`; no port, not a domain type) |
 | ghost | `GhostText` (ours) · shell autosuggestion (zsh/fish/PSReadLine's own) |
 | history | `HistoryEntry` / `HistoryRepository` (store) · `SuggestionKind::History` (rows) · history mode (Ctrl-R in `Menu`) |
 | session | `TerminalSession` · `SessionContext` · `SessionId` · `CompletionSession` |
@@ -160,3 +174,5 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | completion | the module/feature · `CompletionResult` (one reply) |
 | host / pump | gone. `QuickJsSpecRuntime` replaces the js Host struct; `SpecRepository` + `SpecRuntime` replace the parser `Host` trait. The pumps become `pty_reader`, `ProgressGeneratorsUseCase` and runtime internals. |
 | cache | `GeneratorCache`, `GhostTextCache`, `ParsePrefixCache`, first-token cache (in `CompletionSession`), spec cache and module cache (inside adapters) |
+| profile | pwsh `$PROFILE` (the pwsh dotfile, carried by `IntegrationPaths`) · `LlmProfile` |
+| script | `IntegrationScript` (files tabsmith writes) · `InitScript` / `InitScriptTemplates` (what `init` prints) · `GeneratorScript` (spec) |

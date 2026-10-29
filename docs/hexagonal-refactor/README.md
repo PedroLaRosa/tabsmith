@@ -12,14 +12,15 @@ implementation session needs that the plan does not.
 | 1 composition root, fitness test, shared kernel | done | `af1b304..52dcf85` |
 | 2 settings | done | `52dcf85..c7b796e` |
 | 3 history | done | `a3953cf..f485ea7`, see [`phase-3-history.md`](phase-3-history.md) |
-| 4 shell_integration | prepared, not started | see [`phase-4-shell-integration.md`](phase-4-shell-integration.md) |
+| 4 shell_integration | done (also starts terminal_session's session context) | `6f38da1..03024f0`, see [`phase-4-shell-integration.md`](phase-4-shell-integration.md) |
 | 5-11 | not started | |
 
-At `f485ea7`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 524 passed, 0 failed, 1 ignored (the
+At `03024f0`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 758 passed, 0 failed, 1 ignored (the
 baseline was 283). clippy shows 3 warnings (baseline 3). The 131-command golden CLI capture is byte-identical to
 the baseline. The test lock has 0 baseline tests missing. 63 baseline tests are CHANGED, each one a reviewed
-restructuring.
-`REGISTERED_MODULES` = `history`, `settings`, `shared`.
+restructuring (15 against the `phase4-start` tag, each in Phase 4's "Test moves" table). The only DUPLICATE test
+name is `should_not_save_over_settings_that_cannot_be_loaded`.
+`REGISTERED_MODULES` = `history`, `settings`, `shared`, `shell_integration` (terminal_session waits for Phase 9).
 
 ## Files here
 
@@ -59,7 +60,11 @@ Run everything from the repo root. Output goes to `target/hexagonal-refactor/` (
   and their modes, completion, diagnostic, `doctor --all`, error paths and no-`HOME` runs. It is macOS only
   (`stat -f`).
 - `testlock.py <repo> ef807c1 [--diff]`: compares every `#[test]` body with the baseline, ignoring paths. It lists
-  MISSING, NEW, PATH-ONLY and CHANGED tests.
+  MISSING, NEW, PATH-ONLY and CHANGED tests, and every test name defined twice (DUPLICATE).
+- `integrations-diff.sh <binary>` and `precmd-diff.sh <binary>` (Phase 4): scrubbed transcripts of the integration
+  commands and of `_ pre-cmd`. Diff each one run on the baseline binary
+  (`target/hexagonal-refactor/baseline-tree/target/debug/tabsmith`) against `target/debug/tabsmith`; the diff must
+  be empty.
 
 ## Lessons from Phases 1-2
 
