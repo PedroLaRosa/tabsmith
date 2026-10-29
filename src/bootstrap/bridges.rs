@@ -1,15 +1,24 @@
 //! Ports of one module implemented over another module, wired here because only bootstrap may join modules.
 use crate::shell_integration::application::ports::spec_bundle_installer::SpecBundleInstaller;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::specs::application::install_spec_bundle_use_case::InstallSpecBundleUseCase;
 
-/// setup's spec bundle, extracted by the specs module (Phase 5 swaps in its use case).
-pub(crate) struct SpecBundleBridge;
+/// setup's spec bundle, extracted by the specs module (specs' InstallSpecBundleUseCase).
+pub(crate) struct SpecBundleBridge {
+    install_spec_bundle: InstallSpecBundleUseCase,
+}
+
+impl SpecBundleBridge {
+    pub(crate) fn new(install_spec_bundle: InstallSpecBundleUseCase) -> Self {
+        SpecBundleBridge { install_spec_bundle }
+    }
+}
 
 impl SpecBundleInstaller for SpecBundleBridge {
     fn install(&self) -> Result<(), ShellIntegrationError> {
-        crate::specs::ensure_extracted()
-            .map(|_| ())
-            .map_err(spec_bundle_failure)
+        self.install_spec_bundle
+            .execute()
+            .map_err(|e| spec_bundle_failure(anyhow::Error::from(e)))
     }
 }
 
@@ -23,7 +32,8 @@ mod tests {
     use super::*;
     use anyhow::Context;
 
-    /// `ensure_extracted` fails with a chain (`creating <dir>: <io>`); main then prints `error: could not extract the
+    /// The bundle's extraction (EmbeddedSpecBundle) fails with a chain that BundleUnavailable holds already
+    /// rendered (`creating <dir>: <io>`); main then prints `error: could not extract the
     /// completion specs: ` and that whole chain, as before.
     #[test]
     fn should_keep_the_whole_chain_of_a_failed_extraction() {

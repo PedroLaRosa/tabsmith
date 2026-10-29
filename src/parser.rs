@@ -20,8 +20,9 @@ use crate::specs::domain::value_objects::spec_option::SpecOption;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, normalise};
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
+use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
+use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::shared::infrastructure::logger;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -294,11 +295,13 @@ impl Loader {
     }
 }
 
-/// The file a location loads from: `specs::resolve` for globals, `<dir>/.fig/autocomplete/build/<name>.js` (else
+/// The file a location loads from: [`EmbeddedSpecBundle::resolve`] for globals, `<dir>/.fig/autocomplete/build/<name>.js` (else
 /// `<name>/index.js`) for locals.
 fn spec_file(loc: &SpecLocation, ctx: &ParseCtx) -> Option<PathBuf> {
     match loc {
-        SpecLocation::Global { name } => crate::specs::resolve(name, ctx.settings, ctx.index),
+        SpecLocation::Global { name } => {
+            EmbeddedSpecBundle::new(data_directory_from_env()).resolve(name, ctx.settings, ctx.index)
+        }
         SpecLocation::Local { dir, name } => {
             let dir = match dir.strip_prefix("~") {
                 Ok(rest) => user_home_from_env().ok()?.join(rest),

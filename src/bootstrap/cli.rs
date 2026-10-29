@@ -15,6 +15,7 @@ use crate::shell_integration::infrastructure::cli::uninstall_command::{run_unins
 use crate::shell_integration::infrastructure::shell_integration_module::{
     build_shell_integration_module, ShellIntegrationModule,
 };
+use crate::specs::infrastructure::specs_module::build_specs_module;
 use crate::terminal_session::infrastructure::cli::pre_cmd_command::run_pre_cmd_command;
 use crate::terminal_session::infrastructure::terminal_session_module::build_terminal_session_module;
 use crate::{cli, doctor, pty};
@@ -149,7 +150,9 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
 
 /// The shell integration commands' module, built for the one command that runs.
 fn shell_integration_module() -> ShellIntegrationModule {
-    build_shell_integration_module(&SharedDependencies::from_env(), Rc::new(SpecBundleBridge))
+    let dependencies = SharedDependencies::from_env();
+    let spec_bundle = SpecBundleBridge::new(build_specs_module(&dependencies).install_spec_bundle);
+    build_shell_integration_module(&dependencies, Rc::new(spec_bundle))
 }
 
 /// `tabsmith settings --help` as the root command prints it, with the global `-v`.

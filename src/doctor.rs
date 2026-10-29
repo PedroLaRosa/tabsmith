@@ -11,6 +11,7 @@ use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info;
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
+use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::application::integration_installer::IntegrationInstaller;
@@ -26,6 +27,8 @@ use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
 };
 use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
 use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
+use crate::specs::infrastructure::adapters::embedded_spec_bundle::version;
+use crate::specs::infrastructure::specs_module::build_specs_module;
 use crate::types::now_secs;
 use clap::Args;
 use std::io::IsTerminal;
@@ -398,7 +401,7 @@ fn setup_checks(ctx: &IntegrationPaths) -> Vec<Check<'_>> {
     let specs_index = ctx
         .data_root()
         .join("specs")
-        .join(crate::specs::version())
+        .join(version())
         .join("index.json");
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut v = vec![
@@ -463,7 +466,11 @@ fn setup_checks(ctx: &IntegrationPaths) -> Vec<Check<'_>> {
             if specs_index.is_file() {
                 return Outcome::Ok;
             }
-            let fix: Fix = Box::new(|| crate::specs::ensure_extracted().map(|_| ()));
+            let fix: Fix = Box::new(|| {
+                Ok(build_specs_module(&SharedDependencies::from_env())
+                    .install_spec_bundle
+                    .execute()?)
+            });
             Outcome::Err {
                 reason: "Completion specs are not extracted".into(),
                 info: vec![],

@@ -1252,7 +1252,7 @@ mod tests {
     #[cfg(feature = "embed-specs")]
     #[test]
     fn loads_bundled_specs() {
-        let b = crate::specs::testutil::bundle_subset(&[
+        let b = crate::specs::infrastructure::adapters::embedded_spec_bundle::testing::bundle_subset(&[
             "ls.js",
             "git.js",
             "aws/s3.js",
@@ -1307,7 +1307,7 @@ mod tests {
     #[test]
     fn git_alias_directive_with_fake_git() {
         let bin = fake_bin(&[("git", r#"[ "$3" = alias.co ] && echo checkout || exit 1"#)]);
-        let b = crate::specs::testutil::bundle_subset(&["git.js"]);
+        let b = crate::specs::infrastructure::adapters::embedded_spec_bundle::testing::bundle_subset(&["git.js"]);
         let (mut js, _tx) = js();
         let git = js.load_module(&b.path().join("git.js")).unwrap();
         let alias = fn_id(
@@ -1782,7 +1782,7 @@ mod tests {
     #[test]
     #[ignore]
     fn all_bundle_modules() {
-        let dir = crate::specs::testutil::full_bundle();
+        let dir = crate::specs::infrastructure::adapters::embedded_spec_bundle::testing::full_bundle();
         let mut files = Vec::new();
         let mut stack = vec![dir.path().to_path_buf()];
         while let Some(d) = stack.pop() {

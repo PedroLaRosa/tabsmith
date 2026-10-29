@@ -32,6 +32,8 @@ use crate::specs::infrastructure::adapters::fig_spec_mapper::{
     self, json_items, post_process_items, script_exec_input, spec_value_to_json, truthy,
 };
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
+use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
+use crate::specs::infrastructure::specs_module::build_specs_module;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
@@ -254,13 +256,17 @@ struct Engine {
 
 impl Engine {
     fn new(tx: Sender<Msg>, settings: Settings) -> Engine {
-        let index = crate::specs::ensure_extracted()
-            .and_then(|_| SpecIndex::load())
+        let dependencies = SharedDependencies::from_env();
+        let bundle = EmbeddedSpecBundle::new(dependencies.data_directory.clone());
+        // ponytail: load_index ensures the bundle a second time (touch + cleanup twice), as the engine always did.
+        let index = build_specs_module(&dependencies)
+            .install_spec_bundle
+            .execute()
+            .and_then(|()| bundle.load_index())
             .unwrap_or_else(|e| {
                 logger::error(&format!("engine: specs: {e:#}"));
                 SpecIndex::default()
             });
-        let dependencies = SharedDependencies::from_env();
         Engine::with(
             tx,
             settings,
