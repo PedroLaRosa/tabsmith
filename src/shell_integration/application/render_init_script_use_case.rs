@@ -28,10 +28,20 @@ impl RenderInitScriptUseCase {
         &self,
         shell: Shell,
         phase: IntegrationPhase,
-        _snapshot: bool,
+        snapshot: bool,
     ) -> Result<InitScript, ShellIntegrationError> {
         let template = self.templates.template(shell, phase);
-        Ok(init_script_renderer::render_snapshot(shell, phase, template))
+        if snapshot {
+            return Ok(init_script_renderer::render_snapshot(shell, phase, template));
+        }
+        Ok(init_script_renderer::render(
+            shell,
+            phase,
+            template,
+            &self.environment.current_executable()?,
+            || None,
+            || true,
+        ))
     }
 }
 
@@ -64,5 +74,16 @@ mod tests {
                 vec![]
             )
         );
+    }
+
+    #[test]
+    fn should_render_the_post_script_running_the_current_executable() {
+        let environment = Rc::new(RecordingShellEnvironment::default());
+
+        let script = use_case(&environment)
+            .execute(Shell::Zsh, IntegrationPhase::Post, false)
+            .unwrap();
+
+        assert_eq!(script.text(), "body '/usr/local/bin/tabsmith'");
     }
 }
