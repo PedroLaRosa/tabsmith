@@ -140,9 +140,8 @@ pub(crate) fn install_dotfiles(paths: &IntegrationPaths, shells: &[Shell]) -> an
 
 /// Uninstall every integration of `shells` with something on disk, failing with the text main prints.
 pub(crate) fn uninstall_dotfiles(paths: &IntegrationPaths, shells: &[Shell]) -> anyhow::Result<bool> {
-    let installer = installer();
-    installer
-        .apply(paths, shells, |i| installer.has_traces(paths, i), |i| installer.uninstall(paths, i))
+    installer()
+        .uninstall_traced(paths, shells)
         .map_err(integration_failures_error)
 }
 

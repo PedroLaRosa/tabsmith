@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn should_save_no_restart_reminder_when_everything_already_was_installed() {
+    fn should_save_no_restart_reminder_when_setup_found_everything_installed() {
         let bed = test_bed();
         bed.installer
             .install_missing(&paths(), &[Shell::Zsh])
