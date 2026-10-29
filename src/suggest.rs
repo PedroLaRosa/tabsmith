@@ -20,6 +20,7 @@ use crate::completion::domain::value_objects::generator_slot_view::GeneratorSlot
 use crate::completion::domain::value_objects::insertion_context::InsertionContext;
 use crate::completion::domain::value_objects::suggestion_candidate::SuggestionCandidate;
 use crate::completion::domain::value_objects::suggestion_query::{after_sep, SuggestionQuery};
+use crate::completion::domain::services::fuzzy_matcher::fuzzysort;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::Value;
 use std::cmp::Ordering;
@@ -297,94 +298,6 @@ pub fn update_priorities(list: &mut [SuggestionCandidate], recency: Option<&Hash
             p + boost
         };
     }
-}
-
-/// fuzzysort `single(q, t)` (fresh struct per call): `(score, matched char indexes)`; higher is better, 0 = exact.
-pub fn fuzzysort(q: &str, t: &str) -> Option<(i64, Vec<usize>)> {
-    if q.is_empty() || t.is_empty() {
-        return None;
-    }
-    let lower = |c: char| c.to_lowercase().next().unwrap_or(c);
-    let ql: Vec<char> = q.chars().map(lower).collect();
-    let tc: Vec<char> = t.chars().collect();
-    let tl: Vec<char> = tc.iter().map(|&c| lower(c)).collect();
-    let (qn, tn) = (ql.len(), tl.len());
-    // simple pass: query chars in order
-    let mut simple = Vec::with_capacity(qn);
-    for (ti, &c) in tl.iter().enumerate() {
-        if c == ql[simple.len()] {
-            simple.push(ti);
-            if simple.len() == qn {
-                break;
-            }
-        }
-    }
-    if simple.len() < qn {
-        return None;
-    }
-    // beginnings: upper after non-upper, first alnum after non-alnum, any non-alnum (ASCII, original case)
-    let mut beginning = vec![false; tn];
-    let (mut was_upper, mut was_alnum) = (false, false);
-    for (i, &c) in tc.iter().enumerate() {
-        let (upper, alnum) = (c.is_ascii_uppercase(), c.is_ascii_alphanumeric());
-        beginning[i] = (upper && !was_upper) || !was_alnum || !alnum;
-        was_upper = upper;
-        was_alnum = alnum;
-    }
-    let mut next = vec![tn; tn];
-    let mut nb = tn;
-    for i in (0..tn).rev() {
-        next[i] = nb;
-        if beginning[i] {
-            nb = i;
-        }
-    }
-    // strict pass: only consecutive matches or word beginnings, with backtracking
-    let mut strict: Vec<usize> = Vec::with_capacity(qn);
-    let mut ok = false;
-    let mut ti = if simple[0] == 0 {
-        0
-    } else {
-        next[simple[0] - 1]
-    };
-    if ti != tn {
-        let mut qi = 0;
-        loop {
-            if ti >= tn {
-                if qi == 0 {
-                    break;
-                }
-                qi -= 1;
-                let last = strict.pop().unwrap_or(0);
-                ti = next[last];
-            } else if ql[qi] == tl[ti] {
-                strict.push(ti);
-                qi += 1;
-                if qi == qn {
-                    ok = true;
-                    break;
-                }
-                ti += 1;
-            } else {
-                ti = next[ti];
-            }
-        }
-    }
-    let best = if ok { strict } else { simple };
-    let mut score: i64 = 0;
-    let mut last: i64 = -1;
-    for &i in &best {
-        let i = i as i64;
-        if last != i - 1 {
-            score -= i;
-        }
-        last = i;
-    }
-    if !ok {
-        score *= 1000;
-    }
-    score -= (tn - qn) as i64;
-    Some((score, best))
 }
 
 /// Prefix ladder: 0 exact, −1 exact ignoring case, −2 prefix, −3 prefix ignoring case.
@@ -1257,94 +1170,10 @@ pub fn first_token_items(
 mod tests {
     use super::*;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
-    use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLineParts;
+    use crate::completion::domain::test_fixtures::{arg, ctx, names, opt, opts, pr_for, sub};
     use crate::completion::domain::value_objects::token_annotation::TokenAnnotation;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-    use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
-    use crate::specs::domain::value_objects::spec_option::SpecOption;
     use serde_json::json;
-
-    fn pr_for(comp: Subcommand, search: &str) -> ParsedCommandLineParts {
-        let comp = Rc::new(comp);
-        ParsedCommandLineParts {
-            completion: comp.clone(),
-            path: vec![comp],
-            current_arg: None,
-            search_term: search.into(),
-            suggest_subcommands: true,
-            suggest_options: true,
-            suggest_args: true,
-            passed_options: vec![],
-            persistent: vec![],
-            annotations: vec![],
-            command_index: 0,
-            tokens: vec![],
-            raw_last_token: search.into(),
-            directives: ParserDirectives::default(),
-            option_chain: None,
-            first_token: false,
-            spec_name: "cmd".into(),
-        }
-    }
-
-    fn opts() -> FilterOptions {
-        FilterOptions {
-            fuzzy: false,
-            auto_exec_hidden: false,
-            exec_after_space: false,
-            run_dangerous: false,
-            suggest_current_token: false,
-        }
-    }
-
-    fn sub(names: &[&str]) -> Rc<Subcommand> {
-        Rc::new(Subcommand::default().with_names(names.iter().map(|s| s.to_string()).collect()))
-    }
-
-    fn opt(names: &[&str]) -> SpecOption {
-        SpecOption::default().with_names(names.iter().map(|s| s.to_string()).collect())
-    }
-
-    fn arg(optional: bool) -> Rc<Arg> {
-        Rc::new(Arg::default().with_name(Some("x".into())).with_is_optional(optional))
-    }
-
-    fn names(v: &[(SuggestionCandidate, bool)]) -> Vec<String> {
-        v.iter()
-            .map(|(s, _)| {
-                format!(
-                    "{}{}",
-                    if s.kind == SuggestionKind::AutoExecute {
-                        "!"
-                    } else {
-                        ""
-                    },
-                    s.first()
-                )
-            })
-            .collect()
-    }
-
-    fn ctx<'a>(search: &'a str, raw: &'a str, shell: Shell) -> InsertionContext<'a> {
-        InsertionContext {
-            search_term: search,
-            raw,
-            shell,
-            fuzzy: false,
-            prefer_verbose: false,
-            insert_space: true,
-        }
-    }
-
-    #[test]
-    fn fuzzysort_vectors() {
-        assert_eq!(fuzzysort("fs", "Fuzzy Search"), Some((-16, vec![0, 6])));
-        assert_eq!(fuzzysort("test", "test").map(|r| r.0), Some(0));
-        assert_eq!(fuzzysort("doesnt exist", "target"), None);
-        assert_eq!(fuzzysort("", "x"), None);
-        // no strict match (not at a word beginning) → simple indexes, ×1000
-        assert_eq!(fuzzysort("ut", "output"), Some((-1004, vec![1, 2])));
-    }
 
     #[test]
     fn prefix_ladder() {
