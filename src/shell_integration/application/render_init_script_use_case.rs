@@ -2,6 +2,7 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shell_integration::application::ports::init_script_templates::InitScriptTemplates;
 use crate::shell_integration::application::ports::shell_environment::ShellEnvironment;
 use crate::shell_integration::domain::services::init_script_renderer;
+use crate::shell_integration::domain::services::launch_policy::decide;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::init_script::InitScript;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
@@ -40,7 +41,7 @@ impl RenderInitScriptUseCase {
             template,
             &self.environment.current_executable()?,
             || None,
-            || true,
+            || decide(&self.environment.launch_facts()).launches(),
         ))
     }
 }
@@ -85,5 +86,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(script.text(), "body '/usr/local/bin/tabsmith'");
+    }
+
+    /// No variable is set and stdin is no terminal, so tabsmith does not launch: SHOULD_TABSMITH_LAUNCH is 1.
+    #[test]
+    fn should_open_the_pre_script_with_the_launch_flag_the_launch_facts_decide() {
+        let environment = Rc::new(RecordingShellEnvironment::default());
+
+        let script = use_case(&environment)
+            .execute(Shell::Fish, IntegrationPhase::Pre, false)
+            .unwrap();
+
+        assert_eq!(
+            script.text(),
+            "set -g SHOULD_TABSMITH_LAUNCH 1\nbody '/usr/local/bin/tabsmith'"
+        );
     }
 }
