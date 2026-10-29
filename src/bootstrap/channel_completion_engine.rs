@@ -21,7 +21,7 @@ pub(crate) struct ChannelCompletionEngine {
 /// sender of its own, so dropping this port never ends the engine: only `shut_down` does.
 pub(crate) fn start_completion_engine(replies: Sender<Msg>, settings: Settings) -> Rc<dyn CompletionEngine> {
     Rc::new(ChannelCompletionEngine {
-        sender: crate::engine::spawn(replies, settings),
+        sender: crate::bootstrap::engine_server::spawn(replies, settings),
     })
 }
 

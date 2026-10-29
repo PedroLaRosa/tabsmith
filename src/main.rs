@@ -8,7 +8,6 @@ mod bootstrap;
 mod cli;
 mod completion;
 mod doctor;
-mod engine;
 mod history;
 mod icons;
 mod inline;

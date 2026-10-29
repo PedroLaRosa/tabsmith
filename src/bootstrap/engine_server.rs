@@ -42,7 +42,7 @@ use std::time::Duration;
 
 /// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
 /// Returns the engine's inbox. The thread exits on `EngineMsg::Shutdown` or when all senders are dropped.
-pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
+pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
     let (etx, erx) = mpsc::channel();
     let inner = etx.clone();
     let spawned = std::thread::Builder::new()
@@ -82,7 +82,7 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
             );
             let recency = completion.recency.load();
             let session = CompletionSession::new(settings, std::env::vars().collect(), recency);
-            Engine::new(tx, session, completion, history_module).run(&runtime, &inbox);
+            EngineServer::new(tx, session, completion, history_module).run(&runtime, &inbox);
         });
     if let Err(e) = spawned {
         logger::error(&format!("engine: spawn: {e}"));
@@ -173,17 +173,8 @@ impl RuntimeEventSource for EngineInbox {
     }
 }
 
-/// Logs what the completion services report, the moment they report it (D5).
-fn log_completion_notice(notice: CompletionNotice) {
-    match notice {
-        CompletionNotice::GenerateSpecFailed(line) => logger::warn(&line),
-        CompletionNotice::GeneratorFailed(e) => logger::debug(&format!("engine: generator failed: {e}")),
-        CompletionNotice::NoSuggestions(e) => logger::debug(&format!("engine: no suggestions: {e}")),
-    }
-}
-
-struct Engine {
-    tx: Sender<Msg>,
+struct EngineServer {
+    replies: Sender<Msg>,
     session: CompletionSession,
     completion: CompletionModule,
     record_command: RecordCommandUseCase,
@@ -191,14 +182,14 @@ struct Engine {
     ghost_cache: Arc<Mutex<GhostCache>>,
 }
 
-impl Engine {
-    fn new(tx: Sender<Msg>, session: CompletionSession, completion: CompletionModule, history_module: HistoryModule) -> Engine {
+impl EngineServer {
+    fn new(replies: Sender<Msg>, session: CompletionSession, completion: CompletionModule, history_module: HistoryModule) -> EngineServer {
         let HistoryModule {
             history,
             record_command,
         } = history_module;
-        Engine {
-            tx,
+        EngineServer {
+            replies,
             session,
             completion,
             record_command,
@@ -228,7 +219,7 @@ impl Engine {
             }
             if let Some(req) = pending.take() {
                 if let Some(result) =
-                    self.completion.complete_command_line.execute(&mut self.session, &req, &mut |n| log_completion_notice(n))
+                    self.completion.complete_command_line.execute(&mut self.session, &req, &mut |n| Self::log_notice(n))
                 {
                     self.send_reply(result);
                 }
@@ -236,7 +227,7 @@ impl Engine {
             }
             if self.session.has_running_generators() {
                 if let Some(result) =
-                    self.completion.progress_generators.execute(&mut self.session, &mut |n| log_completion_notice(n))
+                    self.completion.progress_generators.execute(&mut self.session, &mut |n| Self::log_notice(n))
                 {
                     self.send_reply(result);
                 }
@@ -280,12 +271,21 @@ impl Engine {
     /// The one place a completion result is sent: with the local ghost text for its buffer (Q15).
     fn send_reply(&self, result: CompletionResult) {
         let ghost = self.local_ghost_text(&result);
-        let _ = self.tx.send(Msg::Completion(Box::new(result.with_ghost(ghost))));
+        let _ = self.replies.send(Msg::Completion(Box::new(result.with_ghost(ghost))));
+    }
+
+    /// Logs what the completion services report, the moment they report it (D5).
+    fn log_notice(notice: CompletionNotice) {
+        match notice {
+            CompletionNotice::GenerateSpecFailed(line) => logger::warn(&line),
+            CompletionNotice::GeneratorFailed(e) => logger::debug(&format!("engine: generator failed: {e}")),
+            CompletionNotice::NoSuggestions(e) => logger::debug(&format!("engine: no suggestions: {e}")),
+        }
     }
 }
 
 // legacy ghost text: Phase 7.6 replaces this block
-impl Engine {
+impl EngineServer {
     /// Local inline ghost (SPEC §6.11) of a reply; error replies (commands without a spec) get one too.
     fn local_ghost_text(&self, result: &CompletionResult) -> Option<String> {
         if !self.session.settings().bool(INLINE_ENABLED)
@@ -305,7 +305,7 @@ impl Engine {
 
     /// LLM ghost text (SPEC §8.4).
     fn request_llm_ghost_text(&mut self, req: u64, buffer: String, cwd: PathBuf, shell: Shell) {
-        let tx = self.tx.clone();
+        let tx = self.replies.clone();
         let Ok(Source::Profile(profile)) = inline::source(self.session.settings()) else {
             let _ = tx.send(Msg::Ghost { req, text: None });
             return;
@@ -424,7 +424,7 @@ mod tests {
     }
 
     /// An engine over a real runtime and a JSONL history in `dir`, whose replies go nowhere.
-    fn engine_over(dir: &TempDir) -> Engine {
+    fn engine_over(dir: &TempDir) -> EngineServer {
         let (tx, _) = std::sync::mpsc::channel();
         let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
         let history_module = HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
@@ -438,7 +438,7 @@ mod tests {
             SpecIndex::default(),
         );
         let session = CompletionSession::new(Settings::default(), std::env::vars().collect(), completion.recency.load());
-        Engine::new(tx, session, completion, history_module)
+        EngineServer::new(tx, session, completion, history_module)
     }
 
     /// The message a shell's session context arrives as: its env and its alias text.
@@ -663,7 +663,7 @@ mod tests {
             SpecIndex::default(),
         );
         let session = CompletionSession::new(settings, std::env::vars().collect(), completion.recency.load());
-        let engine = Engine::new(replies, session, completion, history_module);
+        let engine = EngineServer::new(replies, session, completion, history_module);
         for message in first {
             to_engine.send(message).unwrap();
         }
