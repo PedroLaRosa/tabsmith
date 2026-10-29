@@ -1,5 +1,6 @@
 use crate::shared::infrastructure::terminal_style::{sgr, stdout_tty};
 use crate::shell_integration::application::integration_failure::IntegrationFailure;
+use crate::shell_integration::application::integration_status_report::IntegrationStatusReport;
 
 /// The failures of a run over integrations as one error, the text main prints after `error: ` (the legacy
 /// `bail!`); a failed integration's description is bold when stdout is a terminal, as `paint` does.
@@ -23,9 +24,31 @@ fn failures_text(failures: &[IntegrationFailure], styled: bool) -> String {
     format!("\n\n{}", parts.join("\n\n"))
 }
 
+/// `integrations status` in plain text (SPEC §2.6): every row, its mark green when installed and red when not if
+/// `styled`, then every shell whose integrations could not be listed.
+fn plain_status_lines(report: &IntegrationStatusReport, styled: bool) -> Vec<String> {
+    let rows = report.integrations.iter().map(|row| {
+        let mark = if row.installed {
+            sgr("✔", "32", styled)
+        } else {
+            sgr("✘", "31", styled)
+        };
+        format!("{mark} {}", row.description)
+    });
+    let failures = report.failures.iter().map(|failure| match failure {
+        IntegrationFailure::Listing { shell, reason } => format!("{shell}: {reason}"),
+        IntegrationFailure::Operation {
+            description,
+            reason,
+        } => format!("{description}: {reason}"),
+    });
+    rows.chain(failures).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell_integration::application::integration_status::IntegrationStatus;
 
     #[test]
     fn should_word_a_shell_it_could_not_list_as_the_shell_and_reason_after_a_blank_line() {
@@ -89,5 +112,45 @@ mod tests {
         let error = integration_failures_error(failures);
 
         assert_eq!(format!("{error:#}"), "\n\npwsh: pwsh printed an empty $PROFILE");
+    }
+
+    /// zsh's `.zshrc` is installed, fish's pre file is not, and pwsh could not be listed.
+    fn status_report() -> IntegrationStatusReport {
+        IntegrationStatusReport {
+            integrations: vec![
+                IntegrationStatus {
+                    installed: true,
+                    description: "zsh pre post into .zshrc".into(),
+                    shell: "zsh".into(),
+                    file_name: ".zshrc".into(),
+                },
+                IntegrationStatus {
+                    installed: false,
+                    description: "fish pre".into(),
+                    shell: "fish".into(),
+                    file_name: "00_tabsmith_pre.fish".into(),
+                },
+            ],
+            failures: vec![IntegrationFailure::Listing {
+                shell: "pwsh".into(),
+                reason: "pwsh printed an empty $PROFILE".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn should_mark_an_installed_row_green_and_one_not_installed_red_when_styled() {
+        let report = status_report();
+
+        let lines = plain_status_lines(&report, true);
+
+        assert_eq!(
+            lines,
+            [
+                "\x1b[32m✔\x1b[0m zsh pre post into .zshrc",
+                "\x1b[31m✘\x1b[0m fish pre",
+                "pwsh: pwsh printed an empty $PROFILE"
+            ]
+        );
     }
 }
