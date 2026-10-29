@@ -25,6 +25,9 @@ impl RenderInitScriptUseCase {
         }
     }
 
+    /// A `snapshot` is the deterministic output (SPEC §2.7) and asks the shell environment nothing. Otherwise the
+    /// executable is asked first, for every phase, and its failure is the error; the parent shell and the launch
+    /// facts are asked only by the scripts that print them.
     pub(crate) fn execute(
         &self,
         shell: Shell,
