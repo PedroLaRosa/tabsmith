@@ -56,7 +56,12 @@ impl SessionContextRepository for FileSessionContextRepository {
         std::fs::metadata(path).ok()?.modified().ok()
     }
 
-    fn remove(&self, _id: &SessionId) {}
+    /// A symlinked run file loses the link, not its target; every error is ignored.
+    fn remove(&self, id: &SessionId) {
+        if let Ok(path) = self.file(id) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 
     fn prune_older_than(&self, _max_age: Duration) {}
 }
@@ -164,5 +169,17 @@ mod tests {
             (before, repository.last_modified(&session_id("abc123"))),
             (None, std::fs::metadata(path).unwrap().modified().ok())
         );
+    }
+
+    #[test]
+    fn should_delete_the_run_file_of_a_removed_session() {
+        let temp_dir = TempDir::new("session-remove");
+        let repository = repository_in(&temp_dir);
+        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+        repository.save(&context).unwrap();
+
+        repository.remove(&session_id("abc123"));
+
+        assert!(!temp_dir.path().join("run/abc123.json").exists());
     }
 }
