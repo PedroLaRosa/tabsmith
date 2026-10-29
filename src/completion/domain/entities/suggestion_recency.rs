@@ -13,8 +13,12 @@ impl SuggestionRecency {
         self.times.clone()
     }
 
-    /// Records that `name` was inserted for `command` at `at_ms`; `true` when the recency changed.
+    /// Records that `name` was inserted for `command` at `at_ms`; `true` when the recency changed. The
+    /// auto-execute row (`↪`) is never recorded.
     pub(crate) fn record(&mut self, command: String, name: String, at_ms: u64) -> bool {
+        if name.contains('↪') {
+            return false;
+        }
         self.times.entry(command).or_default().insert(name, at_ms);
         true
     }
@@ -38,5 +42,14 @@ mod tests {
             (recorded, recency.to_primitives()),
             (true, times("git", "checkout", 1_700_000_000_000))
         );
+    }
+
+    #[test]
+    fn should_not_record_an_auto_execute_row() {
+        let mut recency = SuggestionRecency::default();
+
+        let recorded = recency.record("git".into(), "↪".into(), 1_700_000_000_000);
+
+        assert_eq!((recorded, recency), (false, SuggestionRecency::default()));
     }
 }
