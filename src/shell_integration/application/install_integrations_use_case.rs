@@ -29,9 +29,11 @@ impl InstallIntegrationsUseCase {
         paths: &IntegrationPaths,
         shells: &[Shell],
     ) -> Result<bool, Vec<IntegrationFailure>> {
-        let installed = self.installer.install_missing(paths, shells);
-        self.restart_reminder.save_pending();
-        installed
+        let installed = self.installer.install_missing(paths, shells)?;
+        if installed {
+            self.restart_reminder.save_pending();
+        }
+        Ok(installed)
     }
 }
 
@@ -80,6 +82,21 @@ mod tests {
 
         assert!(
             matches!(installed, Ok(true)) && restart_reminder.is_pending(),
+            "{installed:?}"
+        );
+    }
+
+    #[test]
+    fn should_save_no_restart_reminder_when_everything_already_was_installed() {
+        let installer = installer(RecordingShellEnvironment::default());
+        installer.install_missing(&paths(), &[Shell::Zsh]).unwrap();
+        let restart_reminder = Rc::new(InMemoryRestartReminderRepository::default());
+        let use_case = InstallIntegrationsUseCase::new(installer, restart_reminder.clone());
+
+        let installed = use_case.execute(&paths(), &[Shell::Zsh]);
+
+        assert!(
+            matches!(installed, Ok(false)) && !restart_reminder.is_pending(),
             "{installed:?}"
         );
     }
