@@ -13,7 +13,9 @@ use crate::completion::domain::value_objects::parsed_command_line::ParsedCommand
 use crate::completion::application::command_line_parser::CommandLineParser;
 use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::application::parse_context::ParseContext;
+use crate::completion::application::ports::directory_lister::DirectoryLister;
 use crate::completion::domain::entities::parse_prefix_cache::ParsePrefixCache;
+use crate::completion::infrastructure::adapters::fs_directory_lister::FsDirectoryLister;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
     AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
@@ -846,7 +848,7 @@ impl Engine {
                     run.ctx.env(),
                     run.ctx.shell() == Shell::Pwsh.name(),
                 );
-                items = suggest::list_dir(&dir, files, run.ctx.is_dangerous());
+                items = FsDirectoryLister.list(&dir, files, run.ctx.is_dangerous());
             }
             items.extend(run.help.iter().cloned()); // `history` template: [] (F6)
             return match g.filter_template_suggestions() {
