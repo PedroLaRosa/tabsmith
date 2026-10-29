@@ -295,9 +295,8 @@ pub fn install_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool
 /// Uninstall every integration of `shells` with something on disk. Not only the installed ones: `is_installed`
 /// fails exactly when uninstall is needed (a moved binary, lines appended after the post block). Ok(true) if any.
 fn uninstall_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool> {
-    let installer = legacy_installer();
-    installer
-        .apply(ctx, shells, |i| installer.has_traces(ctx, i), |i| installer.uninstall(ctx, i))
+    legacy_installer()
+        .uninstall_traced(ctx, shells)
         .map_err(integration_failures_error)
 }
 
