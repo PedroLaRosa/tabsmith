@@ -30,11 +30,19 @@ pub(crate) struct InMemorySessionContextRepository {
 }
 
 #[cfg(test)]
-impl SessionContextRepository for InMemorySessionContextRepository {
-    fn save(&self, context: &SessionContext) -> Result<(), TerminalSessionError> {
+impl InMemorySessionContextRepository {
+    /// Saves the context as if it last changed at `modified`, so a test can arrange a stale one.
+    pub(crate) fn save_modified_at(&self, context: &SessionContext, modified: SystemTime) {
         self.contexts
             .borrow_mut()
-            .insert(context.id().clone(), (context.clone(), SystemTime::now()));
+            .insert(context.id().clone(), (context.clone(), modified));
+    }
+}
+
+#[cfg(test)]
+impl SessionContextRepository for InMemorySessionContextRepository {
+    fn save(&self, context: &SessionContext) -> Result<(), TerminalSessionError> {
+        self.save_modified_at(context, SystemTime::now());
         Ok(())
     }
 
@@ -54,7 +62,12 @@ impl SessionContextRepository for InMemorySessionContextRepository {
         self.contexts.borrow_mut().remove(id);
     }
 
-    fn prune_older_than(&self, _max_age: Duration) {}
+    /// Stale is strictly older than `max_age`; a time in the future is not stale, as for the run files.
+    fn prune_older_than(&self, max_age: Duration) {
+        self.contexts
+            .borrow_mut()
+            .retain(|_, (_, modified)| modified.elapsed().unwrap_or_default() <= max_age);
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +137,21 @@ mod tests {
                 repository.last_modified(&session_id("abc123"))
             ),
             (true, None)
+        );
+    }
+
+    #[test]
+    fn should_prune_only_the_contexts_unchanged_for_longer_than_the_max_age() {
+        let repository = InMemorySessionContextRepository::default();
+        let two_days_ago = SystemTime::now() - Duration::from_secs(2 * 24 * 3600);
+        repository.save_modified_at(&empty_context("stale"), two_days_ago);
+        repository.save(&empty_context("fresh")).unwrap();
+
+        repository.prune_older_than(Duration::from_secs(24 * 3600));
+
+        assert_eq!(
+            ["stale", "fresh"].map(|id| repository.find(&session_id(id)).is_some()),
+            [false, true]
         );
     }
 }
