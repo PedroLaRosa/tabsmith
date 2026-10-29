@@ -516,3 +516,16 @@ fn should_pass_a_cache_key_function_the_tokens_in_an_object_and_no_exec_function
         (7, vec![JsArg::Json(json!({ "tokens": tokens }))])
     );
 }
+
+#[test]
+fn should_pass_generate_spec_the_tokens_and_the_exec_function() {
+    let tokens = vec!["npm".to_string(), "run".to_string()];
+    let call = SpecFunctionCall::GenerateSpec {
+        function: 8,
+        tokens: tokens.clone(),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(arguments, (8, vec![JsArg::Json(json!(tokens)), JsArg::Exec]));
+}
