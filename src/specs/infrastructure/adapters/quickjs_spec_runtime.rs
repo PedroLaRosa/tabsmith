@@ -19,6 +19,7 @@ use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
+use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::infrastructure::adapters::exec_input::{process_output_json, ExecInput};
@@ -34,7 +35,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
 /// One argument to a JS callback.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum JsArg {
     Json(Value),
     /// The `executeShellCommand` function, bound to the call's `GeneratorContext`.
@@ -490,6 +491,18 @@ impl QuickJsSpecRuntime {
             })
             .collect()
     }
+}
+
+/// The function a spec function call runs, and the JS arguments its kind passes.
+pub(crate) fn call_arguments(
+    call: &SpecFunctionCall,
+    _context: &GeneratorContext,
+) -> (SpecFunctionRef, Vec<JsArg>) {
+    let arguments = match call {
+        SpecFunctionCall::QueryTerm { search_term, .. } => vec![JsArg::Json(json!(search_term))],
+        _ => Vec::new(),
+    };
+    (call.function(), arguments)
 }
 
 #[cfg(test)]

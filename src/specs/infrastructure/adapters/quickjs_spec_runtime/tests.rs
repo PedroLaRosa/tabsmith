@@ -444,3 +444,16 @@ fn all_bundle_modules() {
     }
     assert!(failed.is_empty());
 }
+
+#[test]
+fn should_pass_a_query_term_function_the_search_term() {
+    let search_term = String::from("ma");
+    let call = SpecFunctionCall::QueryTerm {
+        function: 3,
+        search_term: search_term.clone(),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(arguments, (3, vec![JsArg::Json(json!(search_term))]));
+}
