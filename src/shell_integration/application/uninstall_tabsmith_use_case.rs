@@ -25,7 +25,7 @@ impl UninstallTabsmithUseCase {
         &self,
         paths: &IntegrationPaths,
         shells: &[Shell],
-        _purge: bool,
+        purge: bool,
         mut report: impl FnMut(UninstallProgress),
     ) -> bool {
         let mut failed = false;
@@ -37,6 +37,9 @@ impl UninstallTabsmithUseCase {
         ) {
             report(UninstallProgress::IntegrationsFailed(failures));
             failed = true;
+        }
+        if purge {
+            let _ = self.purger.purge(paths.data_root());
         }
         failed
     }
@@ -155,6 +158,20 @@ mod tests {
                     }
                 ])]
             )
+        );
+    }
+
+    /// The data root comes from the paths, never from the environment (T36).
+    #[test]
+    fn should_purge_the_data_root_of_the_paths_when_asked() {
+        let bed = test_bed();
+        let mut events = Vec::new();
+
+        let failed = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
+
+        assert_eq!(
+            (failed, events, bed.purger.purged()),
+            (false, vec![], vec![PathBuf::from("/home/u/.tabsmith")])
         );
     }
 }
