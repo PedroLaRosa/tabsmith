@@ -66,9 +66,9 @@ type Answer = Box<dyn Fn(&SpecFunctionCall) -> Result<SpecFunctionResult, SpecEr
 /// Answers calls with the answers it was given, and records them, for tests. A task runs until a builder scripts how
 /// it finishes (`completing` a function's tasks, `completing_execs`, `finishing_sleeps`); `wait` then gives the
 /// outcome once, like the runtime, or `interrupting` interrupts every wait. It reads values with the runtime's own
-/// decoders and records the settings it is given.
+/// decoders and records the settings it is given and the exec requests it started.
 // ponytail: outcomes are scripted per function, for every exec and for every sleep, and are ready at the first wait;
-// per-task timing or the exec requests a run started come test-first when a use-case test needs them.
+// per-task timing comes test-first when a use-case test needs it.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct InMemorySpecRuntime {
@@ -76,6 +76,7 @@ pub(crate) struct InMemorySpecRuntime {
     calls: RefCell<Vec<SpecFunctionCall>>,
     completions: HashMap<SpecFunctionRef, TaskOutcome>,
     exec_completion: Option<TaskOutcome>,
+    exec_requests: RefCell<Vec<ExecRequest>>,
     sleeps_finish: bool,
     interrupts: bool,
     applied_settings: RefCell<Vec<Settings>>,
@@ -124,6 +125,11 @@ impl InMemorySpecRuntime {
         self.calls.borrow().clone()
     }
 
+    /// The exec requests started so far, in order.
+    pub(crate) fn exec_requests(&self) -> Vec<ExecRequest> {
+        self.exec_requests.borrow().clone()
+    }
+
     /// The settings applied so far, in order.
     pub(crate) fn applied_settings(&self) -> Vec<Settings> {
         self.applied_settings.borrow().clone()
@@ -143,7 +149,8 @@ impl SpecRuntime for InMemorySpecRuntime {
         self.start_task(self.completions.get(&call.function()).cloned())
     }
 
-    fn start_exec(&self, _request: ExecRequest, _context: &GeneratorContext) -> TaskId {
+    fn start_exec(&self, request: ExecRequest, _context: &GeneratorContext) -> TaskId {
+        self.exec_requests.borrow_mut().push(request);
         self.start_task(self.exec_completion.clone())
     }
 
@@ -352,6 +359,18 @@ mod tests {
         let outcomes = runtime.wait(&tasks, Instant::now());
 
         assert_eq!(outcomes, Ok(vec![Some(Ok(output.clone())), Some(Ok(output))]));
+    }
+
+    #[test]
+    fn should_record_the_exec_requests_it_started() {
+        let runtime = InMemorySpecRuntime::default();
+        let listing = ExecRequest::new("ls".into(), vec!["-1".into()], None, HashMap::new(), Some(7000));
+        let branches = ExecRequest::new("git".into(), vec!["branch".into()], None, HashMap::new(), None);
+
+        runtime.start_exec(listing.clone(), &GeneratorContext::default());
+        runtime.start_exec(branches.clone(), &GeneratorContext::default());
+
+        assert_eq!(runtime.exec_requests(), vec![listing, branches]);
     }
 
     #[test]
