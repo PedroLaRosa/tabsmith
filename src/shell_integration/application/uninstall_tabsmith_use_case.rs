@@ -26,15 +26,19 @@ impl UninstallTabsmithUseCase {
         paths: &IntegrationPaths,
         shells: &[Shell],
         _purge: bool,
-        _report: impl FnMut(UninstallProgress),
+        mut report: impl FnMut(UninstallProgress),
     ) -> bool {
-        let _ = self.installer.apply(
+        let mut failed = false;
+        if let Err(failures) = self.installer.apply(
             paths,
             shells,
             |_| true,
             |i| self.installer.uninstall(paths, i),
-        );
-        false
+        ) {
+            report(UninstallProgress::IntegrationsFailed(failures));
+            failed = true;
+        }
+        failed
     }
 }
 
@@ -42,6 +46,7 @@ impl UninstallTabsmithUseCase {
 mod tests {
     use super::*;
     use crate::shared::application::ports::clock::FixedClock;
+    use crate::shell_integration::application::integration_failure::IntegrationFailure;
     use crate::shell_integration::application::ports::data_directory_purger::RecordingDataDirectoryPurger;
     use crate::shell_integration::application::ports::shell_environment::RecordingShellEnvironment;
     use crate::shell_integration::domain::repositories::backup_repository::InMemoryBackupRepository;
@@ -123,6 +128,33 @@ mod tests {
                 bed.purger.purged()
             ),
             (false, vec![], [false, false], vec![])
+        );
+    }
+
+    #[test]
+    fn should_report_the_integrations_that_could_not_be_taken_out_and_fail() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default()
+                .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+            RecordingDataDirectoryPurger::default(),
+        );
+        let mut events = Vec::new();
+
+        let failed = bed
+            .use_case
+            .execute(&paths(), &[Shell::Pwsh], false, |event| events.push(event));
+
+        assert_eq!(
+            (failed, events),
+            (
+                true,
+                vec![UninstallProgress::IntegrationsFailed(vec![
+                    IntegrationFailure::Listing {
+                        shell: "pwsh".into(),
+                        reason: "pwsh printed an empty $PROFILE".into(),
+                    }
+                ])]
+            )
         );
     }
 }
