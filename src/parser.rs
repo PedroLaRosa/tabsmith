@@ -16,7 +16,7 @@ use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_option::SpecOption;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, normalise};
-use crate::specs::SpecIndex;
+use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;

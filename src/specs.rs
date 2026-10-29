@@ -6,9 +6,9 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER,
 };
 use crate::settings::domain::value_objects::settings::Settings;
+use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use anyhow::Context;
-use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -131,15 +131,6 @@ pub fn user_dir() -> anyhow::Result<PathBuf> {
     Ok(data_directory_from_env().user_specs_dir()?)
 }
 
-/// `index.json` of the bundled set ∪ `*.js` stems in the user dir.
-#[derive(Clone, Debug, Default)]
-pub struct SpecIndex {
-    /// Root spec names (e.g. `git`, `aws`, `@withfig/autocomplete-tools`).
-    pub completions: Vec<String>,
-    /// Diff-versioned spec names (`az`, `heroku`, …) → load `<name>/index.js`.
-    pub diff_versioned: HashSet<String>,
-}
-
 impl SpecIndex {
     pub fn load() -> anyhow::Result<SpecIndex> {
         SpecIndex::load_from(&ensure_extracted()?, &user_dir()?)
@@ -169,10 +160,7 @@ impl SpecIndex {
                 }
             }
         }
-        Ok(SpecIndex {
-            completions,
-            diff_versioned: raw.diff_versioned.into_iter().collect(),
-        })
+        Ok(SpecIndex::new(completions, raw.diff_versioned.into_iter().collect()))
     }
 }
 
@@ -212,7 +200,7 @@ pub(crate) fn resolve_in(name: &str, roots: &[PathBuf], index: &SpecIndex) -> Op
     {
         return None;
     }
-    let diff = index.diff_versioned.contains(name);
+    let diff = index.diff_versioned().contains(name);
     roots.iter().find_map(|root| {
         let file = root.join(format!("{name}.js"));
         if !diff && file.is_file() {
@@ -374,13 +362,13 @@ mod tests {
         std::fs::write(user.path().join("mytool.js"), "").unwrap();
         std::fs::write(user.path().join("notes.txt"), "").unwrap();
         let idx = SpecIndex::load_from(bundle.path(), user.path()).unwrap();
-        assert_eq!(idx.completions, ["git", "az", "mytool"]);
-        assert!(idx.diff_versioned.contains("az") && idx.diff_versioned.len() == 1);
+        assert_eq!(idx.completions(), ["git", "az", "mytool"]);
+        assert!(idx.diff_versioned().contains("az") && idx.diff_versioned().len() == 1);
         // Missing user dir is fine.
         assert_eq!(
             SpecIndex::load_from(bundle.path(), &user.path().join("nope"))
                 .unwrap()
-                .completions
+                .completions()
                 .len(),
             2
         );
@@ -407,10 +395,7 @@ mod tests {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, "").unwrap();
         }
-        let idx = SpecIndex {
-            completions: vec![],
-            diff_versioned: ["az".to_string()].into(),
-        };
+        let idx = SpecIndex::new(vec![], ["az".to_string()].into());
         let roots = [dev.clone(), user.clone(), bundle.clone()];
         assert_eq!(resolve_in("git", &roots, &idx), Some(user.join("git.js")));
         assert_eq!(
@@ -487,8 +472,8 @@ mod tests {
     fn embedded_index_shape() {
         let b = testutil::bundle_subset(&["index.json"]);
         let idx = SpecIndex::load_from(b.path(), &b.path().join("user")).unwrap();
-        assert_eq!(idx.completions.len(), 1484);
-        assert_eq!(idx.diff_versioned.len(), 6);
-        assert!(idx.diff_versioned.contains("heroku"));
+        assert_eq!(idx.completions().len(), 1484);
+        assert_eq!(idx.diff_versioned().len(), 6);
+        assert!(idx.diff_versioned().contains("heroku"));
     }
 }

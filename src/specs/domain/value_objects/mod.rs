@@ -7,6 +7,7 @@ pub(crate) mod generator_trigger;
 pub(crate) mod parser_directives;
 pub(crate) mod repeatability;
 pub(crate) mod spec_function_ref;
+pub(crate) mod spec_index;
 pub(crate) mod spec_load_directive;
 pub(crate) mod spec_location;
 pub(crate) mod spec_option;

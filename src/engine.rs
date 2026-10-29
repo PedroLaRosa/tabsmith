@@ -31,7 +31,7 @@ use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{
     self, json_items, post_process_items, script_exec_input, spec_value_to_json, truthy,
 };
-use crate::specs::SpecIndex;
+use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
@@ -969,7 +969,7 @@ impl Engine {
             }
         }
         let items = suggest::first_token_items(
-            &self.index.completions,
+            self.index.completions(),
             aliases,
             path.as_deref(),
             pathext.as_deref(),
