@@ -1066,7 +1066,7 @@ pub fn to_item(s: Sugg, prefix_match: bool, c: &InsCtx) -> Item {
 // ---------------------------------------------------------------------------------------------------------
 // Generators: triggers and cache (SPEC §6.6.1, §6.6.5)
 
-/// Non-function trigger decision (`new` = current search term, `old` = previous); `None` for `Trigger::Fn`.
+/// Non-function trigger decision (`new` = current search term, `old` = previous); `None` for `GeneratorTrigger::Fn`.
 pub fn triggered(t: &GeneratorTrigger, new: &str, old: &str) -> Option<bool> {
     let last = |s: &str, p: &str| s.rfind(p).map(|i| s[..i].chars().count()); // JS lastIndexOf (char units)
     Some(match t {
