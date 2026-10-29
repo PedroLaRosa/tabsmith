@@ -292,7 +292,7 @@ domain/value_objects/{spec_option, arg, generator, spec_suggestion, suggestion_k
                       spec_index, semantic_version, generator_context, exec_request, process_output}.rs
 domain/services/{spec_locator ← parser::spec_location + specs::resolve_in name rules and lookup order
                  (exists predicate injected; bin/console, dotslash rules),
-                 spec_version_selector ← version pick (newest ≤ target),
+                 spec_version_selector ← apply_versions key pick (every diff ≤ target, cumulative, semver order),
                  bundle_retention_policy ← specs cleanup staleness rules}.rs
 domain/repositories/spec_repository.rs    trait {find(&SpecLocation) -> Result<Rc<Subcommand>, SpecError>} + InMemory
 domain/spec_error.rs                      (Aborted, Timeout, NotFound, Invalid)
