@@ -50,7 +50,9 @@ impl SessionContextRepository for InMemorySessionContextRepository {
         Some(*modified)
     }
 
-    fn remove(&self, _id: &SessionId) {}
+    fn remove(&self, id: &SessionId) {
+        self.contexts.borrow_mut().remove(id);
+    }
 
     fn prune_older_than(&self, _max_age: Duration) {}
 }
@@ -107,5 +109,21 @@ mod tests {
 
         let modified = repository.last_modified(&session_id("abc123")).unwrap();
         assert!(modified >= before && modified <= SystemTime::now());
+    }
+
+    #[test]
+    fn should_forget_a_removed_context_and_its_time() {
+        let repository = InMemorySessionContextRepository::default();
+        repository.save(&empty_context("abc123")).unwrap();
+
+        repository.remove(&session_id("abc123"));
+
+        assert_eq!(
+            (
+                repository.find(&session_id("abc123")).is_none(),
+                repository.last_modified(&session_id("abc123"))
+            ),
+            (true, None)
+        );
     }
 }
