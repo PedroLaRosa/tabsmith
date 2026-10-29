@@ -49,6 +49,8 @@ pub(crate) fn script_timeout(settings: &Settings) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::domain::value_objects::setting_number::SettingNumber;
+    use crate::settings::domain::value_objects::setting_value::SettingValue;
 
     #[test]
     fn triggers() {
@@ -74,5 +76,21 @@ mod tests {
         assert!(dir_changed("src\\", "src", true));
         assert!(!dir_changed("src\\ab", "src\\a", true));
         assert!(!dir_changed("my\\ ", "my", false));
+    }
+
+    #[test]
+    fn should_read_the_script_timeout_floor_in_whole_milliseconds() {
+        let fractional = Settings::default().with(
+            AUTOCOMPLETE_SCRIPT_TIMEOUT,
+            SettingValue::Number(SettingNumber::from_f64(7500.5).unwrap()),
+        );
+        let negative = Settings::default().with(
+            AUTOCOMPLETE_SCRIPT_TIMEOUT,
+            SettingValue::Number(SettingNumber::from(-1i64)),
+        );
+
+        let floors = (script_timeout(&fractional), script_timeout(&negative));
+
+        assert_eq!(floors, (7500, 0));
     }
 }
