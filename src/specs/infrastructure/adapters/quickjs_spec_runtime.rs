@@ -16,16 +16,20 @@ use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
 use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
+use crate::specs::application::ports::interrupted::Interrupted;
+use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
+use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use crate::specs::domain::value_objects::task_id::TaskId;
+use crate::specs::domain::value_objects::task_outcome::TaskOutcome;
 use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
 use crate::specs::infrastructure::adapters::exec_input::{process_output_json, ExecInput};
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{
-    generator_context_json, spec_value_to_json, template_json,
+    function_result, generator_context_json, spec_value_to_json, template_json,
 };
 use crate::specs::infrastructure::adapters::process_executor::exec;
 use crate::specs::infrastructure::adapters::quickjs_module_wrapper::{wrap_module, PRELUDE};
@@ -494,6 +498,49 @@ impl QuickJsSpecRuntime {
                 None => Some(Err(format!("unknown task {t}"))),
             })
             .collect()
+    }
+}
+
+impl SpecRuntime for QuickJsSpecRuntime {
+    fn start(&self, _call: SpecFunctionCall, _context: Option<&GeneratorContext>) -> TaskId {
+        todo!()
+    }
+
+    fn start_exec(&self, request: ExecRequest, context: &GeneratorContext) -> TaskId {
+        QuickJsSpecRuntime::start_exec(self, request, context)
+    }
+
+    fn start_sleep(&self, ms: u64) -> TaskId {
+        QuickJsSpecRuntime::start_sleep(self, ms)
+    }
+
+    fn wait(
+        &self,
+        _tasks: &[TaskId],
+        _deadline: Instant,
+    ) -> Result<Vec<Option<TaskOutcome>>, Interrupted> {
+        todo!()
+    }
+
+    fn forget(&self, tasks: &[TaskId]) {
+        QuickJsSpecRuntime::forget(self, tasks)
+    }
+
+    fn call(
+        &self,
+        call: SpecFunctionCall,
+        context: Option<&GeneratorContext>,
+        timeout: Duration,
+    ) -> Result<SpecFunctionResult, SpecError> {
+        let default = GeneratorContext::default();
+        let generator = context.unwrap_or(&default);
+        let (function, args) = call_arguments(&call, generator);
+        let value = self.call_json(function, args, context, timeout)?;
+        Ok(function_result(call.kind(), &value, generator))
+    }
+
+    fn apply_settings(&self, settings: &Settings) {
+        QuickJsSpecRuntime::apply_settings(self, settings)
     }
 }
 

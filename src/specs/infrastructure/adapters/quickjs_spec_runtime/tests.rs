@@ -629,3 +629,18 @@ fn should_pass_filter_template_suggestions_a_returned_custom_result_unchanged() 
 
     assert_eq!(arguments, (13, vec![JsArg::Json(returned)]));
 }
+
+#[test]
+fn should_call_a_spec_function_and_read_what_it_returned_by_its_kind() {
+    let (js, _events) = js();
+    let dir = TempDir::new("typed-call");
+    let ns = module(&js, &dir, "alias.js", "var f=(token,exec)=>token+\":\"+typeof exec;export{f as default};");
+    let call = SpecFunctionCall::Alias {
+        function: fn_id(&ns["default"]).unwrap(),
+        token: "co".into(),
+    };
+
+    let result = SpecRuntime::call(&js, call, None, Duration::from_secs(5));
+
+    assert!(matches!(result, Ok(SpecFunctionResult::Alias(Some(alias))) if alias == "co:function"));
+}
