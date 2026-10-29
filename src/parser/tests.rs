@@ -1,11 +1,14 @@
 //! Parser tests: parseArguments and loadSpec cases, loadSpec recursion, aliases, diffs.
 use super::*;
 use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shell_parser::Token;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
-use crate::specs::infrastructure::adapters::fig_spec_mapper::function_result;
-use crate::specs::infrastructure::adapters::quickjs_spec_runtime::call_arguments;
-use serde_json::json;
+use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{function_result, normalise};
+use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
+use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{call_arguments, JsArg, QuickJsSpecRuntime};
+use serde_json::{json, Value};
 use std::cell::RefCell;
 
 const S: u8 = 1;
@@ -715,38 +718,10 @@ fn first_token_spec_identity_is_stable() {
 }
 
 #[test]
-fn cli_version_detection_survives_an_aborted_parse() {
-    // cli-version-respawn-per-keystroke: an abort keeps the detection running; the next parse reuses it
-    use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
-    let events = Rc::new(ChannelRuntimeEventSource::new());
-    let js = QuickJsSpecRuntime::new(events.clone(), &Settings::default()).unwrap();
-    let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("cliver");
-    let p = dir.path().join("v.js");
-    let src = "var v=async()=>{await new Promise(r=>setTimeout(r,200));globalThis.n=(globalThis.n||0)+1;return `${globalThis.n}.0.0`};export{v as getVersionCommand};";
-    std::fs::write(&p, src).unwrap();
-    let exports = js.load_module(&p).unwrap();
-    let (generator, mut inflight) = (GeneratorContext::default(), HashMap::new());
-    events.send_newer_request();
-    assert!(matches!(
-        cli_version(&exports, "az", &js, &generator, &mut inflight),
-        Err(ParseError::Aborted)
-    ));
-    assert_eq!(inflight.len(), 1);
-    assert!(events.take_newer_request());
-    assert_eq!(
-        cli_version(&exports, "az", &js, &generator, &mut inflight)
-            .unwrap()
-            .as_deref(),
-        Some("1.0.0")
-    );
-    assert!(inflight.is_empty());
-}
-
-#[test]
 fn spec_identity_survives_dev_reload_and_cache_clear() {
     // arg-key-pointer-identity-devmode: an unchanged spec keeps its Rc (the engine's arg/generator keys)
     use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
-    let js = QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap();
+    let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
     let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("devid");
     let build = dir.path().join(".fig").join("autocomplete").join("build");
     std::fs::create_dir_all(&build).unwrap();
@@ -773,12 +748,18 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
         dir: dir.path().to_path_buf(),
         name: "mk".into(),
     };
-    let mut p = Parser::new();
-    let a = p.load_spec(&loc, &ctx, &js).unwrap().unwrap();
-    let b = p.load_spec(&loc, &ctx, &js).unwrap().unwrap();
+    let mut p = Parser::new(
+        Rc::new(QuickJsSpecRepository::new(
+            js.clone(),
+            EmbeddedSpecBundle::new(data_directory_from_env()),
+        )),
+        js,
+    );
+    let a = p.load_spec(&loc, &ctx).unwrap().unwrap();
+    let b = p.load_spec(&loc, &ctx).unwrap().unwrap();
     let first = p.caches.first.clone();
     p.clear_caches(); // settings save
-    let c = p.load_spec(&loc, &ctx, &js).unwrap().unwrap();
+    let c = p.load_spec(&loc, &ctx).unwrap().unwrap();
     assert!(Rc::ptr_eq(&a, &b) && Rc::ptr_eq(&a, &c) && Rc::ptr_eq(&first, &p.caches.first));
     // an edited spec still reloads in developer mode
     std::fs::write(
@@ -786,7 +767,7 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
         r#"var s={name:"mk",args:{name:"target"}};export{s as default};"#,
     )
     .unwrap();
-    let d = p.load_spec(&loc, &ctx, &js).unwrap().unwrap();
+    let d = p.load_spec(&loc, &ctx).unwrap().unwrap();
     assert_eq!(d.args()[0].name().as_deref(), Some("target"));
 }
 

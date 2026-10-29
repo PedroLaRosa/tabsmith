@@ -43,6 +43,7 @@ use crate::specs::infrastructure::adapters::fig_spec_mapper::{
 };
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
+use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime, TaskResult};
 use crate::specs::infrastructure::specs_module::build_specs_module;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
@@ -86,10 +87,20 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
         .spawn(move || {
             // QuickJS is !Send: the inbox and the runtime are created on this thread.
             let inbox = Rc::new(EngineInbox::new(erx, inner));
-            match QuickJsSpecRuntime::new(inbox.clone(), &settings) {
-                Ok(js) => Engine::new(tx, settings).run(&js, &inbox),
-                Err(e) => logger::error(&format!("engine: js host: {e:#}")),
-            }
+            let runtime = match QuickJsSpecRuntime::new(inbox.clone(), &settings) {
+                Ok(r) => Rc::new(r),
+                Err(e) => {
+                    logger::error(&format!("engine: js host: {e:#}"));
+                    return;
+                }
+            };
+            let dependencies = SharedDependencies::from_env();
+            let repository = Rc::new(QuickJsSpecRepository::new(
+                runtime.clone(),
+                EmbeddedSpecBundle::new(dependencies.data_directory.clone()),
+            ));
+            let parser = Parser::new(repository, runtime.clone());
+            Engine::new(tx, settings, parser, &dependencies).run(&runtime, &inbox);
         });
     if let Err(e) = spawned {
         logger::error(&format!("engine: spawn: {e}"));
@@ -345,11 +356,10 @@ struct Engine {
 }
 
 impl Engine {
-    fn new(tx: Sender<Msg>, settings: Settings) -> Engine {
-        let dependencies = SharedDependencies::from_env();
+    fn new(tx: Sender<Msg>, settings: Settings, parser: Parser, dependencies: &SharedDependencies) -> Engine {
         let bundle = EmbeddedSpecBundle::new(dependencies.data_directory.clone());
         // ponytail: load_index ensures the bundle a second time (touch + cleanup twice), as the engine always did.
-        let index = build_specs_module(&dependencies)
+        let index = build_specs_module(dependencies)
             .install_spec_bundle
             .execute()
             .and_then(|()| bundle.load_index())
@@ -360,8 +370,9 @@ impl Engine {
         Engine::with(
             tx,
             settings,
+            parser,
             index,
-            build_history_module(&dependencies),
+            build_history_module(dependencies),
             dependencies.data_directory.state_file().ok(),
         )
     }
@@ -369,6 +380,7 @@ impl Engine {
     fn with(
         tx: Sender<Msg>,
         settings: Settings,
+        parser: Parser,
         index: SpecIndex,
         history_module: HistoryModule,
         state_path: Option<PathBuf>,
@@ -382,7 +394,7 @@ impl Engine {
             tx,
             user_fuzzy: settings.bool(AUTOCOMPLETE_FUZZY_SEARCH),
             settings,
-            parser: Parser::new(),
+            parser,
             index,
             history,
             record_command,
@@ -541,7 +553,7 @@ impl Engine {
             shell: req.shell,
             index: &self.index,
         };
-        let pr = match self.parser.parse(&cmd, &pctx, js) {
+        let pr = match self.parser.parse(&cmd, &pctx) {
             Ok(pr) => pr,
             Err(ParseError::Aborted) => return None,
             Err(ParseError::NoSuggestions(e)) => {
@@ -1268,6 +1280,7 @@ mod tests {
     use super::*;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::history::infrastructure::adapters::jsonl_history_repository::JsonlHistoryRepository;
+    use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
     use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
@@ -1349,16 +1362,17 @@ mod tests {
         // first-token-cache-ignores-session-update: `alias zzal=…` at this prompt shows `zzal` at the next one
         let dir = TempDir::new("engine-session");
         let (tx, _rx) = std::sync::mpsc::channel();
+        let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
         let mut e = Engine::with(
             tx,
             Settings::default(),
+            parser_over(&js),
             SpecIndex::default(),
             HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
                 dir.path().join("h.jsonl"),
             ))),
             None,
         );
-        let js = QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap();
         assert!(e.first_token_items(&HashMap::new(), None, None).is_empty());
         assert!(e.handle(
             EngineMsg::Session { env: HashMap::new(), alias: None },
@@ -1375,12 +1389,20 @@ mod tests {
         );
     }
 
-    /// An engine whose wrapper env is `PATH=/wrapper/bin`, with the js runtime its `handle` takes.
-    fn engine_with_wrapper_env(dir: &TempDir) -> (Engine, QuickJsSpecRuntime) {
+    /// A parser over `js` and a spec repository that reads the env this process was started with.
+    fn parser_over(js: &Rc<QuickJsSpecRuntime>) -> Parser {
+        let bundle = EmbeddedSpecBundle::new(data_directory_from_env());
+        Parser::new(Rc::new(QuickJsSpecRepository::new(js.clone(), bundle)), js.clone())
+    }
+
+    /// An engine whose wrapper env is `PATH=/wrapper/bin`, with the js runtime its parser and its `handle` share.
+    fn engine_with_wrapper_env(dir: &TempDir) -> (Engine, Rc<QuickJsSpecRuntime>) {
         let (tx, _) = std::sync::mpsc::channel();
+        let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
         let mut e = Engine::with(
             tx,
             Settings::default(),
+            parser_over(&js),
             SpecIndex::default(),
             HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
                 dir.path().join("h.jsonl"),
@@ -1388,7 +1410,6 @@ mod tests {
             None,
         );
         e.wrapper_env = wrapper_env();
-        let js = QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap();
         (e, js)
     }
 
@@ -1396,7 +1417,7 @@ mod tests {
         HashMap::from([("PATH".to_string(), "/wrapper/bin".to_string())])
     }
 
-    fn report_session_context(e: &mut Engine, js: &mut QuickJsSpecRuntime, env: &[(&str, &str)], alias: Option<&str>) {
+    fn report_session_context(e: &mut Engine, js: &mut Rc<QuickJsSpecRuntime>, env: &[(&str, &str)], alias: Option<&str>) {
         let env = env
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))

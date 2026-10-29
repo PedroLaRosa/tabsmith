@@ -1,40 +1,31 @@
 //! Spec loading (resolution, diff-versioned merge) and the argv state machine (SPEC §6.3–6.4).
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
-use crate::settings::domain::services::settings_catalog::{
-    AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE_FOR_COMMANDS,
-};
+use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DEVELOPER_MODE;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shell_parser::CommandInfo;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::entities::subcommand::Subcommand;
+use crate::specs::domain::repositories::spec_repository::SpecRepository;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
-use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
 use crate::specs::domain::value_objects::repeatability::Repeatability;
-use crate::specs::domain::value_objects::semantic_version::semver_clean;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
 use crate::specs::domain::services::spec_locator::spec_location;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
+use crate::specs::domain::value_objects::spec_lookup::SpecLookup;
 use crate::specs::domain::value_objects::spec_option::SpecOption;
-use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
-use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, normalise};
-use crate::specs::infrastructure::adapters::fig_version_diff::apply_versions;
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
-use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
-use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime};
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::shared::infrastructure::logger;
-use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(test)]
 mod tests;
@@ -125,16 +116,18 @@ pub struct ParseCtx<'a> {
     pub index: &'a SpecIndex,
 }
 
-/// Spec loader + parse caches (engine thread).
+/// Spec repository + spec runtime + parse caches (engine thread).
 pub struct Parser {
-    loader: Loader,
+    repository: Rc<dyn SpecRepository>,
+    runtime: Rc<dyn SpecRuntime>,
     caches: ParseCaches,
 }
 
 impl Parser {
-    pub fn new() -> Parser {
+    pub fn new(repository: Rc<dyn SpecRepository>, runtime: Rc<dyn SpecRuntime>) -> Parser {
         Parser {
-            loader: Loader::default(),
+            repository,
+            runtime,
             caches: ParseCaches::default(),
         }
     }
@@ -142,7 +135,7 @@ impl Parser {
     /// Drop caches (dev mode toggles, settings reload). The CLI-version memo survives, and so
     /// do spec identities (`by_json`, the first-token spec): unchanged specs are not a "new argument".
     pub fn clear_caches(&mut self) {
-        self.loader.specs.clear();
+        self.repository.forget_loaded_specs();
         self.caches = ParseCaches {
             first: self.caches.first.clone(),
             ..ParseCaches::default()
@@ -150,16 +143,11 @@ impl Parser {
     }
 
     /// Parse the command under the cursor against its spec (SPEC §6.4).
-    pub fn parse(
-        &mut self,
-        cmd: &CommandInfo,
-        ctx: &ParseCtx,
-        js: &QuickJsSpecRuntime,
-    ) -> Result<ParseResult, ParseError> {
+    pub fn parse(&mut self, cmd: &CommandInfo, ctx: &ParseCtx) -> Result<ParseResult, ParseError> {
         let dev = dev_mode(ctx.settings);
         let mut host = JsHost {
-            loader: &mut self.loader,
-            js,
+            repository: &*self.repository,
+            runtime: &*self.runtime,
             ctx,
             generator: gen_ctx(ctx),
         };
@@ -168,13 +156,15 @@ impl Parser {
 
     /// Load (and cache) the spec at `loc`, applying diff versions (SPEC §6.3). `Ok(None)` when it does not exist
     /// or is disabled.
+    #[cfg(test)]
     pub fn load_spec(
-        &mut self,
+        &self,
         loc: &SpecLocation,
         ctx: &ParseCtx,
-        js: &QuickJsSpecRuntime,
     ) -> Result<Option<Rc<Subcommand>>, ParseError> {
-        self.loader.load(loc, ctx, js, &gen_ctx(ctx))
+        self.repository
+            .find(loc, &SpecLookup::new(ctx.settings, ctx.index, &gen_ctx(ctx)))
+            .map_err(ParseError::from)
     }
 }
 
@@ -195,178 +185,6 @@ fn gen_ctx(ctx: &ParseCtx) -> GeneratorContext {
     )
 }
 
-#[derive(Default)]
-struct Loader {
-    /// Spec cache by `SpecLocation::cache_key` (None = missing, cached too).
-    specs: HashMap<String, Option<Rc<Subcommand>>>,
-    /// `cliVersion-<name>` memo (successful detections only).
-    versions: HashMap<String, String>,
-    /// Version detections still running after an aborted parse, reused by the next one (no respawn per keystroke).
-    inflight: HashMap<String, TaskId>,
-    /// Last normalised spec per cache key with the JSON it came from: an unchanged spec keeps its `Rc` through
-    /// developer-mode reloads and `clear_caches` (the engine keys arg/generator identity on the address).
-    by_json: HashMap<String, (Value, Rc<Subcommand>)>,
-}
-
-impl Loader {
-    fn load(
-        &mut self,
-        loc: &SpecLocation,
-        ctx: &ParseCtx,
-        js: &QuickJsSpecRuntime,
-        generator: &GeneratorContext,
-    ) -> Result<Option<Rc<Subcommand>>, ParseError> {
-        let (SpecLocation::Global { name } | SpecLocation::Local { name, .. }) = loc;
-        if ctx
-            .settings
-            .str_list(AUTOCOMPLETE_DISABLE_FOR_COMMANDS)
-            .contains(name)
-        {
-            return Ok(None);
-        }
-        let dev = dev_mode(ctx.settings);
-        let key = loc.cache_key();
-        if let Some(spec) = self.specs.get(&key).filter(|_| !dev) {
-            return Ok(spec.clone());
-        }
-        let Some(path) = spec_file(loc, ctx) else {
-            self.specs.insert(key, None);
-            return Ok(None);
-        };
-        let exports = js.load_module(&path)?;
-        let json = match exports.get("default") {
-            Some(v) if fig_spec_mapper::fn_id(v).is_some() => {
-                self.versioned(&exports, name, &path, dev, js, generator)?
-            }
-            Some(v) if v.is_object() => Some(v.clone()),
-            _ => None,
-        };
-        let spec = match json {
-            Some(j) => match self.by_json.get(&key).filter(|(old, _)| *old == j) {
-                Some((_, rc)) => Some(rc.clone()),
-                None => {
-                    let rc = Rc::new(normalise(&j).map_err(|e| no(format!("{name}: {e}")))?);
-                    self.by_json.insert(key.clone(), (j, rc.clone()));
-                    Some(rc)
-                }
-            },
-            None => None,
-        };
-        self.specs.insert(key, spec.clone());
-        Ok(spec)
-    }
-
-    /// `default` is `async (version) => Subcommand | {versionedSpecPath, version}` (SPEC §6.3).
-    fn versioned(
-        &mut self,
-        exports: &Map<String, Value>,
-        name: &str,
-        path: &Path,
-        dev: bool,
-        js: &QuickJsSpecRuntime,
-        generator: &GeneratorContext,
-    ) -> Result<Option<Value>, ParseError> {
-        let memo = format!("cliVersion-{name}");
-        let version = match self.versions.get(&memo).filter(|_| !dev) {
-            Some(v) => Some(v.clone()),
-            None => cli_version(exports, name, js, generator, &mut self.inflight)?,
-        };
-        if let Some(v) = &version {
-            self.versions.insert(memo, v.clone());
-        }
-        let default = exports
-            .get("default")
-            .and_then(fig_spec_mapper::fn_id)
-            .ok_or_else(|| no("default is not a function"))?;
-        let arg = version.map_or(Value::Null, Value::String);
-        let r = js.call_json(default, vec![JsArg::Json(arg)], Some(generator), TIMEOUT)?;
-        let Some(vsp) = r.get("versionedSpecPath").and_then(Value::as_str) else {
-            return Ok(Some(r).filter(Value::is_object));
-        };
-        // ponytail: the file sits next to `<name>/index.js`; true for all 6 bundled diff-versioned specs.
-        let base = vsp.rsplit('/').next().unwrap_or(vsp);
-        let file = path.with_file_name(format!("{base}.js"));
-        let ex = js.load_module(&file)?;
-        match (
-            ex.get("default"),
-            ex.get("versions").and_then(Value::as_object),
-        ) {
-            (Some(spec), Some(diffs)) => Ok(Some(apply_versions(
-                spec.clone(),
-                diffs,
-                r.get("version").and_then(Value::as_str),
-            ))),
-            _ => Err(no(format!(
-                "{}: invalid versioned spec file",
-                file.display()
-            ))),
-        }
-    }
-}
-
-/// The file a location loads from: [`EmbeddedSpecBundle::resolve`] for globals, `<dir>/.fig/autocomplete/build/<name>.js` (else
-/// `<name>/index.js`) for locals.
-fn spec_file(loc: &SpecLocation, ctx: &ParseCtx) -> Option<PathBuf> {
-    match loc {
-        SpecLocation::Global { name } => {
-            EmbeddedSpecBundle::new(data_directory_from_env()).resolve(name, ctx.settings, ctx.index)
-        }
-        SpecLocation::Local { dir, name } => {
-            let dir = match dir.strip_prefix("~") {
-                Ok(rest) => user_home_from_env().ok()?.join(rest),
-                Err(_) => dir.clone(),
-            };
-            let build = dir.join(".fig").join("autocomplete").join("build");
-            [
-                build.join(format!("{name}.js")),
-                build.join(name).join("index.js"),
-            ]
-            .into_iter()
-            .find(|p| p.is_file())
-        }
-    }
-}
-
-/// `getVersionCommand(exec)` if exported, else `semver_clean(<name> --version)`; failures → None. An aborted
-/// wait leaves the detection running in `inflight`, and the next parse waits on that same task.
-fn cli_version(
-    exports: &Map<String, Value>,
-    name: &str,
-    js: &QuickJsSpecRuntime,
-    generator: &GeneratorContext,
-    inflight: &mut HashMap<String, TaskId>,
-) -> Result<Option<String>, ParseError> {
-    if name == "@usermn/sdc" {
-        return Ok(None); // its version command runs `npx`, which may download a package
-    }
-    let f = exports
-        .get("getVersionCommand")
-        .and_then(fig_spec_mapper::fn_id);
-    let id = *inflight.entry(name.to_string()).or_insert_with(|| match f {
-        Some(f) => js.start_call(f, vec![JsArg::Exec], Some(generator)),
-        None => js.start_exec(
-            ExecRequest::new(name.into(), vec!["--version".into()], None, HashMap::new(), None),
-            generator,
-        ),
-    });
-    let r = js.wait_json(&[id], Instant::now() + TIMEOUT);
-    if matches!(r, Err(SpecError::Aborted)) {
-        return Err(ParseError::Aborted);
-    }
-    inflight.remove(name);
-    js.forget(&[id]);
-    let Ok(Some(Ok(v))) = r.map(|mut r| r.pop().flatten()) else {
-        return Ok(None);
-    };
-    Ok(match f {
-        Some(_) => v.as_str().map(String::from),
-        None => v
-            .get("stdout")
-            .and_then(Value::as_str)
-            .and_then(semver_clean),
-    })
-}
-
 // ---------------------------------------------------------------------------------------------------------------
 // Argv state machine (SPEC §6.4)
 
@@ -379,19 +197,21 @@ trait Host {
 }
 
 struct JsHost<'a, 'c> {
-    loader: &'a mut Loader,
-    js: &'a QuickJsSpecRuntime,
+    repository: &'a dyn SpecRepository,
+    runtime: &'a dyn SpecRuntime,
     ctx: &'a ParseCtx<'c>,
     generator: GeneratorContext,
 }
 
 impl Host for JsHost<'_, '_> {
     fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, ParseError> {
-        self.loader.load(loc, self.ctx, self.js, &self.generator)
+        self.repository
+            .find(loc, &SpecLookup::new(self.ctx.settings, self.ctx.index, &self.generator))
+            .map_err(ParseError::from)
     }
 
     fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, ParseError> {
-        Ok(SpecRuntime::call(self.js, call, Some(&self.generator), TIMEOUT)?)
+        Ok(SpecRuntime::call(self.runtime, call, Some(&self.generator), TIMEOUT)?)
     }
 
     fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo> {

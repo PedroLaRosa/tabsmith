@@ -5,4 +5,5 @@ pub(crate) mod fig_version_diff;
 pub(crate) mod native_ls;
 pub(crate) mod process_executor;
 pub(crate) mod quickjs_module_wrapper;
+pub(crate) mod quickjs_spec_repository;
 pub(crate) mod quickjs_spec_runtime;
