@@ -32,7 +32,8 @@ use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::services::first_token_suggestions;
 use crate::completion::domain::services::generator_trigger_policy::{
-    cache_key, dir_changed, is_path_template, script_timeout, triggered, SYNC_CALL,
+    cache_key, dir_changed, effective_debounce, is_path_template, run_budget, script_timeout, triggered,
+    SYNC_CALL,
 };
 use crate::completion::domain::services::history_suggestions;
 use crate::completion::domain::services::path_template;
@@ -761,10 +762,9 @@ impl Engine {
             slot.gen_id = self.next_gen;
             slot.loading = true;
             triggered.push(slot.key);
-            let debounce = arg.debounce().map(|ms| if ms > 0 { ms } else { 200 });
+            let debounce = effective_debounce(arg.debounce());
             // ponytail: one deadline for the whole run (custom generators may exec several times)
-            let budget =
-                debounce.unwrap_or(0) + 2 * floor.max(gens[i].script_timeout().unwrap_or(0)) + 1000;
+            let budget = run_budget(debounce, floor, gens[i].script_timeout());
             let mut run = Run {
                 slot: i,
                 gen_id: self.next_gen,
