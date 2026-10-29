@@ -3,7 +3,7 @@ use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_lookup::SpecLookup;
 #[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -24,12 +24,13 @@ pub(crate) trait SpecRepository {
 }
 
 /// Specs by location (`name` for a Global, `dir|name` for a Local), for tests; records every find, never caches,
-/// never fails, and answers `None` for a disabled command like every repository.
+/// never fails, answers `None` for a disabled command like every repository, and counts its forgets.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct InMemorySpecRepository {
     specs: HashMap<String, Rc<Subcommand>>,
     finds: RefCell<Vec<SpecLocation>>,
+    forgets: Cell<usize>,
 }
 
 #[cfg(test)]
@@ -47,6 +48,11 @@ impl InMemorySpecRepository {
     /// Every location asked for, in order, repeats included.
     pub(crate) fn finds(&self) -> Vec<SpecLocation> {
         self.finds.borrow().clone()
+    }
+
+    /// How many times the loaded specs were forgotten.
+    pub(crate) fn forgets(&self) -> usize {
+        self.forgets.get()
     }
 }
 
@@ -68,7 +74,9 @@ impl SpecRepository for InMemorySpecRepository {
         Ok(self.specs.get(&key).cloned())
     }
 
-    fn forget_loaded_specs(&self) {}
+    fn forget_loaded_specs(&self) {
+        self.forgets.set(self.forgets.get() + 1);
+    }
 }
 
 #[cfg(test)]
@@ -167,5 +175,15 @@ mod tests {
 
         assert!(found.is_none());
         assert_eq!(repository.finds(), [global("git")]);
+    }
+
+    #[test]
+    fn should_count_the_times_it_forgot_the_loaded_specs() {
+        let repository = InMemorySpecRepository::with(&[("git", &spec("git"))]);
+
+        repository.forget_loaded_specs();
+        repository.forget_loaded_specs();
+
+        assert_eq!(repository.forgets(), 2);
     }
 }
