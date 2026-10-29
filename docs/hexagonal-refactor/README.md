@@ -18,8 +18,8 @@ implementation session needs that the plan does not.
 At `ab7052b`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 761 passed, 0 failed, 1 ignored (the
 baseline was 283). clippy shows 3 warnings (baseline 3). The 131-command golden CLI capture is byte-identical to
 the baseline. The test lock has 0 baseline tests missing. 63 baseline tests are CHANGED, each one a reviewed
-restructuring (15 against the `phase4-start` tag, each in Phase 4's "Test moves" table). The only DUPLICATE test
-name is `should_not_save_over_settings_that_cannot_be_loaded`.
+restructuring (15 against the `phase4-start` tag, each in Phase 4's "Test moves" table). No test name is
+DUPLICATE (the settings copy in `delete_settings_use_case.rs` was renamed after Phase 4).
 `REGISTERED_MODULES` = `history`, `settings`, `shared`, `shell_integration` (terminal_session waits for Phase 9).
 
 ## Files here

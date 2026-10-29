@@ -128,7 +128,7 @@ mod tests {
 
     /// `settings -d KEY` on a corrupted settings.json refuses instead of overwriting it.
     #[test]
-    fn should_not_save_over_settings_that_cannot_be_loaded() {
+    fn should_not_save_a_deletion_over_settings_that_cannot_be_loaded() {
         let repository = Rc::new(UnreadableSettingsRepository::default());
         let use_case = DeleteSettingsUseCase::new(repository.clone());
 
