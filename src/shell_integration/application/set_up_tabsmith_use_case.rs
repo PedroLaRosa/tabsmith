@@ -37,15 +37,21 @@ impl SetUpTabsmithUseCase {
         automatic: bool,
         mut report: impl FnMut(SetupProgress),
     ) -> Result<bool, ShellIntegrationError> {
+        let mut manual = !automatic;
         if automatic {
-            if let Ok(installed) = self.installer.install_missing(paths, shells) {
-                if installed {
-                    self.restart_reminder.save_pending();
+            match self.installer.install_missing(paths, shells) {
+                Ok(installed) => {
+                    if installed {
+                        self.restart_reminder.save_pending();
+                    }
+                    report(SetupProgress::Installed(installed));
                 }
-                report(SetupProgress::Installed(installed));
+                Err(failures) => {
+                    report(SetupProgress::AutomaticInstallFailed(failures));
+                    manual = true;
+                }
             }
         }
-        let manual = !automatic;
         if manual {
             report(SetupProgress::ManualInstructions(manual_install_instructions::text(paths, shells)));
             if let Err(failures) = self.installer.apply(
@@ -232,6 +238,33 @@ mod tests {
                             reason: "pwsh printed an empty $PROFILE".into(),
                         }]),
                     ],
+            "{manual:?} {events:?}"
+        );
+    }
+
+    #[test]
+    fn should_fall_back_to_the_manual_instructions_when_the_automatic_install_failed() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+            RecordingSpecBundleInstaller::default(),
+        );
+        let unlisted = || IntegrationFailure::Listing {
+            shell: "pwsh".into(),
+            reason: "pwsh printed an empty $PROFILE".into(),
+        };
+        let mut events = Vec::new();
+
+        let manual = bed.use_case.execute(&paths(), &[Shell::Pwsh], true, |event| events.push(event));
+
+        assert!(
+            matches!(manual, Ok(true))
+                && events
+                    == [
+                        SetupProgress::AutomaticInstallFailed(vec![unlisted()]),
+                        SetupProgress::ManualInstructions(manual_install_instructions::text(&paths(), &[Shell::Pwsh])),
+                        SetupProgress::ScriptFilesFailed(vec![unlisted()]),
+                    ]
+                && !bed.restart_reminder.is_pending(),
             "{manual:?} {events:?}"
         );
     }

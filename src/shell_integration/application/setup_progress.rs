@@ -5,6 +5,8 @@ use crate::shell_integration::application::integration_failure::IntegrationFailu
 pub(crate) enum SetupProgress {
     /// The automatic install ran; true if something was installed.
     Installed(bool),
+    /// The automatic install failed; the manual instructions follow.
+    AutomaticInstallFailed(Vec<IntegrationFailure>),
     /// The lines to add to the dotfiles by hand.
     ManualInstructions(String),
     /// Not every script file the manual lines source could be written.
