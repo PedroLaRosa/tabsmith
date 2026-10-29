@@ -28,7 +28,7 @@ use crate::specs::domain::value_objects::generator_script::GeneratorScript;
 use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
-use crate::specs::infrastructure::adapters::fig_spec_mapper;
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, spec_value_to_json};
 use crate::specs::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
 use crate::shared::domain::value_objects::shell::Shell;
@@ -800,7 +800,7 @@ impl Engine {
                 }
                 GeneratorScript::Argv(a) => self.script_input(run, g, json!(a), js),
                 GeneratorScript::Shell(s) => self.script_input(run, g, json!(s), js),
-                GeneratorScript::Object(o) => self.script_input(run, g, o.clone(), js),
+                GeneratorScript::Object(o) => self.script_input(run, g, spec_value_to_json(o), js),
             };
         }
         let Some(custom) = g.custom else {

@@ -15,9 +15,10 @@ use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_option::SpecOption;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
+use crate::specs::domain::value_objects::spec_value::SpecValue;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
-use serde_json::{json, Value};
+use serde_json::{json, Number, Value};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -225,7 +226,7 @@ fn generator(v: &Value) -> Generator {
             Value::Array(_) => Some(GeneratorScript::Argv(strs(Some(x)))),
             Value::String(c) => Some(GeneratorScript::Shell(c.clone())),
             Value::Object(_) => {
-                Some(fn_id(x).map_or_else(|| GeneratorScript::Object(x.clone()), GeneratorScript::Fn))
+                Some(fn_id(x).map_or_else(|| GeneratorScript::Object(spec_value_from_json(x)), GeneratorScript::Fn))
             }
             _ => None,
         }),
@@ -351,6 +352,51 @@ pub(crate) fn template_json(items: &[SpecSuggestion]) -> Value {
             })
             .collect(),
     )
+}
+
+/// A spec JSON value as a `SpecValue`, integers and floats kept apart.
+pub(crate) fn spec_value_from_json(v: &Value) -> SpecValue {
+    match v {
+        Value::Null => SpecValue::Null,
+        Value::Bool(b) => SpecValue::Bool(*b),
+        Value::Number(n) => spec_number(n),
+        Value::String(s) => SpecValue::Text(s.clone()),
+        Value::Array(a) => SpecValue::List(a.iter().map(spec_value_from_json).collect()),
+        Value::Object(o) => SpecValue::Object(
+            o.iter()
+                .map(|(k, v)| (k.clone(), spec_value_from_json(v)))
+                .collect(),
+        ),
+    }
+}
+
+/// serde_json's `PosInt`, `NegInt` and `Float`, read in that order.
+fn spec_number(n: &Number) -> SpecValue {
+    n.as_u64()
+        .map(SpecValue::Unsigned)
+        .or_else(|| n.as_i64().map(SpecValue::Negative))
+        .or_else(|| n.as_f64().map(SpecValue::Float))
+        .expect("a serde_json number is an integer or a float")
+}
+
+/// A `SpecValue` as the serde_json value it was read from: integers stay integers, floats keep their bits.
+pub(crate) fn spec_value_to_json(v: &SpecValue) -> Value {
+    match v {
+        SpecValue::Null => Value::Null,
+        SpecValue::Bool(b) => Value::Bool(*b),
+        SpecValue::Unsigned(n) => Value::from(*n),
+        SpecValue::Negative(n) => Value::from(*n),
+        SpecValue::Float(f) => {
+            Value::Number(Number::from_f64(*f).expect("a float serde_json read is finite"))
+        }
+        SpecValue::Text(s) => Value::String(s.clone()),
+        SpecValue::List(a) => Value::Array(a.iter().map(spec_value_to_json).collect()),
+        SpecValue::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, v)| (k.clone(), spec_value_to_json(v)))
+                .collect(),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -623,5 +669,29 @@ mod tests {
             Some(SpecLoadDirective::Inline(_))
         ));
         assert!(load_spec_result(&json!("str")).is_none());
+    }
+
+    #[test]
+    fn should_keep_a_script_object_exactly() {
+        let script = json!({
+            "command": "ls",
+            "max": u64::MAX,
+            "offset": -5,
+            "tiny": 1.0715660391465826e-75,
+            "env": {"HOME": null},
+            "unknownKey": "kept"
+        });
+        let spec = json!({"name": "x", "args": {"generators": [{"script": script}, {"script": {"$fn": 7}}]}});
+
+        let s = normalise(&spec).unwrap();
+
+        let generators = &s.args[0].generators;
+        let Some(GeneratorScript::Object(object)) = &generators[0].script else {
+            panic!("not an object script: {:?}", generators[0].script);
+        };
+        let back = spec_value_to_json(object);
+        assert_eq!(back, script);
+        assert_eq!(back.to_string(), script.to_string());
+        assert_eq!(generators[1].script, Some(GeneratorScript::Fn(7)));
     }
 }

@@ -1,5 +1,5 @@
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
-use serde_json::Value;
+use crate::specs::domain::value_objects::spec_value::SpecValue;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum GeneratorScript {
@@ -10,5 +10,5 @@ pub(crate) enum GeneratorScript {
     /// `script(tokens) -> string[] | string | {command,args,...}`.
     Fn(SpecFunctionRef),
     /// `{command, args, cwd?, env?, timeout?}` object form.
-    Object(Value),
+    Object(SpecValue),
 }

@@ -11,5 +11,6 @@ pub(crate) mod spec_load_directive;
 pub(crate) mod spec_location;
 pub(crate) mod spec_option;
 pub(crate) mod spec_suggestion;
+pub(crate) mod spec_value;
 pub(crate) mod suggestion_kind;
 pub(crate) mod text_or_function;
