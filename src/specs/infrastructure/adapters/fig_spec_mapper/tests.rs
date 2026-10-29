@@ -463,3 +463,20 @@ fn should_read_an_alias_only_from_a_string_and_keep_it_untrimmed() {
     assert!(matches!(text, SpecFunctionResult::Alias(Some(alias)) if alias == "checkout\n"));
     assert!(matches!(number, SpecFunctionResult::Alias(None)));
 }
+
+#[test]
+fn should_read_a_load_spec_result_as_its_directive() {
+    let context = GeneratorContext::default();
+
+    let (location, number) = (
+        function_result(SpecFunctionKind::LoadSpec, &json!({"name": "npm", "type": "global"}), &context),
+        function_result(SpecFunctionKind::LoadSpec, &json!(5), &context),
+    );
+
+    assert!(matches!(
+        location,
+        SpecFunctionResult::LoadSpec(Some(SpecLoadDirective::Locations(l)))
+            if l == vec![SpecLocation::Global { name: "npm".into() }]
+    ));
+    assert!(matches!(number, SpecFunctionResult::LoadSpec(None)));
+}

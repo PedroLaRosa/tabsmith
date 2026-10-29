@@ -490,7 +490,7 @@ pub(crate) fn function_result(
         }),
         SpecFunctionKind::Trigger => SpecFunctionResult::Trigger(truthy(v)),
         SpecFunctionKind::Alias => SpecFunctionResult::Alias(v.as_str().map(String::from)),
-        SpecFunctionKind::LoadSpec => SpecFunctionResult::LoadSpec(None),
+        SpecFunctionKind::LoadSpec => SpecFunctionResult::LoadSpec(load_spec_result(v)),
         SpecFunctionKind::GenerateSpecCacheKey => SpecFunctionResult::GenerateSpecCacheKey(None),
         SpecFunctionKind::GenerateSpec => SpecFunctionResult::GenerateSpec(Err(String::new())),
         SpecFunctionKind::Script => SpecFunctionResult::Script(ScriptResolution::Skip),
