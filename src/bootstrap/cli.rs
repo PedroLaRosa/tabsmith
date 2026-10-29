@@ -9,6 +9,7 @@ use crate::shared::infrastructure::terminal_style::epaint;
 use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
 use crate::shell_integration::infrastructure::cli::init_command::{run_init_command, InitArgs};
 use crate::shell_integration::infrastructure::cli::integrations_command::{run_integrations_command, IntegrationsCmd};
+use crate::shell_integration::infrastructure::cli::setup_command::{run_setup_command, SetupArgs};
 use crate::shell_integration::infrastructure::cli::should_launch_command::run_should_launch_command;
 use crate::shell_integration::infrastructure::cli::uninstall_command::{run_uninstall_command, UninstallArgs};
 use crate::shell_integration::infrastructure::shell_integration_module::{
@@ -52,7 +53,7 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     /// Setup cli components
     #[command(alias = "install")]
-    Setup(integrations::SetupArgs),
+    Setup(SetupArgs),
     /// Uninstall tabsmith
     Uninstall(UninstallArgs),
     /// Show the version
@@ -124,7 +125,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         Some(Command::Integrations(c)) => run_integrations_command(c, &shell_integration_module()),
         Some(Command::Init(a)) => run_init_command(a, &shell_integration_module()),
         Some(Command::Doctor(a)) => doctor::run(a),
-        Some(Command::Setup(a)) => integrations::setup(a),
+        Some(Command::Setup(a)) => run_setup_command(a, &shell_integration_module()),
         Some(Command::Uninstall(a)) => run_uninstall_command(a, &shell_integration_module()),
         Some(Command::Version) => {
             println!("tabsmith {}", env!("CARGO_PKG_VERSION"));
