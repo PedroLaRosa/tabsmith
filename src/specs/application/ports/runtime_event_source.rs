@@ -44,6 +44,13 @@ impl ChannelRuntimeEventSource {
     pub(crate) fn send_newer_request(&self) {
         let _ = self.sender.send(None);
     }
+
+    /// Takes one kept newer request, as the engine loop reads it; false when none is kept.
+    pub(crate) fn take_newer_request(&self) -> bool {
+        let kept = self.kept.get();
+        self.kept.set(kept.saturating_sub(1));
+        kept > 0
+    }
 }
 
 #[cfg(test)]
@@ -87,5 +94,19 @@ mod tests {
         assert!(!reported_before_the_poll);
         assert!(matches!(poll, RuntimeEventPoll::MessageKept));
         assert!(events.has_newer_request());
+    }
+
+    #[test]
+    fn should_keep_reporting_it_until_taken() {
+        let events = ChannelRuntimeEventSource::new();
+        events.send_newer_request();
+        events.poll(Duration::from_secs(1));
+
+        let reported_twice = events.has_newer_request() && events.has_newer_request();
+        let taken = events.take_newer_request();
+
+        assert!(reported_twice);
+        assert!(taken);
+        assert!(!events.has_newer_request());
     }
 }
