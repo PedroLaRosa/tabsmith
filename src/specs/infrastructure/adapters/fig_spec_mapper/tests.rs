@@ -1,4 +1,6 @@
 use super::*;
+use crate::specs::domain::value_objects::spec_function_kind::SpecFunctionKind;
+use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use serde_json::json;
 
 fn fixture(name: &str) -> Subcommand {
@@ -353,4 +355,69 @@ fn post_process_filtering() {
     assert_eq!(items[0].insert_value().as_deref(), Some("a"));
     assert!(items[0].is_dangerous());
     assert!(post_process_items(&json!(null), false).is_empty());
+}
+
+const EVERY_KIND: [SpecFunctionKind; 10] = [
+    SpecFunctionKind::QueryTerm,
+    SpecFunctionKind::Trigger,
+    SpecFunctionKind::Alias,
+    SpecFunctionKind::LoadSpec,
+    SpecFunctionKind::GenerateSpecCacheKey,
+    SpecFunctionKind::GenerateSpec,
+    SpecFunctionKind::Script,
+    SpecFunctionKind::Custom,
+    SpecFunctionKind::PostProcess,
+    SpecFunctionKind::FilterTemplateSuggestions,
+];
+
+fn kind_of(result: &SpecFunctionResult) -> SpecFunctionKind {
+    match result {
+        SpecFunctionResult::QueryTerm(_) => SpecFunctionKind::QueryTerm,
+        SpecFunctionResult::Trigger(_) => SpecFunctionKind::Trigger,
+        SpecFunctionResult::Alias(_) => SpecFunctionKind::Alias,
+        SpecFunctionResult::LoadSpec(_) => SpecFunctionKind::LoadSpec,
+        SpecFunctionResult::GenerateSpecCacheKey(_) => SpecFunctionKind::GenerateSpecCacheKey,
+        SpecFunctionResult::GenerateSpec(_) => SpecFunctionKind::GenerateSpec,
+        SpecFunctionResult::Script(_) => SpecFunctionKind::Script,
+        SpecFunctionResult::Custom(_) => SpecFunctionKind::Custom,
+        SpecFunctionResult::PostProcess(_) => SpecFunctionKind::PostProcess,
+        SpecFunctionResult::FilterTemplateSuggestions(_) => {
+            SpecFunctionKind::FilterTemplateSuggestions
+        }
+    }
+}
+
+/// P18: the parser reads a decoded result with let-else, which is safe only because every input of a kind reads
+/// as that kind's variant.
+#[test]
+fn should_read_every_result_as_the_variant_of_its_call_kind() {
+    let values = [
+        json!(null),
+        json!(false),
+        json!(0),
+        json!(1.5),
+        json!(""),
+        json!("checkout"),
+        json!([]),
+        json!([1]),
+        json!(["git", "log"]),
+        json!([{"name": "main", "context": null}]),
+        json!({}),
+        json!({"name": "npm", "subcommands": [{"name": "run"}]}),
+        json!({"name": "npm", "type": "global"}),
+        json!({"command": "ls", "cwd": null, "timeout": 1.5}),
+        json!({"status": 0, "stdout": "main", "stderr": ""}),
+    ];
+    let context = GeneratorContext::default();
+    let asked: Vec<SpecFunctionKind> = EVERY_KIND
+        .iter()
+        .flat_map(|kind| values.iter().map(|_| *kind))
+        .collect();
+
+    let read: Vec<SpecFunctionKind> = EVERY_KIND
+        .iter()
+        .flat_map(|kind| values.iter().map(|v| kind_of(&function_result(*kind, v, &context))))
+        .collect();
+
+    assert_eq!(read, asked);
 }

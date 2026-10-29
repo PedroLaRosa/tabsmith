@@ -3,6 +3,7 @@
 use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::custom_generator_result::CustomGeneratorResult;
 use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
 use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
@@ -11,7 +12,10 @@ use crate::specs::domain::value_objects::generator_script::GeneratorScript;
 use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
 use crate::specs::domain::value_objects::repeatability::Repeatability;
+use crate::specs::domain::value_objects::script_resolution::ScriptResolution;
+use crate::specs::domain::value_objects::spec_function_kind::SpecFunctionKind;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
+use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_option::SpecOption;
@@ -470,6 +474,30 @@ pub(crate) fn spec_value_to_json(v: &SpecValue) -> Value {
                 .map(|(k, v)| (k.clone(), spec_value_to_json(v)))
                 .collect(),
         ),
+    }
+}
+
+/// What a spec function returned, read the way its call's kind reads it.
+pub(crate) fn function_result(
+    kind: SpecFunctionKind,
+    _v: &Value,
+    _context: &GeneratorContext,
+) -> SpecFunctionResult {
+    match kind {
+        SpecFunctionKind::QueryTerm => SpecFunctionResult::QueryTerm(None),
+        SpecFunctionKind::Trigger => SpecFunctionResult::Trigger(false),
+        SpecFunctionKind::Alias => SpecFunctionResult::Alias(None),
+        SpecFunctionKind::LoadSpec => SpecFunctionResult::LoadSpec(None),
+        SpecFunctionKind::GenerateSpecCacheKey => SpecFunctionResult::GenerateSpecCacheKey(None),
+        SpecFunctionKind::GenerateSpec => SpecFunctionResult::GenerateSpec(Err(String::new())),
+        SpecFunctionKind::Script => SpecFunctionResult::Script(ScriptResolution::Skip),
+        SpecFunctionKind::Custom => {
+            SpecFunctionResult::Custom(CustomGeneratorResult::new(false, Vec::new()))
+        }
+        SpecFunctionKind::PostProcess => SpecFunctionResult::PostProcess(Vec::new()),
+        SpecFunctionKind::FilterTemplateSuggestions => {
+            SpecFunctionResult::FilterTemplateSuggestions(Vec::new())
+        }
     }
 }
 
