@@ -1,5 +1,4 @@
 //! `tabsmith doctor` (SPEC §2.8). OWNER: integrations agent.
-use crate::integrations;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE, INLINE_ENABLED, INLINE_SOURCE,
 };
@@ -12,17 +11,27 @@ use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info;
 use crate::shared::infrastructure::os::process_runner::output_with_timeout;
+use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
+use crate::shell_integration::application::integration_installer::IntegrationInstaller;
 use crate::shell_integration::domain::entities::integration::Integration;
+use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
-use crate::shell_integration::infrastructure::adapters::os_shell_environment::integration_paths_from;
+use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
+use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
+use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
+    integration_paths_from, OsShellEnvironment,
+};
+use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
+use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
 use crate::types::now_secs;
 use clap::Args;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::process::Command;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -265,6 +274,16 @@ fn short_path(home: &Path, p: &Path) -> String {
     }
 }
 
+/// The integration installer over the files on disk, the system clock and the running system's shell facts.
+fn integration_installer() -> IntegrationInstaller {
+    IntegrationInstaller::new(
+        Rc::new(FileDotfileRepository),
+        Rc::new(FileBackupRepository),
+        Arc::new(SystemClock),
+        Rc::new(OsShellEnvironment),
+    )
+}
+
 /// `Let's check your dotfiles...`: one check per integration of every shell.
 fn dotfile_checks(ctx: &IntegrationPaths, current: Option<Shell>) -> Vec<Check<'_>> {
     let mut v = Vec::new();
@@ -276,7 +295,7 @@ fn dotfile_checks(ctx: &IntegrationPaths, current: Option<Shell>) -> Vec<Check<'
         } else {
             continue; // NoCheck (and no `pwsh` spawn when it is missing)
         };
-        match integrations::integrations(ctx, shell) {
+        match integration_installer().integrations(ctx, shell) {
             Ok(list) => v.extend(list.into_iter().map(|i| dotfile_check(ctx, i, kind))),
             Err(e) => {
                 let msg = format!("{e:#}");
@@ -298,7 +317,7 @@ fn dotfile_check(ctx: &IntegrationPaths, i: Integration, kind: Kind) -> Check<'_
         short_path(ctx.home(), i.path())
     );
     check(name, kind, move || {
-        let e = match i.is_installed(ctx) {
+        let e = match integration_installer().check(ctx, &i) {
             Ok(()) => return Outcome::Ok,
             Err(e) => e,
         };
@@ -312,7 +331,10 @@ fn dotfile_check(ctx: &IntegrationPaths, i: Integration, kind: Kind) -> Check<'_
         )];
         let reason = match &e {
             ShellIntegrationError::NotInstalled(m) | ShellIntegrationError::Improper(m) => m.clone(),
-            e => e.to_string(),
+            ShellIntegrationError::FileDoesNotExist(_)
+            | ShellIntegrationError::PermissionDenied(_)
+            | ShellIntegrationError::Io(..)
+            | ShellIntegrationError::Environment(_) => e.to_string(),
         };
         if matches!(e, ShellIntegrationError::PermissionDenied(_)) {
             return Outcome::Err {
@@ -323,8 +345,8 @@ fn dotfile_check(ctx: &IntegrationPaths, i: Integration, kind: Kind) -> Check<'_
         }
         let i = i.clone();
         let fix: Fix = Box::new(move || {
-            i.install(ctx)?;
-            integrations::mark_restart();
+            integration_installer().install(ctx, &i)?;
+            StateRestartReminderRepository::new(data_directory_from_env()).save_pending();
             Ok(())
         });
         Outcome::Err {
@@ -345,7 +367,7 @@ fn script_bins(ctx: &IntegrationPaths) -> Vec<(Shell, String)> {
         .with_pwsh_profile(ctx.pwsh_profile().map(Path::to_path_buf).unwrap_or_default());
     let mut files = Vec::new();
     for shell in Shell::ALL.into_iter().filter(|s| which(s.name()).is_some()) {
-        for i in integrations::integrations(ctx, shell).unwrap_or_default() {
+        for i in integration_installer().integrations(ctx, shell).unwrap_or_default() {
             match i.whole_file_phase() {
                 Some(_) => files.push((shell, i.path().to_path_buf())),
                 None => {
@@ -404,8 +426,10 @@ fn setup_checks(ctx: &IntegrationPaths) -> Vec<Check<'_>> {
                 let mut shells: Vec<Shell> = stale.iter().map(|(s, _)| *s).collect();
                 shells.dedup();
                 let fix: Fix = Box::new(move || {
-                    integrations::install_dotfiles(ctx, &shells)?;
-                    integrations::mark_restart();
+                    integration_installer()
+                        .install_missing(ctx, &shells)
+                        .map_err(integration_failures_error)?;
+                    StateRestartReminderRepository::new(data_directory_from_env()).save_pending();
                     Ok(())
                 });
                 Outcome::Err {
