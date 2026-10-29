@@ -1370,6 +1370,99 @@ mod tests {
         );
     }
 
+    /// An engine whose wrapper env is `PATH=/wrapper/bin`, with the js runtime its `handle` takes.
+    fn engine_with_wrapper_env(dir: &TempDir) -> (Engine, Js) {
+        let (tx, _) = std::sync::mpsc::channel();
+        let mut e = Engine::with(
+            tx,
+            Settings::default(),
+            SpecIndex::default(),
+            HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
+                dir.path().join("h.jsonl"),
+            ))),
+            None,
+        );
+        e.wrapper_env = wrapper_env();
+        let (jtx, jrx) = std::sync::mpsc::channel();
+        let js = Js::new(jrx, jtx, Settings::default()).unwrap();
+        (e, js)
+    }
+
+    fn wrapper_env() -> HashMap<String, String> {
+        HashMap::from([("PATH".to_string(), "/wrapper/bin".to_string())])
+    }
+
+    fn report_session_context(e: &mut Engine, js: &mut Js, env: &[(&str, &str)], alias: Option<&str>) {
+        let env = env
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let alias = alias.map(str::to_owned);
+        assert!(e.handle(EngineMsg::Session(SessionCtx { env, alias, ts: 0 }), &mut None, js));
+    }
+
+    #[test]
+    fn should_use_the_env_of_a_session_context_in_place_of_the_wrapper_env() {
+        let dir = TempDir::new("engine-session-env");
+        let (mut e, mut js) = engine_with_wrapper_env(&dir);
+
+        report_session_context(&mut e, &mut js, &[("PATH", "/session/bin")], None);
+
+        assert_eq!(
+            e.env(),
+            &HashMap::from([("PATH".to_string(), "/session/bin".to_string())])
+        );
+    }
+
+    /// An empty env means the shell reported none, not that it has none.
+    #[test]
+    fn should_fall_back_to_the_wrapper_env_after_a_session_context_with_an_empty_env() {
+        let dir = TempDir::new("engine-session-empty-env");
+        let (mut e, mut js) = engine_with_wrapper_env(&dir);
+        report_session_context(&mut e, &mut js, &[("PATH", "/session/bin")], None);
+
+        report_session_context(&mut e, &mut js, &[], None);
+
+        assert_eq!(e.env(), &wrapper_env());
+    }
+
+    #[test]
+    fn should_parse_the_aliases_of_a_session_context_for_the_shell() {
+        let dir = TempDir::new("engine-session-aliases");
+        let (mut e, mut js) = engine_with_wrapper_env(&dir);
+
+        report_session_context(&mut e, &mut js, &[], Some("alias ll='ls -l'"));
+
+        assert_eq!(
+            e.alias_map(Shell::Bash),
+            HashMap::from([("ll".to_string(), "ls -l".to_string())])
+        );
+    }
+
+    #[test]
+    fn should_find_no_aliases_after_a_session_context_with_an_empty_alias_text() {
+        let dir = TempDir::new("engine-session-empty-alias");
+        let (mut e, mut js) = engine_with_wrapper_env(&dir);
+        report_session_context(&mut e, &mut js, &[], Some("alias ll='ls -l'"));
+        e.alias_map(Shell::Bash);
+
+        report_session_context(&mut e, &mut js, &[], Some(""));
+
+        assert_eq!(e.alias_map(Shell::Bash), HashMap::new());
+    }
+
+    #[test]
+    fn should_find_no_aliases_after_a_session_context_without_alias_text() {
+        let dir = TempDir::new("engine-session-no-alias");
+        let (mut e, mut js) = engine_with_wrapper_env(&dir);
+        report_session_context(&mut e, &mut js, &[], Some("alias ll='ls -l'"));
+        e.alias_map(Shell::Bash);
+
+        report_session_context(&mut e, &mut js, &[], None);
+
+        assert_eq!(e.alias_map(Shell::Bash), HashMap::new());
+    }
+
     #[test]
     fn generator_keys_differ_per_index() {
         let a = Rc::new(Arg::default());
