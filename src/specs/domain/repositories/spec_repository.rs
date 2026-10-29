@@ -85,4 +85,35 @@ mod tests {
 
         assert!(found.is_some_and(|found| Rc::ptr_eq(&found, &git)));
     }
+
+    #[test]
+    fn should_find_a_local_spec_by_dir_and_name() {
+        let (here, elsewhere) = (spec("here"), spec("elsewhere"));
+        let repository = InMemorySpecRepository::with(&[("/cwd/|run", &here), ("/other/|run", &elsewhere)]);
+        let (settings, index, generator_context) =
+            (Settings::default(), SpecIndex::default(), GeneratorContext::default());
+        let location = SpecLocation::Local {
+            dir: "/cwd/".into(),
+            name: "run".into(),
+        };
+
+        let found = repository
+            .find(&location, &SpecLookup::new(&settings, &index, &generator_context))
+            .unwrap();
+
+        assert!(found.is_some_and(|found| Rc::ptr_eq(&found, &here)));
+    }
+
+    #[test]
+    fn should_answer_none_for_an_unknown_location() {
+        let repository = InMemorySpecRepository::with(&[("git", &spec("git"))]);
+        let (settings, index, generator_context) =
+            (Settings::default(), SpecIndex::default(), GeneratorContext::default());
+
+        let found = repository
+            .find(&global("cargo"), &SpecLookup::new(&settings, &index, &generator_context))
+            .unwrap();
+
+        assert!(found.is_none());
+    }
 }
