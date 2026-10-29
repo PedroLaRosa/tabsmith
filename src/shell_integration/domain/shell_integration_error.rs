@@ -11,6 +11,8 @@ pub(crate) enum ShellIntegrationError {
     Io(PathBuf, std::io::Error),
     /// The home, the tabsmith binary or pwsh's `$PROFILE` is unknown; the message already holds its causes.
     Environment(String),
+    /// setup could not extract the completion specs; the message already holds its causes.
+    SpecBundle(String),
 }
 
 impl std::fmt::Display for ShellIntegrationError {
@@ -26,6 +28,7 @@ impl std::fmt::Display for ShellIntegrationError {
             }
             ShellIntegrationError::Io(p, e) => write!(f, "{}: {e}", p.display()),
             ShellIntegrationError::Environment(m) => f.write_str(m),
+            ShellIntegrationError::SpecBundle(m) => write!(f, "could not extract the completion specs: {m}"),
         }
     }
 }
@@ -80,6 +83,28 @@ mod tests {
             (
                 "could not ask pwsh for $PROFILE: timed out after 5s".to_string(),
                 "could not ask pwsh for $PROFILE: timed out after 5s".to_string(),
+                true
+            )
+        );
+    }
+
+    /// setup could not extract the completion specs: the message already holds the whole cause chain, so main's
+    /// `error: {:#}` prints it after the context, as it printed the old anyhow chain.
+    #[test]
+    fn should_describe_a_spec_bundle_failure_after_its_context() {
+        let failure = ShellIntegrationError::SpecBundle(
+            "creating /home/u/.tabsmith/specs: Permission denied (os error 13)".into(),
+        );
+
+        let described = (failure.to_string(), format!("{failure:#}"), std::error::Error::source(&failure).is_none());
+
+        assert_eq!(
+            described,
+            (
+                "could not extract the completion specs: creating /home/u/.tabsmith/specs: Permission denied (os error 13)"
+                    .to_string(),
+                "could not extract the completion specs: creating /home/u/.tabsmith/specs: Permission denied (os error 13)"
+                    .to_string(),
                 true
             )
         );

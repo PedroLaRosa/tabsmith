@@ -334,7 +334,8 @@ fn dotfile_check(ctx: &IntegrationPaths, i: Integration, kind: Kind) -> Check<'_
             ShellIntegrationError::FileDoesNotExist(_)
             | ShellIntegrationError::PermissionDenied(_)
             | ShellIntegrationError::Io(..)
-            | ShellIntegrationError::Environment(_) => e.to_string(),
+            | ShellIntegrationError::Environment(_)
+            | ShellIntegrationError::SpecBundle(_) => e.to_string(),
         };
         if matches!(e, ShellIntegrationError::PermissionDenied(_)) {
             return Outcome::Err {
