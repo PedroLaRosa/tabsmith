@@ -142,6 +142,32 @@ impl GeneratorRun {
             None => GeneratorCommand::Settle(GeneratorOutcome::Done(items)),
         }
     }
+
+    /// An exec's `stdout`: split on `splitOn`, which takes precedence over `postProcess`; neither → [].
+    pub(crate) fn exec_command(&self, generator: &Generator, stdout: &str) -> GeneratorCommand {
+        if let Some(sep) = generator.split_on() {
+            let t = stdout.trim();
+            if t.is_empty() {
+                return GeneratorCommand::Settle(GeneratorOutcome::Done(Vec::new()));
+            }
+            return GeneratorCommand::Settle(GeneratorOutcome::Done(
+                t.split(sep.as_str())
+                    .map(|s| SpecSuggestion::from_script_output(s, self.context().is_dangerous()))
+                    .collect(),
+            ));
+        }
+        let Some(pp) = generator.post_process() else {
+            return GeneratorCommand::Settle(GeneratorOutcome::Done(Vec::new()));
+        };
+        GeneratorCommand::StartCall(
+            SpecFunctionCall::PostProcess {
+                function: pp,
+                stdout: stdout.to_string(),
+                tokens: self.tokens().to_vec(),
+            },
+            self.context().clone(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -190,5 +216,50 @@ mod tests {
             suggestions: TemplateSuggestions::Listed(vec![row("a"), row("b"), row("h")]),
         };
         assert_eq!((call, context.cwd()), (filter, "/repo"));
+    }
+
+    #[test]
+    fn should_split_trimmed_stdout_into_untrimmed_rows() {
+        let generator = Generator::default().with_split_on(Some("\n".into()));
+        let run = run_of(&generator, Vec::new());
+
+        let command = run.exec_command(&generator, " a \n\n b \n");
+
+        let GeneratorCommand::Settle(GeneratorOutcome::Done(rows)) = command else {
+            panic!("expected the split rows to settle, got {command:?}");
+        };
+        let script_rows = ["a ", "", " b"].map(|text| SpecSuggestion::from_script_output(text, false));
+        assert_eq!(rows, script_rows);
+    }
+
+    #[test]
+    fn should_post_process_stdout_when_no_split_is_set() {
+        let generator = Generator::default().with_post_process(Some(5));
+        let run = run_of(&generator, Vec::new());
+
+        let command = run.exec_command(&generator, "x\n");
+
+        let GeneratorCommand::StartCall(call, _) = command else {
+            panic!("expected a post-process call, got {command:?}");
+        };
+        let post_process = SpecFunctionCall::PostProcess {
+            function: 5,
+            stdout: "x\n".into(),
+            tokens: vec!["git".into(), "checkout".into()],
+        };
+        assert_eq!(call, post_process);
+    }
+
+    #[test]
+    fn should_settle_with_no_rows_without_split_or_post_process() {
+        let generator = Generator::default();
+        let run = run_of(&generator, Vec::new());
+
+        let command = run.exec_command(&generator, "main\n");
+
+        let GeneratorCommand::Settle(GeneratorOutcome::Done(rows)) = command else {
+            panic!("expected no rows to settle, got {command:?}");
+        };
+        assert_eq!(rows, Vec::new());
     }
 }
