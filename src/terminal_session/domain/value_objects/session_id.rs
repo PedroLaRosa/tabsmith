@@ -38,6 +38,16 @@ mod tests {
         assert_eq!(session_id.as_str(), id);
     }
 
+    /// Not only hex: `_ pre-cmd` has always taken upper case, `-` and `_` too.
+    #[test]
+    fn should_accept_any_id_of_ascii_letters_digits_dashes_and_underscores() {
+        let id = "Ab-_9".to_string();
+
+        let session_id = SessionId::new(id.clone()).unwrap();
+
+        assert_eq!(session_id.as_str(), id);
+    }
+
     /// The id becomes a file name, so nothing that could name a path, or no file at all, is one.
     #[test]
     fn should_reject_an_empty_id_or_one_with_any_other_byte() {
