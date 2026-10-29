@@ -162,6 +162,7 @@ fn status_json(report: &IntegrationStatusReport) -> serde_json::Value {
         "errors": report.failures.iter().map(|failure| {
             let (shell, reason) = match failure {
                 IntegrationFailure::Listing { shell, reason } => (shell, reason),
+                // Never built: status reports only the shells it cannot list (the legacy `status` had no other error).
                 IntegrationFailure::Operation { description, reason } => (description, reason),
             };
             serde_json::json!({"shell": shell, "error": {"title": reason, "message": null}})
