@@ -635,16 +635,18 @@ fn should_report_a_shell_it_cannot_list_at_its_place_among_the_failures() {
         RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
     );
 
-    let ran = bed.installer.apply(&paths(), &[Shell::Pwsh, Shell::Zsh], |_| true, |i| match i.file_name().as_str() {
-        ".zprofile" => Err(ShellIntegrationError::NotInstalled("gone".into())),
+    let shells = [Shell::Zsh, Shell::Pwsh, Shell::Bash];
+    let ran = bed.installer.apply(&paths(), &shells, |_| true, |i| match i.file_name().as_str() {
+        ".zprofile" | ".bashrc" => Err(ShellIntegrationError::NotInstalled("gone".into())),
         _ => Ok(()),
     });
 
     assert_eq!(
         failures_of(ran),
         [
-            failure("listing", "pwsh", "pwsh printed an empty $PROFILE"),
             failure("operation", "zsh pre post into .zprofile", "Integration not installed: gone"),
+            failure("listing", "pwsh", "pwsh printed an empty $PROFILE"),
+            failure("operation", "bash pre post into .bashrc", "Integration not installed: gone"),
         ]
     );
 }
