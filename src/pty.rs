@@ -18,8 +18,9 @@ use crate::terminal_session::domain::repositories::session_context_repository::S
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
 use crate::completion::domain::value_objects::insertion::Insertion;
+use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::types::{
-    Completion, EngineMsg, Model, Msg, Phase, Request,
+    Completion, EngineMsg, Model, Msg, Request,
 };
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
@@ -879,12 +880,12 @@ impl Session {
         if self.echo_pending.is_some_and(|r| c.req > r) {
             self.echo_pending = None;
         }
-        if c.phase == Phase::Parse || c.ghost.is_some() {
+        if c.phase == CompletionPhase::Parse || c.ghost.is_some() {
             self.ghost = c.ghost.clone().map(|g| (c.buffer.clone(), g));
         }
         // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
         // command) too: the inline source depends on the buffer only. A mid-word cursor fails the length check.
-        if c.phase == Phase::Parse
+        if c.phase == CompletionPhase::Parse
             && c.ghost.is_none()
             && c.cursor == c.buffer.len()
             && self.llm_enabled()

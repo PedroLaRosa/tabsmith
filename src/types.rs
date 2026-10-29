@@ -1,5 +1,6 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
+use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::history::domain::entities::history_entry::HistoryEntry;
@@ -11,19 +12,11 @@ use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Phase {
-    /// First reply: static suggestions (+ stale generator results).
-    Parse,
-    /// Follow-up reply after triggered generators finished.
-    Generators,
-}
-
 /// Engine → wrapper reply (SPEC §4.3).
 #[derive(Clone, Debug)]
 pub struct Completion {
     pub req: u64,
-    pub phase: Phase,
+    pub phase: CompletionPhase,
     pub error: bool,
     /// The buffer/cursor the reply was computed from (for insertion reconciliation, SPEC §7.3).
     pub buffer: String,
@@ -51,7 +44,7 @@ impl Completion {
     pub fn error(req: u64, buffer: String, cursor: usize) -> Completion {
         Completion {
             req,
-            phase: Phase::Parse,
+            phase: CompletionPhase::Parse,
             error: true,
             buffer,
             cursor,

@@ -22,6 +22,7 @@ use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
+use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::generator_key::{argument_key, GeneratorKey};
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
@@ -57,7 +58,7 @@ use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
-    now_ms, Completion, EngineMsg, Msg, Phase, Request,
+    now_ms, Completion, EngineMsg, Msg, Request,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -604,7 +605,7 @@ impl Engine {
             first,
             prefix,
         });
-        Some(self.reply(Phase::Parse))
+        Some(self.reply(CompletionPhase::Parse))
     }
 
     /// Error reply (menu error-reset). Generator state is reset on errors too.
@@ -1057,7 +1058,7 @@ impl Engine {
         if changed && self.cur.is_some() {
             let _ = self
                 .tx
-                .send(Msg::Completion(Box::new(self.reply(Phase::Generators))));
+                .send(Msg::Completion(Box::new(self.reply(CompletionPhase::Generators))));
         }
     }
 
@@ -1086,7 +1087,7 @@ impl Engine {
     }
 
     /// Rank the current request's suggestions (SPEC §6.7.5) into a reply.
-    fn reply(&self, phase: Phase) -> Completion {
+    fn reply(&self, phase: CompletionPhase) -> Completion {
         let cur = self.cur.as_ref().expect("reply without a current request");
         let (pr, s) = (&cur.pr, &self.settings);
         let mut list = if pr.first_token {
@@ -1160,7 +1161,7 @@ impl Engine {
                 description: a.description().clone().unwrap_or_default(),
             }),
             search_term: pr.search_term.clone(),
-            triggered_generators: if phase == Phase::Parse {
+            triggered_generators: if phase == CompletionPhase::Parse {
                 cur.triggered.clone()
             } else {
                 Vec::new()
@@ -1620,7 +1621,7 @@ mod tests {
     fn observe(c: &Completion) -> Reply {
         Reply {
             request: c.req,
-            generators: c.phase == Phase::Generators,
+            generators: c.phase == CompletionPhase::Generators,
             error: c.error,
             cursor: c.cursor,
             loading: c.loading,

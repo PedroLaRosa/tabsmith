@@ -1,6 +1,7 @@
 pub(crate) mod alias_table;
 pub(crate) mod argument_hint;
 pub(crate) mod command_line;
+pub(crate) mod completion_phase;
 pub(crate) mod generator_key;
 pub(crate) mod insertion;
 pub(crate) mod suggestion;

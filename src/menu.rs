@@ -8,10 +8,11 @@ use crate::settings::domain::services::settings_catalog::{
 };
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
+use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
-use crate::types::{Completion, Phase};
+use crate::types::Completion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
 
@@ -115,7 +116,7 @@ impl Menu {
         } else {
             None
         };
-        if c.phase == Phase::Parse {
+        if c.phase == CompletionPhase::Parse {
             // After a reset the comparison is against the initial state: new arg, empty command text.
             let (has_new_arg, backspaced, large) = match &self.last {
                 None => (true, false, !typing(&c.command_text, "", 1)),
@@ -509,7 +510,7 @@ pub(crate) mod tests {
         let tokens: Vec<String> = buffer.split(' ').map(String::from).collect();
         Completion {
             req: 1,
-            phase: Phase::Parse,
+            phase: CompletionPhase::Parse,
             error: false,
             buffer: buffer.to_string(),
             cursor: buffer.len(),
@@ -810,7 +811,7 @@ pub(crate) mod tests {
         m.handle(Action::NavigateDown, &s); // cherry-pick
                                             // Generator phase reply reorders the same items.
         let mut c = comp("git c", 2, subs("c").into_iter().rev().collect());
-        c.phase = Phase::Generators;
+        c.phase = CompletionPhase::Generators;
         m.on_completion(c, &s);
         assert_eq!(m.items()[m.selected()].names[0], "cherry-pick");
         // Item no longer listed → back to the top, not sticky.
