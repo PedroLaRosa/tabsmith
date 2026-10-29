@@ -137,16 +137,16 @@ fn tmux_graphics(out: &str) -> Graphics {
 
 /// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
 pub fn slot(it: &Suggestion, g: Graphics) -> Slot {
-    let spec = it.icon.as_deref();
+    let spec = it.icon();
     if let Some(emoji) = spec.and_then(wide_emoji) {
         return text(&emoji);
     }
     if g == Graphics::Off {
-        return ascii_slot(it.kind);
+        return ascii_slot(it.kind());
     }
     let s = spec
         .and_then(spec_image)
-        .unwrap_or_else(|| type_image(it.kind));
+        .unwrap_or_else(|| type_image(it.kind()));
     if g != Graphics::Tmux {
         return s;
     }
@@ -437,10 +437,7 @@ mod tests {
 
     #[test]
     fn resolves_like_q() {
-        let it = |icon: Option<&str>, kind| Suggestion {
-            icon: icon.map(String::from),
-            ..item("x", kind, "")
-        };
+        let it = |icon: Option<&str>, kind| item("x", kind, "").with_icon(icon.map(String::from));
         // The current-branch star is an emoji: text in both modes.
         assert_eq!(
             slot(
@@ -542,10 +539,7 @@ mod tests {
 
     #[test]
     fn tmux_uses_placeholders() {
-        let it = |icon: Option<&str>, kind| Suggestion {
-            icon: icon.map(String::from),
-            ..item("x", kind, "")
-        };
+        let it = |icon: Option<&str>, kind| item("x", kind, "").with_icon(icon.map(String::from));
         // A PNG: two placeholder cells, its id in a 256-colour foreground.
         let s = slot(&it(None, SuggestionKind::Option), Graphics::Tmux);
         let id = s.image.as_ref().map(|i| i.id).unwrap();

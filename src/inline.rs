@@ -143,12 +143,12 @@ pub fn history_ghost(history: &[HistoryEntry], buffer: &str) -> Option<String> {
 /// text (trailing space trimmed).
 pub fn spec_ghost(items: &[Suggestion]) -> Option<String> {
     items.iter().find_map(|i| {
-        let text = i.insert.text.strip_suffix(' ').unwrap_or(&i.insert.text);
+        let text = i.insert().text().strip_suffix(' ').unwrap_or(i.insert().text());
         // accepting a ghost types its text and leaves the cursor at the end: rows that move it back are skipped
-        let ok = !matches!(i.kind, SuggestionKind::AutoExecute | SuggestionKind::History)
-            && i.insert.delete == 0
-            && i.insert.cursor_back <= i.insert.text.len() - text.len()
-            && i.prefix_match
+        let ok = !matches!(i.kind(), SuggestionKind::AutoExecute | SuggestionKind::History)
+            && i.insert().delete() == 0
+            && i.insert().cursor_back() <= i.insert().text().len() - text.len()
+            && i.prefix_match()
             && !text.is_empty();
         ok.then(|| text.to_string())
     })
@@ -506,7 +506,8 @@ fn expand(arg: &str, env: &HashMap<String, String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::domain::value_objects::insertion::Insertion;
+    use crate::completion::domain::value_objects::insertion::{Insertion, InsertionParts};
+    use crate::completion::domain::value_objects::suggestion::SuggestionParts;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
@@ -796,7 +797,7 @@ mod tests {
     }
 
     fn item(kind: SuggestionKind, delete: usize, text: &str, prefix: bool) -> Suggestion {
-        Suggestion {
+        Suggestion::new(SuggestionParts {
             names: vec!["n".into()],
             display_name: None,
             description: None,
@@ -807,17 +808,17 @@ mod tests {
             args_hint: String::new(),
             highlight: Vec::new(),
             query: String::new(),
-            insert: Insertion {
+            insert: Insertion::new(InsertionParts {
                 delete,
                 text: text.into(),
                 cursor_back: 0,
                 execute: false,
-            },
+            }),
             generator: None,
             prefix_match: prefix,
             template_type: None,
             icon: None,
-        }
+        })
     }
 
     #[test]
@@ -840,9 +841,9 @@ mod tests {
         // spec-ghost-ignores-cursor: `commit -m '{cursor}'` would leave the cursor outside the quotes; `--out=`
         // (cursor right after `=`, before the auto-space) is fine
         let with_back = |text: &str, back| {
-            let mut i = item(SuggestionKind::Arg, 0, text, true);
-            i.insert.cursor_back = back;
-            i
+            let i = item(SuggestionKind::Arg, 0, text, true);
+            let insert = i.insert().clone().with_cursor_back(back);
+            i.with_insertion(insert)
         };
         assert_eq!(spec_ghost(&[with_back("commit -m ''", 1)]), None);
         assert_eq!(

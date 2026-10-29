@@ -403,7 +403,7 @@ impl Renderer {
         let items = menu.items();
         let sel = menu.selected().min(items.len().saturating_sub(1));
         let query = match items.get(sel) {
-            Some(it) => it.query.as_str(),
+            Some(it) => it.query(),
             None => menu.last().map_or("", |c| c.search_term.as_str()),
         };
         let menu_w = s.f64(AUTOCOMPLETE_WIDTH).max(10.0) as usize;
@@ -501,7 +501,7 @@ impl Renderer {
         }
         r.put(&base, " ");
         let avail = w.saturating_sub(5);
-        let (title, hint) = (clean(&it.title()), clean(&it.args_hint));
+        let (title, hint) = (clean(&it.title()), clean(it.args_hint()));
         let show_hint = !hint.is_empty() && width(&title) + 1 + width(&hint) <= avail;
         let shown = fit(&title, avail);
         let kept = if shown == title {
@@ -511,7 +511,7 @@ impl Renderer {
         };
         let mut on = false;
         for (i, c) in shown.chars().enumerate() {
-            let h = i < kept && it.highlight.contains(&i);
+            let h = i < kept && it.highlight().contains(&i);
             if h != on {
                 r.s.push_str(if h { &hl } else { &base });
                 on = h;
@@ -600,10 +600,10 @@ impl Renderer {
 fn describe(menu: &Menu) -> (String, String) {
     let sel = menu.items().get(menu.selected());
     let own = sel
-        .and_then(|s| s.description.as_deref())
+        .and_then(|s| s.description())
         .filter(|d| !d.trim().is_empty())
         .map(String::from)
-        .or_else(|| match sel.map(|s| s.kind) {
+        .or_else(|| match sel.map(|s| s.kind()) {
             Some(SuggestionKind::File) => Some("file".into()),
             Some(SuggestionKind::Folder) => Some("folder".into()),
             _ => None,
@@ -971,9 +971,9 @@ mod tests {
             .iter()
             .map(|n| item(n, SuggestionKind::Subcommand, "c"))
             .collect();
-        v[0].args_hint = "<br>".into();
-        v[1].names.push("cp".into());
-        v[2].description = Some("multi\nline 中文 description".into());
+        v[0] = v[0].clone().with_args_hint("<br>".into());
+        v[1] = v[1].clone().with_names(vec!["cherry-pick".into(), "cp".into()]);
+        v[2] = v[2].clone().with_description(Some("multi\nline 中文 description".into()));
         v
     }
 
@@ -1287,7 +1287,7 @@ mod tests {
         let s = settings(r#"{"autocomplete.width": 20}"#);
         let r = Renderer::new(Theme::dark(), true);
         let mut it = item("checkout-a-very-long-name", SuggestionKind::Subcommand, "ch");
-        it.args_hint = "<branch>".into();
+        it = it.with_args_hint("<branch>".into());
         let (row, _, _) = r.list_row(&it, false, 20);
         let text: String = strip(&row);
         assert_eq!(

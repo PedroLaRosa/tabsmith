@@ -147,12 +147,12 @@ pub fn insertion_bytes(ins: &Insertion, ib: &str, cur: &str) -> Vec<u8> {
     } else if let Some(missing) = ib.strip_prefix(cur) {
         b.extend_from_slice(missing.as_bytes()); // the shell has not echoed yet
     }
-    b.extend(std::iter::repeat_n(0x7f, ins.delete));
-    b.extend_from_slice(ins.text.as_bytes());
-    for _ in 0..ins.cursor_back {
+    b.extend(std::iter::repeat_n(0x7f, ins.delete()));
+    b.extend_from_slice(ins.text().as_bytes());
+    for _ in 0..ins.cursor_back() {
         b.extend_from_slice(b"\x1b[D");
     }
-    if ins.execute {
+    if ins.executes() {
         b.push(b'\r');
     }
     b
@@ -167,10 +167,10 @@ pub fn expected_buffer(ins: &Insertion, ib: &str, cursor: usize) -> String {
         ib.len()
     };
     let mut s = ib[..cursor].to_string();
-    for _ in 0..ins.delete {
+    for _ in 0..ins.delete() {
         s.pop();
     }
-    s.push_str(&ins.text);
+    s.push_str(ins.text());
     s.push_str(&ib[cursor..]);
     s
 }
@@ -1171,7 +1171,7 @@ impl Session {
         fwd.extend(insertion_bytes(ins, &ib, &cur));
         self.unechoed.clear();
         let expected = expected_buffer(ins, &ib, at);
-        if ins.execute {
+        if ins.executes() {
             // As for Enter: preferred over a scrape with a transient prompt in front of the line; pre_exec still
             // reads a line the shell rewrote from the screen.
             self.tracker.submitted = Some(expected.clone());
@@ -1608,14 +1608,15 @@ mod sys {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::completion::domain::value_objects::insertion::InsertionParts;
 
     fn ins(delete: usize, text: &str, cursor_back: usize, execute: bool) -> Insertion {
-        Insertion {
+        Insertion::new(InsertionParts {
             delete,
             text: text.into(),
             cursor_back,
             execute,
-        }
+        })
     }
 
     #[test]

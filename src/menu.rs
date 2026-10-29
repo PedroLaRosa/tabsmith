@@ -11,7 +11,7 @@ use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
-use crate::completion::domain::value_objects::insertion::Insertion;
+use crate::completion::domain::value_objects::insertion::{Insertion, InsertionParts};
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
@@ -76,7 +76,7 @@ fn typing(a: &str, b: &str, steps: usize) -> bool {
 /// Compares names, type, insertValue and description; `insert.text` has the typed query stripped, so it is
 /// left out (it changes on every keystroke).
 fn same_item(a: &Suggestion, b: &Suggestion) -> bool {
-    a.names == b.names && a.kind == b.kind && a.description == b.description
+    a.names() == b.names() && a.kind() == b.kind() && a.description() == b.description()
 }
 
 /// Whether the types match (`../` only matches `../`; file and folder match each other).
@@ -85,7 +85,7 @@ fn matching_type(a: &Suggestion, b_first: &str, b_kind: SuggestionKind) -> bool 
         return b_first == "../";
     }
     let file_like = |k| matches!(k, SuggestionKind::File | SuggestionKind::Folder);
-    (file_like(a.kind) && file_like(b_kind)) || a.kind == b_kind
+    (file_like(a.kind()) && file_like(b_kind)) || a.kind() == b_kind
 }
 
 impl Menu {
@@ -363,9 +363,9 @@ impl Menu {
     /// Full insertion of item `idx` (SPEC §7.3): HiddenByInsertion + recency record (D21; skipped for `↪`).
     fn insert_full(&mut self, idx: usize, execute: bool) -> Vec<Effect> {
         let item = &self.items[idx];
-        let mut ins = item.insert.clone();
-        if execute && item.kind != SuggestionKind::AutoExecute {
-            ins.execute = true;
+        let mut ins = item.insert().clone();
+        if execute && item.kind() != SuggestionKind::AutoExecute {
+            ins = ins.with_execute();
         }
         let name = item.first_name();
         let record = match &self.last {
@@ -375,7 +375,7 @@ impl Menu {
                 .map(|cmd| (cmd.clone(), name.to_string())),
             _ => None,
         };
-        self.last_inserted_gen = item.generator;
+        self.last_inserted_gen = item.generator();
         self.vis = Vis::HiddenByInsertion;
         self.just_inserted = true;
         vec![Effect::Insert {
@@ -391,8 +391,8 @@ impl Menu {
         if self.items.len() == 1 {
             return Some(self.insert_full(self.selected, false));
         }
-        let auto = sel.kind == SuggestionKind::AutoExecute;
-        let kind = if auto { sel.original_kind? } else { sel.kind };
+        let auto = sel.kind() == SuggestionKind::AutoExecute;
+        let kind = if auto { sel.original_kind()? } else { sel.kind() };
         if matches!(kind, SuggestionKind::Special | SuggestionKind::AutoExecute) {
             return None;
         }
@@ -400,7 +400,7 @@ impl Menu {
         if auto && kind == SuggestionKind::Folder && !sel_first.ends_with('/') {
             sel_first.push('/');
         }
-        let q = sel.query.to_lowercase();
+        let q = sel.query().to_lowercase();
         let mut names: Vec<String> = (self.items.iter())
             .filter(|a| matching_type(a, &sel_first, kind))
             .map(|a| a.first_name().to_lowercase())
@@ -415,7 +415,7 @@ impl Menu {
             _ => 0,
         };
         let shared: String = sel.first_name().chars().take(lcp).collect();
-        if shared.is_empty() || shared == sel.query {
+        if shared.is_empty() || shared == sel.query() {
             return None;
         }
         let text: String = shared
@@ -429,10 +429,10 @@ impl Menu {
             })
             .collect();
         // The engine strips an already-typed query from `insert.text` (delete == 0): put it back to compare.
-        let full = if sel.insert.delete == 0 {
-            format!("{}{}", sel.query, sel.insert.text)
+        let full = if sel.insert().delete() == 0 {
+            format!("{}{}", sel.query(), sel.insert().text())
         } else {
-            sel.insert.text.clone()
+            sel.insert().text().to_string()
         };
         // The engine escaped the row for its shell: type the shared prefix only as the start of that insertion
         // (`$XDG_` of `$XDG_CONFIG_HOME`), else BEL (`zz;` of `'zz;a'`, pwsh `my\ dir` of `'my dir1.txt'`).
@@ -445,24 +445,24 @@ impl Menu {
         }
         // Partial insertion. Raw on-screen token chars (D22): the item's own delete count, or the query when it was
         // stripped (then the typed text equals the query and is not retyped).
-        let q_chars = sel.query.chars().count();
-        let raw = if sel.insert.delete > 0 {
-            sel.insert.delete
+        let q_chars = sel.query().chars().count();
+        let raw = if sel.insert().delete() > 0 {
+            sel.insert().delete()
         } else {
             q_chars
         };
-        let (delete, text) = match text.strip_prefix(sel.query.as_str()) {
+        let (delete, text) = match text.strip_prefix(sel.query()) {
             Some(rest) if raw == q_chars => (0, rest.to_string()),
             _ => (raw, text),
         };
         self.just_inserted = true;
         Some(vec![Effect::Insert {
-            ins: Insertion {
+            ins: Insertion::new(InsertionParts {
                 delete,
                 text,
                 cursor_back: 0,
                 execute: false,
-            },
+            }),
             full: false,
             record: None,
         }])
@@ -473,11 +473,12 @@ impl Menu {
 pub(crate) mod tests {
     use super::*;
     use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
+    use crate::completion::domain::value_objects::suggestion::SuggestionParts;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     pub fn item(name: &str, kind: SuggestionKind, query: &str) -> Suggestion {
         let typed = name.starts_with(query) && !query.is_empty();
-        Suggestion {
+        Suggestion::new(SuggestionParts {
             names: vec![name.to_string()],
             display_name: None,
             description: Some(format!("about {name}")),
@@ -488,7 +489,7 @@ pub(crate) mod tests {
             args_hint: String::new(),
             highlight: (0..query.chars().count()).collect(),
             query: query.to_string(),
-            insert: Insertion {
+            insert: Insertion::new(InsertionParts {
                 delete: if typed { 0 } else { query.chars().count() },
                 text: if typed {
                     name[query.len()..].to_string()
@@ -497,12 +498,12 @@ pub(crate) mod tests {
                 },
                 cursor_back: 0,
                 execute: false,
-            },
+            }),
             generator: None,
             prefix_match: true,
             template_type: None,
             icon: None,
-        }
+        })
     }
 
     /// A Parse reply for `buffer` (tokens split on spaces, a trailing space adds an empty token).
@@ -584,12 +585,12 @@ pub(crate) mod tests {
         assert_eq!(
             fx,
             vec![Effect::Insert {
-                ins: Insertion {
+                ins: Insertion::new(InsertionParts {
                     delete: 0,
                     text: "heckout".into(),
                     cursor_back: 0,
                     execute: false
-                },
+                }),
                 full: true,
                 record: Some(("git".into(), "checkout".into())),
             }]
@@ -619,10 +620,7 @@ pub(crate) mod tests {
             comp(
                 "git c ",
                 5,
-                vec![Suggestion {
-                    generator: Some(GeneratorKey::from_raw(7)),
-                    ..item("src/", SuggestionKind::Folder, "")
-                }],
+                vec![item("src/", SuggestionKind::Folder, "").with_generator(Some(GeneratorKey::from_raw(7)))],
             ),
             &s,
         );
@@ -644,7 +642,7 @@ pub(crate) mod tests {
         assert_eq!(m.vis(), Vis::HiddenUntilShown);
         assert!(!m.shown(&s));
         // Items are still recomputed (globally interceptable keys like showAutocomplete work).
-        assert_eq!(m.items()[0].names[0], "x");
+        assert_eq!(m.items()[0].names()[0], "x");
         m.handle(Action::ShowAutocomplete, &s);
         assert_eq!(m.vis(), Vis::Visible);
         m.handle(Action::ToggleAutocomplete, &s);
@@ -813,7 +811,7 @@ pub(crate) mod tests {
         let mut c = comp("git c", 2, subs("c").into_iter().rev().collect());
         c.phase = CompletionPhase::Generators;
         m.on_completion(c, &s);
-        assert_eq!(m.items()[m.selected()].names[0], "cherry-pick");
+        assert_eq!(m.items()[m.selected()].names()[0], "cherry-pick");
         // Item no longer listed → back to the top, not sticky.
         m.on_completion(comp("git cl", 2, subs("cl")), &s);
         assert_eq!(m.selected(), 0);
@@ -823,7 +821,7 @@ pub(crate) mod tests {
         m.on_completion(comp("git ch", 2, subs("ch")), &s);
         m.handle(Action::NavigateDown, &s);
         m.on_completion(comp("git che", 2, subs("che")), &s);
-        assert_eq!(m.items()[m.selected()].names[0], "cherry-pick");
+        assert_eq!(m.items()[m.selected()].names()[0], "cherry-pick");
     }
 
     fn prefix_fx(m: &mut Menu) -> Vec<Effect> {
@@ -840,12 +838,12 @@ pub(crate) mod tests {
         assert_eq!(
             fx,
             vec![Effect::Insert {
-                ins: Insertion {
+                ins: Insertion::new(InsertionParts {
                     delete: 0,
                     text: "e".into(),
                     cursor_back: 0,
                     execute: false
-                },
+                }),
                 full: false,
                 record: None
             }]
@@ -861,7 +859,7 @@ pub(crate) mod tests {
                 .collect(),
         ));
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 2, text, .. }, full: false, .. }] if text == "che")
+            matches!(&fx[..], [Effect::Insert { ins, full: false, .. }] if ins.delete() == 2 && ins.text() == "che")
         );
 
         // No remaining prefix → bell; a single item → full insertion.
@@ -891,7 +889,7 @@ pub(crate) mod tests {
         ]);
         let fx = prefix_fx(&mut m);
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, full: false, .. }] if text == "r")
+            matches!(&fx[..], [Effect::Insert { ins, full: false, .. }] if ins.delete() == 0 && ins.text() == "r")
         );
 
         // `../` only matches `../`: with `..foo/` selected, `../` is not a candidate → full insertion.
@@ -915,29 +913,27 @@ pub(crate) mod tests {
         ));
 
         // Escaped spaces: the raw token `my\ d` (5 chars) is deleted and retyped escaped (D22).
-        let mk = |n: &str| Suggestion {
-            insert: Insertion {
+        let mk = |n: &str| {
+            item(n, SuggestionKind::Folder, "my d").with_insertion(Insertion::new(InsertionParts {
                 delete: 5,
                 text: n.replace(' ', "\\ "),
                 cursor_back: 0,
                 execute: false,
-            },
-            ..item(n, SuggestionKind::Folder, "my d")
+            }))
         };
         let fx = prefix_fx(&mut with(vec![mk("my dir/"), mk("my dirt/")]));
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 5, text, .. }, .. }] if text == "my\\ dir")
+            matches!(&fx[..], [Effect::Insert { ins, .. }] if ins.delete() == 5 && ins.text() == "my\\ dir")
         );
 
         // A shared prefix with shell syntax (`zz;` of branches `zz;a`, `zz;b`) is never typed unquoted → bell.
-        let quoted = |n: &str, q: &str, ins: &str| Suggestion {
-            insert: Insertion {
+        let quoted = |n: &str, q: &str, ins: &str| {
+            item(n, SuggestionKind::File, q).with_insertion(Insertion::new(InsertionParts {
                 delete: q.chars().count(),
                 text: ins.into(),
                 cursor_back: 0,
                 execute: false,
-            },
-            ..item(n, SuggestionKind::File, q)
+            }))
         };
         let mut m = with(vec![
             quoted("zz;a", "z", "'zz;a'"),
@@ -951,7 +947,7 @@ pub(crate) mod tests {
             item("$XDG_DATA_HOME", SuggestionKind::Arg, "$XDG"),
         ]));
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, full: false, .. }] if text == "_"),
+            matches!(&fx[..], [Effect::Insert { ins, full: false, .. }] if ins.delete() == 0 && ins.text() == "_"),
             "{fx:?}"
         );
         let mut m = with(vec![
@@ -970,16 +966,13 @@ pub(crate) mod tests {
             quoted("my dir2.txt", "my", "my\\ dir2.txt"),
         ]));
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins: Insertion { delete: 0, text, .. }, .. }] if text == "\\ dir"),
+            matches!(&fx[..], [Effect::Insert { ins, .. }] if ins.delete() == 0 && ins.text() == "\\ dir"),
             "{fx:?}"
         );
 
         // Auto-execute / special → failure.
         let mut m = with(vec![
-            Suggestion {
-                original_kind: Some(SuggestionKind::Special),
-                ..item("↪", SuggestionKind::AutoExecute, "")
-            },
+            item("↪", SuggestionKind::AutoExecute, "").with_original_kind(Some(SuggestionKind::Special)),
             item("x", SuggestionKind::Arg, ""),
         ]);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
@@ -1006,9 +999,9 @@ pub(crate) mod tests {
         assert!(matches!(
             &fx[..],
             [Effect::Insert {
-                ins: Insertion { execute: true, .. },
+                ins,
                 ..
-            }]
+            }] if ins.executes()
         ));
         let mut m = typed(&s);
         m.on_completion(
