@@ -22,8 +22,10 @@ use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
+use crate::specs::domain::value_objects::spec_function_kind::SpecFunctionKind;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
+use crate::specs::domain::value_objects::spec_value::SpecValue;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::task_outcome::TaskOutcome;
 use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
@@ -530,6 +532,15 @@ impl SpecRuntime for QuickJsSpecRuntime {
         let (function, args) = call_arguments(&call, generator);
         let value = self.call_json(function, args, context, timeout)?;
         Ok(function_result(call.kind(), &value, generator))
+    }
+
+    fn read(
+        &self,
+        value: &SpecValue,
+        kind: SpecFunctionKind,
+        context: &GeneratorContext,
+    ) -> SpecFunctionResult {
+        function_result(kind, &spec_value_to_json(value), context)
     }
 
     fn apply_settings(&self, settings: &Settings) {

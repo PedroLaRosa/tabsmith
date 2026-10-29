@@ -1,5 +1,6 @@
 use super::*;
 use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
+use crate::specs::domain::value_objects::spec_function_kind::SpecFunctionKind;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
@@ -660,6 +661,34 @@ fn should_give_a_started_call_its_outcome_as_a_spec_value() {
     let outcomes = js.wait(&[task], Instant::now() + Duration::from_secs(5));
 
     assert_eq!(outcomes, Ok(vec![Some(Ok(spec_value_from_json(&returned)))]));
+}
+
+#[test]
+fn should_read_a_kept_value_like_a_fresh_result_of_its_kind() {
+    let (js, _events) = js();
+    let dir = TempDir::new("typed-read");
+    let ns = module(
+        &js,
+        &dir,
+        "post.js",
+        "var f=(out,tokens)=>[out,{name:tokens[1],description:'d'},'',1.5];export{f as default};",
+    );
+    let call = SpecFunctionCall::PostProcess {
+        function: fn_id(&ns["default"]).unwrap(),
+        stdout: "main".into(),
+        tokens: vec!["git".into(), "dev".into()],
+    };
+    let context = GeneratorContext::new("/repo".into(), HashMap::new(), "zsh".into(), "".into(), true);
+    let fresh = js.call(call.clone(), Some(&context), Duration::from_secs(5)).unwrap();
+    let task = js.start(call, Some(&context));
+    let outcomes = js.wait(&[task], Instant::now() + Duration::from_secs(5)).unwrap();
+    let Some(Ok(kept)) = &outcomes[0] else {
+        panic!("the started call gave no value: {outcomes:?}")
+    };
+
+    let read = js.read(kept, SpecFunctionKind::PostProcess, &context);
+
+    assert_eq!(format!("{read:?}"), format!("{fresh:?}"));
 }
 
 #[test]

@@ -4,7 +4,9 @@ use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
+use crate::specs::domain::value_objects::spec_function_kind::SpecFunctionKind;
 use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
+use crate::specs::domain::value_objects::spec_value::SpecValue;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::task_outcome::TaskOutcome;
 use std::time::{Duration, Instant};
@@ -41,6 +43,13 @@ pub(crate) trait SpecRuntime {
         context: Option<&GeneratorContext>,
         timeout: Duration,
     ) -> Result<SpecFunctionResult, SpecError>;
+    /// Reads a value a task gave, or a kept one, the way a fresh result of `kind` is read: what `call` gives for it.
+    fn read(
+        &self,
+        value: &SpecValue,
+        kind: SpecFunctionKind,
+        context: &GeneratorContext,
+    ) -> SpecFunctionResult;
     /// Applies the settings the runtime reads (`autocomplete.scriptTimeout`).
     fn apply_settings(&self, settings: &Settings);
 }
@@ -132,6 +141,15 @@ impl SpecRuntime for InMemorySpecRuntime {
             Some(answer) => answer(&call),
             None => Err(SpecError::Invalid("unknown fn".into())),
         }
+    }
+
+    fn read(
+        &self,
+        _value: &SpecValue,
+        _kind: SpecFunctionKind,
+        _context: &GeneratorContext,
+    ) -> SpecFunctionResult {
+        unimplemented!("the in-memory runtime does not read values yet")
     }
 
     fn apply_settings(&self, _settings: &Settings) {}
