@@ -11,7 +11,7 @@
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_SCRIPT_TIMEOUT;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::logger;
-use crate::spec::FnId;
+use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::types::{EngineMsg, ExecOutput};
 use rquickjs::context::EvalOptions;
 use rquickjs::{CatchResultExt, Context, Function, Object, Runtime};
@@ -407,7 +407,7 @@ impl Js {
     }
 
     /// Start a JS callback `fns[f](...args)`; the result is the serialized return value (Promises awaited).
-    pub fn start_call(&mut self, f: FnId, args: Vec<JsArg>, ctx: Option<&GenCtx>) -> TaskId {
+    pub fn start_call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>, ctx: Option<&GenCtx>) -> TaskId {
         let generator = ctx.cloned().unwrap_or_default();
         let id = {
             let mut h = self.host.borrow_mut();
@@ -510,7 +510,7 @@ impl Js {
     /// Convenience: start + wait for one callback.
     pub fn call(
         &mut self,
-        f: FnId,
+        f: SpecFunctionRef,
         args: Vec<JsArg>,
         ctx: Option<&GenCtx>,
         timeout: Duration,
@@ -1115,7 +1115,7 @@ pub fn native_ls(dir: &Path) -> ExecOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::fn_id;
+    use crate::specs::infrastructure::adapters::fig_spec_mapper::fn_id;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::shared::domain::value_objects::shell::Shell;
     use crate::types::Request;

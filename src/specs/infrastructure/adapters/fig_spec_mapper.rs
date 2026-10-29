@@ -1,245 +1,38 @@
-//! Completion-spec model and normalisation from the JSON produced by the JS host (SPEC §6.2).
-//! Functions inside specs arrive as `{"$fn": <id>}` and are kept as [`FnId`]s, called through `crate::js::Js`.
-//! OWNER: parser agent (struct shapes are shared with the suggest agent — extend, don't rename).
+//! The Fig spec JSON produced by the JS host, read into the spec model (SPEC §6.2), and back.
+//! Functions inside specs arrive as `{"$fn": <id>}` and are kept as `SpecFunctionRef`s.
+use crate::specs::domain::entities::subcommand::Subcommand;
+use crate::specs::domain::spec_error::SpecError;
+use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
+use crate::specs::domain::value_objects::generator::Generator;
+use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
+use crate::specs::domain::value_objects::generator_script::GeneratorScript;
+use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
+use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
+use crate::specs::domain::value_objects::repeatability::Repeatability;
+use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
+use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
+use crate::specs::domain::value_objects::spec_location::SpecLocation;
+use crate::specs::domain::value_objects::spec_option::SpecOption;
+use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
-use serde_json::Value;
-use std::collections::HashMap;
+use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-/// Index into the JS host's function table (`__ts.fns`).
-pub type FnId = u32;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum StrOrFn {
-    Str(String),
-    Fn(FnId),
-}
-
-/// A static suggestion, `additionalSuggestions` entry or generator result, before filtering.
-#[derive(Clone, Debug, Default)]
-pub struct Suggestion {
-    pub names: Vec<String>,
-    pub display_name: Option<String>,
-    pub insert_value: Option<String>,
-    pub description: Option<String>,
-    /// `None` → caller decides (static arg suggestions/generator results default to Arg).
-    pub kind: Option<SuggestionKind>,
-    pub priority: Option<f64>,
-    pub hidden: bool,
-    pub is_dangerous: bool,
-    /// `context.templateType` (filepaths/folders/help).
-    pub template_type: Option<String>,
-    pub icon: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Trigger {
-    /// Re-run when the last index of this string in the search term changes.
-    Str(String),
-    /// `trigger(newToken, oldToken) -> bool`.
-    Fn(FnId),
-    /// `{on: "change"}`.
-    Change,
-    /// `{on: "threshold", length}`.
-    Threshold(usize),
-    /// `{on: "match", string: [...]}`.
-    Match(Vec<String>),
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct CacheCfg {
-    pub ttl_ms: u64,
-    /// `strategy: "max-age"` (else stale-while-revalidate).
-    pub max_age: bool,
-    pub cache_by_directory: bool,
-    pub cache_key: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Script {
-    /// `["git", "branch"]`
-    Argv(Vec<String>),
-    /// Legacy string form (`sh -c`).
-    Shell(String),
-    /// `script(tokens) -> string[] | string | {command,args,...}`.
-    Fn(FnId),
-    /// `{command, args, cwd?, env?, timeout?}` object form.
-    Object(Value),
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Generator {
-    /// `filepaths` | `folders` | `history` | `help` (from `template`).
-    pub template: Vec<String>,
-    pub script: Option<Script>,
-    pub post_process: Option<FnId>,
-    pub split_on: Option<String>,
-    pub custom: Option<FnId>,
-    pub trigger: Option<Trigger>,
-    pub get_query_term: Option<StrOrFn>,
-    pub cache: Option<CacheCfg>,
-    pub script_timeout: Option<u64>,
-    pub filter_template_suggestions: Option<FnId>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Repeat {
-    /// Absent: may be passed once (suggestions); the parser does not enforce it. Explicit `false` → `Times(1)`.
-    #[default]
-    No,
-    Times(u32),
-    Unlimited,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Strategy {
-    #[default]
-    Default,
-    Prefix,
-    Fuzzy,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Arg {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub is_optional: bool,
-    pub is_variadic: bool,
-    pub is_dangerous: bool,
-    pub is_command: bool,
-    pub is_script: bool,
-    /// `isModule: "python/"`.
-    pub is_module: Option<String>,
-    pub suggest_current_token: Option<bool>,
-    /// `debounce`: true → 200 ms, number → ms.
-    pub debounce: Option<u64>,
-    pub options_can_break_variadic: Option<bool>,
-    pub suggestions: Vec<Suggestion>,
-    pub generators: Vec<Generator>,
-    pub load_spec: Option<LoadSpec>,
-    pub filter_strategy: Strategy,
-    /// `parserDirectives.alias` (git aliases).
-    pub alias_directive: Option<StrOrFn>,
-    pub default: Option<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Opt {
-    pub names: Vec<String>,
-    pub description: Option<String>,
-    pub display_name: Option<String>,
-    pub insert_value: Option<String>,
-    pub icon: Option<String>,
-    pub priority: Option<f64>,
-    pub hidden: bool,
-    pub is_dangerous: bool,
-    pub args: Vec<Rc<Arg>>,
-    pub is_persistent: bool,
-    pub is_repeatable: Repeat,
-    pub requires_equals: bool,
-    /// `requiresSeparator`: `Some("=")`/`Some(":")`; `true` → `Some("")` (= use first optionArgSeparator).
-    pub requires_separator: Option<String>,
-    pub exclusive_on: Vec<String>,
-    pub depends_on: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Directives {
-    pub flags_posix_noncompliant: bool,
-    pub options_must_precede_args: bool,
-    /// Default `["="]`.
-    pub option_arg_separators: Vec<String>,
-}
-
-impl Default for Directives {
-    fn default() -> Self {
-        Directives {
-            flags_posix_noncompliant: false,
-            options_must_precede_args: false,
-            option_arg_separators: vec!["=".into()],
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum SpecLocation {
-    /// A bundled/user spec by global name, e.g. `git`, `aws/s3`.
-    Global { name: String },
-    /// `<dir>/.fig/autocomplete/build/<name>.js`.
-    Local { dir: PathBuf, name: String },
-}
-
-#[derive(Clone, Debug)]
-pub enum LoadSpec {
-    Locations(Vec<SpecLocation>),
-    Inline(Rc<Subcommand>),
-    /// `loadSpec(token, executeShellCommand)`.
-    Fn(FnId),
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Subcommand {
-    pub names: Vec<String>,
-    pub description: Option<String>,
-    pub display_name: Option<String>,
-    pub insert_value: Option<String>,
-    pub icon: Option<String>,
-    pub priority: Option<f64>,
-    pub hidden: bool,
-    pub is_dangerous: bool,
-    pub subcommands: Vec<Rc<Subcommand>>,
-    /// Every alias → index into `subcommands`.
-    pub sub_index: HashMap<String, usize>,
-    /// Non-persistent options.
-    pub options: Vec<Rc<Opt>>,
-    /// Options declared `isPersistent` on this level.
-    pub persistent: Vec<Rc<Opt>>,
-    /// Every option name → (is_persistent, index into `options`/`persistent`).
-    pub opt_index: HashMap<String, (bool, usize)>,
-    pub args: Vec<Rc<Arg>>,
-    pub load_spec: Option<LoadSpec>,
-    pub generate_spec: Option<FnId>,
-    pub generate_spec_cache_key: Option<StrOrFn>,
-    pub directives: Directives,
-    /// True if `parserDirectives` was given explicitly at this level (for inheritance).
-    pub has_directives: bool,
-    pub additional_suggestions: Vec<Suggestion>,
-    pub filter_strategy: Strategy,
-    pub requires_subcommand: Option<bool>,
-}
-
-impl Subcommand {
-    /// Rebuild `sub_index`/`opt_index` from the lists (later wins; options win over persistent, as in
-    /// `options[t] || persistentOptions[t]`).
-    pub fn reindex(&mut self) {
-        self.sub_index.clear();
-        for (i, s) in self.subcommands.iter().enumerate() {
-            for n in &s.names {
-                self.sub_index.insert(n.clone(), i);
-            }
-        }
-        self.opt_index.clear();
-        for (persistent, list) in [(true, &self.persistent), (false, &self.options)] {
-            for (i, o) in list.iter().enumerate() {
-                for n in &o.names {
-                    self.opt_index.insert(n.clone(), (persistent, i));
-                }
-            }
-        }
-    }
-}
-
 /// Normalise a spec JSON object (SPEC §6.2). Never panics on odd specs; skips malformed parts.
-pub fn normalise(v: &Value) -> anyhow::Result<Subcommand> {
-    anyhow::ensure!(v.is_object(), "spec is not an object");
+pub(crate) fn normalise(v: &Value) -> Result<Subcommand, SpecError> {
+    if !v.is_object() {
+        return Err(SpecError::Invalid("spec is not an object".into()));
+    }
     Ok(subcommand(v))
 }
 
 /// Parse one suggestion: a string or an object with `name` (string or array).
-pub fn suggestion_from_json(v: &Value) -> Option<Suggestion> {
+pub(crate) fn suggestion_from_json(v: &Value) -> Option<SpecSuggestion> {
     if let Some(s) = v.as_str() {
-        return Some(Suggestion {
+        return Some(SpecSuggestion {
             names: vec![s.to_string()],
             ..Default::default()
         });
@@ -248,7 +41,7 @@ pub fn suggestion_from_json(v: &Value) -> Option<Suggestion> {
     if !v.is_object() || names.is_empty() {
         return None;
     }
-    Some(Suggestion {
+    Some(SpecSuggestion {
         names,
         display_name: s(v, "displayName"),
         insert_value: s(v, "insertValue"),
@@ -281,13 +74,13 @@ fn from_fig(s: &str) -> SuggestionKind {
 }
 
 /// Result of a function `loadSpec` (SPEC §6.2): `SpecLocation[]`, one location (`{name, type}`) or a Subcommand.
-pub fn load_spec_result(v: &Value) -> Option<LoadSpec> {
+pub(crate) fn load_spec_result(v: &Value) -> Option<SpecLoadDirective> {
     match v {
-        Value::Array(a) => Some(LoadSpec::Locations(a.iter().filter_map(location).collect())),
+        Value::Array(a) => Some(SpecLoadDirective::Locations(a.iter().filter_map(location).collect())),
         Value::Object(o) if o.contains_key("type") => {
-            Some(LoadSpec::Locations(location(v).into_iter().collect()))
+            Some(SpecLoadDirective::Locations(location(v).into_iter().collect()))
         }
-        Value::Object(_) => Some(LoadSpec::Inline(Rc::new(subcommand(v)))),
+        Value::Object(_) => Some(SpecLoadDirective::Inline(Rc::new(subcommand(v)))),
         _ => None,
     }
 }
@@ -331,7 +124,7 @@ fn subcommand(v: &Value) -> Subcommand {
     };
     if let Some(d) = v.get("parserDirectives").filter(|d| d.is_object()) {
         sc.has_directives = true;
-        sc.directives = Directives {
+        sc.directives = ParserDirectives {
             flags_posix_noncompliant: b(d, "flagsArePosixNoncompliant"),
             options_must_precede_args: b(d, "optionsMustPrecedeArguments"),
             // The separators form a set: a string is a set of chars.
@@ -353,8 +146,8 @@ fn subcommand(v: &Value) -> Subcommand {
     sc
 }
 
-fn option(v: &Value) -> Opt {
-    Opt {
+fn option(v: &Value) -> SpecOption {
+    SpecOption {
         names: strs(v.get("name")),
         description: s(v, "description"),
         display_name: s(v, "displayName"),
@@ -366,11 +159,11 @@ fn option(v: &Value) -> Opt {
         args: args(v.get("args")),
         is_persistent: b(v, "isPersistent"),
         is_repeatable: match v.get("isRepeatable") {
-            Some(Value::Bool(true)) => Repeat::Unlimited,
+            Some(Value::Bool(true)) => Repeatability::Unlimited,
             // Explicit `false` is enforced by the parser (absent is not): same limit as `No` for suggestions.
-            Some(Value::Bool(false)) => Repeat::Times(1),
-            Some(n) if n.is_number() => Repeat::Times(n.as_f64().unwrap_or(1.0) as u32),
-            _ => Repeat::No,
+            Some(Value::Bool(false)) => Repeatability::Times(1),
+            Some(n) if n.is_number() => Repeatability::Times(n.as_f64().unwrap_or(1.0) as u32),
+            _ => Repeatability::No,
         },
         requires_equals: b(v, "requiresEquals"),
         requires_separator: match v.get("requiresSeparator") {
@@ -429,10 +222,10 @@ fn generator(v: &Value) -> Generator {
     let path_template = template.iter().any(|t| t == "filepaths" || t == "folders");
     Generator {
         script: v.get("script").and_then(|x| match x {
-            Value::Array(_) => Some(Script::Argv(strs(Some(x)))),
-            Value::String(c) => Some(Script::Shell(c.clone())),
+            Value::Array(_) => Some(GeneratorScript::Argv(strs(Some(x)))),
+            Value::String(c) => Some(GeneratorScript::Shell(c.clone())),
             Value::Object(_) => {
-                Some(fn_id(x).map_or_else(|| Script::Object(x.clone()), Script::Fn))
+                Some(fn_id(x).map_or_else(|| GeneratorScript::Object(x.clone()), GeneratorScript::Fn))
             }
             _ => None,
         }),
@@ -440,24 +233,24 @@ fn generator(v: &Value) -> Generator {
         split_on: s(v, "splitOn"),
         custom: v.get("custom").and_then(fn_id),
         trigger: match v.get("trigger") {
-            Some(Value::String(t)) => Some(Trigger::Str(t.clone())),
-            Some(t) if fn_id(t).is_some() => fn_id(t).map(Trigger::Fn),
+            Some(Value::String(t)) => Some(GeneratorTrigger::Str(t.clone())),
+            Some(t) if fn_id(t).is_some() => fn_id(t).map(GeneratorTrigger::Fn),
             Some(t) => match t.get("on").and_then(Value::as_str) {
-                Some("change") => Some(Trigger::Change),
-                Some("threshold") => Some(Trigger::Threshold(
+                Some("change") => Some(GeneratorTrigger::Change),
+                Some("threshold") => Some(GeneratorTrigger::Threshold(
                     t.get("length").and_then(Value::as_f64).unwrap_or(0.0) as usize,
                 )),
-                Some("match") => Some(Trigger::Match(strs(t.get("string")))),
+                Some("match") => Some(GeneratorTrigger::Match(strs(t.get("string")))),
                 _ => None,
             },
-            None if path_template => Some(Trigger::Str("/".into())),
+            None if path_template => Some(GeneratorTrigger::Str("/".into())),
             None => None,
         },
         get_query_term: v
             .get("getQueryTerm")
             .and_then(str_or_fn)
-            .or_else(|| path_template.then(|| StrOrFn::Str("/".into()))),
-        cache: v.get("cache").filter(|c| c.is_object()).map(|c| CacheCfg {
+            .or_else(|| path_template.then(|| TextOrFunction::Str("/".into()))),
+        cache: v.get("cache").filter(|c| c.is_object()).map(|c| GeneratorCachePolicy {
             ttl_ms: c.get("ttl").and_then(Value::as_f64).unwrap_or(0.0) as u64,
             max_age: c.get("strategy").and_then(Value::as_str) == Some("max-age"),
             cache_by_directory: b(c, "cacheByDirectory"),
@@ -473,29 +266,29 @@ fn generator(v: &Value) -> Generator {
 }
 
 /// String → one global location; `{"$fn"}` → function; other object → inline subcommand.
-fn load_spec(v: &Value) -> Option<LoadSpec> {
+fn load_spec(v: &Value) -> Option<SpecLoadDirective> {
     match v {
-        Value::String(name) => Some(LoadSpec::Locations(vec![SpecLocation::Global {
+        Value::String(name) => Some(SpecLoadDirective::Locations(vec![SpecLocation::Global {
             name: name.clone(),
         }])),
         Value::Object(_) => {
-            Some(fn_id(v).map_or_else(|| LoadSpec::Inline(Rc::new(subcommand(v))), LoadSpec::Fn))
+            Some(fn_id(v).map_or_else(|| SpecLoadDirective::Inline(Rc::new(subcommand(v))), SpecLoadDirective::Fn))
         }
         _ => None,
     }
 }
 
-fn str_or_fn(v: &Value) -> Option<StrOrFn> {
+fn str_or_fn(v: &Value) -> Option<TextOrFunction> {
     v.as_str()
-        .map(|x| StrOrFn::Str(x.into()))
-        .or_else(|| fn_id(v).map(StrOrFn::Fn))
+        .map(|x| TextOrFunction::Str(x.into()))
+        .or_else(|| fn_id(v).map(TextOrFunction::Fn))
 }
 
-fn strategy(v: &Value) -> Strategy {
+fn strategy(v: &Value) -> FilterStrategy {
     match v.get("filterStrategy").and_then(Value::as_str) {
-        Some("prefix") => Strategy::Prefix,
-        Some("fuzzy") => Strategy::Fuzzy,
-        _ => Strategy::Default,
+        Some("prefix") => FilterStrategy::Prefix,
+        Some("fuzzy") => FilterStrategy::Fuzzy,
+        _ => FilterStrategy::Default,
     }
 }
 
@@ -528,8 +321,36 @@ fn b(v: &Value, key: &str) -> bool {
 }
 
 /// `{"$fn": id}` → id.
-pub fn fn_id(v: &Value) -> Option<FnId> {
-    v.get("$fn").and_then(Value::as_u64).map(|n| n as FnId)
+pub(crate) fn fn_id(v: &Value) -> Option<SpecFunctionRef> {
+    v.get("$fn").and_then(Value::as_u64).map(|n| n as SpecFunctionRef)
+}
+
+fn fig_type(k: SuggestionKind) -> &'static str {
+    match k {
+        SuggestionKind::Subcommand => "subcommand",
+        SuggestionKind::Option => "option",
+        SuggestionKind::Arg => "arg",
+        SuggestionKind::File => "file",
+        SuggestionKind::Folder => "folder",
+        SuggestionKind::Special => "special",
+        SuggestionKind::Shortcut => "shortcut",
+        SuggestionKind::History => "history",
+        SuggestionKind::AutoExecute => "auto-execute",
+    }
+}
+
+/// Template results as Fig suggestion objects (input of `filterTemplateSuggestions`).
+pub(crate) fn template_json(items: &[SpecSuggestion]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|s| {
+                json!({"name": s.names.first(), "type": fig_type(s.kind.unwrap_or(SuggestionKind::Arg)),
+                       "insertValue": s.insert_value, "isDangerous": s.is_dangerous,
+                       "context": {"templateType": s.template_type}})
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -549,7 +370,7 @@ mod tests {
         &s.subcommands[s.sub_index[name]]
     }
 
-    fn opt<'a>(s: &'a Subcommand, flag: &str) -> &'a Opt {
+    fn opt<'a>(s: &'a Subcommand, flag: &str) -> &'a SpecOption {
         match s.opt_index[flag] {
             (true, i) => &s.persistent[i],
             (false, i) => &s.options[i],
@@ -567,7 +388,7 @@ mod tests {
         assert!(opt(&s, "-h").args.is_empty());
         assert_eq!(s.args.len(), 1);
         assert!(s.args[0].is_command && !s.args[0].is_optional);
-        assert_eq!(s.directives, Directives::default());
+        assert_eq!(s.directives, ParserDirectives::default());
         assert!(!s.has_directives);
     }
 
@@ -575,11 +396,11 @@ mod tests {
     fn normalise_cd_function_generator() {
         let s = fixture("cd");
         let a = &s.args[0];
-        assert_eq!(a.filter_strategy, Strategy::Fuzzy);
+        assert_eq!(a.filter_strategy, FilterStrategy::Fuzzy);
         let g = &a.generators[0];
         assert_eq!(
             (g.trigger.clone(), g.get_query_term.clone(), g.custom),
-            (Some(Trigger::Fn(0)), Some(StrOrFn::Fn(1)), Some(2))
+            (Some(GeneratorTrigger::Fn(0)), Some(TextOrFunction::Fn(1)), Some(2))
         );
         assert_eq!(
             a.suggestions
@@ -603,8 +424,8 @@ mod tests {
         assert_eq!(
             (g.trigger.clone(), g.get_query_term.clone()),
             (
-                Some(Trigger::Str("/".into())),
-                Some(StrOrFn::Str("/".into()))
+                Some(GeneratorTrigger::Str("/".into())),
+                Some(TextOrFunction::Str("/".into()))
             )
         );
         assert!(check.args[0].is_variadic);
@@ -614,7 +435,7 @@ mod tests {
         );
         assert_eq!(
             sub(&s, "init").args[0].generators[0].trigger,
-            Some(Trigger::Str("/".into()))
+            Some(GeneratorTrigger::Str("/".into()))
         );
     }
 
@@ -631,7 +452,7 @@ mod tests {
     fn normalise_git_like() {
         let s = fixture("git_min");
         assert_eq!(s.generate_spec, Some(7));
-        assert_eq!(s.args[0].alias_directive, Some(StrOrFn::Fn(8)));
+        assert_eq!(s.args[0].alias_directive, Some(TextOrFunction::Fn(8)));
         assert!(s.has_directives);
         assert_eq!(s.directives.option_arg_separators, ["=", ":"]); // a string is a set of chars
         let short = &s.additional_suggestions[0];
@@ -639,15 +460,15 @@ mod tests {
             (short.kind, short.insert_value.as_deref()),
             (Some(SuggestionKind::Shortcut), Some("commit -m '{cursor}'"))
         );
-        assert_eq!(opt(&s, "-C").is_repeatable, Repeat::Unlimited);
-        assert_eq!(opt(&s, "-c").is_repeatable, Repeat::Times(3));
-        assert_eq!(opt(&s, "--version").is_repeatable, Repeat::No);
+        assert_eq!(opt(&s, "-C").is_repeatable, Repeatability::Unlimited);
+        assert_eq!(opt(&s, "-c").is_repeatable, Repeatability::Times(3));
+        assert_eq!(opt(&s, "--version").is_repeatable, Repeatability::No);
         assert!(opt(&s, "--no-pager").is_persistent);
         assert_eq!(s.opt_index["--no-pager"], (true, 0));
 
         let commit = sub(&s, "ci");
         assert!(std::ptr::eq(commit, sub(&s, "commit")));
-        assert_eq!(opt(commit, "--amend").is_repeatable, Repeat::Times(1)); // explicit false
+        assert_eq!(opt(commit, "--amend").is_repeatable, Repeatability::Times(1)); // explicit false
         assert_eq!(opt(commit, "--amend").exclusive_on, ["--no-edit"]);
         assert_eq!(
             opt(commit, "--pathspec-file-nul").depends_on,
@@ -659,7 +480,7 @@ mod tests {
         let g = &a.generators[0];
         assert_eq!(
             g.script,
-            Some(Script::Argv(vec![
+            Some(GeneratorScript::Argv(vec![
                 "git".into(),
                 "--no-optional-locks".into(),
                 "status".into(),
@@ -669,7 +490,7 @@ mod tests {
         assert_eq!(g.post_process, Some(9));
         assert_eq!(
             g.cache,
-            Some(CacheCfg {
+            Some(GeneratorCachePolicy {
                 ttl_ms: 1000,
                 max_age: true,
                 cache_by_directory: true,
@@ -682,25 +503,25 @@ mod tests {
         assert_eq!(
             (g0.script.clone(), g0.trigger.clone(), g0.script_timeout),
             (
-                Some(Script::Fn(10)),
-                Some(Trigger::Threshold(2)),
+                Some(GeneratorScript::Fn(10)),
+                Some(GeneratorTrigger::Threshold(2)),
                 Some(15000)
             )
         );
-        assert_eq!(g0.get_query_term, Some(StrOrFn::Str("/".into())));
+        assert_eq!(g0.get_query_term, Some(TextOrFunction::Str("/".into())));
         assert_eq!(
             (
                 g1.custom,
                 g1.trigger.clone(),
                 g1.filter_template_suggestions
             ),
-            (Some(12), Some(Trigger::Change), Some(13))
+            (Some(12), Some(GeneratorTrigger::Change), Some(13))
         );
         assert_eq!(co.args[0].suggest_current_token, Some(true));
         assert_eq!(co.args[1].generators[0].template, ["filepaths"]);
 
         assert!(
-            matches!(&sub(&s, "flow").load_spec, Some(LoadSpec::Locations(l)) if l == &[SpecLocation::Global { name: "git-flow".into() }])
+            matches!(&sub(&s, "flow").load_spec, Some(SpecLoadDirective::Locations(l)) if l == &[SpecLocation::Global { name: "git-flow".into() }])
         );
         let help = &sub(&s, "help").args[0];
         assert_eq!(
@@ -751,9 +572,9 @@ mod tests {
         assert_eq!(s.opt_index["-o"], (false, 0)); // options win over persistent
         assert_eq!((s.args.len(), s.args[0].debounce), (1, Some(50)));
         assert!(
-            matches!(&s.args[0].load_spec, Some(LoadSpec::Inline(i)) if i.names == ["inner"] && i.args.len() == 1)
+            matches!(&s.args[0].load_spec, Some(SpecLoadDirective::Inline(i)) if i.names == ["inner"] && i.args.len() == 1)
         );
-        assert!(matches!(s.load_spec, Some(LoadSpec::Fn(4))));
+        assert!(matches!(s.load_spec, Some(SpecLoadDirective::Fn(4))));
     }
 
     #[test]
@@ -773,7 +594,7 @@ mod tests {
         assert!(suggestion_from_json(&json!(3)).is_none());
 
         let locs = |v: Value| match load_spec_result(&v) {
-            Some(LoadSpec::Locations(l)) => l,
+            Some(SpecLoadDirective::Locations(l)) => l,
             other => panic!("{other:?}"),
         };
         assert_eq!(
@@ -799,7 +620,7 @@ mod tests {
         );
         assert!(matches!(
             load_spec_result(&json!({"name": "sub", "args": {}})),
-            Some(LoadSpec::Inline(_))
+            Some(SpecLoadDirective::Inline(_))
         ));
         assert!(load_spec_result(&json!("str")).is_none());
     }

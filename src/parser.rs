@@ -6,9 +6,16 @@ use crate::settings::domain::services::settings_catalog::{
 };
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shell_parser::CommandInfo;
-use crate::spec::{
-    normalise, Arg, Directives, FnId, LoadSpec, Opt, Repeat, SpecLocation, StrOrFn, Subcommand,
-};
+use crate::specs::domain::entities::subcommand::Subcommand;
+use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
+use crate::specs::domain::value_objects::repeatability::Repeatability;
+use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
+use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
+use crate::specs::domain::value_objects::spec_location::SpecLocation;
+use crate::specs::domain::value_objects::spec_option::SpecOption;
+use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, normalise};
 use crate::specs::SpecIndex;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
@@ -58,9 +65,9 @@ pub struct ParseResult {
     pub suggest_options: bool,
     pub suggest_args: bool,
     /// Options already passed at this level.
-    pub passed_options: Vec<Rc<Opt>>,
+    pub passed_options: Vec<Rc<SpecOption>>,
     /// Persistent options inherited at this level, in lookup order (parent first: parent wins on name clash).
-    pub persistent: Vec<Rc<Opt>>,
+    pub persistent: Vec<Rc<SpecOption>>,
     pub annotations: Vec<Annotation>,
     /// Index of the token that names the spec in use (`sudo git ch` → 1).
     pub command_index: usize,
@@ -69,7 +76,7 @@ pub struct ParseResult {
     /// Raw text of the last token as typed; for an option value inside the token (`--opt=val`, `-oval`) only
     /// the value part.
     pub raw_last_token: String,
-    pub directives: Directives,
+    pub directives: ParserDirectives,
     /// The composite option chain being typed (`-la`), if the last annotation is one ending in an option.
     pub option_chain: Option<String>,
     /// Single-token command: suggest first tokens (SPEC §6.9) instead of spec items.
@@ -252,7 +259,7 @@ impl Loader {
         };
         let exports = js.load_module(&path)?;
         let json = match exports.get("default") {
-            Some(v) if crate::spec::fn_id(v).is_some() => {
+            Some(v) if fig_spec_mapper::fn_id(v).is_some() => {
                 self.versioned(&exports, name, &path, dev, js, generator)?
             }
             Some(v) if v.is_object() => Some(v.clone()),
@@ -293,7 +300,7 @@ impl Loader {
         }
         let default = exports
             .get("default")
-            .and_then(crate::spec::fn_id)
+            .and_then(fig_spec_mapper::fn_id)
             .ok_or_else(|| no("default is not a function"))?;
         let arg = version.map_or(Value::Null, Value::String);
         let r = js.call(default, vec![JsArg::Json(arg)], Some(generator), TIMEOUT)?;
@@ -356,7 +363,7 @@ fn cli_version(
     }
     let f = exports
         .get("getVersionCommand")
-        .and_then(crate::spec::fn_id);
+        .and_then(fig_spec_mapper::fn_id);
     let id = *inflight.entry(name.to_string()).or_insert_with(|| match f {
         Some(f) => js.start_call(f, vec![JsArg::Exec], Some(generator)),
         None => js.start_exec(
@@ -566,7 +573,7 @@ fn semver_cmp(a: &str, b: &str) -> Ordering {
 trait Host {
     fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, ParseError>;
     /// Call a spec function; `JsArg::Exec` is bound to the session's exec.
-    fn call(&mut self, f: FnId, args: Vec<JsArg>) -> Result<Value, ParseError>;
+    fn call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>) -> Result<Value, ParseError>;
     fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo>;
 }
 
@@ -582,7 +589,7 @@ impl Host for JsHost<'_, '_> {
         self.loader.load(loc, self.ctx, self.js, &self.generator)
     }
 
-    fn call(&mut self, f: FnId, args: Vec<JsArg>) -> Result<Value, ParseError> {
+    fn call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>) -> Result<Value, ParseError> {
         Ok(self.js.call(f, args, Some(&self.generator), TIMEOUT)?)
     }
 
@@ -635,13 +642,13 @@ struct State {
     completion: Rc<Subcommand>,
     path: Vec<Rc<Subcommand>>,
     /// Effective parserDirectives (inherited downwards without mutating the spec).
-    directives: Directives,
+    directives: ParserDirectives,
     /// Inherited persistent options, lookup order (parent first).
-    persistent: Vec<Rc<Opt>>,
+    persistent: Vec<Rc<SpecOption>>,
     opt_args: ArgState,
     sub_args: ArgState,
     annotations: Vec<Annotation>,
-    passed: Vec<Rc<Opt>>,
+    passed: Vec<Rc<SpecOption>>,
     command_index: usize,
     entered_sub_args: bool,
     end_of_options: bool,
@@ -721,7 +728,7 @@ impl State {
     }
 
     /// `options[flag] || persistentOptions[flag]`.
-    fn find_option(&self, flag: &str) -> Option<Rc<Opt>> {
+    fn find_option(&self, flag: &str) -> Option<Rc<SpecOption>> {
         match self.completion.opt_index.get(flag) {
             Some(&(false, i)) => self.completion.options.get(i).cloned(),
             _ => self
@@ -779,7 +786,7 @@ fn subcommand(st: &State, token: &str, fin: bool) -> Option<State> {
 
 fn option(st: &State, flag: &str, fin: bool) -> Option<State> {
     let o = st.find_option(flag)?;
-    if let Repeat::Times(n) = o.is_repeatable {
+    if let Repeatability::Times(n) = o.is_repeatable {
         let count = st
             .passed
             .iter()
@@ -1110,13 +1117,13 @@ impl ParseCaches {
                 if a.load_spec.is_some() {
                     ls = a.load_spec.clone();
                 } else if a.is_command || a.is_script {
-                    ls = Some(LoadSpec::Locations(vec![spec_location(
+                    ls = Some(SpecLoadDirective::Locations(vec![spec_location(
                         &token,
                         cwd,
                         Some(a.is_script),
                     )]));
                 } else if let Some(prefix) = &a.is_module {
-                    ls = Some(LoadSpec::Locations(vec![SpecLocation::Global {
+                    ls = Some(SpecLoadDirective::Locations(vec![SpecLocation::Global {
                         name: format!("{prefix}{token}"),
                     }]));
                 }
@@ -1157,12 +1164,12 @@ impl ParseCaches {
         cmd: &CommandInfo,
         index: usize,
         token: &str,
-        alias: &StrOrFn,
+        alias: &TextOrFunction,
         host: &mut dyn Host,
     ) -> Result<CommandInfo, ParseError> {
         let value = match alias {
-            StrOrFn::Str(s) => s.clone(),
-            StrOrFn::Fn(f) => {
+            TextOrFunction::Str(s) => s.clone(),
+            TextOrFunction::Fn(f) => {
                 let v = host.call(*f, vec![JsArg::Json(token.into()), JsArg::Exec])?;
                 v.as_str()
                     .ok_or_else(|| no("alias did not return a string"))?
@@ -1179,7 +1186,7 @@ impl ParseCaches {
     fn apply_load_spec(
         &mut self,
         st: &mut State,
-        ls: Option<LoadSpec>,
+        ls: Option<SpecLoadDirective>,
         index: usize,
         token: Option<&str>,
         cmd: &CommandInfo,
@@ -1190,14 +1197,14 @@ impl ParseCaches {
         depth: usize,
     ) -> Result<Option<State>, ParseError> {
         let ls = match (ls, token) {
-            (Some(LoadSpec::Fn(f)), Some(t)) => crate::spec::load_spec_result(
+            (Some(SpecLoadDirective::Fn(f)), Some(t)) => fig_spec_mapper::load_spec_result(
                 &host.call(f, vec![JsArg::Json(t.into()), JsArg::Exec])?,
             ),
-            (Some(LoadSpec::Fn(_)), None) => None, // function loadSpecs are skipped at the root
+            (Some(SpecLoadDirective::Fn(_)), None) => None, // function loadSpecs are skipped at the root
             (ls, _) => ls,
         };
         match ls {
-            Some(LoadSpec::Locations(l)) => {
+            Some(SpecLoadDirective::Locations(l)) => {
                 let mut nested =
                     self.parse_prefix(cmd, l, start + index, cwd, dev, host, depth + 1)?;
                 nested.command_index += index;
@@ -1207,7 +1214,7 @@ impl ParseCaches {
                 nested.tokens = prefix.chain(nested.tokens).collect();
                 Ok(Some(nested))
             }
-            Some(LoadSpec::Inline(sub)) => {
+            Some(SpecLoadDirective::Inline(sub)) => {
                 // ponytail: parserDirectives merge per object, not per field (4 inline specs upstream).
                 if sub.has_directives {
                     st.directives = sub.directives.clone();
@@ -1237,8 +1244,8 @@ impl ParseCaches {
             return Ok(st);
         };
         let cache_key = match &st.completion.generate_spec_cache_key {
-            Some(StrOrFn::Str(k)) => Some(k.clone()),
-            Some(StrOrFn::Fn(kf)) => match host.call(
+            Some(TextOrFunction::Str(k)) => Some(k.clone()),
+            Some(TextOrFunction::Fn(kf)) => match host.call(
                 *kf,
                 vec![JsArg::Json(serde_json::json!({ "tokens": tokens }))],
             ) {

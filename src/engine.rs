@@ -21,7 +21,14 @@ use crate::settings::domain::services::settings_catalog::{
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shell_parser;
-use crate::spec::{Arg, Generator, Script, StrOrFn, Strategy, Suggestion, Trigger};
+use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
+use crate::specs::domain::value_objects::generator::Generator;
+use crate::specs::domain::value_objects::generator_script::GeneratorScript;
+use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
+use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
+use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
+use crate::specs::infrastructure::adapters::fig_spec_mapper;
 use crate::specs::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
 use crate::shared::domain::value_objects::shell::Shell;
@@ -183,8 +190,8 @@ fn script_exec_input(v: Value, cwd: &str) -> Option<Value> {
 }
 
 /// Script-generator string → `{type:"arg", name, insertValue, isDangerous}`.
-fn script_string(s: &str, is_dangerous: bool) -> Suggestion {
-    Suggestion {
+fn script_string(s: &str, is_dangerous: bool) -> SpecSuggestion {
+    SpecSuggestion {
         names: vec![s.to_string()],
         insert_value: Some(s.to_string()),
         kind: Some(SuggestionKind::Arg),
@@ -194,18 +201,18 @@ fn script_string(s: &str, is_dangerous: bool) -> Suggestion {
 }
 
 /// Suggestion objects (custom / filterTemplateSuggestions results).
-fn json_items(v: &Value) -> Vec<Suggestion> {
+fn json_items(v: &Value) -> Vec<SpecSuggestion> {
     v.as_array()
         .map(|a| {
             a.iter()
-                .filter_map(crate::spec::suggestion_from_json)
+                .filter_map(fig_spec_mapper::suggestion_from_json)
                 .collect()
         })
         .unwrap_or_default()
 }
 
 /// `postProcess` result: drop falsy items and objects without a name; strings become arg rows.
-fn post_process_items(v: &Value, is_dangerous: bool) -> Vec<Suggestion> {
+fn post_process_items(v: &Value, is_dangerous: bool) -> Vec<SpecSuggestion> {
     let Some(a) = v.as_array() else {
         return Vec::new();
     };
@@ -213,7 +220,7 @@ fn post_process_items(v: &Value, is_dangerous: bool) -> Vec<Suggestion> {
         .filter_map(|x| match x {
             Value::String(s) if !s.is_empty() => Some(script_string(s, is_dangerous)),
             Value::Object(o) if o.get("name").is_some_and(truthy) => {
-                crate::spec::suggestion_from_json(x)
+                fig_spec_mapper::suggestion_from_json(x)
             }
             _ => None,
         })
@@ -229,7 +236,7 @@ fn gen_context_json(ctx: &GenCtx) -> Value {
 /// Generator results of the current argument, one per generator (SPEC §6.6.1).
 struct Slot {
     key: GenKey,
-    result: Vec<Suggestion>,
+    result: Vec<SpecSuggestion>,
     loading: bool,
     /// Trigger generation: runs carrying another value are stale.
     gen_id: u64,
@@ -256,7 +263,7 @@ struct Run {
     idx: usize,
     ctx: GenCtx,
     tokens: Vec<String>,
-    help: Vec<Suggestion>,
+    help: Vec<SpecSuggestion>,
     step: Step,
     task: TaskId,
     /// Cache key this run's task result is stored under (owner of an in-flight fetch).
@@ -266,7 +273,7 @@ struct Run {
 
 enum Outcome {
     Pending,
-    Done(Vec<Suggestion>),
+    Done(Vec<SpecSuggestion>),
     Fail(String),
 }
 
@@ -526,9 +533,9 @@ impl Engine {
             .as_ref()
             .map_or(pr.completion.filter_strategy, |a| a.filter_strategy);
         let fuzzy = match strategy {
-            Strategy::Prefix => false,
-            Strategy::Fuzzy => true,
-            Strategy::Default => self.user_fuzzy,
+            FilterStrategy::Prefix => false,
+            FilterStrategy::Fuzzy => true,
+            FilterStrategy::Default => self.user_fuzzy,
         };
         let ctx = GenCtx {
             cwd: req.cwd.to_string_lossy().into_owned(),
@@ -596,8 +603,8 @@ impl Engine {
             } else {
                 match &g.get_query_term {
                     None => Query::Term,
-                    Some(StrOrFn::Str(s)) => Query::Str(s.clone()),
-                    Some(StrOrFn::Fn(f)) => match js.call(
+                    Some(TextOrFunction::Str(s)) => Query::Str(s.clone()),
+                    Some(TextOrFunction::Fn(f)) => match js.call(
                         *f,
                         vec![JsArg::Json(json!(pr.search_term))],
                         None,
@@ -637,7 +644,7 @@ impl Engine {
             } else {
                 match &g.trigger {
                     None => arg.as_ref().is_some_and(|a| a.debounce.is_some()),
-                    Some(Trigger::Fn(f)) => match js.call(
+                    Some(GeneratorTrigger::Fn(f)) => match js.call(
                         *f,
                         vec![JsArg::Json(json!(new)), JsArg::Json(json!(old))],
                         None,
@@ -771,7 +778,7 @@ impl Engine {
                 Some(f) => {
                     run.task = js.start_call(
                         f,
-                        vec![JsArg::Json(suggest::template_json(&items))],
+                        vec![JsArg::Json(fig_spec_mapper::template_json(&items))],
                         Some(&run.ctx),
                     );
                     run.step = Step::Filter;
@@ -785,15 +792,15 @@ impl Engine {
         }
         if let Some(script) = &g.script {
             return match script {
-                Script::Fn(f) => {
+                GeneratorScript::Fn(f) => {
                     run.task =
                         js.start_call(*f, vec![JsArg::Json(json!(run.tokens))], Some(&run.ctx));
                     run.step = Step::Script;
                     Outcome::Pending
                 }
-                Script::Argv(a) => self.script_input(run, g, json!(a), js),
-                Script::Shell(s) => self.script_input(run, g, json!(s), js),
-                Script::Object(o) => self.script_input(run, g, o.clone(), js),
+                GeneratorScript::Argv(a) => self.script_input(run, g, json!(a), js),
+                GeneratorScript::Shell(s) => self.script_input(run, g, json!(s), js),
+                GeneratorScript::Object(o) => self.script_input(run, g, o.clone(), js),
             };
         }
         let Some(custom) = g.custom else {

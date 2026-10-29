@@ -80,7 +80,7 @@ type Callback = Box<dyn Fn(&[JsArg]) -> Result<Value, ParseError>>;
 #[derive(Default)]
 struct Mock {
     specs: HashMap<String, Rc<Subcommand>>,
-    fns: HashMap<FnId, Callback>,
+    fns: HashMap<SpecFunctionRef, Callback>,
     loads: Vec<SpecLocation>,
 }
 
@@ -106,7 +106,7 @@ impl Host for Mock {
         Ok(self.specs.get(&key).cloned())
     }
 
-    fn call(&mut self, f: FnId, args: Vec<JsArg>) -> Result<Value, ParseError> {
+    fn call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>) -> Result<Value, ParseError> {
         (self.fns.get(&f).ok_or_else(|| no("unknown fn"))?)(&args)
     }
 

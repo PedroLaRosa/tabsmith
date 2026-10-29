@@ -1,1 +1,15 @@
+pub(crate) mod arg;
+pub(crate) mod filter_strategy;
+pub(crate) mod generator;
+pub(crate) mod generator_cache_policy;
+pub(crate) mod generator_script;
+pub(crate) mod generator_trigger;
+pub(crate) mod parser_directives;
+pub(crate) mod repeatability;
+pub(crate) mod spec_function_ref;
+pub(crate) mod spec_load_directive;
+pub(crate) mod spec_location;
+pub(crate) mod spec_option;
+pub(crate) mod spec_suggestion;
 pub(crate) mod suggestion_kind;
+pub(crate) mod text_or_function;

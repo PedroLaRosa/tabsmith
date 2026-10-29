@@ -3,13 +3,19 @@
 //! OWNER: engine agent (internal API; only `engine.rs` uses it). Everything here is pure (no JS); the engine
 //! resolves function triggers / `getQueryTerm`s and runs generators.
 use crate::parser::{AnnKind, ParseResult};
-use crate::spec::{Arg, CacheCfg, Opt, Repeat, Subcommand, Suggestion, Trigger};
+use crate::specs::domain::entities::subcommand::Subcommand;
+use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
+use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
+use crate::specs::domain::value_objects::repeatability::Repeatability;
+use crate::specs::domain::value_objects::spec_option::SpecOption;
+use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::types::{GenKey, Insertion, Item};
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -119,7 +125,7 @@ impl Sugg {
         }
     }
 
-    fn from_opt(o: &Opt, separators: &[String]) -> Sugg {
+    fn from_opt(o: &SpecOption, separators: &[String]) -> Sugg {
         let separator = if o.args.first().is_some_and(|a| a.is_optional) {
             None
         } else {
@@ -147,7 +153,7 @@ impl Sugg {
 
     /// Static/additional/generator suggestion (`type` defaults to `arg`).
     pub fn from_suggestion(
-        s: &Suggestion,
+        s: &SpecSuggestion,
         dangerous: bool,
         generator: Option<GenKey>,
         query: Query,
@@ -189,7 +195,7 @@ pub struct GenView<'a> {
     /// `Query::Term` ⇔ the generator has no `getQueryTerm`.
     pub query: Query,
     pub loading: bool,
-    pub items: &'a [Suggestion],
+    pub items: &'a [SpecSuggestion],
 }
 
 /// Options offered at this level: exclusiveOn / repeat limits / dependsOn priority, alphabetical.
@@ -226,9 +232,9 @@ fn static_options(pr: &ParseResult) -> Vec<Sugg> {
             continue;
         }
         let limit = match o.is_repeatable {
-            Repeat::No | Repeat::Times(0) => Some(1),
-            Repeat::Times(n) => Some(n as usize),
-            Repeat::Unlimited => None,
+            Repeatability::No | Repeatability::Times(0) => Some(1),
+            Repeatability::Times(n) => Some(n as usize),
+            Repeatability::Unlimited => None,
         };
         if let Some(limit) = limit {
             let used = passed
@@ -1061,16 +1067,16 @@ pub fn to_item(s: Sugg, prefix_match: bool, c: &InsCtx) -> Item {
 // Generators: triggers and cache (SPEC §6.6.1, §6.6.5)
 
 /// Non-function trigger decision (`new` = current search term, `old` = previous); `None` for `Trigger::Fn`.
-pub fn triggered(t: &Trigger, new: &str, old: &str) -> Option<bool> {
+pub fn triggered(t: &GeneratorTrigger, new: &str, old: &str) -> Option<bool> {
     let last = |s: &str, p: &str| s.rfind(p).map(|i| s[..i].chars().count()); // JS lastIndexOf (char units)
     Some(match t {
-        Trigger::Str(p) => last(new, p) != last(old, p),
-        Trigger::Change => new != old,
-        Trigger::Threshold(n) => new.chars().count() > *n && old.chars().count() <= *n,
-        Trigger::Match(list) => {
+        GeneratorTrigger::Str(p) => last(new, p) != last(old, p),
+        GeneratorTrigger::Change => new != old,
+        GeneratorTrigger::Threshold(n) => new.chars().count() > *n && old.chars().count() <= *n,
+        GeneratorTrigger::Match(list) => {
             list.iter().position(|x| x == new) != list.iter().position(|x| x == old)
         }
-        Trigger::Fn(_) => return None,
+        GeneratorTrigger::Fn(_) => return None,
     })
 }
 
@@ -1081,7 +1087,7 @@ pub fn dir_changed(new: &str, old: &str, backslash: bool) -> bool {
 }
 
 /// `[cacheByDirectory ? cwd : "", key].join(",")`.
-pub fn cache_key(cfg: &CacheCfg, cwd: &str, key: String) -> String {
+pub fn cache_key(cfg: &GeneratorCachePolicy, cwd: &str, key: String) -> String {
     format!("{},{key}", if cfg.cache_by_directory { cwd } else { "" })
 }
 
@@ -1111,7 +1117,7 @@ pub struct GenCache {
 }
 
 impl GenCache {
-    pub fn lookup(&self, key: &str, cfg: &CacheCfg, now: u64) -> Lookup {
+    pub fn lookup(&self, key: &str, cfg: &GeneratorCachePolicy, now: u64) -> Lookup {
         match self.map.get(key) {
             Some(CacheEntry {
                 value: Some(v),
@@ -1270,7 +1276,7 @@ pub fn inserted_directory(
 
 /// Native `filepaths`/`folders` listing: `ls -1ApL` semantics, sorted non-dot then dot names, `.DS_Store`
 /// skipped, `../` appended. Unreadable dir → `[]`.
-pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<Suggestion> {
+pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<SpecSuggestion> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -1301,7 +1307,7 @@ pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<Suggestion> 
             if !folder && !files {
                 return None;
             }
-            Some(Suggestion {
+            Some(SpecSuggestion {
                 insert_value: Some(n.clone()),
                 kind: Some(if folder {
                     SuggestionKind::Folder
@@ -1318,7 +1324,7 @@ pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<Suggestion> 
 }
 
 /// `help` template: subcommand names of the level above the triggering subcommand, minus its aliases.
-pub fn help_items(pr: &ParseResult) -> Vec<Suggestion> {
+pub fn help_items(pr: &ParseResult) -> Vec<SpecSuggestion> {
     let trig = pr
         .annotations
         .iter()
@@ -1336,7 +1342,7 @@ pub fn help_items(pr: &ParseResult) -> Vec<Suggestion> {
         .iter()
         .flat_map(|s| s.names.iter())
         .filter(|n| !exclude.contains(n))
-        .map(|n| Suggestion {
+        .map(|n| SpecSuggestion {
             names: vec![n.clone()],
             insert_value: Some(n.clone()),
             kind: Some(SuggestionKind::Special),
@@ -1344,34 +1350,6 @@ pub fn help_items(pr: &ParseResult) -> Vec<Suggestion> {
             ..Default::default()
         })
         .collect()
-}
-
-fn fig_type(k: SuggestionKind) -> &'static str {
-    match k {
-        SuggestionKind::Subcommand => "subcommand",
-        SuggestionKind::Option => "option",
-        SuggestionKind::Arg => "arg",
-        SuggestionKind::File => "file",
-        SuggestionKind::Folder => "folder",
-        SuggestionKind::Special => "special",
-        SuggestionKind::Shortcut => "shortcut",
-        SuggestionKind::History => "history",
-        SuggestionKind::AutoExecute => "auto-execute",
-    }
-}
-
-/// Template results as Fig suggestion objects (input of `filterTemplateSuggestions`).
-pub fn template_json(items: &[Suggestion]) -> Value {
-    Value::Array(
-        items
-            .iter()
-            .map(|s| {
-                json!({"name": s.names.first(), "type": fig_type(s.kind.unwrap_or(SuggestionKind::Arg)),
-                       "insertValue": s.insert_value, "isDangerous": s.is_dangerous,
-                       "context": {"templateType": s.template_type}})
-            })
-            .collect(),
-    )
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1458,7 +1436,8 @@ mod tests {
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::parser::Annotation;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-    use crate::spec::Directives;
+    use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
+    use serde_json::json;
 
     fn pr_for(comp: Subcommand, search: &str) -> ParseResult {
         let comp = Rc::new(comp);
@@ -1476,7 +1455,7 @@ mod tests {
             command_index: 0,
             tokens: vec![],
             raw_last_token: search.into(),
-            directives: Directives::default(),
+            directives: ParserDirectives::default(),
             option_chain: None,
             first_token: false,
             spec_name: "cmd".into(),
@@ -1500,8 +1479,8 @@ mod tests {
         })
     }
 
-    fn opt(names: &[&str]) -> Opt {
-        Opt {
+    fn opt(names: &[&str]) -> SpecOption {
+        SpecOption {
             names: names.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
         }
@@ -1728,21 +1707,21 @@ mod tests {
 
     #[test]
     fn triggers() {
-        let s = Trigger::Str("/".into());
+        let s = GeneratorTrigger::Str("/".into());
         assert_eq!(triggered(&s, "src/", "src"), Some(true));
         assert_eq!(triggered(&s, "src/a", "src/"), Some(false));
-        assert_eq!(triggered(&Trigger::Change, "a", "a"), Some(false));
-        assert_eq!(triggered(&Trigger::Change, "ab", "a"), Some(true));
-        assert_eq!(triggered(&Trigger::Threshold(2), "abc", "ab"), Some(true));
-        assert_eq!(triggered(&Trigger::Threshold(2), "ab", "abc"), Some(false));
+        assert_eq!(triggered(&GeneratorTrigger::Change, "a", "a"), Some(false));
+        assert_eq!(triggered(&GeneratorTrigger::Change, "ab", "a"), Some(true));
+        assert_eq!(triggered(&GeneratorTrigger::Threshold(2), "abc", "ab"), Some(true));
+        assert_eq!(triggered(&GeneratorTrigger::Threshold(2), "ab", "abc"), Some(false));
         assert_eq!(
-            triggered(&Trigger::Threshold(2), "abcd", "abc"),
+            triggered(&GeneratorTrigger::Threshold(2), "abcd", "abc"),
             Some(false)
         );
-        let m = Trigger::Match(vec!["x".into(), "y".into()]);
+        let m = GeneratorTrigger::Match(vec!["x".into(), "y".into()]);
         assert_eq!(triggered(&m, "y", "x"), Some(true));
         assert_eq!(triggered(&m, "z", "w"), Some(false));
-        assert_eq!(triggered(&Trigger::Fn(1), "a", "b"), None);
+        assert_eq!(triggered(&GeneratorTrigger::Fn(1), "a", "b"), None);
         assert!(dir_changed("src/a", "lib/a", false));
         assert!(!dir_changed("src/ab", "src/a", false));
         assert!(dir_changed("src/", "src", false));
@@ -1755,11 +1734,11 @@ mod tests {
     #[test]
     fn cache_ttl_swr_max_age() {
         let mut c = GenCache::default();
-        let swr = CacheCfg {
+        let swr = GeneratorCachePolicy {
             ttl_ms: 1000,
             ..Default::default()
         };
-        let max_age = CacheCfg {
+        let max_age = GeneratorCachePolicy {
             ttl_ms: 1000,
             max_age: true,
             ..Default::default()
@@ -1796,7 +1775,7 @@ mod tests {
                 refresh: true
             }
         );
-        let by_dir = CacheCfg {
+        let by_dir = GeneratorCachePolicy {
             cache_by_directory: true,
             ..Default::default()
         };
@@ -1809,7 +1788,7 @@ mod tests {
 
     #[test]
     fn assembly_options_rules() {
-        let excl = Rc::new(Opt {
+        let excl = Rc::new(SpecOption {
             exclusive_on: vec!["-b".into()],
             depends_on: vec!["-c".into()],
             ..opt(&["-a"])
@@ -1820,8 +1799,8 @@ mod tests {
                 excl.clone(),
                 Rc::new(opt(&["-b"])),
                 Rc::new(opt(&["-c"])),
-                Rc::new(Opt {
-                    is_repeatable: Repeat::Unlimited,
+                Rc::new(SpecOption {
+                    is_repeatable: Repeatability::Unlimited,
                     ..opt(&["-v"])
                 }),
             ],
@@ -1830,8 +1809,8 @@ mod tests {
         let mut pr = pr_for(comp, "");
         pr.passed_options = vec![
             excl,
-            Rc::new(Opt {
-                is_repeatable: Repeat::Unlimited,
+            Rc::new(SpecOption {
+                is_repeatable: Repeatability::Unlimited,
                 ..opt(&["-v"])
             }),
         ];

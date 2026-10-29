@@ -21,7 +21,6 @@ mod settings;
 mod shared;
 mod shell_integration;
 mod shell_parser;
-mod spec;
 mod specs;
 mod suggest;
 mod terminal_session;
