@@ -10,25 +10,25 @@ use std::rc::Rc;
 /// A suggestion row inside the pipeline (a spec's `SpecSuggestion` + internal fields), before it becomes a `Suggestion`.
 #[derive(Clone, Debug)]
 pub(crate) struct SuggestionCandidate {
-    pub(crate) names: Vec<String>,
-    pub(crate) display_name: Option<String>,
-    pub(crate) insert_value: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) kind: SuggestionKind,
-    pub(crate) original_kind: Option<SuggestionKind>,
+    names: Vec<String>,
+    display_name: Option<String>,
+    insert_value: Option<String>,
+    description: Option<String>,
+    kind: SuggestionKind,
+    original_kind: Option<SuggestionKind>,
     /// 0 = unset (`0` and unset are treated alike).
-    pub(crate) priority: f64,
-    pub(crate) hidden: bool,
-    pub(crate) is_dangerous: bool,
+    priority: f64,
+    hidden: bool,
+    is_dangerous: bool,
     /// Args of the subcommand/option (auto-execute rule, args hint, dedupe).
-    pub(crate) args: Vec<Rc<Arg>>,
-    pub(crate) should_add_space: bool,
-    pub(crate) separator: Option<String>,
-    pub(crate) query: SuggestionQuery,
-    pub(crate) generator: Option<GeneratorKey>,
-    pub(crate) template_type: Option<String>,
+    args: Vec<Rc<Arg>>,
+    should_add_space: bool,
+    separator: Option<String>,
+    query: SuggestionQuery,
+    generator: Option<GeneratorKey>,
+    template_type: Option<String>,
     /// Spec `icon` (emoji or `fig://icon?type=`), resolved by the renderer.
-    pub(crate) icon: Option<String>,
+    icon: Option<String>,
 }
 
 impl SuggestionCandidate {
@@ -123,5 +123,158 @@ impl SuggestionCandidate {
             icon: s.icon().clone(),
             ..SuggestionCandidate::new("", s.kind().unwrap_or(SuggestionKind::Arg))
         }
+    }
+
+    pub(crate) fn names(&self) -> &Vec<String> {
+        &self.names
+    }
+
+    pub(crate) fn display_name(&self) -> &Option<String> {
+        &self.display_name
+    }
+
+    pub(crate) fn insert_value(&self) -> &Option<String> {
+        &self.insert_value
+    }
+
+    pub(crate) fn description(&self) -> &Option<String> {
+        &self.description
+    }
+
+    pub(crate) fn kind(&self) -> SuggestionKind {
+        self.kind
+    }
+
+    pub(crate) fn original_kind(&self) -> Option<SuggestionKind> {
+        self.original_kind
+    }
+
+    pub(crate) fn priority(&self) -> f64 {
+        self.priority
+    }
+
+    pub(crate) fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    pub(crate) fn is_dangerous(&self) -> bool {
+        self.is_dangerous
+    }
+
+    pub(crate) fn args(&self) -> &Vec<Rc<Arg>> {
+        &self.args
+    }
+
+    pub(crate) fn should_add_space(&self) -> bool {
+        self.should_add_space
+    }
+
+    pub(crate) fn separator(&self) -> &Option<String> {
+        &self.separator
+    }
+
+    pub(crate) fn query(&self) -> &SuggestionQuery {
+        &self.query
+    }
+
+    pub(crate) fn generator(&self) -> Option<GeneratorKey> {
+        self.generator
+    }
+
+    pub(crate) fn template_type(&self) -> &Option<String> {
+        &self.template_type
+    }
+
+    pub(crate) fn icon(&self) -> &Option<String> {
+        &self.icon
+    }
+
+    pub(crate) fn with_names(mut self, names: Vec<String>) -> Self {
+        self.names = names;
+        self
+    }
+
+    pub(crate) fn with_insert_value(mut self, insert_value: Option<String>) -> Self {
+        self.insert_value = insert_value;
+        self
+    }
+
+    pub(crate) fn with_description(mut self, description: Option<String>) -> Self {
+        self.description = description;
+        self
+    }
+
+    pub(crate) fn with_kind(mut self, kind: SuggestionKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub(crate) fn with_original_kind(mut self, original_kind: Option<SuggestionKind>) -> Self {
+        self.original_kind = original_kind;
+        self
+    }
+
+    pub(crate) fn with_priority(mut self, priority: f64) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_display_name(mut self, display_name: Option<String>) -> Self {
+        self.display_name = display_name;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_is_dangerous(mut self, is_dangerous: bool) -> Self {
+        self.is_dangerous = is_dangerous;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_args(mut self, args: Vec<Rc<Arg>>) -> Self {
+        self.args = args;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_should_add_space(mut self, should_add_space: bool) -> Self {
+        self.should_add_space = should_add_space;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_separator(mut self, separator: Option<String>) -> Self {
+        self.separator = separator;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_query(mut self, query: SuggestionQuery) -> Self {
+        self.query = query;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_template_type(mut self, template_type: Option<String>) -> Self {
+        self.template_type = template_type;
+        self
+    }
+
+    /// In-place writes for the loops that rewrite rows where they stand (`update_priorities`, `option_chain`).
+    pub(crate) fn set_names(&mut self, names: Vec<String>) {
+        self.names = names;
+    }
+
+    pub(crate) fn set_insert_value(&mut self, insert_value: Option<String>) {
+        self.insert_value = insert_value;
+    }
+
+    pub(crate) fn set_priority(&mut self, priority: f64) {
+        self.priority = priority;
+    }
+
+    pub(crate) fn set_query(&mut self, query: SuggestionQuery) {
+        self.query = query;
     }
 }

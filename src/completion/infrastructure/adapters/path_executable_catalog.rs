@@ -71,7 +71,7 @@ mod tests {
         let items = first_token_items(&specs, &aliases, &PathExecutableCatalog.executables(d.to_str(), None));
         let got: Vec<(&str, SuggestionKind, f64)> = items
             .iter()
-            .map(|s| (s.first(), s.kind, s.priority))
+            .map(|s| (s.first(), s.kind(), s.priority()))
             .collect();
         assert_eq!(
             got,
@@ -82,7 +82,7 @@ mod tests {
                 ("mytool", SuggestionKind::Subcommand, 40.0)
             ]
         );
-        assert_eq!(items[2].description.as_deref(), Some("git status"));
+        assert_eq!(items[2].description().as_deref(), Some("git status"));
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

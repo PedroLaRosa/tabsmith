@@ -60,7 +60,7 @@ pub(crate) fn names(v: &[(SuggestionCandidate, bool)]) -> Vec<String> {
         .map(|(s, _)| {
             format!(
                 "{}{}",
-                if s.kind == SuggestionKind::AutoExecute {
+                if s.kind() == SuggestionKind::AutoExecute {
                     "!"
                 } else {
                     ""

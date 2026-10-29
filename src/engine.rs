@@ -1417,7 +1417,7 @@ mod tests {
         assert_eq!(
             e.first_token_items(&aliases, None, None)
                 .iter()
-                .map(|s| s.names[0].as_str())
+                .map(|s| s.names()[0].as_str())
                 .collect::<Vec<_>>(),
             ["zzal"]
         );

@@ -21,9 +21,9 @@ pub(crate) fn first_token_items(
     let mut out = Vec::new();
     let mut push = |name: &str, kind: SuggestionKind, priority: f64, description: Option<&String>| {
         if !name.is_empty() && seen.insert(name.to_string()) {
-            let mut s = SuggestionCandidate::new(name, kind);
-            s.priority = priority;
-            s.description = description.cloned();
+            let s = SuggestionCandidate::new(name, kind)
+                .with_priority(priority)
+                .with_description(description.cloned());
             out.push(s);
         }
     };
@@ -55,9 +55,9 @@ mod tests {
 
         let rows: Vec<(&str, SuggestionKind, f64)> = items
             .iter()
-            .map(|s| (s.first(), s.kind, s.priority))
+            .map(|s| (s.first(), s.kind(), s.priority()))
             .collect();
-        let shortcut_description = items[2].description.as_deref();
+        let shortcut_description = items[2].description().as_deref();
         assert_eq!(
             (rows, shortcut_description),
             (

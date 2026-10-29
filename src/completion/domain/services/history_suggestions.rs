@@ -33,15 +33,14 @@ pub(crate) fn history_rows(prefix: &str, entries: &[HistoryEntry]) -> Vec<Sugges
         .filter(|n| seen.insert(*n))
         .map(|n| {
             let f = freq.get(&first_word(n)).copied().unwrap_or(0);
-            let mut s = SuggestionCandidate::new(n, SuggestionKind::History);
-            s.description = Some("past command".into());
-            s.insert_value = Some(n.to_string());
-            s.priority = if f > 1 {
-                75.0 + f.min(10) as f64 / 10.0
-            } else {
-                50.0
-            };
-            s
+            SuggestionCandidate::new(n, SuggestionKind::History)
+                .with_description(Some("past command".into()))
+                .with_insert_value(Some(n.to_string()))
+                .with_priority(if f > 1 {
+                    75.0 + f.min(10) as f64 / 10.0
+                } else {
+                    50.0
+                })
         })
         .collect()
 }
@@ -54,11 +53,11 @@ pub(crate) fn mix_history(spec: Vec<SuggestionCandidate>, hist: Vec<SuggestionCa
     }
     let mut by_word: HashMap<&str, f64> = HashMap::new();
     for h in &hist {
-        by_word.insert(h.first().split(' ').next().unwrap_or(""), h.priority);
+        by_word.insert(h.first().split(' ').next().unwrap_or(""), h.priority());
     }
     let existing: HashSet<&str> = spec
         .iter()
-        .flat_map(|s| s.names.iter().map(String::as_str))
+        .flat_map(|s| s.names().iter().map(String::as_str))
         .collect();
     let extra: Vec<SuggestionCandidate> = hist
         .iter()
@@ -68,13 +67,13 @@ pub(crate) fn mix_history(spec: Vec<SuggestionCandidate>, hist: Vec<SuggestionCa
     let mut out: Vec<SuggestionCandidate> = spec
         .iter()
         .map(|s| {
-            let mut s = s.clone();
-            s.priority = s
-                .names
+            let s = s.clone();
+            let priority = s
+                .names()
                 .iter()
                 .filter_map(|n| by_word.get(n.as_str()))
-                .fold(s.priority, |a, &b| a.max(b));
-            s
+                .fold(s.priority(), |a, &b| a.max(b));
+            s.with_priority(priority)
         })
         .collect();
     out.extend(extra);
@@ -100,7 +99,7 @@ mod tests {
             e("ls"),
         ];
         let rows = history_rows("git ", &hist);
-        let got: Vec<(&str, f64)> = rows.iter().map(|s| (s.first(), s.priority)).collect();
+        let got: Vec<(&str, f64)> = rows.iter().map(|s| (s.first(), s.priority())).collect();
         assert_eq!(
             got,
             [
@@ -109,13 +108,13 @@ mod tests {
                 ("checkout dev", 75.3)
             ]
         );
-        assert_eq!(rows[0].insert_value.as_deref(), Some("checkout main"));
+        assert_eq!(rows[0].insert_value().as_deref(), Some("checkout main"));
         let spec = vec![
             SuggestionCandidate::new("checkout", SuggestionKind::Subcommand),
             SuggestionCandidate::new("status", SuggestionKind::Subcommand),
         ];
         let mixed = mix_history(spec.clone(), rows.clone(), true);
-        let got: Vec<(&str, f64)> = mixed.iter().map(|s| (s.first(), s.priority)).collect();
+        let got: Vec<(&str, f64)> = mixed.iter().map(|s| (s.first(), s.priority())).collect();
         assert_eq!(
             got,
             [

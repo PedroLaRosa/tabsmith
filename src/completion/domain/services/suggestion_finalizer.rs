@@ -31,9 +31,9 @@ fn highlight(s: &SuggestionCandidate, q: &str, fuzzy: bool) -> Vec<usize> {
     if q.is_empty() {
         return Vec::new();
     }
-    let segs: Vec<&str> = match &s.display_name {
+    let segs: Vec<&str> = match s.display_name() {
         Some(d) => vec![d.as_str()],
-        None => s.names.iter().map(String::as_str).collect(),
+        None => s.names().iter().map(String::as_str).collect(),
     };
     let mut offsets = Vec::with_capacity(segs.len());
     let mut off = 0;
@@ -61,23 +61,23 @@ fn highlight(s: &SuggestionCandidate, q: &str, fuzzy: bool) -> Vec<usize> {
 
 /// Final dropdown row with its insertion precomputed.
 pub(crate) fn to_item(s: SuggestionCandidate, prefix_match: bool, c: &InsertionContext) -> Suggestion {
-    let query = s.query.of(c.search_term);
+    let query = s.query().of(c.search_term);
     Suggestion::new(SuggestionParts {
         insert: insertion(&s, c),
         highlight: highlight(&s, &query, c.fuzzy),
-        args_hint: args_hint(&s.args),
+        args_hint: args_hint(s.args()),
         query,
-        names: s.names,
-        display_name: s.display_name,
-        description: s.description,
-        kind: s.kind,
-        original_kind: s.original_kind,
-        priority: s.priority,
-        is_dangerous: s.is_dangerous,
-        generator: s.generator,
+        names: s.names().clone(),
+        display_name: s.display_name().clone(),
+        description: s.description().clone(),
+        kind: s.kind(),
+        original_kind: s.original_kind(),
+        priority: s.priority(),
+        is_dangerous: s.is_dangerous(),
+        generator: s.generator(),
         prefix_match,
-        template_type: s.template_type,
-        icon: s.icon,
+        template_type: s.template_type().clone(),
+        icon: s.icon().clone(),
     })
 }
 
@@ -90,17 +90,17 @@ mod tests {
 
     #[test]
     fn item_highlight_and_hint() {
-        let mut s = SuggestionCandidate::new("-m", SuggestionKind::Option);
-        s.names.push("--message".into());
-        s.args = vec![
-            Rc::new(Arg::default().with_name(Some("msg".into()))),
-            Rc::new(
-                Arg::default()
-                    .with_name(Some("more".into()))
-                    .with_is_optional(true)
-                    .with_is_variadic(true),
-            ),
-        ];
+        let s = SuggestionCandidate::new("-m", SuggestionKind::Option)
+            .with_names(vec!["-m".into(), "--message".into()])
+            .with_args(vec![
+                Rc::new(Arg::default().with_name(Some("msg".into()))),
+                Rc::new(
+                    Arg::default()
+                        .with_name(Some("more".into()))
+                        .with_is_optional(true)
+                        .with_is_variadic(true),
+                ),
+            ]);
         let it = to_item(s, true, &ctx("--m", "--m", Shell::Bash));
         assert_eq!(it.title(), "-m, --message");
         assert_eq!(it.highlight(), [4, 5, 6]);

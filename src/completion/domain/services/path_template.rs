@@ -190,8 +190,7 @@ mod tests {
             ("ma".into(), "c".into(), "ma".into())
         );
         assert_eq!(SuggestionQuery::Path { backslash: false }.of("a\\b/c\\d"), "c\\d");
-        let mut main = SuggestionCandidate::new("main.rs", SuggestionKind::File);
-        main.query = q;
+        let main = SuggestionCandidate::new("main.rs", SuggestionKind::File).with_query(q);
         let i = insertion(&main, &ctx("src\\ma", "src\\ma", Shell::Pwsh));
         assert_eq!((i.delete(), i.text()), (0, "in.rs"));
         let i = insertion(&main, &ctx("src\\MA", "src\\MA", Shell::Pwsh));

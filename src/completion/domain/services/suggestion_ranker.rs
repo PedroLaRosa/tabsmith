@@ -16,25 +16,25 @@ pub(crate) fn update_priorities(list: &mut [SuggestionCandidate], recency: Optio
             .copied()
             .filter(|&ms| ms != 0);
         let boost = rec.map_or(0.0, |ms| ms as f64 / 1e13);
-        let mut p = if s.priority == 0.0 { 50.0 } else { s.priority }; // 0 is treated as unset, i.e. 50
-        if s.kind != SuggestionKind::AutoExecute {
+        let mut p = if s.priority() == 0.0 { 50.0 } else { s.priority() }; // 0 is treated as unset, i.e. 50
+        if s.kind() != SuggestionKind::AutoExecute {
             p = p.clamp(0.0, 100.0);
         }
-        s.priority = if rec.is_some() && (50.0..=75.0).contains(&p) {
+        s.set_priority(if rec.is_some() && (50.0..=75.0).contains(&p) {
             75.0 + boost
         } else {
             p + boost
-        };
+        });
     }
 }
 
 fn same_row(a: &SuggestionCandidate, b: &SuggestionCandidate) -> bool {
     // ponytail: args compared by identity (not deep-compared); distinct specs never share names anyway
-    a.names == b.names
-        && a.insert_value == b.insert_value
-        && a.display_name == b.display_name
-        && a.args.len() == b.args.len()
-        && a.args.iter().zip(&b.args).all(|(x, y)| Rc::ptr_eq(x, y))
+    a.names() == b.names()
+        && a.insert_value() == b.insert_value()
+        && a.display_name() == b.display_name()
+        && a.args().len() == b.args().len()
+        && a.args().iter().zip(b.args()).all(|(x, y)| Rc::ptr_eq(x, y))
 }
 
 /// Keep the first of rows equal in (names, insertValue, displayName, args).
@@ -57,8 +57,8 @@ pub(crate) fn rank(
 ) -> Vec<(SuggestionCandidate, bool)> {
     update_priorities(&mut list, recency);
     list.sort_by(|a, b| {
-        b.priority
-            .partial_cmp(&a.priority)
+        b.priority()
+            .partial_cmp(&a.priority())
             .unwrap_or(Ordering::Equal)
     });
     let out = filter(list, search_term, o);
@@ -76,8 +76,7 @@ mod tests {
 
     #[test]
     fn dedupe_only_up_to_50() {
-        let mut d = SuggestionCandidate::new("dup", SuggestionKind::Arg);
-        d.display_name = Some("dup".into());
+        let d = SuggestionCandidate::new("dup", SuggestionKind::Arg).with_display_name(Some("dup".into()));
         // name and display name both match → pushed twice, deduped
         let out = rank(vec![d.clone()], "du", None, &opts());
         assert_eq!(names(&out), ["dup"]);
@@ -99,21 +98,21 @@ mod tests {
             SuggestionCandidate::new("c", SuggestionKind::Arg),
             SuggestionCandidate::new("../", SuggestionKind::Folder),
         ];
-        list[1].priority = 80.0;
-        list[2].priority = 0.0;
+        list[1].set_priority(80.0);
+        list[2].set_priority(0.0);
         update_priorities(&mut list, Some(&rec));
-        assert!((list[0].priority - 75.17).abs() < 1e-9);
-        assert!((list[1].priority - 80.17).abs() < 1e-9);
-        assert_eq!(list[2].priority, 50.0);
-        assert_eq!(list[3].priority, 50.0);
+        assert!((list[0].priority() - 75.17).abs() < 1e-9);
+        assert!((list[1].priority() - 80.17).abs() < 1e-9);
+        assert_eq!(list[2].priority(), 50.0);
+        assert_eq!(list[3].priority(), 50.0);
         // alphabetical → no recency map
         let mut list = vec![SuggestionCandidate::new("a", SuggestionKind::Arg)];
         update_priorities(&mut list, None);
-        assert_eq!(list[0].priority, 50.0);
+        assert_eq!(list[0].priority(), 50.0);
         // auto-execute is not clamped
         let mut list = vec![SuggestionCandidate::new("↪", SuggestionKind::AutoExecute)];
-        list[0].priority = 150.0;
+        list[0].set_priority(150.0);
         update_priorities(&mut list, None);
-        assert_eq!(list[0].priority, 150.0);
+        assert_eq!(list[0].priority(), 150.0);
     }
 }

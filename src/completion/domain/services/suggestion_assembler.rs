@@ -61,7 +61,7 @@ fn static_options(pr: &ParsedCommandLine) -> Vec<SuggestionCandidate> {
         }
         let mut s = SuggestionCandidate::from_opt(o, pr.directives().option_arg_separators());
         if o.names().iter().any(|n| unmet.contains(n.as_str())) {
-            s.priority = 75.0;
+            s = s.with_priority(75.0);
         }
         out.push(s);
     }
@@ -71,7 +71,7 @@ fn static_options(pr: &ParsedCommandLine) -> Vec<SuggestionCandidate> {
 
 /// `-x` short name of an option row.
 fn short_name(s: &SuggestionCandidate) -> Option<String> {
-    s.names
+    s.names()
         .iter()
         .find(|n| n.starts_with('-') && !n.starts_with("--") && n.chars().count() == 2)
         .cloned()
@@ -133,7 +133,7 @@ fn option_chain(list: Vec<SuggestionCandidate>, options: &[SuggestionCandidate],
     };
     let mut list: Vec<SuggestionCandidate> = list
         .into_iter()
-        .filter(|s| matches!(s.kind, SuggestionKind::Option | SuggestionKind::Arg))
+        .filter(|s| matches!(s.kind(), SuggestionKind::Option | SuggestionKind::Arg))
         .collect();
     if !options_flag {
         if let Some(o) = options
@@ -144,21 +144,22 @@ fn option_chain(list: Vec<SuggestionCandidate>, options: &[SuggestionCandidate],
         }
     }
     for s in &mut list {
-        if s.kind == SuggestionKind::Arg {
-            s.query = SuggestionQuery::Value(String::new());
+        if s.kind() == SuggestionKind::Arg {
+            s.set_query(SuggestionQuery::Value(String::new()));
             continue;
         }
         let Some(short) = short_name(s) else { continue };
         if short == last {
-            for n in &mut s.names {
-                if *n == short {
-                    *n = chain.to_string();
-                }
-            }
+            let names = s
+                .names()
+                .iter()
+                .map(|n| if *n == short { chain.to_string() } else { n.clone() })
+                .collect();
+            s.set_names(names);
         } else {
             let name = format!("{chain}{}", &short[1..]);
-            s.names = vec![name.clone()];
-            s.insert_value = Some(name);
+            s.set_names(vec![name.clone()]);
+            s.set_insert_value(Some(name));
         }
     }
     list
@@ -195,7 +196,7 @@ mod tests {
             Rc::new(opt(&["-v"]).with_is_repeatable(Repeatability::Unlimited)),
         ];
         let out = assemble(&ParsedCommandLine::new(pr), &[]);
-        let got: Vec<(&str, f64)> = out.iter().map(|s| (s.first(), s.priority)).collect();
+        let got: Vec<(&str, f64)> = out.iter().map(|s| (s.first(), s.priority())).collect();
         // subcommands alphabetical; -a used once (gone), -b excluded, -c depended on → 75, -v repeatable
         assert_eq!(
             got,
@@ -225,7 +226,7 @@ mod tests {
         pr.option_chain = Some("-la".into());
         pr.annotations = vec![TokenAnnotation::new(AnnotationKind::Option, "-la".into(), vec![])];
         let out = assemble(&ParsedCommandLine::new(pr), &[]);
-        let got: Vec<Vec<String>> = out.iter().map(|s| s.names.clone()).collect();
+        let got: Vec<Vec<String>> = out.iter().map(|s| s.names().clone()).collect();
         assert_eq!(
             got,
             [
@@ -234,7 +235,7 @@ mod tests {
                 vec!["-lah".into()]
             ]
         );
-        assert_eq!(out[2].insert_value.as_deref(), Some("-lah"));
+        assert_eq!(out[2].insert_value().as_deref(), Some("-lah"));
         assert_eq!(
             names(&rank(out, "-la", None, &opts())),
             ["!-la", "-la", "-lah"]

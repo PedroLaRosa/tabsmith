@@ -11,7 +11,7 @@ use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 /// `getNameMatch`: which alias to insert.
 fn name_match(s: &SuggestionCandidate, q: &str, fuzzy: bool, verbose: bool) -> Option<String> {
     let pick = |names: Vec<&String>| -> Option<String> {
-        if verbose && matches!(s.kind, SuggestionKind::Option | SuggestionKind::Subcommand) {
+        if verbose && matches!(s.kind(), SuggestionKind::Option | SuggestionKind::Subcommand) {
             let mut best: Option<&String> = None;
             for n in names {
                 if n.chars().count() > best.map_or(0, |b| b.chars().count()) {
@@ -24,7 +24,7 @@ fn name_match(s: &SuggestionCandidate, q: &str, fuzzy: bool, verbose: bool) -> O
         }
     };
     let matched: Vec<&String> = s
-        .names
+        .names()
         .iter()
         .filter(|n| {
             if fuzzy {
@@ -34,10 +34,10 @@ fn name_match(s: &SuggestionCandidate, q: &str, fuzzy: bool, verbose: bool) -> O
             }
         })
         .collect();
-    if !matched.is_empty() || s.display_name.is_none() {
+    if !matched.is_empty() || s.display_name().is_none() {
         pick(matched)
     } else {
-        pick(s.names.iter().collect())
+        pick(s.names().iter().collect())
     }
 }
 
@@ -152,19 +152,19 @@ fn escape_in_quote(s: &str, q: char, shell: Shell) -> String {
 
 /// Precomputed full insertion for a row (SPEC §6.8, D22/D25).
 pub(crate) fn insertion(s: &SuggestionCandidate, c: &InsertionContext) -> Insertion {
-    let q = s.query.of(c.search_term);
+    let q = s.query().of(c.search_term);
     let raw: Vec<char> = c.raw.chars().collect();
     let (logical, open) = unquote(&raw, c.shell);
     // special (`help` template) rows replace the typed prefix like any other row
-    let delete = if s.kind == SuggestionKind::AutoExecute {
+    let delete = if s.kind() == SuggestionKind::AutoExecute {
         0
     } else if q == c.search_term {
         raw.len()
-    } else if let SuggestionQuery::Str(g) = &s.query {
+    } else if let SuggestionQuery::Str(g) = s.query() {
         c.raw[c.raw.rfind(g.as_str()).map_or(0, |i| i + g.len())..]
             .chars()
             .count()
-    } else if let SuggestionQuery::Path { backslash } = s.query {
+    } else if let SuggestionQuery::Path { backslash } = *s.query() {
         c.raw[after_sep(c.raw, backslash)..].chars().count()
     } else {
         // function getQueryTerm: delete the raw chars that spell q's logical chars (quotes/escapes included);
@@ -189,10 +189,10 @@ pub(crate) fn insertion(s: &SuggestionCandidate, c: &InsertionContext) -> Insert
         .filter(|&(_, i)| i < raw.len() - delete)
         .map(|(q, _)| q);
     let (folder, path) = (
-        s.kind == SuggestionKind::Folder,
-        matches!(s.kind, SuggestionKind::File | SuggestionKind::Folder),
+        s.kind() == SuggestionKind::Folder,
+        matches!(s.kind(), SuggestionKind::File | SuggestionKind::Folder),
     );
-    let mut text = match &s.insert_value {
+    let mut text = match s.insert_value() {
         Some(v) if !path => v.clone(),
         _ => match name_match(s, &q, c.fuzzy, c.prefer_verbose).filter(|m| !m.is_empty()) {
             None => String::new(),
@@ -201,14 +201,14 @@ pub(crate) fn insertion(s: &SuggestionCandidate, c: &InsertionContext) -> Insert
                     // a file closes the quote; a folder leaves it open for the next segment
                     (Some(qc), sh) => {
                         let mut t = escape_in_quote(&m, qc, sh);
-                        t.extend((s.kind == SuggestionKind::File).then_some(qc));
+                        t.extend((s.kind() == SuggestionKind::File).then_some(qc));
                         t
                     }
                     (None, Shell::Pwsh) => escape_pwsh(&m, folder, quote, path),
                     (None, sh) => escape_posix(&m, folder, quote, path, sh),
                 };
                 // only the name is escaped: `--out=` keeps its separator and the cursor outside any quote
-                match &s.separator {
+                match s.separator() {
                     Some(sep) => format!("{name}{sep}{{cursor}}"),
                     None => name,
                 }
@@ -220,7 +220,7 @@ pub(crate) fn insertion(s: &SuggestionCandidate, c: &InsertionContext) -> Insert
         text.truncate(n);
         text.push('\n');
     }
-    if !text.ends_with('\n') && s.should_add_space && c.insert_space {
+    if !text.ends_with('\n') && s.should_add_space() && c.insert_space {
         text.push(' ');
     }
     let mut delete = delete;
@@ -257,12 +257,10 @@ mod tests {
 
     #[test]
     fn insertion_examples() {
-        let mut status = SuggestionCandidate::new("status", SuggestionKind::Subcommand);
-        status.should_add_space = true;
+        let status = SuggestionCandidate::new("status", SuggestionKind::Subcommand).with_should_add_space(true);
         let i = insertion(&status, &ctx("st", "st", Shell::Bash));
         assert_eq!((i.delete(), i.text()), (0, "atus "));
-        let mut checkout = SuggestionCandidate::new("checkout", SuggestionKind::Subcommand);
-        checkout.should_add_space = true;
+        let checkout = SuggestionCandidate::new("checkout", SuggestionKind::Subcommand).with_should_add_space(true);
         assert_eq!(
             insertion(&checkout, &ctx("ch", "ch", Shell::Zsh)).text(),
             "eckout "
@@ -271,9 +269,9 @@ mod tests {
         let i = insertion(&checkout, &ctx("CH", "CH", Shell::Zsh));
         assert_eq!((i.delete(), i.text()), (2, "checkout "));
         // requiresSeparator + mandatory arg: `--out= ` with the cursor right after `=`
-        let mut out = SuggestionCandidate::new("--out", SuggestionKind::Option);
-        out.separator = Some("=".into());
-        out.should_add_space = true;
+        let out = SuggestionCandidate::new("--out", SuggestionKind::Option)
+            .with_separator(Some("=".into()))
+            .with_should_add_space(true);
         let i = insertion(&out, &ctx("", "", Shell::Bash));
         assert_eq!(
             i,
@@ -301,19 +299,17 @@ mod tests {
         };
         assert_eq!(insertion(&checkout, &c).text(), "eckout");
         // escaped space in the raw token
-        let mut dir = SuggestionCandidate::new("my dir/", SuggestionKind::Folder);
-        dir.insert_value = Some("my dir/".into());
-        dir.query = SuggestionQuery::Str("/".into());
+        let dir = SuggestionCandidate::new("my dir/", SuggestionKind::Folder)
+            .with_insert_value(Some("my dir/".into()))
+            .with_query(SuggestionQuery::Str("/".into()));
         let i = insertion(&dir, &ctx("my di", "my\\ di", Shell::Bash));
         assert_eq!((i.delete(), i.text()), (6, "my\\ dir/"));
         // quoted raw token
-        let mut file = SuggestionCandidate::new("my file", SuggestionKind::File);
-        file.query = SuggestionQuery::Str("/".into());
+        let file = SuggestionCandidate::new("my file", SuggestionKind::File).with_query(SuggestionQuery::Str("/".into()));
         let i = insertion(&file, &ctx("my fi", "'my fi", Shell::Bash));
         assert_eq!((i.delete(), i.text()), (6, "'my file'"));
         // getQueryTerm "/": only the part after the last "/" is deleted / not retyped
-        let mut main = SuggestionCandidate::new("main.rs", SuggestionKind::File);
-        main.query = SuggestionQuery::Str("/".into());
+        let main = SuggestionCandidate::new("main.rs", SuggestionKind::File).with_query(SuggestionQuery::Str("/".into()));
         let i = insertion(&main, &ctx("src/ma", "src/ma", Shell::Bash));
         assert_eq!((i.delete(), i.text()), (0, "in.rs"));
         // POSIX special chars → single quotes, embedded quote escaped
@@ -346,8 +342,7 @@ mod tests {
         let i = insertion(&out, &ctx("", "", Shell::Pwsh));
         assert_eq!((i.text(), i.cursor_back()), ("--out= ", 1));
         // insertValue verbatim with {cursor}; "\n" → execute; auto-execute deletes nothing
-        let mut iv = SuggestionCandidate::new("x", SuggestionKind::Arg);
-        iv.insert_value = Some("a{cursor}b\n\n".into());
+        let iv = SuggestionCandidate::new("x", SuggestionKind::Arg).with_insert_value(Some("a{cursor}b\n\n".into()));
         assert_eq!(
             insertion(&iv, &ctx("x", "x", Shell::Bash)),
             Insertion::new(InsertionParts {
@@ -368,14 +363,10 @@ mod tests {
             })
         );
         // option chain arg rows: query "" → nothing deleted
-        let mut a = SuggestionCandidate::new("val", SuggestionKind::Arg);
-        a.query = SuggestionQuery::Value(String::new());
+        let a = SuggestionCandidate::new("val", SuggestionKind::Arg).with_query(SuggestionQuery::Value(String::new()));
         assert_eq!(insertion(&a, &ctx("-la", "-la", Shell::Bash)).delete(), 0);
         // preferVerboseSuggestions
-        let o = SuggestionCandidate {
-            names: vec!["-m".into(), "--message".into()],
-            ..SuggestionCandidate::new("", SuggestionKind::Option)
-        };
+        let o = SuggestionCandidate::new("", SuggestionKind::Option).with_names(vec!["-m".into(), "--message".into()]);
         assert_eq!(insertion(&o, &ctx("", "", Shell::Bash)).text(), "-m");
         let c = InsertionContext {
             prefer_verbose: true,
@@ -410,8 +401,7 @@ mod tests {
                 "{name:?} → {i:?}"
             );
         }
-        let mut generator = SuggestionCandidate::new("x", SuggestionKind::Arg);
-        generator.insert_value = Some("dev\rrm -rf ~\n".into());
+        let generator = SuggestionCandidate::new("x", SuggestionKind::Arg).with_insert_value(Some("dev\rrm -rf ~\n".into()));
         assert_eq!(
             insertion(&generator, &ctx("", "", Shell::Bash)),
             Insertion::new(InsertionParts {
@@ -427,10 +417,7 @@ mod tests {
         let i = insertion(&build, &ctx("BU", "BU", Shell::Bash));
         assert_eq!((i.delete(), i.text()), (2, "build"));
         // open-quote-escaping: inside a quote opened before the replaced segment, escape for that quote
-        let path = |name: &str, kind| SuggestionCandidate {
-            query: SuggestionQuery::Path { backslash: false },
-            ..SuggestionCandidate::new(name, kind)
-        };
+        let path = |name: &str, kind| SuggestionCandidate::new(name, kind).with_query(SuggestionQuery::Path { backslash: false });
         let file = path("x y.txt", SuggestionKind::File);
         let i = insertion(&file, &ctx("my dir/x", "\"my dir/x", Shell::Zsh));
         assert_eq!((i.delete(), i.text()), (0, " y.txt\""));
@@ -521,10 +508,7 @@ mod tests {
             "'it\\'s\\\\'"
         );
         // a separator stays outside the escaping (`--out=` + cursor), even when the name needs quotes
-        let sep = SuggestionCandidate {
-            separator: Some("=".into()),
-            ..SuggestionCandidate::new("--a;b", SuggestionKind::Option)
-        };
+        let sep = SuggestionCandidate::new("--a;b", SuggestionKind::Option).with_separator(Some("=".into()));
         assert_eq!(
             insertion(&sep, &ctx("", "", Shell::Bash)),
             Insertion::new(InsertionParts {
@@ -567,20 +551,14 @@ mod tests {
             text(SuggestionCandidate::new("a$b'(c)/", SuggestionKind::Folder), Shell::Pwsh),
             "a`$b`'`(c`)/"
         );
-        let file = SuggestionCandidate {
-            query: SuggestionQuery::Path { backslash: true },
-            ..SuggestionCandidate::new("a b.txt", SuggestionKind::File)
-        };
+        let file = SuggestionCandidate::new("a b.txt", SuggestionKind::File).with_query(SuggestionQuery::Path { backslash: true });
         let i = insertion(
             &file,
             &ctx("dir with space/", "dir` with` space/", Shell::Pwsh),
         );
         assert_eq!((i.delete(), i.text()), (0, "'a b.txt'"));
         // fn-queryterm-quoted-delete: a function getQueryTerm deletes the raw chars spelling the query
-        let fq = |name: &str, kind, q: &str| SuggestionCandidate {
-            query: SuggestionQuery::Value(q.into()),
-            ..SuggestionCandidate::new(name, kind)
-        };
+        let fq = |name: &str, kind, q: &str| SuggestionCandidate::new(name, kind).with_query(SuggestionQuery::Value(q.into()));
         for (raw, sh) in [
             ("\"dir with space/sub d", Shell::Zsh),
             ("'dir with space/sub d", Shell::Bash),
@@ -626,10 +604,7 @@ mod tests {
         );
         assert_eq!((i.delete(), i.text()), (5, "it''s.txt'"));
         // dq-bang-history-expansion: `!` inside bash/zsh double quotes; fish has no backtick escape there
-        let path = |name: &str| SuggestionCandidate {
-            query: SuggestionQuery::Path { backslash: false },
-            ..SuggestionCandidate::new(name, SuggestionKind::File)
-        };
+        let path = |name: &str| SuggestionCandidate::new(name, SuggestionKind::File).with_query(SuggestionQuery::Path { backslash: false });
         for sh in [Shell::Bash, Shell::Zsh] {
             assert_eq!(
                 insertion(&path("wow!x"), &ctx("d/", "\"d/", sh)).text(),

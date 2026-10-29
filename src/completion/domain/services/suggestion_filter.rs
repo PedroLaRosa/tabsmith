@@ -48,11 +48,10 @@ pub(crate) fn partial(names: &[String], q: &str, fuzzy: bool) -> Option<(f64, bo
 }
 
 pub(crate) fn auto_exec(name: &str, description: &str, original: Option<SuggestionKind>) -> SuggestionCandidate {
-    let mut s = SuggestionCandidate::new(name, SuggestionKind::AutoExecute);
-    s.original_kind = original;
-    s.insert_value = Some("\n".into());
-    s.description = Some(description.into());
-    s
+    SuggestionCandidate::new(name, SuggestionKind::AutoExecute)
+        .with_original_kind(original)
+        .with_insert_value(Some("\n".into()))
+        .with_description(Some(description.into()))
 }
 
 /// `filterSuggestions`: exact (non-folder A, folder B) then partial (C by score, priority). Input must be
@@ -62,7 +61,7 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
         // nothing typed: nothing prefix-matched, so no spec ghost (SPEC §6.11)
         let mut out: Vec<(SuggestionCandidate, bool)> = list
             .into_iter()
-            .filter(|s| !s.hidden)
+            .filter(|s| !s.hidden())
             .map(|s| (s, false))
             .collect();
         if o.exec_after_space && !out.is_empty() && !o.auto_exec_hidden {
@@ -75,37 +74,39 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
     let mut c: Vec<(SuggestionCandidate, f64, bool)> = Vec::new();
     let mut added = false;
     for s in list {
-        let q = s.query.of(search_term);
-        let folder = s.kind == SuggestionKind::Folder;
+        let q = s.query().of(search_term);
+        let folder = s.kind() == SuggestionKind::Folder;
         let qx = if folder { format!("{q}/") } else { q.clone() }.to_lowercase();
-        if let Some(exact) = s.names.iter().find(|n| n.to_lowercase() == qx).cloned() {
-            let plain = s.names.first().is_none_or(|n| n.is_empty())
-                || s.insert_value.is_none()
-                || s.names.first() == s.insert_value.as_ref();
+        if let Some(exact) = s.names().iter().find(|n| n.to_lowercase() == qx).cloned() {
+            let plain = s.names().first().is_none_or(|n| n.is_empty())
+                || s.insert_value().is_none()
+                || s.names().first() == s.insert_value().as_ref();
             if !added
                 && !o.auto_exec_hidden
                 && plain
-                && (!s.is_dangerous || o.run_dangerous)
-                && s.args.first().is_none_or(|a| a.is_optional())
+                && (!s.is_dangerous() || o.run_dangerous)
+                && s.args().first().is_none_or(|a| a.is_optional())
             {
-                let mut x = s.clone();
-                x.kind = SuggestionKind::AutoExecute;
-                x.original_kind = Some(s.kind);
+                let mut x = s
+                    .clone()
+                    .with_kind(SuggestionKind::AutoExecute)
+                    .with_original_kind(Some(s.kind()));
                 if folder {
-                    x.names = vec![exact.strip_suffix('/').unwrap_or(&exact).to_string()];
-                    x.description = Some("folder".into());
+                    x = x
+                        .with_names(vec![exact.strip_suffix('/').unwrap_or(&exact).to_string()])
+                        .with_description(Some("folder".into()));
                 }
-                x.insert_value = Some("\n".into());
+                x = x.with_insert_value(Some("\n".into()));
                 a.push((x, false));
                 added = true;
             }
             if folder { &mut b } else { &mut a }.push((s.clone(), true));
-        } else if !s.hidden {
-            if let Some((score, p)) = partial(&s.names, &q, o.fuzzy) {
+        } else if !s.hidden() {
+            if let Some((score, p)) = partial(s.names(), &q, o.fuzzy) {
                 c.push((s.clone(), score, p));
             }
         }
-        if let Some(d) = &s.display_name {
+        if let Some(d) = s.display_name() {
             if let Some((score, p)) = partial(std::slice::from_ref(d), &q, o.fuzzy) {
                 c.push((s, score, p)); // possible duplicate, removed by dedupe (≤ 50)
             }
@@ -113,8 +114,8 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
     }
     c.sort_by(|x, y| {
         y.1.partial_cmp(&x.1).unwrap_or(Ordering::Equal).then(
-            y.0.priority
-                .partial_cmp(&x.0.priority)
+            y.0.priority()
+                .partial_cmp(&x.0.priority())
                 .unwrap_or(Ordering::Equal),
         )
     });
@@ -127,7 +128,7 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
         let folders = search_term.ends_with('/')
             && out
                 .iter()
-                .any(|(s, _)| s.template_type.as_deref() == Some("folders"));
+                .any(|(s, _)| s.template_type().as_deref() == Some("folders"));
         if search_term == "." || folders {
             let name = if search_term == "." { "." } else { "↪" };
             out.insert(
@@ -193,43 +194,37 @@ mod tests {
         };
         assert_eq!(names(&filter(list, "foo", &o)), ["foo", "foo/", "foobar"]);
         // dangerous / mandatory arg → no auto-execute row; dangerous allowed by setting
-        let mut d = SuggestionCandidate::new("rm", SuggestionKind::Subcommand);
-        d.is_dangerous = true;
+        let d = SuggestionCandidate::new("rm", SuggestionKind::Subcommand).with_is_dangerous(true);
         assert_eq!(names(&filter(vec![d.clone()], "rm", &opts())), ["rm"]);
         let o = FilterOptions {
             run_dangerous: true,
             ..opts()
         };
         assert_eq!(names(&filter(vec![d], "rm", &o)), ["!rm", "rm"]);
-        let mut m = SuggestionCandidate::new("commit", SuggestionKind::Subcommand);
-        m.args = vec![arg(false)];
+        let m = SuggestionCandidate::new("commit", SuggestionKind::Subcommand).with_args(vec![arg(false)]);
         assert_eq!(
             names(&filter(vec![m.clone()], "commit", &opts())),
             ["commit"]
         );
-        m.args = vec![arg(true)];
+        let m = m.with_args(vec![arg(true)]);
         assert_eq!(
             names(&filter(vec![m], "commit", &opts())),
             ["!commit", "commit"]
         );
         // insertValue differing from the name → no auto-execute
-        let mut iv = SuggestionCandidate::new("x", SuggestionKind::Arg);
-        iv.insert_value = Some("y".into());
+        let iv = SuggestionCandidate::new("x", SuggestionKind::Arg).with_insert_value(Some("y".into()));
         assert_eq!(names(&filter(vec![iv], "x", &opts())), ["x"]);
         // folder exact match: auto-execute named without "/"
         let out = filter(vec![SuggestionCandidate::new("src/", SuggestionKind::Folder)], "src", &opts());
         assert_eq!(names(&out), ["!src", "src/"]);
-        assert_eq!(out[0].0.description.as_deref(), Some("folder"));
+        assert_eq!(out[0].0.description().as_deref(), Some("folder"));
     }
 
     #[test]
     fn partial_sorted_by_score_then_priority() {
-        let mut a = SuggestionCandidate::new("CHeck", SuggestionKind::Arg);
-        a.priority = 90.0;
-        let mut b = SuggestionCandidate::new("check", SuggestionKind::Arg);
-        b.priority = 10.0;
-        let mut c = SuggestionCandidate::new("chmod", SuggestionKind::Arg);
-        c.priority = 80.0;
+        let a = SuggestionCandidate::new("CHeck", SuggestionKind::Arg).with_priority(90.0);
+        let b = SuggestionCandidate::new("check", SuggestionKind::Arg).with_priority(10.0);
+        let c = SuggestionCandidate::new("chmod", SuggestionKind::Arg).with_priority(80.0);
         // check/chmod tie on score −2 → priority decides; CHeck is −3
         assert_eq!(
             names(&filter(vec![a, b, c], "ch", &opts())),
@@ -260,14 +255,13 @@ mod tests {
     #[test]
     fn directory_and_current_token_rows() {
         let row = |s: &str| {
-            let mut x = SuggestionCandidate::new(s, SuggestionKind::Folder);
-            x.template_type = Some("folders".into());
-            x.query = SuggestionQuery::Str("/".into());
-            x
+            SuggestionCandidate::new(s, SuggestionKind::Folder)
+                .with_template_type(Some("folders".into()))
+                .with_query(SuggestionQuery::Str("/".into()))
         };
         let out = filter(vec![row("../"), row("./x/")], ".", &opts());
         assert_eq!(out[0].0.first(), ".");
-        assert_eq!(out[0].0.original_kind, Some(SuggestionKind::Folder));
+        assert_eq!(out[0].0.original_kind(), Some(SuggestionKind::Folder));
         let out = filter(vec![row("lib/")], "src/", &opts());
         assert_eq!(names(&out), ["!↪", "lib/"]);
         let o = FilterOptions {
@@ -277,7 +271,7 @@ mod tests {
         let out = filter(vec![SuggestionCandidate::new("main", SuggestionKind::Arg)], "ma", &o);
         assert_eq!(names(&out), ["!ma", "main"]);
         assert_eq!(
-            out[0].0.description.as_deref(),
+            out[0].0.description().as_deref(),
             Some("Enter the current argument")
         );
         let o = FilterOptions {
