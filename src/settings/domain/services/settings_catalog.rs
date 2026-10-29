@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// doctor.rs, parser.rs and specs.rs: `bool("autocomplete.developerMode", false)`.
+    /// doctor.rs, parser.rs and embedded_spec_bundle.rs: `bool("autocomplete.developerMode", false)`.
     #[test]
     fn should_default_developer_mode_to_off() {
         let settings = Settings::default();

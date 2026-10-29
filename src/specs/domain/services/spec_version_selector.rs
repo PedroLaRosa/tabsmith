@@ -58,11 +58,20 @@ mod tests {
 
     #[test]
     fn should_keep_equal_versions_in_their_input_order() {
-        let versions = ["v1.0.0", "0.1.0", "1.0.0"];
+        // 40 keys: below about 20, even sort_unstable keeps equal keys in order (it insertion-sorts).
+        let builds = 0..20;
+        let versions: Vec<String> = builds
+            .clone()
+            .flat_map(|build| [format!("2.0.0+{build}"), format!("v1.0.0+{build}")])
+            .collect();
 
-        let applied = versions_to_apply(versions, None);
+        let applied = versions_to_apply(versions.iter().map(String::as_str), None);
 
-        assert_eq!(applied, ["0.1.0", "v1.0.0", "1.0.0"]);
+        let expected: Vec<String> = ["v1.0.0", "2.0.0"]
+            .into_iter()
+            .flat_map(|release| builds.clone().map(move |build| format!("{release}+{build}")))
+            .collect();
+        assert_eq!(applied, expected);
     }
 
     #[test]
