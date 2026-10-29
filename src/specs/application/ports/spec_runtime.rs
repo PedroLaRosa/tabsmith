@@ -12,7 +12,7 @@ use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
 #[cfg(test)]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Runs spec functions, processes and sleeps as tasks, and waits for them.
 pub(crate) trait SpecRuntime {
@@ -30,6 +30,8 @@ pub(crate) trait SpecRuntime {
         tasks: &[TaskId],
         deadline: Instant,
     ) -> Result<Vec<Option<TaskOutcome>>, Interrupted>;
+    /// Drops tasks the caller no longer waits for.
+    fn forget(&self, tasks: &[TaskId]);
     /// Calls a spec function and reads its result by `call.kind()`.
     fn call(
         &self,
@@ -42,12 +44,14 @@ pub(crate) trait SpecRuntime {
 #[cfg(test)]
 type Answer = Box<dyn Fn(&SpecFunctionCall) -> Result<SpecFunctionResult, SpecError>>;
 
-/// Answers calls with the answers it was given, and records them, for tests.
+/// Answers calls with the answers it was given, and records them, for tests. Its tasks never finish.
+// ponytail: tasks only run or are unknown; Phase 6.4 adds scripted task completion when the generator tests need it.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct InMemorySpecRuntime {
     answers: HashMap<SpecFunctionRef, Answer>,
     calls: RefCell<Vec<SpecFunctionCall>>,
+    running: RefCell<HashSet<TaskId>>,
     next_task: Cell<TaskId>,
 }
 
@@ -70,6 +74,7 @@ impl InMemorySpecRuntime {
     fn start_task(&self) -> TaskId {
         let task = self.next_task.get();
         self.next_task.set(task + 1);
+        self.running.borrow_mut().insert(task);
         task
     }
 }
@@ -93,7 +98,22 @@ impl SpecRuntime for InMemorySpecRuntime {
         tasks: &[TaskId],
         _deadline: Instant,
     ) -> Result<Vec<Option<TaskOutcome>>, Interrupted> {
-        Ok(tasks.iter().map(|_| None).collect())
+        let running = self.running.borrow();
+        let outcome = |t: &TaskId| {
+            if running.contains(t) {
+                None
+            } else {
+                Some(Err(format!("unknown task {t}")))
+            }
+        };
+        Ok(tasks.iter().map(outcome).collect())
+    }
+
+    fn forget(&self, tasks: &[TaskId]) {
+        let mut running = self.running.borrow_mut();
+        for t in tasks {
+            running.remove(t);
+        }
     }
 
     fn call(
@@ -181,5 +201,20 @@ mod tests {
         let outcomes = runtime.wait(&tasks, Instant::now());
 
         assert_eq!(outcomes, Ok(vec![None, None, None]));
+    }
+
+    #[test]
+    fn should_give_unknown_for_a_forgotten_task() {
+        let runtime = InMemorySpecRuntime::default();
+        let running = runtime.start_sleep(100);
+        let forgotten = runtime.start_sleep(100);
+        runtime.forget(&[forgotten]);
+
+        let outcomes = runtime.wait(&[running, forgotten], Instant::now());
+
+        assert_eq!(
+            outcomes,
+            Ok(vec![None, Some(Err(format!("unknown task {forgotten}")))])
+        );
     }
 }
