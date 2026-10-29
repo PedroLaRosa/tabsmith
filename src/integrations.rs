@@ -12,7 +12,6 @@ use crate::shell_integration::application::integration_installer::IntegrationIns
 use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
 use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
-use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
 use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
 use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
@@ -37,16 +36,6 @@ pub struct SetupArgs {
     /// Force installation (e.g. as root)
     #[arg(long)]
     pub force: bool,
-}
-
-#[derive(Args)]
-pub struct UninstallArgs {
-    /// Do not prompt for confirmation
-    #[arg(long, short = 'y')]
-    pub no_confirm: bool,
-    /// Also remove ~/.tabsmith
-    #[arg(long)]
-    pub purge: bool,
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -106,11 +95,6 @@ fn legacy_installer() -> IntegrationInstaller {
         Arc::new(SystemClock),
         Rc::new(OsShellEnvironment),
     )
-}
-
-/// `[bash, zsh, fish]`, plus pwsh when it is on PATH (SPEC §2.6).
-fn default_shells() -> Vec<Shell> {
-    IntegrationTarget::All.shells(|| which("pwsh").is_some())
 }
 
 /// Install every integration of `shells` that is not installed. Ok(true) if something was installed.
@@ -193,58 +177,10 @@ fn manual_text(ctx: &IntegrationPaths, shells: &[Shell]) -> String {
     manual_install_instructions::text(ctx, shells)
 }
 
-pub fn uninstall(args: UninstallArgs) -> anyhow::Result<i32> {
-    if !args.no_confirm && !confirm("Are you sure want to continue uninstalling tabsmith? [Y/n] ")?
-    {
-        println!("Cancelled");
-        return Ok(1);
-    }
-    Ok(uninstall_all(
-        &integration_paths_from(&data_directory_from_env())?,
-        &default_shells(),
-        args.purge,
-    ))
-}
-
-/// Remove every integration of `shells` (and the data root on `purge`), carrying on past errors (SPEC §2.9): 1 if any.
-fn uninstall_all(ctx: &IntegrationPaths, shells: &[Shell], purge: bool) -> i32 {
-    let installer = legacy_installer();
-    let mut failed = installer
-        .apply(ctx, shells, |_| true, |i| installer.uninstall(ctx, i))
-        .map_err(|failures| eprintln!("{:#}", integration_failures_error(failures)))
-        .is_err();
-    if purge {
-        match std::fs::remove_dir_all(ctx.data_root()) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                eprintln!("Could not remove {}: {e}", ctx.data_root().display());
-                failed = true;
-            }
-            _ => {}
-        }
-    }
-    if failed {
-        println!("Uninstalled tabsmith with errors (see above).");
-        return 1;
-    }
-    println!("Uninstalled tabsmith.");
-    if purge {
-        println!("Restart open terminals to stop tabsmith in them.");
-    }
-    println!(
-        "Remove the binary with your package manager, or delete {}.",
-        ctx.binary()
-    );
-    0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-    #[cfg(unix)]
-    use crate::shell_integration::domain::value_objects::dotfile::PRE_MARKER;
-    #[cfg(unix)]
-    use crate::shell_integration::infrastructure::testing::integration_fixtures::{ctx, install_dotfiles};
 
     /// The file modes and the purge guard of this scenario are asserted in shared atomic_file.rs
     /// (`integrations_pre_cmd_file`); this half keeps the SessionCtx round trip.
@@ -265,30 +201,6 @@ mod tests {
             (back.env["A"].as_str(), back.alias.as_deref(), back.ts),
             ("1", Some("ll='ls -l'"), 7)
         );
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// A dotfile uninstall cannot clean (read-only) makes `uninstall` fail with 1, not claim success.
-    #[cfg(unix)]
-    #[test]
-    fn integrations_uninstall_reports_failure() {
-        use std::os::unix::fs::PermissionsExt;
-        if is_root() {
-            return;
-        }
-        let temp_dir = TempDir::new("uninstfail");
-        let dir = temp_dir.path().to_path_buf();
-        let c = ctx(&dir);
-        install_dotfiles(&c, &[Shell::Zsh]).unwrap();
-        let zshrc = c.home().join(".zshrc");
-        std::fs::set_permissions(&zshrc, std::fs::Permissions::from_mode(0o444)).unwrap();
-        assert_eq!(uninstall_all(&c, &[Shell::Zsh], false), 1);
-        assert!(std::fs::read_to_string(&zshrc)
-            .unwrap()
-            .contains(PRE_MARKER));
-        std::fs::set_permissions(&zshrc, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(uninstall_all(&c, &[Shell::Zsh], true), 0);
-        assert!(!c.data_root().exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 

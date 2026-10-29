@@ -10,6 +10,7 @@ use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_sh
 use crate::shell_integration::infrastructure::cli::init_command::{run_init_command, InitArgs};
 use crate::shell_integration::infrastructure::cli::integrations_command::{run_integrations_command, IntegrationsCmd};
 use crate::shell_integration::infrastructure::cli::should_launch_command::run_should_launch_command;
+use crate::shell_integration::infrastructure::cli::uninstall_command::{run_uninstall_command, UninstallArgs};
 use crate::shell_integration::infrastructure::shell_integration_module::{
     build_shell_integration_module, ShellIntegrationModule,
 };
@@ -53,7 +54,7 @@ enum Command {
     #[command(alias = "install")]
     Setup(integrations::SetupArgs),
     /// Uninstall tabsmith
-    Uninstall(integrations::UninstallArgs),
+    Uninstall(UninstallArgs),
     /// Show the version
     #[command(hide = true)]
     Version,
@@ -124,7 +125,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         Some(Command::Init(a)) => run_init_command(a, &shell_integration_module()),
         Some(Command::Doctor(a)) => doctor::run(a),
         Some(Command::Setup(a)) => integrations::setup(a),
-        Some(Command::Uninstall(a)) => integrations::uninstall(a),
+        Some(Command::Uninstall(a)) => run_uninstall_command(a, &shell_integration_module()),
         Some(Command::Version) => {
             println!("tabsmith {}", env!("CARGO_PKG_VERSION"));
             Ok(0)

@@ -1,22 +1,26 @@
 //! Fixtures shared by the shell integration tests: the paths every dotfile test installs into, the syntax check of
 //! a script in each installed checker of its shell, and a test driver over the production pieces. The driver only
-//! builds the installer over the files on disk, the system clock and the running system's shell facts, and
-//! delegates to it (and to the failures presenter): it holds no branching, formatting or text of its own, so every
-//! string a test asserts still comes from production code.
+//! builds the installer over the files on disk, the system clock and the running system's shell facts (and the
+//! uninstall use case over it and the data directory on disk), and delegates to them (and to the CLI's failures
+//! presenter and uninstall report): it holds no branching, formatting or text of its own, so every string a test
+//! asserts still comes from production code.
 use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shell_integration::application::integration_installer::IntegrationInstaller;
+use crate::shell_integration::application::uninstall_tabsmith_use_case::UninstallTabsmithUseCase;
 use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
+use crate::shell_integration::infrastructure::adapters::file_data_directory_purger::FileDataDirectoryPurger;
 use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
 use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
+use crate::shell_integration::infrastructure::cli::uninstall_command::uninstall_and_report;
 use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
@@ -143,6 +147,17 @@ pub(crate) fn uninstall_dotfiles(paths: &IntegrationPaths, shells: &[Shell]) -> 
     installer()
         .uninstall_traced(paths, shells)
         .map_err(integration_failures_error)
+}
+
+/// Uninstall every integration of `shells` (and purge the data root of `paths`), printing what `tabsmith uninstall`
+/// prints: its exit code.
+pub(crate) fn uninstall_all(paths: &IntegrationPaths, shells: &[Shell], purge: bool) -> i32 {
+    uninstall_and_report(
+        &UninstallTabsmithUseCase::new(Rc::new(installer()), Rc::new(FileDataDirectoryPurger)),
+        paths,
+        shells,
+        purge,
+    )
 }
 
 /// The lines `setup` prints for a manual install.
