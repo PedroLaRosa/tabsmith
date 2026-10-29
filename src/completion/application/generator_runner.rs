@@ -31,7 +31,6 @@ use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::spec_value::SpecValue;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::task_outcome::TaskOutcome;
-use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -405,20 +404,8 @@ impl GeneratorRunner {
             | SpecFunctionResult::PostProcess(_)
             | SpecFunctionResult::FilterTemplateSuggestions(_) => CustomGeneratorResult::new(false, Vec::new()),
         };
-        match g.filter_template_suggestions() {
-            Some(f) if custom.is_templated() => {
-                let task = self.runtime.start(
-                    SpecFunctionCall::FilterTemplateSuggestions {
-                        function: f,
-                        suggestions: TemplateSuggestions::Returned(v),
-                    },
-                    Some(run.context()),
-                );
-                run.wait_on(task, GeneratorStep::Filter);
-                GeneratorOutcome::Pending
-            }
-            _ => GeneratorOutcome::Done(custom.suggestions().clone()), // undefined → []
-        }
+        let command = run.custom_command(g, v, custom);
+        self.start(run, command, GeneratorStep::Filter)
     }
 
     /// A task of `run` finished.
