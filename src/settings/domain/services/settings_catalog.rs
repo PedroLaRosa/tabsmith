@@ -582,7 +582,7 @@ mod tests {
         assert_eq!(read, Some("most recent"));
     }
 
-    /// parser.rs: `str_list("autocomplete.disableForCommands")` is empty when unset.
+    /// spec_lookup.rs (`SpecLookup::disables`): `str_list("autocomplete.disableForCommands")` is empty when unset.
     #[test]
     fn should_default_to_completing_every_command() {
         let settings = Settings::default();

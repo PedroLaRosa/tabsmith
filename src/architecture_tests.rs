@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 
 /// Modules that follow the hexagonal layout; each phase registers the module it finishes. `bootstrap` is the
 /// composition root and is never registered.
-const REGISTERED_MODULES: &[&str] = &["history", "settings", "shared", "shell_integration"];
+const REGISTERED_MODULES: &[&str] = &["history", "settings", "shared", "shell_integration", "specs"];
 
 /// The flat files the refactor is emptying (`src/<name>.rs`). Domain and application never use them: they reach
 /// serde, I/O and the QuickJS runtime by the back door.
-// ponytail: a name stays listed after its file is deleted (harmless, nothing can use it then). The legacy `specs.rs`
-// is not listed because the `specs` module takes over its name in Phase 5.
+// ponytail: a name stays listed after its file is deleted (harmless, nothing can use it then). `specs` is not listed:
+// it is the registered module now, not the legacy `specs.rs` it replaced in Phase 5.
 const LEGACY_MODULES: &[&str] = &[
     "cli",
     "doctor",
