@@ -226,6 +226,7 @@ Runs 4 and 5 add run 3's (and run 4's) review additions to this list, as runs 1 
     `*_use_case` and `infrastructure` paths";
   - `suggestion_from_json` private (a departure from P8);
   - the garbled subject of `f8e6055` (the RTK hook, not rewritten);
+  - the 73-character subjects of `9ba2510` and `e1f1dd2` (run 4, over the 72 limit, not rewritten);
   - `should_report_a_build_without_embedded_specs_like_anyhow` runs only under `--no-default-features` (neither the
     gate nor CI runs it);
   - the accepted rule 3 ceilings;
@@ -238,7 +239,7 @@ Runs 4 and 5 add run 3's (and run 4's) review additions to this list, as runs 1 
 - Then give the user the final report for phases 3, 4 and 5:
   - commits per phase and gate results;
   - deviations: long subjects, `29fce49` over the clippy budget, the widened fitness rules, the run-A filter-branch
-    and the step-13 amend, and `f8e6055`;
+    and the step-13 amend, `f8e6055`, and the 73-character `9ba2510` and `e1f1dd2`;
   - CHANGED tests;
   - open risks.
 - Ask the user before pushing.
