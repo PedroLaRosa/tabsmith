@@ -5,7 +5,9 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::domain::completion_error::CompletionError;
 use crate::completion::domain::value_objects::annotation_kind::AnnotationKind;
 use crate::completion::domain::value_objects::command_line::CommandLine;
-use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
+use crate::completion::domain::value_objects::parsed_command_line::{
+    ParsedCommandLine, ParsedCommandLineParts,
+};
 use crate::completion::domain::value_objects::token_annotation::TokenAnnotation;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::entities::subcommand::Subcommand;
@@ -213,11 +215,7 @@ struct State {
 }
 
 fn ann(kind: AnnotationKind, text: &str) -> TokenAnnotation {
-    TokenAnnotation {
-        kind,
-        text: text.into(),
-        parts: Vec::new(),
-    }
+    TokenAnnotation::new(kind, text.into(), Vec::new())
 }
 
 impl State {
@@ -394,11 +392,7 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
     let composite = |mut s: State, parts: Vec<(AnnotationKind, String)>| {
         s.annotations.truncate(st.annotations.len());
         let kind = parts.last().map_or(AnnotationKind::Option, |p| p.0);
-        s.annotations.push(TokenAnnotation {
-            kind,
-            text: token.into(),
-            parts,
-        });
+        s.annotations.push(TokenAnnotation::new(kind, token.into(), parts));
         s
     };
     if st.directives.flags_posix_noncompliant() || token.starts_with("--") || !token.starts_with('-')
@@ -470,19 +464,19 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
 
 fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -> ParsedCommandLine {
     let last = st.annotations.last();
-    let mut search_term = last.map(|a| a.text.clone()).unwrap_or_default();
+    let mut search_term = last.map(|a| a.text().to_string()).unwrap_or_default();
     let mut only_args = st.end_of_options;
     let mut arg_st = st.arg_state();
     let mut option_chain = None;
     let mut raw = raw_last_token.to_string();
-    if let Some(a) = last.filter(|a| !a.parts.is_empty()) {
+    if let Some(a) = last.filter(|a| !a.parts().is_empty()) {
         arg_st = &st.opt_args;
-        match a.parts.last() {
+        match a.parts().last() {
             Some((AnnotationKind::OptionArg, t)) => {
                 search_term = t.clone();
                 only_args = true;
                 // `--color=al` / `-oal`: only the value is replaced, never the flag in front of it
-                let flag: String = a.parts[..a.parts.len() - 1]
+                let flag: String = a.parts()[..a.parts().len() - 1]
                     .iter()
                     .map(|p| p.1.as_str())
                     .collect();
@@ -491,14 +485,21 @@ fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -
                     .unwrap_or(t)
                     .to_string();
             }
-            _ => option_chain = Some(a.text.clone()),
+            Some((
+                AnnotationKind::Subcommand
+                | AnnotationKind::Option
+                | AnnotationKind::SubcommandArg
+                | AnnotationKind::None,
+                _,
+            ))
+            | None => option_chain = Some(a.text().to_string()),
         }
     }
     let mut tokens = st.tokens.clone();
     if let Some(t) = tokens.last_mut() {
         *t = last_text.into();
     }
-    ParsedCommandLine {
+    ParsedCommandLine::new(ParsedCommandLineParts {
         current_arg: arg_st.cur().cloned(),
         search_term,
         suggest_subcommands: !only_args && st.can_subcommands(),
@@ -516,7 +517,7 @@ fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -
         first_token,
         spec_name: st.spec_name.clone(),
         annotations: st.annotations,
-    }
+    })
 }
 
 /// Prefix-parse cache and generateSpec cache (SPEC §6.4); pure over a [`Host`].
@@ -642,7 +643,7 @@ impl ParseCaches {
             let last_state = st.clone();
             st = update(&st, &token, false)
                 .ok_or_else(|| no(format!("cannot consume {token:?}")))?;
-            let last_type = st.annotations.last().map_or(AnnotationKind::None, |a| a.kind);
+            let last_type = st.annotations.last().map_or(AnnotationKind::None, |a| a.kind());
             let mut alias_err = None;
             if let Some(alias) = last_arg
                 .as_ref()

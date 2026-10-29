@@ -557,15 +557,15 @@ impl Engine {
                 return Some(self.error(req, cursor, true));
             }
         };
-        let arg = pr.current_arg.clone();
-        let arg_key = argument_key(arg.as_ref(), &pr.completion);
+        let arg = pr.current_arg().clone();
+        let arg_key = argument_key(arg.as_ref(), pr.completion());
         if arg_key != self.last_arg_key {
             self.user_fuzzy = self.settings.bool(AUTOCOMPLETE_FUZZY_SEARCH);
             self.last_arg_key = arg_key;
         }
         let strategy = arg
             .as_ref()
-            .map_or(pr.completion.filter_strategy(), |a| a.filter_strategy());
+            .map_or(pr.completion().filter_strategy(), |a| a.filter_strategy());
         let fuzzy = match strategy {
             FilterStrategy::Prefix => false,
             FilterStrategy::Fuzzy => true,
@@ -575,18 +575,18 @@ impl Engine {
             req.cwd.to_string_lossy().into_owned(),
             env.clone(),
             req.shell.name().into(),
-            pr.search_term.clone(),
+            pr.search_term().to_string(),
             arg.as_ref().is_some_and(|a| a.is_dangerous()),
         );
         let (path, pathext) = (env_var(env, "PATH"), env_var(env, "PATHEXT"));
         let queries = self.queries(&pr, req.shell, js)?;
         let tokens = pr
-            .tokens
-            .get(pr.command_index..)
+            .tokens()
+            .get(pr.command_index()..)
             .unwrap_or_default()
             .to_vec();
         let triggered = self.update_slots(&pr, &ctx, &tokens, js)?;
-        let first = if pr.first_token
+        let first = if pr.first_token()
             && self.settings.bool(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION)
         {
             self.first_token_items(&aliases, path, pathext)
@@ -594,7 +594,7 @@ impl Engine {
             Vec::new()
         };
         let prefix = before
-            .strip_suffix(pr.raw_last_token.as_str())
+            .strip_suffix(pr.raw_last_token())
             .unwrap_or(before)
             .to_string();
         self.cur = Some(Current {
@@ -625,7 +625,7 @@ impl Engine {
 
     /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
     fn queries(&self, pr: &ParsedCommandLine, shell: Shell, js: &QuickJsSpecRuntime) -> Option<Vec<Query>> {
-        let Some(arg) = &pr.current_arg else {
+        let Some(arg) = pr.current_arg() else {
             return Some(Vec::new());
         };
         let mut out = Vec::with_capacity(arg.generators().len());
@@ -640,7 +640,7 @@ impl Engine {
                     Some(TextOrFunction::Str(s)) => Query::Str(s.clone()),
                     Some(TextOrFunction::Fn(f)) => match js.call_json(
                         *f,
-                        vec![JsArg::Json(json!(pr.search_term))],
+                        vec![JsArg::Json(json!(pr.search_term()))],
                         None,
                         SYNC_CALL,
                     ) {
@@ -651,7 +651,7 @@ impl Engine {
                             SpecError::Timeout
                             | SpecError::Invalid(_)
                             | SpecError::BundleUnavailable(_),
-                        ) => Query::Value(pr.search_term.clone()), // error → search term
+                        ) => Query::Value(pr.search_term().to_string()), // error → search term
                     },
                 }
             });
@@ -667,12 +667,12 @@ impl Engine {
         tokens: &[String],
         js: &QuickJsSpecRuntime,
     ) -> Option<Vec<GeneratorKey>> {
-        let arg = pr.current_arg.clone();
+        let arg = pr.current_arg().clone();
         let same = match (&arg, &self.slot_arg) {
             (Some(a), Some(b)) => Rc::ptr_eq(a, b),
             _ => false,
         };
-        let (new, old) = (pr.search_term.as_str(), self.prev_search.as_str());
+        let (new, old) = (pr.search_term(), self.prev_search.as_str());
         let gens: &[Generator] = arg.as_deref().map_or(&[], |a| a.generators());
         let mut fire = Vec::with_capacity(gens.len());
         for (i, g) in gens.iter().enumerate() {
@@ -701,7 +701,7 @@ impl Engine {
                 }
             });
         }
-        self.prev_search = pr.search_term.clone();
+        self.prev_search = pr.search_term().to_string();
         let Some(arg) = arg.as_ref() else {
             self.slots.clear();
             self.slot_arg = None;
@@ -1094,7 +1094,7 @@ impl Engine {
     fn reply(&self, phase: CompletionPhase) -> CompletionResult {
         let cur = self.cur.as_ref().expect("reply without a current request");
         let (pr, s) = (&cur.pr, &self.settings);
-        let mut list = if pr.first_token {
+        let mut list = if pr.first_token() {
             cur.first.clone()
         } else {
             let views: Vec<GenView> = self
@@ -1122,12 +1122,12 @@ impl Engine {
             exec_after_space: s.bool(AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE),
             run_dangerous: s.bool(AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS),
             suggest_current_token: pr
-                .current_arg
+                .current_arg()
                 .as_ref()
                 .and_then(|a| a.suggest_current_token())
                 .unwrap_or_else(|| s.bool(AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN)),
         };
-        let cmd = pr.tokens.get(pr.command_index).map_or("", String::as_str); // D21
+        let cmd = pr.tokens().get(pr.command_index()).map_or("", String::as_str); // D21
         let use_recency = s.string(AUTOCOMPLETE_SORT_METHOD) != Some("alphabetical");
         let ranked = {
             let rec = self.recency.lock().ok();
@@ -1135,11 +1135,11 @@ impl Engine {
                 .as_ref()
                 .filter(|_| use_recency)
                 .and_then(|r| r.get(cmd));
-            suggest::rank(list, &pr.search_term, map, &fo)
+            suggest::rank(list, pr.search_term(), map, &fo)
         };
         let ic = InsCtx {
-            search_term: &pr.search_term,
-            raw: &pr.raw_last_token,
+            search_term: pr.search_term(),
+            raw: pr.raw_last_token(),
             shell: cur.req.shell,
             fuzzy: cur.fuzzy,
             prefer_verbose: s.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS),
@@ -1156,17 +1156,17 @@ impl Engine {
             error: false,
             buffer: cur.req.buffer.clone(),
             cursor: cur.cursor,
-            tokens: pr.tokens.clone(),
+            tokens: pr.tokens().clone(),
             command_text: cur.cmd_text.clone(),
-            command_index: pr.command_index,
+            command_index: pr.command_index(),
             arg_key: cur.arg_key,
-            current_arg: pr.current_arg.as_ref().map(|a| {
+            current_arg: pr.current_arg().as_ref().map(|a| {
                 ArgumentHint::new(
                     a.name().clone().unwrap_or_default(),
                     a.description().clone().unwrap_or_default(),
                 )
             }),
-            search_term: pr.search_term.clone(),
+            search_term: pr.search_term().to_string(),
             triggered_generators: if phase == CompletionPhase::Parse {
                 cur.triggered.clone()
             } else {
