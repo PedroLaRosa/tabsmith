@@ -390,6 +390,9 @@ fn only_declares_children(code: &str) -> bool {
 
 /// `#[path = ..]` and `include!` compile a file the rules never read into the module; `#[macro_export]` and
 /// `#[macro_use]` hand a macro to modules that call it as `crate::name!` or `name!`, a path rules 1-3 cannot read.
+// ponytail: only the registered modules and main.rs are read, so a macro exported from bootstrap or a legacy file
+// still passes, and so do `#[cfg_attr(.., path = ..)]` and a space after `#[` or before `!`. Read every file under
+// src for these if one shows up.
 fn splices_in_unread_code(code: &str) -> bool {
     let attributes = ["#[path", "#[macro_export", "#[macro_use"];
     attributes.iter().any(|attribute| code.contains(attribute)) || macro_names(code).any(|name| name == "include")
@@ -397,7 +400,7 @@ fn splices_in_unread_code(code: &str) -> bool {
 
 /// The lines of `main_rs` every module would see as `crate::<name>`, a path rules 1-3 cannot read as the shared
 /// infrastructure or bootstrap: a crate-root item other than a child declaration or `fn main` (a `type` alias, a
-/// wrapper fn), and a `use` anywhere.
+/// wrapper fn), and a `use` or a splice (`#[path]`, `include!`, a macro handed on) anywhere.
 // ponytail: braces are counted per line, so an unpaired brace in a string literal shifts what counts as the crate root.
 fn crate_root_back_doors(main_rs: &str) -> Vec<&str> {
     let mut depth = 0;
@@ -405,7 +408,7 @@ fn crate_root_back_doors(main_rs: &str) -> Vec<&str> {
     for line in main_rs.lines() {
         let code = without_line_comment(line);
         let root_item = depth == 0 && !only_declares_children(code) && !code.starts_with("fn main(");
-        if root_item || imports_or_re_exports(code) {
+        if root_item || imports_or_re_exports(code) || splices_in_unread_code(code) {
             found.push(line);
         }
         depth += code.matches('{').count() as isize - code.matches('}').count() as isize;
@@ -504,6 +507,24 @@ mod tests {
                 "    use crate::bootstrap::cli::Cli;",
             ]
         );
+    }
+
+    /// Rule 6 lets a child declaration's attributes through, so the crate root needs the splice check of its own.
+    #[test]
+    fn should_flag_a_crate_root_line_that_splices_in_a_file_the_rules_never_read() {
+        let main_rs = "mod settings;\n\
+                       #[path = \"leak.rs\"]\n\
+                       mod leak;\n\
+                       #[macro_use]\n\
+                       mod shared;\n\
+                       \n\
+                       fn main() {\n    \
+                       include!(\"leak.rs\");\n\
+                       }\n";
+
+        let found = crate_root_back_doors(main_rs);
+
+        assert_eq!(found, ["#[path = \"leak.rs\"]", "#[macro_use]", "    include!(\"leak.rs\");"]);
     }
 
     #[test]
