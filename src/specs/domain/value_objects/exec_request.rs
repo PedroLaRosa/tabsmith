@@ -48,4 +48,34 @@ impl ExecRequest {
     pub(crate) fn timeout(&self) -> Option<u64> {
         self.timeout
     }
+
+    /// The same request with `timeout` in place of its own.
+    pub(crate) fn with_timeout(self, timeout: Option<u64>) -> Self {
+        ExecRequest { timeout, ..self }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(timeout: Option<u64>) -> ExecRequest {
+        let env = HashMap::from([("PAGER".to_string(), None)]);
+        ExecRequest::new(
+            "git".into(),
+            vec!["branch".into()],
+            Some("/repo".into()),
+            env,
+            timeout,
+        )
+    }
+
+    #[test]
+    fn should_replace_only_the_timeout() {
+        let five_seconds = request(Some(5));
+
+        let nine_seconds = five_seconds.with_timeout(Some(9));
+
+        assert_eq!(nine_seconds, request(Some(9)));
+    }
 }
