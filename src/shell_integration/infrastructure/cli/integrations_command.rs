@@ -32,4 +32,43 @@ mod tests {
 
         assert_eq!(text, "\n\npwsh: pwsh printed an empty $PROFILE");
     }
+
+    fn failed_zshrc() -> IntegrationFailure {
+        IntegrationFailure::Operation {
+            description: "zsh pre post into .zshrc".into(),
+            reason: "Permission denied: /home/u/.zshrc".into(),
+        }
+    }
+
+    #[test]
+    fn should_put_a_blank_line_between_failures() {
+        let failures = [
+            IntegrationFailure::Listing {
+                shell: "pwsh".into(),
+                reason: "pwsh printed an empty $PROFILE".into(),
+            },
+            failed_zshrc(),
+        ];
+
+        let text = failures_text(&failures, false);
+
+        assert_eq!(
+            text,
+            "\n\npwsh: pwsh printed an empty $PROFILE\n\nzsh pre post into .zshrc: Permission denied: /home/u/.zshrc"
+        );
+    }
+
+    #[test]
+    fn should_bold_the_description_of_a_failed_operation_when_styled() {
+        let text = failures_text(&[failed_zshrc()], true);
+
+        assert_eq!(text, "\n\n\x1b[1mzsh pre post into .zshrc\x1b[0m: Permission denied: /home/u/.zshrc");
+    }
+
+    #[test]
+    fn should_word_a_failed_operation_plainly_when_not_styled() {
+        let text = failures_text(&[failed_zshrc()], false);
+
+        assert_eq!(text, "\n\nzsh pre post into .zshrc: Permission denied: /home/u/.zshrc");
+    }
 }
