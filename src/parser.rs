@@ -1,4 +1,4 @@
-//! Spec loading (resolution, diff-versioned merge) and the argv state machine (SPEC §6.3–6.4).
+//! Spec loading through the spec repository and the argv state machine (SPEC §6.3–6.4).
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DEVELOPER_MODE;
 use crate::settings::domain::value_objects::settings::Settings;
@@ -30,7 +30,7 @@ use std::time::Duration;
 #[cfg(test)]
 mod tests;
 
-/// Deadline for one spec load / spec callback (SPEC §6.3).
+/// Deadline for one spec callback (SPEC §6.3).
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

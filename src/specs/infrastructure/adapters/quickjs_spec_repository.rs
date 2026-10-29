@@ -78,7 +78,7 @@ struct Loader {
     /// Version detections still running after an aborted parse, reused by the next one (no respawn per keystroke).
     inflight: HashMap<String, TaskId>,
     /// Last normalised spec per cache key with the JSON it came from: an unchanged spec keeps its `Rc` through
-    /// developer-mode reloads and `clear_caches` (the engine keys arg/generator identity on the address).
+    /// developer-mode reloads and `forget_loaded_specs` (the engine keys arg/generator identity on the address).
     by_json: HashMap<String, (Value, Rc<Subcommand>)>,
 }
 

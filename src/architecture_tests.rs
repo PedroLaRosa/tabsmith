@@ -367,12 +367,13 @@ fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
 /// Another module's use cases and adapters are reached only through bootstrap. The shared kernel is open to every
 /// module; rules 1-2 still keep its infrastructure out of domain and application files. A use case is its file
 /// (`*_use_case`) or its type (`*UseCase`) anywhere under another module, so a use case re-exported under its own
-/// type name is caught at the module root or in a legacy shim (`crate::specs::InstallSpecBundleUseCase`) too. An
-/// adapter has no name suffix, so only its `infrastructure` segment gives it away.
+/// type name is caught at the module root (`crate::specs::InstallSpecBundleUseCase`) or in a legacy shim
+/// (`crate::parser::InstallSpecBundleUseCase`) too. An adapter has no name suffix, so only its `infrastructure`
+/// segment gives it away.
 // ponytail: a use case re-exported under another name (`type Installer = ..UseCase;`, a wrapper fn), an `as` rename,
-// a `super::` path, and an adapter re-exported by a legacy file or a legacy module root (`crate::specs::X` while
-// src/specs.rs is legacy) still pass; read every file of the module for those, as rule 6 reads mod.rs, and the
-// legacy files for `pub(crate) use crate::<module>::..`, if one shows up.
+// a `super::` path, and an adapter re-exported by a legacy file (`crate::engine::X` from a
+// `pub(crate) use crate::specs::infrastructure::..` in src/engine.rs) still pass; read every file of the module for
+// those, as rule 6 reads mod.rs, and the legacy files for `pub(crate) use crate::<module>::..`, if one shows up.
 fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| match path.as_slice() {
         ["crate", "shared", ..] => false,
