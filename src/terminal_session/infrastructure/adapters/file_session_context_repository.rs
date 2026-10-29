@@ -360,4 +360,57 @@ mod tests {
             (true, None)
         );
     }
+
+    /// The file modes and the purge guard of this scenario are asserted in shared atomic_file.rs
+    /// (`integrations_pre_cmd_file`); this half keeps the SessionCtx round trip.
+    #[cfg(unix)]
+    #[test]
+    fn integrations_pre_cmd_file_session_ctx() {
+        let temp_dir = TempDir::new("precmd");
+        let dir = temp_dir.path().to_path_buf();
+        let repository = FileSessionContextRepository::new(DataDirectory::new(Some(dir.clone()), None));
+        let ctx = SessionContext::new(
+            SessionId::new("abc123".to_string()).unwrap(),
+            [("A".to_string(), "1".to_string())].into(),
+            Some("ll='ls -l'".into()),
+            7,
+        );
+        repository.save(&ctx).unwrap();
+        let back = repository.find(ctx.id()).unwrap();
+        assert_eq!(
+            (back.env()["A"].as_str(), back.alias(), back.reported_at_ms()),
+            ("1", Some("ll='ls -l'"), 7)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The prune `_ pre-cmd` runs after each save, over a bare dir, for `integrations_prune_run_files`.
+    fn prune_run_files(dir: &Path) {
+        prune_files_older_than(dir, Duration::from_secs(24 * 3600));
+    }
+
+    /// Run files untouched for a day go (a quick exit can leave one behind); fresh files and directories stay.
+    #[test]
+    fn integrations_prune_run_files() {
+        let temp_dir = TempDir::new("prune");
+        let dir = temp_dir.path().to_path_buf();
+        let (old, new, sub) = (
+            dir.join("old.json"),
+            dir.join("new.json"),
+            dir.join("debug-shell-1"),
+        );
+        std::fs::write(&old, "{}").unwrap();
+        std::fs::write(&new, "{}").unwrap();
+        std::fs::create_dir(&sub).unwrap();
+        let day_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 24 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(day_ago)
+            .unwrap();
+        prune_run_files(&dir);
+        assert!(!old.exists() && new.exists() && sub.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
