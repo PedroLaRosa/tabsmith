@@ -6,6 +6,7 @@
 mod architecture_tests;
 mod bootstrap;
 mod cli;
+mod completion;
 mod doctor;
 mod engine;
 mod history;
@@ -19,7 +20,6 @@ mod render;
 mod settings;
 mod shared;
 mod shell_integration;
-mod shell_parser;
 mod specs;
 mod suggest;
 mod terminal_session;

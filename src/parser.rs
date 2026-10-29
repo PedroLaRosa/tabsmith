@@ -2,7 +2,7 @@
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DEVELOPER_MODE;
 use crate::settings::domain::value_objects::settings::Settings;
-use crate::shell_parser::CommandInfo;
+use crate::completion::domain::services::command_line_tokenizer::CommandInfo;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::repositories::spec_repository::SpecRepository;
@@ -215,7 +215,7 @@ impl Host for JsHost<'_, '_> {
     }
 
     fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo> {
-        crate::shell_parser::substitute_token(cmd, index, value, self.ctx.shell)
+        crate::completion::domain::services::command_line_tokenizer::substitute_token(cmd, index, value, self.ctx.shell)
     }
 }
 

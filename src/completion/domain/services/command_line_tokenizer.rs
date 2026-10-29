@@ -1,5 +1,4 @@
 //! Command-line tokenizer (SPEC §6.1). Pure, no I/O.
-//! OWNER: shell-parser agent.
 //!
 //! Scans bytes: every syntax char is ASCII, so node boundaries always fall on UTF-8 char boundaries.
 use crate::shared::domain::value_objects::shell::Shell;
@@ -7,31 +6,31 @@ use std::collections::HashMap;
 
 /// One argument of the current command.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Token {
+pub(crate) struct Token {
     /// Unquoted/unescaped text (`inner_text`).
-    pub text: String,
+    pub(crate) text: String,
     /// Raw source text as typed (quotes/escapes included).
-    pub raw: String,
+    pub(crate) raw: String,
     /// Byte offsets into the (alias-expanded) command source.
-    pub start: usize,
-    pub end: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// The command under the cursor.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CommandInfo {
+pub(crate) struct CommandInfo {
     /// Tokens up to the cursor; a trailing empty token when the text ends with whitespace.
-    pub tokens: Vec<Token>,
+    pub(crate) tokens: Vec<Token>,
     /// Source text of the command (after alias expansion).
-    pub text: String,
+    pub(crate) text: String,
     /// Source text as typed, before alias expansion (what the menu compares between keystrokes).
-    pub original_text: String,
+    pub(crate) original_text: String,
 }
 
 /// Parse `buffer_before_cursor` and return the command containing the end of it (SPEC §6.1.3), with aliases
 /// expanded (SPEC §6.1.6). `None` when there is no command at the cursor (e.g. `ls |`, empty, only spaces).
 /// Token offsets are relative to `CommandInfo::text`.
-pub fn current_command(
+pub(crate) fn current_command(
     buffer_before_cursor: &str,
     shell: Shell,
     aliases: &HashMap<String, String>,
@@ -62,7 +61,7 @@ pub fn current_command(
 }
 
 /// Parse the `alias` builtin output into a map (SPEC §6.1.6). Fish uses `alias name 'value'` lines.
-pub fn parse_aliases(text: &str, shell: Shell) -> HashMap<String, String> {
+pub(crate) fn parse_aliases(text: &str, shell: Shell) -> HashMap<String, String> {
     let sep = if shell == Shell::Fish { ' ' } else { '=' };
     text.lines()
         .filter_map(|line| {
@@ -82,7 +81,7 @@ pub fn parse_aliases(text: &str, shell: Shell) -> HashMap<String, String> {
 /// Re-tokenize `command` with the token at `index` replaced by `replacement` (parserDirectives.alias, SPEC §6.4).
 /// `None` unless the result is exactly one plain command (so `|`, `&&`, `;` in `replacement` fail). Tokens that
 /// come from `replacement` keep the replaced token's `raw` (what is on screen).
-pub fn substitute_token(
+pub(crate) fn substitute_token(
     command: &CommandInfo,
     index: usize,
     replacement: &str,
@@ -1008,23 +1007,23 @@ mod tests {
         let fixtures = [
             (
                 "basic",
-                include_str!("../tests/fixtures/shell_parser/basic/input.sh"),
-                include_str!("../tests/fixtures/shell_parser/basic/output.txt"),
+                include_str!("../../../../tests/fixtures/shell_parser/basic/input.sh"),
+                include_str!("../../../../tests/fixtures/shell_parser/basic/output.txt"),
             ),
             (
                 "multipleStatements",
-                include_str!("../tests/fixtures/shell_parser/multipleStatements/input.sh"),
-                include_str!("../tests/fixtures/shell_parser/multipleStatements/output.txt"),
+                include_str!("../../../../tests/fixtures/shell_parser/multipleStatements/input.sh"),
+                include_str!("../../../../tests/fixtures/shell_parser/multipleStatements/output.txt"),
             ),
             (
                 "primaryExpressions",
-                include_str!("../tests/fixtures/shell_parser/primaryExpressions/input.sh"),
-                include_str!("../tests/fixtures/shell_parser/primaryExpressions/output.txt"),
+                include_str!("../../../../tests/fixtures/shell_parser/primaryExpressions/input.sh"),
+                include_str!("../../../../tests/fixtures/shell_parser/primaryExpressions/output.txt"),
             ),
             (
                 "variables",
-                include_str!("../tests/fixtures/shell_parser/variables/input.sh"),
-                include_str!("../tests/fixtures/shell_parser/variables/output.txt"),
+                include_str!("../../../../tests/fixtures/shell_parser/variables/input.sh"),
+                include_str!("../../../../tests/fixtures/shell_parser/variables/output.txt"),
             ),
         ];
         let mut failures = Vec::new();

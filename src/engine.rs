@@ -2,7 +2,7 @@
 //! recency, history and the inline cache. Serves only the latest request.
 //! OWNER: engine agent.
 //!
-//! Per request: mid-word guard → `shell_parser::current_command` → `Parser::parse` → generator triggers →
+//! Per request: mid-word guard → `command_line_tokenizer::current_command` → `Parser::parse` → generator triggers →
 //! reply (phase `Parse`). Triggered generators run as small state machines over `QuickJsSpecRuntime` tasks;
 //! whenever one finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
@@ -19,7 +19,7 @@ use crate::settings::domain::services::settings_catalog::{
 };
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
-use crate::shell_parser;
+use crate::completion::domain::services::command_line_tokenizer;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
@@ -510,7 +510,7 @@ impl Engine {
     fn alias_map(&mut self, shell: Shell) -> HashMap<String, String> {
         if !matches!(&self.aliases, Some((s, _)) if *s == shell) {
             let map = match self.session_alias.as_deref() {
-                Some(text) if !text.is_empty() => shell_parser::parse_aliases(text, shell),
+                Some(text) if !text.is_empty() => command_line_tokenizer::parse_aliases(text, shell),
                 _ => HashMap::new(),
             };
             self.aliases = Some((shell, map));
@@ -538,7 +538,7 @@ impl Engine {
         }
         let before = &req.buffer[..cursor];
         let aliases = self.alias_map(req.shell);
-        let Some(cmd) = shell_parser::current_command(before, req.shell, &aliases) else {
+        let Some(cmd) = command_line_tokenizer::current_command(before, req.shell, &aliases) else {
             return Some(self.error(req, cursor, true));
         };
         let env = if self.session_env.is_empty() {

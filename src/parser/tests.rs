@@ -2,7 +2,7 @@
 use super::*;
 use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
-use crate::shell_parser::Token;
+use crate::completion::domain::services::command_line_tokenizer::Token;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{function_result, normalise};
