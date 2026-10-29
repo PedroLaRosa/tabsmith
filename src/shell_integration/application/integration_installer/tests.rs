@@ -145,9 +145,9 @@ fn should_find_a_dotfile_that_does_not_source_the_pre_script_not_installed() {
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
-    assert!(
-        matches!(&checked, Err(ShellIntegrationError::NotInstalled(m)) if m == "/home/u/.zshrc does not source pre integration"),
-        "{checked:?}"
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        "Integration not installed: /home/u/.zshrc does not source pre integration"
     );
 }
 
@@ -160,9 +160,9 @@ fn should_find_a_pre_source_line_that_is_not_first_improperly_installed() {
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
-    assert!(
-        matches!(&checked, Err(ShellIntegrationError::Improper(m)) if m == "/home/u/.zshrc does not source pre integration first"),
-        "{checked:?}"
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        "Improper integration installation: /home/u/.zshrc does not source pre integration first"
     );
 }
 
@@ -175,10 +175,7 @@ fn should_check_the_pre_script_after_its_line_and_before_the_post_line() {
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
-    assert!(
-        matches!(&checked, Err(ShellIntegrationError::FileDoesNotExist(p)) if p == Path::new("/home/u/.tabsmith/shell/zshrc.pre.zsh")),
-        "{checked:?}"
-    );
+    assert_eq!(checked.unwrap_err().to_string(), "File does not exist: /home/u/.tabsmith/shell/zshrc.pre.zsh");
 }
 
 #[test]
@@ -190,9 +187,9 @@ fn should_find_a_dotfile_that_does_not_source_the_post_script_not_installed() {
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
-    assert!(
-        matches!(&checked, Err(ShellIntegrationError::NotInstalled(m)) if m == "/home/u/.zshrc does not source post integration"),
-        "{checked:?}"
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        "Integration not installed: /home/u/.zshrc does not source post integration"
     );
 }
 
@@ -206,9 +203,9 @@ fn should_find_a_post_source_line_that_is_not_last_improperly_installed() {
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
-    assert!(
-        matches!(&checked, Err(ShellIntegrationError::Improper(m)) if m == "/home/u/.zshrc does not source post integration last"),
-        "{checked:?}"
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        "Improper integration installation: /home/u/.zshrc does not source post integration last"
     );
 }
 
@@ -223,10 +220,12 @@ fn should_find_a_script_file_holding_anything_else_improperly_installed() {
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
-    assert!(
-        matches!(&checked, Err(ShellIntegrationError::Improper(m))
-            if *m == format!("/home/u/.tabsmith/shell/zshrc.pre.zsh should contain:\n{}", pre_script.contents())),
-        "{checked:?}"
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        format!(
+            "Improper integration installation: /home/u/.tabsmith/shell/zshrc.pre.zsh should contain:\n{}",
+            pre_script.contents()
+        )
     );
 }
 
@@ -262,10 +261,7 @@ fn should_fail_the_check_of_a_dotfile_it_cannot_read_on_the_dotfile() {
 
     let checked = bed.installer.check(&paths(), &zshrc());
 
-    assert!(
-        matches!(&checked, Err(ShellIntegrationError::FileDoesNotExist(p)) if p == Path::new("/home/u/.zshrc")),
-        "{checked:?}"
-    );
+    assert_eq!(checked.unwrap_err().to_string(), "File does not exist: /home/u/.zshrc");
 }
 
 #[test]
@@ -289,10 +285,12 @@ fn should_find_a_whole_file_holding_more_than_its_script_improperly_installed() 
 
     let checked = bed.installer.check(&paths(), &fish_pre);
 
-    assert!(
-        matches!(&checked, Err(ShellIntegrationError::Improper(m))
-            if *m == format!("/home/u/.config/fish/conf.d/00_tabsmith_pre.fish should contain:\n{}", script.contents())),
-        "{checked:?}"
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        format!(
+            "Improper integration installation: /home/u/.config/fish/conf.d/00_tabsmith_pre.fish should contain:\n{}",
+            script.contents()
+        )
     );
 }
 
