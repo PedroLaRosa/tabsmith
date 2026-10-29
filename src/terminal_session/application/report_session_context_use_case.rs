@@ -48,7 +48,9 @@ impl ReportSessionContextUseCase {
 mod tests {
     use super::*;
     use crate::shared::application::ports::clock::FixedClock;
-    use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
+    use crate::terminal_session::domain::repositories::session_context_repository::{
+        InMemorySessionContextRepository, UnwritableSessionContextRepository,
+    };
     use std::time::SystemTime;
 
     fn session_id(id: &str) -> SessionId {
@@ -105,6 +107,29 @@ mod tests {
             ["stale", "recent", "abc123"]
                 .map(|id| session_contexts.find(&session_id(id)).is_some()),
             [false, true, true]
+        );
+    }
+
+    /// A purged data directory: the run file cannot be written, so nothing is pruned either (T43).
+    #[test]
+    fn should_give_back_the_failed_save_without_pruning() {
+        let session_contexts = Rc::new(UnwritableSessionContextRepository::default());
+        let use_case = ReportSessionContextUseCase::new(
+            session_contexts.clone(),
+            Arc::new(FixedClock::new(0)),
+        );
+
+        let result = use_case.execute(session_id("abc123"), HashMap::new(), None);
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                session_contexts.prune_ran()
+            ),
+            (
+                Err("No such file or directory (os error 2)".to_string()),
+                false
+            )
         );
     }
 }
