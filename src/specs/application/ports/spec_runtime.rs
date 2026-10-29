@@ -72,6 +72,7 @@ pub(crate) struct InMemorySpecRuntime {
     answers: HashMap<SpecFunctionRef, Answer>,
     calls: RefCell<Vec<SpecFunctionCall>>,
     completions: HashMap<SpecFunctionRef, TaskOutcome>,
+    exec_completion: Option<TaskOutcome>,
     /// The tasks it knows: `None` while one runs, the outcome a finished one gives.
     tasks: RefCell<HashMap<TaskId, Option<TaskOutcome>>>,
     next_task: Cell<TaskId>,
@@ -91,6 +92,12 @@ impl InMemorySpecRuntime {
     /// Every task started for `function` finishes with `outcome`.
     pub(crate) fn completing(mut self, function: SpecFunctionRef, outcome: TaskOutcome) -> Self {
         self.completions.insert(function, outcome);
+        self
+    }
+
+    /// Every process started finishes with `outcome`.
+    pub(crate) fn completing_execs(mut self, outcome: TaskOutcome) -> Self {
+        self.exec_completion = Some(outcome);
         self
     }
 
@@ -114,7 +121,7 @@ impl SpecRuntime for InMemorySpecRuntime {
     }
 
     fn start_exec(&self, _request: ExecRequest, _context: &GeneratorContext) -> TaskId {
-        self.start_task(None)
+        self.start_task(self.exec_completion.clone())
     }
 
     fn start_sleep(&self, _ms: u64) -> TaskId {
@@ -300,5 +307,20 @@ mod tests {
                 Ok(vec![unknown(tasks[0]), unknown(tasks[1])])
             )
         );
+    }
+
+    #[test]
+    fn should_finish_an_exec_with_its_scripted_outcome() {
+        let stdout = SpecValue::Text("main\ndev".into());
+        let output = SpecValue::Object([("stdout".to_string(), stdout)].into());
+        let runtime = InMemorySpecRuntime::default().completing_execs(Ok(output.clone()));
+        let tasks = [
+            runtime.start_exec(ExecRequest::default(), &GeneratorContext::default()),
+            runtime.start_exec(ExecRequest::default(), &GeneratorContext::default()),
+        ];
+
+        let outcomes = runtime.wait(&tasks, Instant::now());
+
+        assert_eq!(outcomes, Ok(vec![Some(Ok(output.clone())), Some(Ok(output))]));
     }
 }
