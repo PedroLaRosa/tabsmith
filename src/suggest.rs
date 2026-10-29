@@ -13,8 +13,9 @@ use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
+use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::insertion::Insertion;
-use crate::types::{GenKey, Item};
+use crate::types::Item;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::Value;
 use std::cmp::Ordering;
@@ -75,7 +76,7 @@ pub struct Sugg {
     pub should_add_space: bool,
     pub separator: Option<String>,
     pub query: Query,
-    pub generator: Option<GenKey>,
+    pub generator: Option<GeneratorKey>,
     pub template_type: Option<String>,
     /// Spec `icon` (emoji or `fig://icon?type=`), resolved by the renderer.
     pub icon: Option<String>,
@@ -156,7 +157,7 @@ impl Sugg {
     pub fn from_suggestion(
         s: &SpecSuggestion,
         dangerous: bool,
-        generator: Option<GenKey>,
+        generator: Option<GeneratorKey>,
         query: Query,
     ) -> Sugg {
         Sugg {
@@ -192,7 +193,7 @@ fn cmp_first(a: &Sugg, b: &Sugg) -> Ordering {
 
 /// One generator slot as seen by assembly.
 pub struct GenView<'a> {
-    pub key: GenKey,
+    pub key: GeneratorKey,
     /// `Query::Term` ⇔ the generator has no `getQueryTerm`.
     pub query: Query,
     pub loading: bool,

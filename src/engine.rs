@@ -21,6 +21,7 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
+use crate::completion::domain::value_objects::generator_key::{argument_key, GeneratorKey};
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
@@ -54,13 +55,11 @@ use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
-    now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, Msg, Phase, Request,
+    now_ms, ArgInfo, Completion, EngineMsg, Item, Msg, Phase, Request,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
@@ -228,17 +227,6 @@ pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
     Ok(store.save()?)
 }
 
-fn hash2(a: usize, b: usize) -> u64 {
-    let mut h = DefaultHasher::new();
-    (a, b).hash(&mut h);
-    h.finish()
-}
-
-/// Generator identity: arg identity + generator index.
-fn gen_key(arg: &Rc<Arg>, idx: usize) -> GenKey {
-    hash2(Rc::as_ptr(arg) as usize, idx)
-}
-
 /// `filepaths` / `folders` templates behave like the bundled `filepaths()` helper (trigger, query term).
 fn is_path_template(g: &Generator) -> bool {
     g.template()
@@ -272,7 +260,7 @@ fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntr
 
 /// Generator results of the current argument, one per generator (SPEC §6.6.1).
 struct Slot {
-    key: GenKey,
+    key: GeneratorKey,
     result: Vec<SpecSuggestion>,
     loading: bool,
     /// Trigger generation: runs carrying another value are stale.
@@ -323,7 +311,7 @@ struct Current {
     arg_key: u64,
     fuzzy: bool,
     queries: Vec<Query>,
-    triggered: Vec<GenKey>,
+    triggered: Vec<GeneratorKey>,
     first: Vec<Sugg>,
     /// Buffer up to the start of the last token (history rows).
     prefix: String,
@@ -563,10 +551,7 @@ impl Engine {
             }
         };
         let arg = pr.current_arg.clone();
-        let arg_key = hash2(
-            arg.as_ref().map_or(0, |a| Rc::as_ptr(a) as usize),
-            Rc::as_ptr(&pr.completion) as usize,
-        );
+        let arg_key = argument_key(arg.as_ref(), &pr.completion);
         if arg_key != self.last_arg_key {
             self.user_fuzzy = self.settings.bool(AUTOCOMPLETE_FUZZY_SEARCH);
             self.last_arg_key = arg_key;
@@ -674,7 +659,7 @@ impl Engine {
         ctx: &GeneratorContext,
         tokens: &[String],
         js: &QuickJsSpecRuntime,
-    ) -> Option<Vec<GenKey>> {
+    ) -> Option<Vec<GeneratorKey>> {
         let arg = pr.current_arg.clone();
         let same = match (&arg, &self.slot_arg) {
             (Some(a), Some(b)) => Rc::ptr_eq(a, b),
@@ -719,7 +704,7 @@ impl Engine {
             // ponytail: results are not carried over to a different arg (they could be kept while loading)
             self.slots = (0..gens.len())
                 .map(|i| Slot {
-                    key: gen_key(arg, i),
+                    key: GeneratorKey::for_arg(arg, i),
                     result: Vec::new(),
                     loading: false,
                     gen_id: 0,
@@ -1570,13 +1555,6 @@ mod tests {
             delivered,
             Ok(vec![Some(Ok(json!({"status": 0, "stderr": "", "stdout": "x"})))])
         );
-    }
-
-    #[test]
-    fn generator_keys_differ_per_index() {
-        let a = Rc::new(Arg::default());
-        assert_ne!(gen_key(&a, 0), gen_key(&a, 1));
-        assert_eq!(gen_key(&a, 0), gen_key(&a, 0));
     }
 
     // The engine loop seen from its inbox: requests and events go in, replies come out (6.0a characterization).

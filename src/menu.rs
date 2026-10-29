@@ -7,8 +7,9 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_SCROLL_WRAP_AROUND,
 };
 use crate::settings::domain::value_objects::settings::Settings;
+use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::insertion::Insertion;
-use crate::types::{ArgInfo, Completion, GenKey, Item, Phase};
+use crate::types::{ArgInfo, Completion, Item, Phase};
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
 
@@ -48,7 +49,7 @@ pub struct Menu {
     sticky: bool,
     scroll_top: usize,
     /// Generator of the last fully inserted item (re-trigger reopens the menu).
-    last_inserted_gen: Option<GenKey>,
+    last_inserted_gen: Option<GeneratorKey>,
     just_inserted: bool,
     history_mode: bool,
     popout: bool,
@@ -616,7 +617,7 @@ pub(crate) mod tests {
                 "git c ",
                 5,
                 vec![Item {
-                    generator: Some(7),
+                    generator: Some(GeneratorKey::from_raw(7)),
                     ..item("src/", SuggestionKind::Folder, "")
                 }],
             ),
@@ -624,7 +625,7 @@ pub(crate) mod tests {
         );
         m.handle(Action::InsertSelected, &s);
         let mut c = comp("git c src/", 5, vec![item("main.rs", SuggestionKind::File, "")]);
-        c.triggered_generators = vec![7];
+        c.triggered_generators = vec![GeneratorKey::from_raw(7)];
         m.on_completion(c, &s);
         assert_eq!(m.vis(), Vis::Visible);
     }

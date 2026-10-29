@@ -1,4 +1,5 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
+use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
@@ -9,9 +10,6 @@ use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-/// Identity of a generator (hash of arg identity + generator index).
-pub type GenKey = u64;
 
 /// One dropdown row, already filtered, ranked and with its insertion precomputed by the engine.
 #[derive(Clone, Debug)]
@@ -32,7 +30,7 @@ pub struct Item {
     pub query: String,
     pub insert: Insertion,
     /// Generator that produced it, if any.
-    pub generator: Option<GenKey>,
+    pub generator: Option<GeneratorKey>,
     /// Matched by prefix (not only fuzzy) — used by the spec ghost source (SPEC §6.11).
     pub prefix_match: bool,
     /// `context.templateType` of the generator result (`filepaths`/`folders`/`help`), if any.
@@ -85,7 +83,7 @@ pub struct Completion {
     pub arg_key: u64,
     pub current_arg: Option<ArgInfo>,
     pub search_term: String,
-    pub triggered_generators: Vec<GenKey>,
+    pub triggered_generators: Vec<GeneratorKey>,
     pub items: Vec<Item>,
     /// Some generator is still running.
     pub loading: bool,
