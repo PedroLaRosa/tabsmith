@@ -6,7 +6,7 @@
 //! reply (phase `Parse`). Triggered generators run as small state machines over `Js` tasks; whenever one
 //! finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
-use crate::js::{ExecInput, GenCtx, Js, JsArg, TaskId, TaskResult};
+use crate::js::{Js, JsArg, TaskResult};
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
@@ -23,14 +23,19 @@ use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shell_parser;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
 use crate::specs::domain::value_objects::generator::Generator;
+use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::generator_script::GeneratorScript;
 use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
+use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
+use crate::specs::infrastructure::adapters::exec_input::ExecInput;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{
-    self, json_items, post_process_items, script_exec_input, spec_value_to_json, truthy,
+    self, generator_context_json, json_items, post_process_items, script_exec_input, spec_value_to_json,
+    truthy,
 };
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
@@ -163,12 +168,6 @@ fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntr
     inline::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
 }
 
-/// `generatorContext` for custom generators (SPEC §6.5).
-fn gen_context_json(ctx: &GenCtx) -> Value {
-    json!({"currentWorkingDirectory": ctx.cwd, "currentProcess": ctx.shell, "sshPrefix": "",
-           "searchTerm": ctx.search_term, "environmentVariables": ctx.env, "isDangerous": ctx.is_dangerous})
-}
-
 /// Generator results of the current argument, one per generator (SPEC §6.6.1).
 struct Slot {
     key: GenKey,
@@ -197,7 +196,7 @@ struct Run {
     background: bool,
     arg: Rc<Arg>,
     idx: usize,
-    ctx: GenCtx,
+    ctx: GeneratorContext,
     tokens: Vec<String>,
     help: Vec<SpecSuggestion>,
     step: Step,
@@ -477,13 +476,13 @@ impl Engine {
             FilterStrategy::Fuzzy => true,
             FilterStrategy::Default => self.user_fuzzy,
         };
-        let ctx = GenCtx {
-            cwd: req.cwd.to_string_lossy().into_owned(),
-            env: env.clone(),
-            shell: req.shell.name().into(),
-            search_term: pr.search_term.clone(),
-            is_dangerous: arg.as_ref().is_some_and(|a| a.is_dangerous()),
-        };
+        let ctx = GeneratorContext::new(
+            req.cwd.to_string_lossy().into_owned(),
+            env.clone(),
+            req.shell.name().into(),
+            pr.search_term.clone(),
+            arg.as_ref().is_some_and(|a| a.is_dangerous()),
+        );
         let (path, pathext) = (env_var(env, "PATH"), env_var(env, "PATHEXT"));
         let queries = self.queries(&pr, req.shell, js)?;
         let tokens = pr
@@ -569,7 +568,7 @@ impl Engine {
     fn update_slots(
         &mut self,
         pr: &ParseResult,
-        ctx: &GenCtx,
+        ctx: &GeneratorContext,
         tokens: &[String],
         js: &mut Js,
     ) -> Option<Vec<GenKey>> {
@@ -585,7 +584,7 @@ impl Engine {
             fire.push(if !same || i >= self.slots.len() {
                 true
             } else if is_path_template(g) {
-                suggest::dir_changed(new, old, ctx.shell == Shell::Pwsh.name())
+                suggest::dir_changed(new, old, ctx.shell() == Shell::Pwsh.name())
             } else {
                 match g.trigger() {
                     None => arg.as_ref().is_some_and(|a| a.debounce().is_some()),
@@ -713,14 +712,14 @@ impl Engine {
         if !g.template().is_empty() {
             let mut items = Vec::new();
             let files = g.template().iter().any(|t| t == "filepaths");
-            if is_path_template(g) && !run.ctx.cwd.is_empty() {
+            if is_path_template(g) && !run.ctx.cwd().is_empty() {
                 let dir = suggest::inserted_directory(
-                    &run.ctx.cwd,
-                    &run.ctx.search_term,
-                    &run.ctx.env,
-                    run.ctx.shell == Shell::Pwsh.name(),
+                    run.ctx.cwd(),
+                    run.ctx.search_term(),
+                    run.ctx.env(),
+                    run.ctx.shell() == Shell::Pwsh.name(),
                 );
-                items = suggest::list_dir(&dir, files, run.ctx.is_dangerous);
+                items = suggest::list_dir(&dir, files, run.ctx.is_dangerous());
             }
             items.extend(run.help.iter().cloned()); // `history` template: [] (F6)
             return match g.filter_template_suggestions() {
@@ -736,7 +735,7 @@ impl Engine {
                 None => Outcome::Done(items),
             };
         }
-        if run.ctx.cwd.is_empty() {
+        if run.ctx.cwd().is_empty() {
             return Outcome::Done(Vec::new()); // no context for script/custom generators
         }
         if let Some(script) = g.script() {
@@ -758,14 +757,14 @@ impl Engine {
         let key = g.cache().as_ref().map(|c| {
             suggest::cache_key(
                 c,
-                &run.ctx.cwd,
+                run.ctx.cwd(),
                 c.cache_key().clone().unwrap_or_else(|| run.tokens.join(" ")),
             )
         });
         let args = vec![
             JsArg::Json(json!(run.tokens)),
             JsArg::Exec,
-            JsArg::Json(gen_context_json(&run.ctx)),
+            JsArg::Json(generator_context_json(&run.ctx)),
         ];
         let ctx = run.ctx.clone();
         match self.fetch(run, g, key, Step::Custom, js, move |js| {
@@ -822,7 +821,7 @@ impl Engine {
 
     /// SPEC §6.6.3: script value → exec input → (cached) exec.
     fn script_input(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut Js) -> Outcome {
-        let Some(mut input) = script_exec_input(v, &run.ctx.cwd) else {
+        let Some(mut input) = script_exec_input(v, run.ctx.cwd()) else {
             return Outcome::Done(Vec::new());
         }; // falsy → []
         let key_src = input.to_string();
@@ -837,10 +836,10 @@ impl Engine {
         let key = g
             .cache()
             .as_ref()
-            .map(|c| suggest::cache_key(c, &run.ctx.cwd, c.cache_key().clone().unwrap_or(key_src)));
+            .map(|c| suggest::cache_key(c, run.ctx.cwd(), c.cache_key().clone().unwrap_or(key_src)));
         let ctx = run.ctx.clone();
         match self.fetch(run, g, key, Step::Exec, js, move |js| {
-            js.start_exec(exec, &ctx)
+            js.start_exec(ExecRequest::from(exec), &ctx)
         }) {
             Ok(v) => self.exec_output(run, g, &v, js),
             Err(o) => o,
@@ -857,7 +856,7 @@ impl Engine {
             }
             return Outcome::Done(
                 t.split(sep.as_str())
-                    .map(|s| SpecSuggestion::from_script_output(s, run.ctx.is_dangerous))
+                    .map(|s| SpecSuggestion::from_script_output(s, run.ctx.is_dangerous()))
                     .collect(),
             );
         }
@@ -913,7 +912,7 @@ impl Engine {
             Step::Script => self.script_input(run, g, v, js),
             Step::Exec => self.exec_output(run, g, &v, js),
             Step::Custom => self.custom_result(run, g, v, js),
-            Step::PostProcess => Outcome::Done(post_process_items(&v, run.ctx.is_dangerous)),
+            Step::PostProcess => Outcome::Done(post_process_items(&v, run.ctx.is_dangerous())),
             Step::Filter => Outcome::Done(json_items(&v)),
         }
     }

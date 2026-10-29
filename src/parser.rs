@@ -1,6 +1,6 @@
 //! Spec loading (resolution, diff-versioned merge) and the argv state machine (SPEC §6.3–6.4).
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
-use crate::js::{ExecInput, GenCtx, Js, JsArg, TaskId};
+use crate::js::{Js, JsArg};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE_FOR_COMMANDS,
 };
@@ -9,6 +9,8 @@ use crate::shell_parser::CommandInfo;
 use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::exec_request::ExecRequest;
+use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
 use crate::specs::domain::value_objects::repeatability::Repeatability;
 use crate::specs::domain::value_objects::semantic_version::semver_clean;
@@ -18,6 +20,7 @@ use crate::specs::domain::services::spec_locator::spec_location;
 use crate::specs::domain::services::spec_version_selector::versions_to_apply;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_option::SpecOption;
+use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, normalise};
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
@@ -180,13 +183,14 @@ fn dev_mode(settings: &Settings) -> bool {
     settings.bool(AUTOCOMPLETE_DEVELOPER_MODE)
 }
 
-fn gen_ctx(ctx: &ParseCtx) -> GenCtx {
-    GenCtx {
-        cwd: ctx.cwd.to_string_lossy().into_owned(),
-        env: ctx.env.clone(),
-        shell: ctx.shell.name().into(),
-        ..Default::default()
-    }
+fn gen_ctx(ctx: &ParseCtx) -> GeneratorContext {
+    GeneratorContext::new(
+        ctx.cwd.to_string_lossy().into_owned(),
+        ctx.env.clone(),
+        ctx.shell.name().into(),
+        String::new(),
+        false,
+    )
 }
 
 #[derive(Default)]
@@ -208,7 +212,7 @@ impl Loader {
         loc: &SpecLocation,
         ctx: &ParseCtx,
         js: &mut Js,
-        generator: &GenCtx,
+        generator: &GeneratorContext,
     ) -> Result<Option<Rc<Subcommand>>, ParseError> {
         let (SpecLocation::Global { name } | SpecLocation::Local { name, .. }) = loc;
         if ctx
@@ -258,7 +262,7 @@ impl Loader {
         path: &Path,
         dev: bool,
         js: &mut Js,
-        generator: &GenCtx,
+        generator: &GeneratorContext,
     ) -> Result<Option<Value>, ParseError> {
         let memo = format!("cliVersion-{name}");
         let version = match self.versions.get(&memo).filter(|_| !dev) {
@@ -327,7 +331,7 @@ fn cli_version(
     exports: &Map<String, Value>,
     name: &str,
     js: &mut Js,
-    generator: &GenCtx,
+    generator: &GeneratorContext,
     inflight: &mut HashMap<String, TaskId>,
 ) -> Result<Option<String>, ParseError> {
     if name == "@usermn/sdc" {
@@ -339,11 +343,7 @@ fn cli_version(
     let id = *inflight.entry(name.to_string()).or_insert_with(|| match f {
         Some(f) => js.start_call(f, vec![JsArg::Exec], Some(generator)),
         None => js.start_exec(
-            ExecInput {
-                command: name.into(),
-                args: vec!["--version".into()],
-                ..Default::default()
-            },
+            ExecRequest::new(name.into(), vec!["--version".into()], None, HashMap::new(), None),
             generator,
         ),
     });
@@ -494,7 +494,7 @@ struct JsHost<'a, 'c> {
     loader: &'a mut Loader,
     js: &'a mut Js,
     ctx: &'a ParseCtx<'c>,
-    generator: GenCtx,
+    generator: GeneratorContext,
 }
 
 impl Host for JsHost<'_, '_> {

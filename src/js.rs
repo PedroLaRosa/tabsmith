@@ -12,11 +12,15 @@ use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_SCRIPT_TIM
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::logger;
 use crate::specs::domain::spec_error::SpecError;
+use crate::specs::domain::value_objects::exec_request::ExecRequest;
+use crate::specs::domain::value_objects::generator_context::GeneratorContext;
+use crate::specs::domain::value_objects::process_output::ProcessOutput;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
-use crate::types::{EngineMsg, ExecOutput};
+use crate::specs::domain::value_objects::task_id::TaskId;
+use crate::specs::infrastructure::adapters::exec_input::{process_output_json, ExecInput};
+use crate::types::EngineMsg;
 use rquickjs::context::EvalOptions;
 use rquickjs::{CatchResultExt, Context, Function, Object, Runtime};
-use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -29,71 +33,13 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
-/// `generatorContext` given to custom generators, plus what `exec` needs (SPEC §6.5, §9.3).
-#[derive(Clone, Debug, Default)]
-pub struct GenCtx {
-    pub cwd: String,
-    pub env: HashMap<String, String>,
-    /// Shell name (`currentProcess`).
-    pub shell: String,
-    pub search_term: String,
-    pub is_dangerous: bool,
-}
-
-impl GenCtx {
-    /// The `generatorContext` object for `custom(tokens, exec, generatorContext)` (SPEC §6.5). An empty `env`
-    /// means "session env unknown" → the wrapper's own environment.
-    pub fn context_json(&self) -> Value {
-        let env: Map<String, Value> = if self.env.is_empty() {
-            std::env::vars_os()
-                .map(|(k, v)| {
-                    (
-                        k.to_string_lossy().into_owned(),
-                        v.to_string_lossy().into_owned().into(),
-                    )
-                })
-                .collect()
-        } else {
-            self.env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone().into()))
-                .collect()
-        };
-        json!({
-            "currentWorkingDirectory": self.cwd,
-            "currentProcess": self.shell,
-            "sshPrefix": "",
-            "environmentVariables": env,
-            "searchTerm": self.search_term,
-            "isDangerous": self.is_dangerous,
-        })
-    }
-}
-
 /// One argument to a JS callback.
 #[derive(Clone, Debug)]
 pub enum JsArg {
     Json(Value),
-    /// The `executeShellCommand` function, bound to the call's `GenCtx`.
+    /// The `executeShellCommand` function, bound to the call's `GeneratorContext`.
     Exec,
 }
-
-/// `executeCommand` input `{command, args, cwd?, env?, timeout?}`.
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ExecInput {
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub cwd: Option<String>,
-    /// `null` value → remove the variable.
-    #[serde(default)]
-    pub env: HashMap<String, Option<String>>,
-    #[serde(default)]
-    pub timeout: Option<u64>,
-}
-
-pub type TaskId = u64;
 
 /// Result of a finished task: JSON (callbacks: the returned value; exec: `{stdout, stderr, status}`) or an error.
 pub type TaskResult = Result<Value, String>;
@@ -155,7 +101,7 @@ struct Host {
     live: HashSet<TaskId>,
     done: HashMap<TaskId, TaskResult>,
     /// Exec context of each callback task (`__ts_exec` gets the task id; unknown/0 → default).
-    ctxs: HashMap<u64, GenCtx>,
+    ctxs: HashMap<u64, GeneratorContext>,
     /// Pending sleeps (`start_sleep` tasks and JS `setTimeout` ops): (due, id).
     timers: Vec<(Instant, u64)>,
     tx: Sender<EngineMsg>,
@@ -170,7 +116,7 @@ impl Host {
     }
 
     /// Run `exec` on a worker thread; the result comes back as `EngineMsg::ExecDone{id}`.
-    fn spawn_exec(&self, id: u64, input: ExecInput, ctx: GenCtx) {
+    fn spawn_exec(&self, id: u64, input: ExecRequest, ctx: GeneratorContext) {
         let (tx, timeout) = (self.tx.clone(), self.timeout_ms);
         let spawned = std::thread::Builder::new()
             .name("tabsmith-exec".into())
@@ -253,7 +199,7 @@ impl Js {
                         let id = h.id();
                         let generator = h.ctxs.get(&(ctx_id as u64)).cloned().unwrap_or_default();
                         match serde_json::from_str::<ExecInput>(&input) {
-                            Ok(input) => h.spawn_exec(id, input, generator),
+                            Ok(input) => h.spawn_exec(id, ExecRequest::from(input), generator),
                             Err(e) => {
                                 let _ = h.tx.send(EngineMsg::ExecDone {
                                     id,
@@ -388,7 +334,12 @@ impl Js {
     }
 
     /// Start a JS callback `fns[f](...args)`; the result is the serialized return value (Promises awaited).
-    pub fn start_call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>, ctx: Option<&GenCtx>) -> TaskId {
+    pub fn start_call(
+        &mut self,
+        f: SpecFunctionRef,
+        args: Vec<JsArg>,
+        ctx: Option<&GeneratorContext>,
+    ) -> TaskId {
         let generator = ctx.cloned().unwrap_or_default();
         let id = {
             let mut h = self.host.borrow_mut();
@@ -410,8 +361,8 @@ impl Js {
             })
             .collect();
         let mut c = json!({ "id": id, "exec": exec_at });
-        if !generator.cwd.is_empty() {
-            c["cwd"] = generator.cwd.into();
+        if !generator.cwd().is_empty() {
+            c["cwd"] = generator.cwd().into();
         }
         let (args, c) = (Value::Array(args).to_string(), c.to_string());
         self.arm(Instant::now() + SLICE);
@@ -432,7 +383,7 @@ impl Js {
     }
 
     /// Start a native process (SPEC §9.3) on a worker thread; result `{stdout, stderr, status}`.
-    pub fn start_exec(&mut self, input: ExecInput, ctx: &GenCtx) -> TaskId {
+    pub fn start_exec(&mut self, input: ExecRequest, ctx: &GeneratorContext) -> TaskId {
         let mut h = self.host.borrow_mut();
         let id = h.id();
         h.live.insert(id);
@@ -493,7 +444,7 @@ impl Js {
         &mut self,
         f: SpecFunctionRef,
         args: Vec<JsArg>,
-        ctx: Option<&GenCtx>,
+        ctx: Option<&GeneratorContext>,
         timeout: Duration,
     ) -> Result<Value, SpecError> {
         let task = self.start_call(f, args, ctx);
@@ -545,7 +496,7 @@ impl Js {
     fn internal(&mut self, m: EngineMsg) -> Option<EngineMsg> {
         match m {
             EngineMsg::ExecDone { id, out } => {
-                self.finish(id, out.map(|o| serde_json::to_value(o).unwrap_or_default()));
+                self.finish(id, out.map(|o| process_output_json(&o)));
             }
             EngineMsg::Timer { id } => {
                 // ponytail: timers are deadlines checked by the pump; nothing sends Timer, but honour it.
@@ -671,49 +622,46 @@ fn wrap_module(src: &str) -> Option<String> {
 /// Run a process with RunProcess semantics (SPEC §9.3), blocking. Used by exec workers.
 /// `default_timeout_ms` = `autocomplete.scriptTimeout` (5000; Windows 20000).
 pub fn exec(
-    input: &ExecInput,
-    ctx: &GenCtx,
+    input: &ExecRequest,
+    ctx: &GeneratorContext,
     default_timeout_ms: u64,
-) -> Result<ExecOutput, String> {
-    let cwd = [input.cwd.as_deref(), Some(ctx.cwd.as_str())]
+) -> Result<ProcessOutput, String> {
+    let cwd = [input.cwd().as_deref(), Some(ctx.cwd())]
         .into_iter()
         .flatten()
         .map(PathBuf::from)
         .find(|p| !p.as_os_str().is_empty() && p.is_dir())
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" }));
-    if input.command == "ls" && input.args.iter().map(|a| a.trim()).eq(["-1ApL"]) {
+    if input.command() == "ls" && input.args().iter().map(|a| a.trim()).eq(["-1ApL"]) {
         // The listed dir itself, never the fallback: `cd nonexist/` must list nothing, not the shell cwd.
         let dir = input
-            .cwd
+            .cwd()
             .as_deref()
             .filter(|c| !c.is_empty())
-            .map_or(cwd, |c| Path::new(&ctx.cwd).join(c));
+            .map_or(cwd, |c| Path::new(ctx.cwd()).join(c));
         return Ok(native_ls(&dir));
     }
-    if ["fig", "tabsmith"].contains(&input.command.as_str()) {
-        return Ok(ExecOutput {
-            status: 1,
-            ..Default::default()
-        }); // bundled ai() helper
+    if ["fig", "tabsmith"].contains(&input.command()) {
+        return Ok(ProcessOutput::new(String::new(), String::new(), 1)); // bundled ai() helper
     }
     // Effective value of a variable in the child's env (input.env > session env > wrapper env).
     let var = |key: &str| -> Option<OsString> {
-        if let Some((_, v)) = input.env.iter().find(|(k, _)| key_eq(k, key)) {
+        if let Some((_, v)) = input.env().iter().find(|(k, _)| key_eq(k, key)) {
             return v.as_ref().map(OsString::from);
         }
-        if ctx.env.is_empty() {
+        if ctx.env().is_empty() {
             std::env::var_os(key)
         } else {
-            ctx.env
+            ctx.env()
                 .iter()
                 .find(|(k, _)| key_eq(k, key))
                 .map(|(_, v)| v.into())
         }
     };
     let mut cmd = build_command(input, &cwd, &var)?;
-    if !ctx.env.is_empty() {
-        cmd.env_clear().envs(&ctx.env);
+    if !ctx.env().is_empty() {
+        cmd.env_clear().envs(ctx.env());
     }
     for k in ["LS_COLORS", "CLICOLOR_FORCE", "CLICOLOR", "COLORTERM"] {
         cmd.env_remove(k);
@@ -725,7 +673,7 @@ pub fn exec(
         ("TERM", "xterm-256color"),
         ("NO_COLOR", "1"),
     ]);
-    for (k, v) in &input.env {
+    for (k, v) in input.env() {
         match v {
             Some(v) => cmd.env(k, v),
             None => cmd.env_remove(k),
@@ -761,11 +709,11 @@ pub fn exec(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     }
-    let timeout = default_timeout_ms.max(input.timeout.unwrap_or(0));
+    let timeout = default_timeout_ms.max(input.timeout().unwrap_or(0));
     let child = cmd
         .spawn()
-        .map_err(|e| format!("failed running executable ({}): {e}", input.command))?;
-    wait_output(child, timeout, &input.command)
+        .map_err(|e| format!("failed running executable ({}): {e}", input.command()))?;
+    wait_output(child, timeout, input.command())
 }
 
 fn key_eq(a: &str, b: &str) -> bool {
@@ -778,36 +726,36 @@ fn key_eq(a: &str, b: &str) -> bool {
 
 /// `Command` for `input` (no shell). Windows: the legacy `sh -c s` form runs through Git Bash, else `cmd /C`.
 fn build_command(
-    input: &ExecInput,
+    input: &ExecRequest,
     cwd: &Path,
     var: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Command, String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        if input.command == "sh"
-            && input.args.len() == 2
-            && input.args[0] == "-c"
+        if input.command() == "sh"
+            && input.args().len() == 2
+            && input.args()[0] == "-c"
             && find_exe("sh", cwd, var).is_none()
         {
             let mut c;
             match git_bash(cwd, var) {
                 Some(bash) => {
                     c = Command::new(bash);
-                    c.args(&input.args);
+                    c.args(input.args());
                 }
                 None => {
                     c = Command::new(var("ComSpec").unwrap_or_else(|| "cmd.exe".into()));
-                    c.arg("/C").raw_arg(&input.args[1]); // raw: cmd does its own (non-MSVC) parsing
+                    c.arg("/C").raw_arg(&input.args()[1]); // raw: cmd does its own (non-MSVC) parsing
                 }
             }
             return Ok(c);
         }
     }
-    let exe = find_exe(&input.command, cwd, var)
-        .ok_or_else(|| format!("failed running executable ({}): not found", input.command))?;
+    let exe = find_exe(input.command(), cwd, var)
+        .ok_or_else(|| format!("failed running executable ({}): not found", input.command()))?;
     let mut c = Command::new(exe);
-    c.args(&input.args);
+    c.args(input.args());
     Ok(c)
 }
 
@@ -884,7 +832,7 @@ fn git_bash(cwd: &Path, var: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBu
 
 /// Collect stdout/stderr (reader threads, so full pipes never block the child) while polling for exit every
 /// 5 ms; on timeout kill the child (Unix: its whole session/process group; Windows: its job object) and fail.
-fn wait_output(mut child: Child, timeout_ms: u64, label: &str) -> Result<ExecOutput, String> {
+fn wait_output(mut child: Child, timeout_ms: u64, label: &str) -> Result<ProcessOutput, String> {
     #[cfg(unix)]
     let _live = Live::new(child.id() as isize);
     #[cfg(windows)]
@@ -922,11 +870,7 @@ fn wait_output(mut child: Child, timeout_ms: u64, label: &str) -> Result<ExecOut
                 .map_err(|e| format!("waiting for {label}: {e}"))?;
         }
         if let (Some(s), [Some(o), Some(e)]) = (status, &out) {
-            return Ok(ExecOutput {
-                stdout: clean(o),
-                stderr: clean(e),
-                status: s.code().unwrap_or(1),
-            });
+            return Ok(ProcessOutput::new(clean(o), clean(e), s.code().unwrap_or(1)));
         }
         if Instant::now() >= deadline {
             #[cfg(unix)]
@@ -1066,7 +1010,7 @@ fn clean(b: &[u8]) -> String {
 }
 
 /// Native answer to `ls -1ApL` in `dir` (SPEC §6.6.4, §9.3).
-pub fn native_ls(dir: &Path) -> ExecOutput {
+pub fn native_ls(dir: &Path) -> ProcessOutput {
     match std::fs::read_dir(dir) {
         Ok(entries) => {
             let names: Vec<String> = entries
@@ -1079,17 +1023,9 @@ pub fn native_ls(dir: &Path) -> ExecOutput {
                     name
                 })
                 .collect();
-            ExecOutput {
-                stdout: names.join("\n"),
-                stderr: String::new(),
-                status: 0,
-            }
+            ProcessOutput::new(names.join("\n"), String::new(), 0)
         }
-        Err(e) => ExecOutput {
-            stdout: String::new(),
-            stderr: format!("ls: {}: {e}", dir.display()),
-            status: 2,
-        },
+        Err(e) => ProcessOutput::new(String::new(), format!("ls: {}: {e}", dir.display()), 2),
     }
 }
 
@@ -1117,7 +1053,7 @@ mod tests {
         js: &mut Js,
         ns: &Map<String, Value>,
         args: Vec<JsArg>,
-        ctx: Option<&GenCtx>,
+        ctx: Option<&GeneratorContext>,
     ) -> Result<Value, SpecError> {
         js.call(
             fn_id(&ns["default"]).unwrap(),
@@ -1135,6 +1071,36 @@ mod tests {
             Value::Array(a) => a.iter().find_map(|x| find_key(x, key)),
             _ => None,
         }
+    }
+
+    /// The `generatorContext` object for `custom(tokens, exec, generatorContext)` (SPEC §6.5). An empty `env`
+    /// means "session env unknown" → the wrapper's own environment. Test-only: production builds it with
+    /// `fig_spec_mapper::generator_context_json`, which keeps an empty env as `{}` (D1, D7).
+    fn context_json(context: &GeneratorContext) -> Value {
+        let env: Map<String, Value> = if context.env().is_empty() {
+            std::env::vars_os()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned().into(),
+                    )
+                })
+                .collect()
+        } else {
+            context
+                .env()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone().into()))
+                .collect()
+        };
+        json!({
+            "currentWorkingDirectory": context.cwd(),
+            "currentProcess": context.shell(),
+            "sshPrefix": "",
+            "environmentVariables": env,
+            "searchTerm": context.search_term(),
+            "isDangerous": context.is_dangerous(),
+        })
     }
 
     /// A temp dir holding executable shell scripts, for hermetic "fake" commands.
@@ -1298,10 +1264,13 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let ctx = GenCtx {
-            env: [("PATH".to_string(), bin.path().display().to_string())].into(),
-            ..Default::default()
-        };
+        let ctx = GeneratorContext::new(
+            String::new(),
+            [("PATH".to_string(), bin.path().display().to_string())].into(),
+            String::new(),
+            String::new(),
+            false,
+        );
         let run = |js: &mut Js, tok: &str| {
             js.call(
                 alias,
@@ -1333,16 +1302,17 @@ mod tests {
              return [r.stdout,r.status,l,p.stdout,e]};export{g as default};",
         );
         let path = format!("{}:/bin:/usr/bin", bin.path().display());
-        let ctx = GenCtx {
-            cwd: cwd.path().display().to_string(),
-            env: [("PATH".to_string(), path)].into(),
-            search_term: "term".into(),
-            ..Default::default()
-        };
+        let ctx = GeneratorContext::new(
+            cwd.path().display().to_string(),
+            [("PATH".to_string(), path)].into(),
+            String::new(),
+            "term".into(),
+            false,
+        );
         let args = vec![
             JsArg::Json(json!(["git"])),
             JsArg::Exec,
-            JsArg::Json(ctx.context_json()),
+            JsArg::Json(context_json(&ctx)),
         ];
         let out = call_default(&mut js, &ns, args, Some(&ctx)).unwrap();
         let real_cwd = cwd.path().canonicalize().unwrap().display().to_string();
@@ -1371,7 +1341,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(dir.path().join("sub"), dir.path().join("link")).unwrap();
         let mut got: Vec<String> = native_ls(dir.path())
-            .stdout
+            .stdout()
             .lines()
             .map(String::from)
             .collect();
@@ -1382,38 +1352,36 @@ mod tests {
         }
         assert_eq!(got, want);
         let missing = native_ls(&dir.path().join("nope"));
-        assert_eq!((missing.status, missing.stdout.as_str()), (2, ""));
+        assert_eq!((missing.status(), missing.stdout()), (2, ""));
 
         // exec answers `ls -1ApL` natively (args trimmed; no input.cwd → ctx cwd; relative → under ctx cwd; missing
         // dir → error, not the ctx cwd's listing) and stubs fig/tabsmith.
-        let ctx = GenCtx {
-            cwd: dir.path().display().to_string(),
-            ..Default::default()
-        };
+        let ctx = GeneratorContext::new(
+            dir.path().display().to_string(),
+            HashMap::new(),
+            String::new(),
+            String::new(),
+            false,
+        );
         let ls = |cwd: Option<&str>| {
-            let input = ExecInput {
-                command: "ls".into(),
-                args: vec!["-1ApL ".into()],
-                cwd: cwd.map(String::from),
-                ..Default::default()
-            };
+            let input = ExecRequest::new(
+                "ls".into(),
+                vec!["-1ApL ".into()],
+                cwd.map(String::from),
+                HashMap::new(),
+                None,
+            );
             exec(&input, &ctx, 5000).unwrap()
         };
         assert_eq!(ls(None), native_ls(dir.path()));
         assert_eq!(ls(Some("sub/")), native_ls(&dir.path().join("sub")));
         let missing = ls(Some(&dir.path().join("nonexist/").display().to_string()));
-        assert_eq!((missing.status, missing.stdout.as_str()), (2, ""));
+        assert_eq!((missing.status(), missing.stdout()), (2, ""));
         for cmd in ["fig", "tabsmith"] {
-            let input = ExecInput {
-                command: cmd.into(),
-                ..Default::default()
-            };
+            let input = ExecRequest::new(cmd.into(), vec![], None, HashMap::new(), None);
             assert_eq!(
                 exec(&input, &ctx, 5000),
-                Ok(ExecOutput {
-                    status: 1,
-                    ..Default::default()
-                })
+                Ok(ProcessOutput::new(String::new(), String::new(), 1))
             );
         }
     }
@@ -1421,15 +1389,15 @@ mod tests {
     #[test]
     fn exec_reports_an_unknown_command_instead_of_stubbing_it() {
         let empty_path = TempDir::new("empty-path");
-        let ctx = GenCtx {
-            env: HashMap::from([("PATH".to_string(), empty_path.path().display().to_string())]),
-            ..Default::default()
-        };
+        let ctx = GeneratorContext::new(
+            String::new(),
+            HashMap::from([("PATH".to_string(), empty_path.path().display().to_string())]),
+            String::new(),
+            String::new(),
+            false,
+        );
 
-        let input = ExecInput {
-            command: "no-such-cli".into(),
-            ..Default::default()
-        };
+        let input = ExecRequest::new("no-such-cli".into(), vec![], None, HashMap::new(), None);
 
         let result = exec(&input, &ctx, 5000);
 
@@ -1440,32 +1408,29 @@ mod tests {
     #[test]
     fn exec_status_output_and_timeout() {
         let sh = |script: &str, timeout: Option<u64>| {
-            let input = ExecInput {
-                command: "sh".into(),
-                args: vec!["-c".into(), script.into()],
+            let input = ExecRequest::new(
+                "sh".into(),
+                vec!["-c".into(), script.into()],
+                None,
+                HashMap::new(),
                 timeout,
-                ..Default::default()
-            };
-            exec(&input, &GenCtx::default(), 100)
+            );
+            exec(&input, &GeneratorContext::default(), 100)
         };
         assert_eq!(
             sh(
                 "printf '\\n\\nout\\r\\nx\\033[?25h\\n\\n'; echo err >&2; exit 3",
                 None
             ),
-            Ok(ExecOutput {
-                stdout: "out\nx".into(),
-                stderr: "err".into(),
-                status: 3
-            })
+            Ok(ProcessOutput::new("out\nx".into(), "err".into(), 3))
         );
         assert_eq!(
-            sh("kill -9 $$", None).unwrap().status,
+            sh("kill -9 $$", None).unwrap().status(),
             1,
             "killed by a signal → 1"
         );
         assert_eq!(
-            sh("echo $TERM $CLICOLOR", None).unwrap().stdout,
+            sh("echo $TERM $CLICOLOR", None).unwrap().stdout(),
             "xterm-256color"
         );
         let t0 = Instant::now();
@@ -1473,7 +1438,7 @@ mod tests {
         assert!(e.contains("timed out after 100 ms"), "{e}");
         assert!(t0.elapsed() < Duration::from_secs(2));
         assert_eq!(
-            sh("sleep 0.2; echo ok", Some(3000)).unwrap().stdout,
+            sh("sleep 0.2; echo ok", Some(3000)).unwrap().stdout(),
             "ok",
             "input.timeout raises the floor"
         );
@@ -1599,16 +1564,21 @@ mod tests {
     #[test]
     fn cmd_gets_no_cwd_search_env() {
         let bin = fake_bin(&[("cmd", r#"printf %s "$NoDefaultCurrentDirectoryInExePath""#)]);
-        let ctx = GenCtx {
-            env: [("PATH".to_string(), bin.path().display().to_string())].into(),
-            ..Default::default()
-        };
-        let input = ExecInput {
-            command: "cmd".into(),
-            args: vec!["/C".into(), "git".into()],
-            ..Default::default()
-        };
-        assert_eq!(exec(&input, &ctx, 5000).unwrap().stdout, "1");
+        let ctx = GeneratorContext::new(
+            String::new(),
+            [("PATH".to_string(), bin.path().display().to_string())].into(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        let input = ExecRequest::new(
+            "cmd".into(),
+            vec!["/C".into(), "git".into()],
+            None,
+            HashMap::new(),
+            None,
+        );
+        assert_eq!(exec(&input, &ctx, 5000).unwrap().stdout(), "1");
     }
 
     /// A generator still running when the wrapper exits dies with it (re-runs this test in a child process that
@@ -1621,12 +1591,8 @@ mod tests {
             std::thread::spawn(|| {
                 let args = vec!["-c".into(), "sleep 30; echo never".into()];
                 exec(
-                    &ExecInput {
-                        command: "/bin/sh".into(),
-                        args,
-                        ..Default::default()
-                    },
-                    &GenCtx::default(),
+                    &ExecRequest::new("/bin/sh".into(), args, None, HashMap::new(), None),
+                    &GeneratorContext::default(),
                     60_000,
                 )
             });
@@ -1682,13 +1648,14 @@ mod tests {
             "echo",
             "x^>marker",
         ];
-        let input = ExecInput {
-            command: "cmd".into(),
-            args: args.map(String::from).to_vec(),
-            cwd: Some(dir.path().display().to_string()),
-            ..Default::default()
-        };
-        assert!(exec(&input, &GenCtx::default(), 300)
+        let input = ExecRequest::new(
+            "cmd".into(),
+            args.map(String::from).to_vec(),
+            Some(dir.path().display().to_string()),
+            HashMap::new(),
+            None,
+        );
+        assert!(exec(&input, &GeneratorContext::default(), 300)
             .unwrap_err()
             .contains("timed out"));
         std::thread::sleep(Duration::from_secs(4));
@@ -1742,11 +1709,8 @@ mod tests {
         );
         // Exec tasks deliver `{stdout, stderr, status}`; ExecDone is consumed internally.
         let e = js.start_exec(
-            ExecInput {
-                command: "fig".into(),
-                ..Default::default()
-            },
-            &GenCtx::default(),
+            ExecRequest::new("fig".into(), vec![], None, HashMap::new(), None),
+            &GeneratorContext::default(),
         );
         let r = js
             .wait(&[e], Instant::now() + Duration::from_secs(5))

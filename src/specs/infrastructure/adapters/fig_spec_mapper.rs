@@ -6,6 +6,7 @@ use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
 use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
+use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::generator_script::GeneratorScript;
 use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
@@ -419,6 +420,12 @@ pub(crate) fn post_process_items(v: &Value, is_dangerous: bool) -> Vec<SpecSugge
             _ => None,
         })
         .collect()
+}
+
+/// `generatorContext` for custom generators (SPEC §6.5): the env as is, `{}` when it is empty.
+pub(crate) fn generator_context_json(context: &GeneratorContext) -> Value {
+    json!({"currentWorkingDirectory": context.cwd(), "currentProcess": context.shell(), "sshPrefix": "",
+           "searchTerm": context.search_term(), "environmentVariables": context.env(), "isDangerous": context.is_dangerous()})
 }
 
 /// A spec JSON value as a `SpecValue`, integers and floats kept apart.

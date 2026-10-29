@@ -779,7 +779,7 @@ fn cli_version_detection_survives_an_aborted_parse() {
     let src = "var v=async()=>{await new Promise(r=>setTimeout(r,200));globalThis.n=(globalThis.n||0)+1;return `${globalThis.n}.0.0`};export{v as getVersionCommand};";
     std::fs::write(&p, src).unwrap();
     let exports = js.load_module(&p).unwrap();
-    let (generator, mut inflight) = (GenCtx::default(), HashMap::new());
+    let (generator, mut inflight) = (GeneratorContext::default(), HashMap::new());
     let req = Request {
         id: 1,
         buffer: "az ".into(),

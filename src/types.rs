@@ -4,8 +4,8 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::system_clock::SystemClock;
+use crate::specs::domain::value_objects::process_output::ProcessOutput;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -143,14 +143,6 @@ pub struct Request {
     pub history_mode: bool,
 }
 
-/// Output of a generator process (`executeCommand` result shape).
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct ExecOutput {
-    pub stdout: String,
-    pub stderr: String,
-    pub status: i32,
-}
-
 /// Messages to the wrapper's main loop.
 pub enum Msg {
     Stdin(Vec<u8>),
@@ -188,7 +180,7 @@ pub enum EngineMsg {
     /// Internal (js host): a spawned process finished.
     ExecDone {
         id: u64,
-        out: Result<ExecOutput, String>,
+        out: Result<ProcessOutput, String>,
     },
     /// Internal (js host): a `setTimeout`/debounce timer fired.
     Timer {
