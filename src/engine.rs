@@ -52,28 +52,30 @@ use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
 use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
+use crate::specs::application::ports::interrupted::Interrupted;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
-use crate::specs::domain::value_objects::exec_request::ExecRequest;
+use crate::specs::domain::value_objects::custom_generator_result::CustomGeneratorResult;
 use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
 use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::generator_script::GeneratorScript;
 use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
+use crate::specs::domain::value_objects::script_resolution::ScriptResolution;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
+use crate::specs::domain::value_objects::spec_function_kind::SpecFunctionKind;
 use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
+use crate::specs::domain::value_objects::spec_value::SpecValue;
 use crate::specs::domain::value_objects::task_id::TaskId;
+use crate::specs::domain::value_objects::task_outcome::TaskOutcome;
+use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
-use crate::specs::infrastructure::adapters::exec_input::ExecInput;
-use crate::specs::infrastructure::adapters::fig_spec_mapper::{
-    self, generator_context_json, json_items, post_process_items, script_exec_input, spec_value_to_json,
-};
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
-use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime, TaskResult};
+use crate::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
 use crate::specs::infrastructure::specs_module::build_specs_module;
 use crate::completion::domain::entities::generator_cache::GeneratorCache;
 use crate::completion::domain::value_objects::cache_lookup::CacheLookup;
@@ -90,7 +92,6 @@ use crate::history::infrastructure::history_module::{build_history_module, Histo
 use crate::types::{
     now_ms, EngineMsg, Msg,
 };
-use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -243,6 +244,21 @@ fn log_completion_notice(notice: CompletionNotice) {
     }
 }
 
+/// The rows of a read post-process or filter result; the kinds a generator never reads this way give none.
+fn suggestion_rows(result: SpecFunctionResult) -> Vec<SpecSuggestion> {
+    match result {
+        SpecFunctionResult::PostProcess(rows) | SpecFunctionResult::FilterTemplateSuggestions(rows) => rows,
+        SpecFunctionResult::QueryTerm(_)
+        | SpecFunctionResult::Trigger(_)
+        | SpecFunctionResult::Alias(_)
+        | SpecFunctionResult::LoadSpec(_)
+        | SpecFunctionResult::GenerateSpecCacheKey(_)
+        | SpecFunctionResult::GenerateSpec(_)
+        | SpecFunctionResult::Script(_)
+        | SpecFunctionResult::Custom(_) => Vec::new(),
+    }
+}
+
 /// Generator results of the current argument, one per generator (SPEC §6.6.1).
 struct Slot {
     key: GeneratorKey,
@@ -324,7 +340,7 @@ struct Engine {
     prev_search: String,
     next_gen: u64,
     runs: Vec<Run>,
-    cache: GeneratorCache<Value>,
+    cache: GeneratorCache<SpecValue>,
     cur: Option<Current>,
     first_token_cache: Option<(Instant, Vec<SuggestionCandidate>)>,
 }
@@ -611,7 +627,7 @@ impl Engine {
     }
 
     /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
-    fn queries(&self, pr: &ParsedCommandLine, shell: Shell, js: &QuickJsSpecRuntime) -> Option<Vec<SuggestionQuery>> {
+    fn queries(&self, pr: &ParsedCommandLine, shell: Shell, js: &dyn SpecRuntime) -> Option<Vec<SuggestionQuery>> {
         let Some(arg) = pr.current_arg() else {
             return Some(Vec::new());
         };
@@ -665,7 +681,7 @@ impl Engine {
         pr: &ParsedCommandLine,
         ctx: &GeneratorContext,
         tokens: &[String],
-        js: &QuickJsSpecRuntime,
+        js: &dyn SpecRuntime,
     ) -> Option<Vec<GeneratorKey>> {
         let arg = pr.current_arg().clone();
         let same = match (&arg, &self.slot_arg) {
@@ -814,7 +830,7 @@ impl Engine {
     }
 
     /// First step after the (optional) debounce: template, script or custom.
-    fn begin(&mut self, run: &mut Run, js: &QuickJsSpecRuntime) -> Outcome {
+    fn begin(&mut self, run: &mut Run, js: &dyn SpecRuntime) -> Outcome {
         let arg = run.arg.clone();
         let g = &arg.generators()[run.idx];
         if !g.template().is_empty() {
@@ -832,9 +848,11 @@ impl Engine {
             items.extend(run.help.iter().cloned()); // `history` template: [] (F6)
             return match g.filter_template_suggestions() {
                 Some(f) => {
-                    run.task = js.start_call(
-                        f,
-                        vec![JsArg::Json(fig_spec_mapper::template_json(&items))],
+                    run.task = js.start(
+                        SpecFunctionCall::FilterTemplateSuggestions {
+                            function: f,
+                            suggestions: TemplateSuggestions::Listed(items),
+                        },
                         Some(&run.ctx),
                     );
                     run.step = Step::Filter;
@@ -849,14 +867,22 @@ impl Engine {
         if let Some(script) = g.script() {
             return match script {
                 GeneratorScript::Fn(f) => {
-                    run.task =
-                        js.start_call(*f, vec![JsArg::Json(json!(run.tokens))], Some(&run.ctx));
+                    run.task = js.start(
+                        SpecFunctionCall::Script {
+                            function: *f,
+                            tokens: run.tokens.clone(),
+                        },
+                        Some(&run.ctx),
+                    );
                     run.step = Step::Script;
                     Outcome::Pending
                 }
-                GeneratorScript::Argv(a) => self.script_input(run, g, json!(a), js),
-                GeneratorScript::Shell(s) => self.script_input(run, g, json!(s), js),
-                GeneratorScript::Object(o) => self.script_input(run, g, spec_value_to_json(o), js),
+                GeneratorScript::Argv(a) => {
+                    let argv = SpecValue::List(a.iter().cloned().map(SpecValue::Text).collect());
+                    self.script_input(run, g, argv, js)
+                }
+                GeneratorScript::Shell(s) => self.script_input(run, g, SpecValue::Text(s.clone()), js),
+                GeneratorScript::Object(o) => self.script_input(run, g, o.clone(), js),
             };
         }
         let Some(custom) = g.custom() else {
@@ -869,14 +895,13 @@ impl Engine {
                 c.cache_key().clone().unwrap_or_else(|| run.tokens.join(" ")),
             )
         });
-        let args = vec![
-            JsArg::Json(json!(run.tokens)),
-            JsArg::Exec,
-            JsArg::Json(generator_context_json(&run.ctx)),
-        ];
+        let call = SpecFunctionCall::Custom {
+            function: custom,
+            tokens: run.tokens.clone(),
+        };
         let ctx = run.ctx.clone();
         match self.fetch(run, g, key, Step::Custom, js, move |js| {
-            js.start_call(custom, args, Some(&ctx))
+            js.start(call, Some(&ctx))
         }) {
             Ok(v) => self.custom_result(run, g, v, js),
             Err(o) => o,
@@ -890,9 +915,9 @@ impl Engine {
         g: &Generator,
         key: Option<String>,
         step: Step,
-        js: &QuickJsSpecRuntime,
-        start: impl FnOnce(&QuickJsSpecRuntime) -> TaskId,
-    ) -> Result<Value, Outcome> {
+        js: &dyn SpecRuntime,
+        start: impl FnOnce(&dyn SpecRuntime) -> TaskId,
+    ) -> Result<SpecValue, Outcome> {
         let (Some(cfg), Some(key)) = (g.cache(), key) else {
             run.task = start(js);
             run.step = step;
@@ -928,26 +953,37 @@ impl Engine {
     }
 
     /// SPEC §6.6.3: script value → exec input → (cached) exec.
-    fn script_input(&mut self, run: &mut Run, g: &Generator, v: Value, js: &QuickJsSpecRuntime) -> Outcome {
-        let Some(mut input) = script_exec_input(v, run.ctx.cwd()) else {
-            return Outcome::Done(Vec::new());
-        }; // falsy → []
-        let key_src = input.to_string();
+    fn script_input(&mut self, run: &mut Run, g: &Generator, v: SpecValue, js: &dyn SpecRuntime) -> Outcome {
+        let (request, cache_key_source) = match js.read(&v, SpecFunctionKind::Script, &run.ctx) {
+            SpecFunctionResult::Script(ScriptResolution::Ready {
+                request,
+                cache_key_source,
+            }) => (request, cache_key_source),
+            SpecFunctionResult::Script(ScriptResolution::Invalid(e)) => {
+                return Outcome::Fail(format!("bad script input: {e}"))
+            }
+            SpecFunctionResult::Script(ScriptResolution::Skip)
+            | SpecFunctionResult::QueryTerm(_)
+            | SpecFunctionResult::Trigger(_)
+            | SpecFunctionResult::Alias(_)
+            | SpecFunctionResult::LoadSpec(_)
+            | SpecFunctionResult::GenerateSpecCacheKey(_)
+            | SpecFunctionResult::GenerateSpec(_)
+            | SpecFunctionResult::Custom(_)
+            | SpecFunctionResult::PostProcess(_)
+            | SpecFunctionResult::FilterTemplateSuggestions(_) => return Outcome::Done(Vec::new()), // falsy → []
+        };
         let timeout = script_timeout(&self.settings)
             .max(g.script_timeout().unwrap_or(0))
-            .max(input.get("timeout").and_then(Value::as_u64).unwrap_or(0));
-        input["timeout"] = json!(timeout);
-        let exec: ExecInput = match serde_json::from_value(input) {
-            Ok(i) => i,
-            Err(e) => return Outcome::Fail(format!("bad script input: {e}")),
-        };
+            .max(request.timeout().unwrap_or(0));
+        let request = request.with_timeout(Some(timeout));
         let key = g
             .cache()
             .as_ref()
-            .map(|c| cache_key(c, run.ctx.cwd(), c.cache_key().clone().unwrap_or(key_src)));
+            .map(|c| cache_key(c, run.ctx.cwd(), c.cache_key().clone().unwrap_or(cache_key_source)));
         let ctx = run.ctx.clone();
         match self.fetch(run, g, key, Step::Exec, js, move |js| {
-            js.start_exec(ExecRequest::from(exec), &ctx)
+            js.start_exec(request, &ctx)
         }) {
             Ok(v) => self.exec_output(run, g, &v, js),
             Err(o) => o,
@@ -955,8 +991,8 @@ impl Engine {
     }
 
     /// `splitOn` takes precedence over `postProcess`; neither → [].
-    fn exec_output(&mut self, run: &mut Run, g: &Generator, v: &Value, js: &QuickJsSpecRuntime) -> Outcome {
-        let stdout = v.get("stdout").and_then(Value::as_str).unwrap_or("");
+    fn exec_output(&mut self, run: &mut Run, g: &Generator, v: &SpecValue, js: &dyn SpecRuntime) -> Outcome {
+        let stdout = js.read_exec_stdout(v);
         if let Some(sep) = g.split_on() {
             let t = stdout.trim();
             if t.is_empty() {
@@ -971,9 +1007,12 @@ impl Engine {
         let Some(pp) = g.post_process() else {
             return Outcome::Done(Vec::new());
         };
-        run.task = js.start_call(
-            pp,
-            vec![JsArg::Json(json!(stdout)), JsArg::Json(json!(run.tokens))],
+        run.task = js.start(
+            SpecFunctionCall::PostProcess {
+                function: pp,
+                stdout,
+                tokens: run.tokens.clone(),
+            },
             Some(&run.ctx),
         );
         run.step = Step::PostProcess;
@@ -981,23 +1020,37 @@ impl Engine {
     }
 
     /// Custom result; `filterTemplateSuggestions` applies when the first item has a `context`.
-    fn custom_result(&mut self, run: &mut Run, g: &Generator, v: Value, js: &QuickJsSpecRuntime) -> Outcome {
-        let templated = v
-            .as_array()
-            .and_then(|a| a.first())
-            .is_some_and(|x| x.get("context").is_some());
+    fn custom_result(&mut self, run: &mut Run, g: &Generator, v: SpecValue, js: &dyn SpecRuntime) -> Outcome {
+        let custom = match js.read(&v, SpecFunctionKind::Custom, &run.ctx) {
+            SpecFunctionResult::Custom(custom) => custom,
+            SpecFunctionResult::QueryTerm(_)
+            | SpecFunctionResult::Trigger(_)
+            | SpecFunctionResult::Alias(_)
+            | SpecFunctionResult::LoadSpec(_)
+            | SpecFunctionResult::GenerateSpecCacheKey(_)
+            | SpecFunctionResult::GenerateSpec(_)
+            | SpecFunctionResult::Script(_)
+            | SpecFunctionResult::PostProcess(_)
+            | SpecFunctionResult::FilterTemplateSuggestions(_) => CustomGeneratorResult::new(false, Vec::new()),
+        };
         match g.filter_template_suggestions() {
-            Some(f) if templated => {
-                run.task = js.start_call(f, vec![JsArg::Json(v)], Some(&run.ctx));
+            Some(f) if custom.is_templated() => {
+                run.task = js.start(
+                    SpecFunctionCall::FilterTemplateSuggestions {
+                        function: f,
+                        suggestions: TemplateSuggestions::Returned(v),
+                    },
+                    Some(&run.ctx),
+                );
                 run.step = Step::Filter;
                 Outcome::Pending
             }
-            _ => Outcome::Done(json_items(&v)), // undefined → []
+            _ => Outcome::Done(custom.suggestions().clone()), // undefined → []
         }
     }
 
     /// A task of `run` finished.
-    fn advance(&mut self, run: &mut Run, res: TaskResult, js: &QuickJsSpecRuntime) -> Outcome {
+    fn advance(&mut self, run: &mut Run, res: TaskOutcome, js: &dyn SpecRuntime) -> Outcome {
         let v = match res {
             Ok(v) => v,
             Err(e) => {
@@ -1020,13 +1073,21 @@ impl Engine {
             Step::Script => self.script_input(run, g, v, js),
             Step::Exec => self.exec_output(run, g, &v, js),
             Step::Custom => self.custom_result(run, g, v, js),
-            Step::PostProcess => Outcome::Done(post_process_items(&v, run.ctx.is_dangerous())),
-            Step::Filter => Outcome::Done(json_items(&v)),
+            Step::PostProcess => Outcome::Done(suggestion_rows(js.read(
+                &v,
+                SpecFunctionKind::PostProcess,
+                &run.ctx,
+            ))),
+            Step::Filter => Outcome::Done(suggestion_rows(js.read(
+                &v,
+                SpecFunctionKind::FilterTemplateSuggestions,
+                &run.ctx,
+            ))),
         }
     }
 
     /// Wait (one slice) on every running generator task; reply again when a current slot changed.
-    fn pump(&mut self, js: &QuickJsSpecRuntime) {
+    fn pump(&mut self, js: &dyn SpecRuntime) {
         let mut tasks: Vec<TaskId> = self.runs.iter().map(|r| r.task).collect();
         tasks.sort_unstable();
         tasks.dedup();
@@ -1036,12 +1097,9 @@ impl Engine {
             .map(|r| r.deadline)
             .min()
             .map_or(Instant::now() + SLICE, |d| d.min(Instant::now() + SLICE));
-        let results = match js.wait_json(&tasks, deadline) {
+        let results = match js.wait(&tasks, deadline) {
             Ok(r) => r,
-            Err(SpecError::Aborted) => return, // a newer request is queued
-            Err(
-                e @ (SpecError::Timeout | SpecError::Invalid(_) | SpecError::BundleUnavailable(_)),
-            ) => vec![Some(Err(e.to_string())); tasks.len()],
+            Err(Interrupted) => return, // a newer request is queued
         };
         let mut changed = false;
         let mut runs = std::mem::take(&mut self.runs);
@@ -1248,6 +1306,8 @@ mod tests {
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
     use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
     use crate::specs::domain::value_objects::process_output::ProcessOutput;
+    use crate::specs::domain::value_objects::exec_request::ExecRequest;
+    use serde_json::{json, Value};
 
     #[test]
     fn llm_history_honours_history_count() {
