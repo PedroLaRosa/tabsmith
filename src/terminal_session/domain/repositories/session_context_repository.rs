@@ -1,6 +1,10 @@
 use crate::terminal_session::domain::entities::session_context::SessionContext;
 use crate::terminal_session::domain::terminal_session_error::TerminalSessionError;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
+#[cfg(test)]
+use std::cell::RefCell;
+#[cfg(test)]
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 /// Where each session's latest context is kept, between the `_ pre-cmd` that reports it and the wrapper that reads
@@ -21,16 +25,21 @@ pub(crate) trait SessionContextRepository {
 /// Session contexts kept in memory, for tests.
 #[cfg(test)]
 #[derive(Default)]
-pub(crate) struct InMemorySessionContextRepository;
+pub(crate) struct InMemorySessionContextRepository {
+    contexts: RefCell<HashMap<SessionId, SessionContext>>,
+}
 
 #[cfg(test)]
 impl SessionContextRepository for InMemorySessionContextRepository {
-    fn save(&self, _context: &SessionContext) -> Result<(), TerminalSessionError> {
+    fn save(&self, context: &SessionContext) -> Result<(), TerminalSessionError> {
+        self.contexts
+            .borrow_mut()
+            .insert(context.id().clone(), context.clone());
         Ok(())
     }
 
-    fn find(&self, _id: &SessionId) -> Option<SessionContext> {
-        None
+    fn find(&self, id: &SessionId) -> Option<SessionContext> {
+        self.contexts.borrow().get(id).cloned()
     }
 
     fn last_modified(&self, _id: &SessionId) -> Option<SystemTime> {
@@ -57,5 +66,26 @@ mod tests {
         let found = repository.find(&session_id("abc123"));
 
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn should_find_the_context_the_session_last_reported() {
+        let repository = InMemorySessionContextRepository::default();
+        let first = SessionContext::new(session_id("abc123"), HashMap::new(), None, 1);
+        let last = SessionContext::new(
+            session_id("abc123"),
+            HashMap::from([("A".to_string(), "1".to_string())]),
+            Some("ll='ls -l'".to_string()),
+            2,
+        );
+        repository.save(&first).unwrap();
+
+        repository.save(&last).unwrap();
+
+        let found = repository.find(&session_id("abc123")).unwrap();
+        assert_eq!(
+            (found.env(), found.alias(), found.reported_at_ms()),
+            (last.env(), last.alias(), 2)
+        );
     }
 }
