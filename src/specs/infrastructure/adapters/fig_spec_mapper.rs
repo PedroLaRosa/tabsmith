@@ -488,7 +488,7 @@ pub(crate) fn function_result(
             Value::String(s) => Some(s.clone()),
             _ => None,
         }),
-        SpecFunctionKind::Trigger => SpecFunctionResult::Trigger(false),
+        SpecFunctionKind::Trigger => SpecFunctionResult::Trigger(truthy(v)),
         SpecFunctionKind::Alias => SpecFunctionResult::Alias(None),
         SpecFunctionKind::LoadSpec => SpecFunctionResult::LoadSpec(None),
         SpecFunctionKind::GenerateSpecCacheKey => SpecFunctionResult::GenerateSpecCacheKey(None),

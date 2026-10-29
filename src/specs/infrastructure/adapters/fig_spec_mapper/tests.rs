@@ -434,3 +434,19 @@ fn should_read_a_query_term_only_from_a_string() {
     assert!(matches!(text, SpecFunctionResult::QueryTerm(Some(term)) if term == "ma"));
     assert!(matches!(list, SpecFunctionResult::QueryTerm(None)));
 }
+
+#[test]
+fn should_read_a_trigger_by_js_truthiness() {
+    let context = GeneratorContext::default();
+    let values = [json!("a"), json!(0), json!("")];
+
+    let fired: Vec<bool> = values
+        .iter()
+        .map(|v| match function_result(SpecFunctionKind::Trigger, v, &context) {
+            SpecFunctionResult::Trigger(fired) => fired,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+
+    assert_eq!(fired, vec![true, false, false]);
+}
