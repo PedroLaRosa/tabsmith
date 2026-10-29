@@ -56,14 +56,16 @@ mod tests {
     use crate::shell_integration::application::ports::data_directory_purger::RecordingDataDirectoryPurger;
     use crate::shell_integration::application::ports::shell_environment::RecordingShellEnvironment;
     use crate::shell_integration::domain::repositories::backup_repository::InMemoryBackupRepository;
+    use crate::shell_integration::domain::repositories::dotfile_repository::DotfileRepository;
     use crate::shell_integration::domain::repositories::dotfile_repository::InMemoryDotfileRepository;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     /// The use case over in-memory dotfiles and backups, a fixed clock and recording doubles, kept for the asserts.
     struct TestBed {
         use_case: UninstallTabsmithUseCase,
         installer: Rc<IntegrationInstaller>,
+        dotfiles: Rc<InMemoryDotfileRepository>,
         purger: Rc<RecordingDataDirectoryPurger>,
     }
 
@@ -78,8 +80,9 @@ mod tests {
         environment: RecordingShellEnvironment,
         purger: RecordingDataDirectoryPurger,
     ) -> TestBed {
+        let dotfiles = Rc::new(InMemoryDotfileRepository::default());
         let installer = Rc::new(IntegrationInstaller::new(
-            Rc::new(InMemoryDotfileRepository::default()),
+            dotfiles.clone(),
             Rc::new(InMemoryBackupRepository::default()),
             Arc::new(FixedClock::new(1_700_000_123_999)),
             Rc::new(environment),
@@ -88,6 +91,7 @@ mod tests {
         TestBed {
             use_case: UninstallTabsmithUseCase::new(installer.clone(), purger.clone()),
             installer,
+            dotfiles,
             purger,
         }
     }
@@ -170,7 +174,9 @@ mod tests {
         let bed = test_bed();
         let mut events = Vec::new();
 
-        let failed = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
+        let failed = bed
+            .use_case
+            .execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
 
         assert_eq!(
             (failed, events, bed.purger.purged()),
@@ -187,11 +193,50 @@ mod tests {
         );
         let mut events = Vec::new();
 
-        let failed = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
+        let failed = bed
+            .use_case
+            .execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
 
         assert_eq!(
             (failed, events),
-            (true, vec![UninstallProgress::PurgeFailed("Permission denied (os error 13)".into())])
+            (
+                true,
+                vec![UninstallProgress::PurgeFailed(
+                    "Permission denied (os error 13)".into()
+                )]
+            )
         );
+    }
+
+    #[test]
+    fn should_report_the_integration_failures_before_purging() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default()
+                .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+            RecordingDataDirectoryPurger::default(),
+        );
+        let mut purges_when_reported = Vec::new();
+
+        let failed = bed.use_case.execute(&paths(), &[Shell::Pwsh], true, |_| {
+            purges_when_reported.push(bed.purger.purged().len())
+        });
+
+        assert_eq!(
+            (failed, purges_when_reported, bed.purger.purged()),
+            (true, vec![0], vec![PathBuf::from("/home/u/.tabsmith")])
+        );
+    }
+
+    /// Unlike `integrations uninstall`, which takes out only what has traces, every integration is uninstalled: a
+    /// dotfile tabsmith never touched is still rewritten by the whitespace normalisation (T34).
+    #[test]
+    fn should_take_out_every_integration_even_one_without_traces() {
+        let bed = test_bed();
+        let zshrc = Path::new("/home/u/.zshrc");
+        bed.dotfiles.write(zshrc, "").unwrap();
+
+        let _ = bed.use_case.execute(&paths(), &[Shell::Zsh], false, |_| {});
+
+        assert_eq!(bed.dotfiles.read(zshrc).unwrap(), "\n");
     }
 }
