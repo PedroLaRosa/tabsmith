@@ -100,4 +100,24 @@ mod tests {
             "{installed:?}"
         );
     }
+
+    /// zsh is installed, but pwsh cannot be listed: the run fails, so no reminder.
+    #[test]
+    fn should_save_no_restart_reminder_when_the_run_failed() {
+        let restart_reminder = Rc::new(InMemoryRestartReminderRepository::default());
+        let use_case = InstallIntegrationsUseCase::new(
+            installer(
+                RecordingShellEnvironment::default()
+                    .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+            ),
+            restart_reminder.clone(),
+        );
+
+        let installed = use_case.execute(&paths(), &[Shell::Zsh, Shell::Pwsh]);
+
+        assert!(
+            installed.is_err() && !restart_reminder.is_pending(),
+            "{installed:?}"
+        );
+    }
 }
