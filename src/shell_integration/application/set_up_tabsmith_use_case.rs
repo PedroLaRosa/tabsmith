@@ -63,6 +63,7 @@ impl SetUpTabsmithUseCase {
                 report(SetupProgress::ScriptFilesFailed(failures));
             }
         }
+        self.spec_bundle.install()?;
         Ok(manual)
     }
 }
@@ -267,5 +268,29 @@ mod tests {
                 && !bed.restart_reminder.is_pending(),
             "{manual:?} {events:?}"
         );
+    }
+
+    /// How often the spec bundle was installed when each event was reported, then after setup.
+    fn spec_bundle_installs(environment: RecordingShellEnvironment, automatic: bool) -> (Vec<usize>, usize) {
+        let bed = test_bed_with(environment, RecordingSpecBundleInstaller::default());
+        let mut installs_when_reported = Vec::new();
+        let _ = bed.use_case.execute(&paths(), &[Shell::Zsh, Shell::Pwsh], automatic, |_| {
+            installs_when_reported.push(bed.spec_bundle.times_asked())
+        });
+        (installs_when_reported, bed.spec_bundle.times_asked())
+    }
+
+    #[test]
+    fn should_install_the_spec_bundle_once_after_every_event_whichever_way_setup_went() {
+        let unlistable_pwsh =
+            || RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into()));
+
+        let installs = [
+            spec_bundle_installs(RecordingShellEnvironment::default(), true),
+            spec_bundle_installs(unlistable_pwsh(), true),
+            spec_bundle_installs(RecordingShellEnvironment::default(), false),
+        ];
+
+        assert_eq!(installs, [(vec![0], 1), (vec![0, 0, 0], 1), (vec![0], 1)]);
     }
 }
