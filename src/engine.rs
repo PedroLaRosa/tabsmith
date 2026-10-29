@@ -8,12 +8,14 @@
 use crate::inline::{self, GhostCache, Source};
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
+use crate::shared::infrastructure::system_clock::SystemClock;
+use crate::shared::application::ports::clock::Clock;
 use crate::completion::domain::completion_error::CompletionError;
 use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
 use crate::completion::application::command_line_parser::CommandLineParser;
 use crate::completion::application::completion_notice::CompletionNotice;
+use crate::completion::application::generator_runner::GeneratorRunner;
 use crate::completion::application::parse_context::ParseContext;
-use crate::completion::application::ports::directory_lister::DirectoryLister;
 use crate::completion::application::ports::executable_catalog::ExecutableCatalog;
 use crate::completion::domain::entities::completion_session::CompletionSession;
 use crate::completion::domain::repositories::recency_repository::RecencyRepository;
@@ -32,53 +34,33 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::services::first_token_suggestions;
-use crate::completion::domain::services::generator_trigger_policy::{
-    cache_key, dir_changed, effective_debounce, is_path_template, run_budget, script_timeout, triggered,
-    SYNC_CALL,
-};
+use crate::completion::domain::services::generator_trigger_policy::{is_path_template, SYNC_CALL};
 use crate::completion::domain::services::history_suggestions;
-use crate::completion::domain::services::path_template;
 use crate::completion::domain::services::suggestion_assembler;
 use crate::completion::domain::services::suggestion_finalizer;
 use crate::completion::domain::services::suggestion_ranker;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::{CompletionResult, CompletionResultParts};
-use crate::completion::domain::value_objects::generator_key::{argument_key, GeneratorKey};
+use crate::completion::domain::value_objects::generator_key::argument_key;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
 use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
-use crate::specs::application::ports::interrupted::Interrupted;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::spec_error::SpecError;
-use crate::specs::domain::value_objects::custom_generator_result::CustomGeneratorResult;
 use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
-use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
-use crate::specs::domain::value_objects::generator_script::GeneratorScript;
-use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
-use crate::specs::domain::value_objects::script_resolution::ScriptResolution;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
-use crate::specs::domain::value_objects::spec_function_kind::SpecFunctionKind;
 use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
-use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
-use crate::specs::domain::value_objects::spec_value::SpecValue;
-use crate::specs::domain::value_objects::task_id::TaskId;
-use crate::specs::domain::value_objects::task_outcome::TaskOutcome;
-use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
 use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::completion::domain::entities::generator_run::GeneratorRun;
-use crate::completion::domain::value_objects::cache_lookup::CacheLookup;
 use crate::completion::domain::value_objects::filter_options::FilterOptions;
-use crate::completion::domain::value_objects::generator_outcome::GeneratorOutcome;
-use crate::completion::domain::value_objects::generator_step::GeneratorStep;
 use crate::completion::domain::value_objects::insertion_context::InsertionContext;
 use crate::completion::domain::value_objects::served_request::{ServedRequest, ServedRequestParts};
 use crate::completion::domain::value_objects::suggestion_candidate::SuggestionCandidate;
@@ -98,9 +80,6 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-/// Pump slice while generators run: deferred messages and finished runs are handled at least this often.
-const SLICE: Duration = Duration::from_millis(50);
 
 /// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
 /// Returns the engine's inbox. The thread exits on `EngineMsg::Shutdown` or when all senders are dropped.
@@ -125,7 +104,7 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
                 EmbeddedSpecBundle::new(dependencies.data_directory.clone()),
             ));
             let command_line_parser = CommandLineParser::new(repository, runtime.clone());
-            Engine::new(tx, settings, command_line_parser, &dependencies).run(&runtime, &inbox);
+            Engine::new(tx, settings, command_line_parser, runtime.clone(), &dependencies).run(&runtime, &inbox);
         });
     if let Err(e) = spawned {
         logger::error(&format!("engine: spawn: {e}"));
@@ -239,21 +218,7 @@ fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntr
 fn log_completion_notice(notice: CompletionNotice) {
     match notice {
         CompletionNotice::GenerateSpecFailed(line) => logger::warn(&line),
-    }
-}
-
-/// The rows of a read post-process or filter result; the kinds a generator never reads this way give none.
-fn suggestion_rows(result: SpecFunctionResult) -> Vec<SpecSuggestion> {
-    match result {
-        SpecFunctionResult::PostProcess(rows) | SpecFunctionResult::FilterTemplateSuggestions(rows) => rows,
-        SpecFunctionResult::QueryTerm(_)
-        | SpecFunctionResult::Trigger(_)
-        | SpecFunctionResult::Alias(_)
-        | SpecFunctionResult::LoadSpec(_)
-        | SpecFunctionResult::GenerateSpecCacheKey(_)
-        | SpecFunctionResult::GenerateSpec(_)
-        | SpecFunctionResult::Script(_)
-        | SpecFunctionResult::Custom(_) => Vec::new(),
+        CompletionNotice::GeneratorFailed(e) => logger::debug(&format!("engine: generator failed: {e}")),
     }
 }
 
@@ -265,6 +230,7 @@ struct Engine {
     record_command: RecordCommandUseCase,
     recency_repository: Rc<dyn RecencyRepository>,
     ghost_cache: Arc<Mutex<GhostCache>>,
+    generators: Rc<GeneratorRunner>,
     session: CompletionSession,
 }
 
@@ -273,6 +239,7 @@ impl Engine {
         tx: Sender<Msg>,
         settings: Settings,
         command_line_parser: CommandLineParser,
+        runtime: Rc<dyn SpecRuntime>,
         dependencies: &SharedDependencies,
     ) -> Engine {
         let bundle = EmbeddedSpecBundle::new(dependencies.data_directory.clone());
@@ -289,6 +256,7 @@ impl Engine {
             tx,
             settings,
             command_line_parser,
+            runtime,
             index,
             build_history_module(dependencies),
             dependencies.data_directory.state_file().ok(),
@@ -299,6 +267,7 @@ impl Engine {
         tx: Sender<Msg>,
         settings: Settings,
         command_line_parser: CommandLineParser,
+        runtime: Rc<dyn SpecRuntime>,
         index: SpecIndex,
         history_module: HistoryModule,
         state_path: Option<PathBuf>,
@@ -309,6 +278,8 @@ impl Engine {
         } = history_module;
         let recency_repository: Rc<dyn RecencyRepository> = Rc::new(StateFileRecencyRepository::new(state_path));
         let recency = recency_repository.load();
+        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
+        let generators = Rc::new(GeneratorRunner::new(runtime, Rc::new(FsDirectoryLister), clock));
         Engine {
             tx,
             command_line_parser,
@@ -317,6 +288,7 @@ impl Engine {
             record_command,
             recency_repository,
             ghost_cache: Arc::new(Mutex::new(GhostCache::default())),
+            generators,
             session: CompletionSession::new(settings, std::env::vars().collect(), recency),
         }
     }
@@ -347,7 +319,7 @@ impl Engine {
                 continue;
             }
             if self.session.has_running_generators() {
-                self.pump(js);
+                self.pump();
             }
         }
         self.recency_repository.flush();
@@ -468,7 +440,7 @@ impl Engine {
             .get(pr.command_index()..)
             .unwrap_or_default()
             .to_vec();
-        let triggered = self.update_slots(&pr, &ctx, &tokens, js)?;
+        let triggered = self.generators.trigger(&mut self.session, &pr, &ctx, &tokens, &mut |n| log_completion_notice(n))?;
         let first = if pr.first_token()
             && self.session.settings().bool(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION)
         {
@@ -558,420 +530,14 @@ impl Engine {
         Some(out)
     }
 
-    /// SPEC §6.6.1: decide triggers (no mutation until every JS trigger answered), then start runs.
-    fn update_slots(
-        &mut self,
-        pr: &ParsedCommandLine,
-        ctx: &GeneratorContext,
-        tokens: &[String],
-        js: &dyn SpecRuntime,
-    ) -> Option<Vec<GeneratorKey>> {
-        let arg = pr.current_arg().clone();
-        let same = match (&arg, self.session.slot_argument()) {
-            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-            _ => false,
-        };
-        let (new, old) = (pr.search_term(), self.session.previous_search_term());
-        let gens: &[Generator] = arg.as_deref().map_or(&[], |a| a.generators());
-        let mut fire = Vec::with_capacity(gens.len());
-        for (i, g) in gens.iter().enumerate() {
-            fire.push(if !same || i >= self.session.slot_count() {
-                true
-            } else if is_path_template(g) {
-                dir_changed(new, old, ctx.shell() == Shell::Pwsh.name())
-            } else {
-                match g.trigger() {
-                    None => arg.as_ref().is_some_and(|a| a.debounce().is_some()),
-                    Some(GeneratorTrigger::Fn(f)) => match js.call(
-                        SpecFunctionCall::Trigger {
-                            function: *f,
-                            new_token: new.to_string(),
-                            old_token: old.to_string(),
-                        },
-                        None,
-                        SYNC_CALL,
-                    ) {
-                        Ok(SpecFunctionResult::Trigger(fired)) => fired,
-                        Err(SpecError::Aborted) => return None,
-                        Ok(
-                            SpecFunctionResult::QueryTerm(_)
-                            | SpecFunctionResult::Alias(_)
-                            | SpecFunctionResult::LoadSpec(_)
-                            | SpecFunctionResult::GenerateSpecCacheKey(_)
-                            | SpecFunctionResult::GenerateSpec(_)
-                            | SpecFunctionResult::Script(_)
-                            | SpecFunctionResult::Custom(_)
-                            | SpecFunctionResult::PostProcess(_)
-                            | SpecFunctionResult::FilterTemplateSuggestions(_),
-                        )
-                        | Err(
-                            SpecError::Timeout
-                            | SpecError::Invalid(_)
-                            | SpecError::BundleUnavailable(_),
-                        ) => true, // a throwing trigger counts as a trigger
-                    },
-                    Some(t) => triggered(t, new, old).unwrap_or(true),
-                }
-            });
-        }
-        self.session.remember_search_term(pr.search_term().to_string());
-        let Some(arg) = arg.as_ref() else {
-            self.session.clear_generator_slots();
-            return Some(Vec::new());
-        };
-        if !same {
-            // ponytail: results are not carried over to a different arg (they could be kept while loading)
-            let keys = (0..gens.len())
-                .map(|i| GeneratorKey::for_arg(arg, i))
-                .collect();
-            self.session.assign_generator_slots(arg.clone(), keys);
-        }
-        let help = if gens.iter().any(|g| g.template().iter().any(|t| t == "help")) {
-            path_template::help_items(pr)
-        } else {
-            Vec::new()
-        };
-        let floor = script_timeout(self.session.settings());
-        let mut triggered_keys = Vec::new();
-        for (i, fire) in fire.into_iter().enumerate() {
-            if !fire {
-                continue;
-            }
-            let (generation, key) = self.session.fire_slot(i);
-            triggered_keys.push(key);
-            let debounce = effective_debounce(arg.debounce());
-            // ponytail: one deadline for the whole run (custom generators may exec several times)
-            let budget = run_budget(debounce, floor, gens[i].script_timeout());
-            let mut run = GeneratorRun::new(
-                i,
-                generation,
-                arg.clone(),
-                ctx.clone(),
-                tokens.to_vec(),
-                help.clone(),
-                Instant::now() + Duration::from_millis(budget),
-            );
-            let outcome = match debounce {
-                Some(ms) => {
-                    run.wait_on(js.start_sleep(ms), GeneratorStep::Debounce);
-                    GeneratorOutcome::Pending
-                }
-                None => self.begin(&mut run, js),
-            };
-            self.settle(run, outcome);
-        }
-        Some(triggered_keys)
-    }
-
     // -----------------------------------------------------------------------------------------------------
     // Generator runs (SPEC §6.6.2–6.6.5)
 
-    /// Record an outcome; returns whether a current slot changed. Every failure is logged first.
-    fn settle(&mut self, run: GeneratorRun, outcome: GeneratorOutcome) -> bool {
-        if let GeneratorOutcome::Fail(e) = &outcome {
-            logger::debug(&format!("engine: generator failed: {e}"));
-        }
-        self.session.settle(run, outcome)
-    }
-
-    /// First step after the (optional) debounce: template, script or custom.
-    fn begin(&mut self, run: &mut GeneratorRun, js: &dyn SpecRuntime) -> GeneratorOutcome {
-        let arg = run.arg().clone();
-        let g = &arg.generators()[run.index()];
-        if !g.template().is_empty() {
-            let mut items = Vec::new();
-            let files = g.template().iter().any(|t| t == "filepaths");
-            if is_path_template(g) && !run.context().cwd().is_empty() {
-                let dir = path_template::inserted_directory(
-                    run.context().cwd(),
-                    run.context().search_term(),
-                    run.context().env(),
-                    run.context().shell() == Shell::Pwsh.name(),
-                );
-                items = FsDirectoryLister.list(&dir, files, run.context().is_dangerous());
-            }
-            items.extend(run.help().iter().cloned()); // `history` template: [] (F6)
-            return match g.filter_template_suggestions() {
-                Some(f) => {
-                    let task = js.start(
-                        SpecFunctionCall::FilterTemplateSuggestions {
-                            function: f,
-                            suggestions: TemplateSuggestions::Listed(items),
-                        },
-                        Some(run.context()),
-                    );
-                    run.wait_on(task, GeneratorStep::Filter);
-                    GeneratorOutcome::Pending
-                }
-                None => GeneratorOutcome::Done(items),
-            };
-        }
-        if run.context().cwd().is_empty() {
-            return GeneratorOutcome::Done(Vec::new()); // no context for script/custom generators
-        }
-        if let Some(script) = g.script() {
-            return match script {
-                GeneratorScript::Fn(f) => {
-                    let task = js.start(
-                        SpecFunctionCall::Script {
-                            function: *f,
-                            tokens: run.tokens().to_vec(),
-                        },
-                        Some(run.context()),
-                    );
-                    run.wait_on(task, GeneratorStep::Script);
-                    GeneratorOutcome::Pending
-                }
-                GeneratorScript::Argv(a) => {
-                    let argv = SpecValue::List(a.iter().cloned().map(SpecValue::Text).collect());
-                    self.script_input(run, g, argv, js)
-                }
-                GeneratorScript::Shell(s) => self.script_input(run, g, SpecValue::Text(s.clone()), js),
-                GeneratorScript::Object(o) => self.script_input(run, g, o.clone(), js),
-            };
-        }
-        let Some(custom) = g.custom() else {
-            return GeneratorOutcome::Done(Vec::new());
-        };
-        let key = g.cache().as_ref().map(|c| {
-            cache_key(
-                c,
-                run.context().cwd(),
-                c.cache_key().clone().unwrap_or_else(|| run.tokens().join(" ")),
-            )
-        });
-        let call = SpecFunctionCall::Custom {
-            function: custom,
-            tokens: run.tokens().to_vec(),
-        };
-        let ctx = run.context().clone();
-        match self.fetch(run, g, key, GeneratorStep::Custom, js, move |js| {
-            js.start(call, Some(&ctx))
-        }) {
-            Ok(v) => self.custom_result(run, g, v, js),
-            Err(o) => o,
-        }
-    }
-
-    /// Cached fetch (D10): a value now (`Ok`), or a started/shared task (`Err(Pending)`).
-    fn fetch(
-        &mut self,
-        run: &mut GeneratorRun,
-        g: &Generator,
-        key: Option<String>,
-        step: GeneratorStep,
-        js: &dyn SpecRuntime,
-        start: impl FnOnce(&dyn SpecRuntime) -> TaskId,
-    ) -> Result<SpecValue, GeneratorOutcome> {
-        let (Some(cfg), Some(key)) = (g.cache(), key) else {
-            run.wait_on(start(js), step);
-            return Err(GeneratorOutcome::Pending);
-        };
-        match self.session.generator_cache_mut().lookup(&key, cfg, now_ms()) {
-            CacheLookup::Fresh(v) => Ok(v),
-            CacheLookup::Stale { value, refresh } => {
-                if refresh {
-                    let mut bg = run.background_copy();
-                    bg.wait_on(start(js), step);
-                    self.session.generator_cache_mut().start(&key, bg.task());
-                    bg.store_result_as(key);
-                    self.session.push_run(bg);
-                }
-                Ok(value)
-            }
-            CacheLookup::Shared(t) => {
-                run.wait_on(t, step);
-                Err(GeneratorOutcome::Pending)
-            }
-            CacheLookup::Miss => {
-                run.wait_on(start(js), step);
-                self.session.generator_cache_mut().start(&key, run.task());
-                run.store_result_as(key);
-                Err(GeneratorOutcome::Pending)
-            }
-        }
-    }
-
-    /// SPEC §6.6.3: script value → exec input → (cached) exec.
-    fn script_input(&mut self, run: &mut GeneratorRun, g: &Generator, v: SpecValue, js: &dyn SpecRuntime) -> GeneratorOutcome {
-        let (request, cache_key_source) = match js.read(&v, SpecFunctionKind::Script, run.context()) {
-            SpecFunctionResult::Script(ScriptResolution::Ready {
-                request,
-                cache_key_source,
-            }) => (request, cache_key_source),
-            SpecFunctionResult::Script(ScriptResolution::Invalid(e)) => {
-                return GeneratorOutcome::Fail(format!("bad script input: {e}"))
-            }
-            SpecFunctionResult::Script(ScriptResolution::Skip)
-            | SpecFunctionResult::QueryTerm(_)
-            | SpecFunctionResult::Trigger(_)
-            | SpecFunctionResult::Alias(_)
-            | SpecFunctionResult::LoadSpec(_)
-            | SpecFunctionResult::GenerateSpecCacheKey(_)
-            | SpecFunctionResult::GenerateSpec(_)
-            | SpecFunctionResult::Custom(_)
-            | SpecFunctionResult::PostProcess(_)
-            | SpecFunctionResult::FilterTemplateSuggestions(_) => return GeneratorOutcome::Done(Vec::new()), // falsy → []
-        };
-        let timeout = script_timeout(self.session.settings())
-            .max(g.script_timeout().unwrap_or(0))
-            .max(request.timeout().unwrap_or(0));
-        let request = request.with_timeout(Some(timeout));
-        let key = g
-            .cache()
-            .as_ref()
-            .map(|c| cache_key(c, run.context().cwd(), c.cache_key().clone().unwrap_or(cache_key_source)));
-        let ctx = run.context().clone();
-        match self.fetch(run, g, key, GeneratorStep::Exec, js, move |js| {
-            js.start_exec(request, &ctx)
-        }) {
-            Ok(v) => self.exec_output(run, g, &v, js),
-            Err(o) => o,
-        }
-    }
-
-    /// `splitOn` takes precedence over `postProcess`; neither → [].
-    fn exec_output(&mut self, run: &mut GeneratorRun, g: &Generator, v: &SpecValue, js: &dyn SpecRuntime) -> GeneratorOutcome {
-        let stdout = js.read_exec_stdout(v);
-        if let Some(sep) = g.split_on() {
-            let t = stdout.trim();
-            if t.is_empty() {
-                return GeneratorOutcome::Done(Vec::new());
-            }
-            return GeneratorOutcome::Done(
-                t.split(sep.as_str())
-                    .map(|s| SpecSuggestion::from_script_output(s, run.context().is_dangerous()))
-                    .collect(),
-            );
-        }
-        let Some(pp) = g.post_process() else {
-            return GeneratorOutcome::Done(Vec::new());
-        };
-        let task = js.start(
-            SpecFunctionCall::PostProcess {
-                function: pp,
-                stdout,
-                tokens: run.tokens().to_vec(),
-            },
-            Some(run.context()),
-        );
-        run.wait_on(task, GeneratorStep::PostProcess);
-        GeneratorOutcome::Pending
-    }
-
-    /// Custom result; `filterTemplateSuggestions` applies when the first item has a `context`.
-    fn custom_result(&mut self, run: &mut GeneratorRun, g: &Generator, v: SpecValue, js: &dyn SpecRuntime) -> GeneratorOutcome {
-        let custom = match js.read(&v, SpecFunctionKind::Custom, run.context()) {
-            SpecFunctionResult::Custom(custom) => custom,
-            SpecFunctionResult::QueryTerm(_)
-            | SpecFunctionResult::Trigger(_)
-            | SpecFunctionResult::Alias(_)
-            | SpecFunctionResult::LoadSpec(_)
-            | SpecFunctionResult::GenerateSpecCacheKey(_)
-            | SpecFunctionResult::GenerateSpec(_)
-            | SpecFunctionResult::Script(_)
-            | SpecFunctionResult::PostProcess(_)
-            | SpecFunctionResult::FilterTemplateSuggestions(_) => CustomGeneratorResult::new(false, Vec::new()),
-        };
-        match g.filter_template_suggestions() {
-            Some(f) if custom.is_templated() => {
-                let task = js.start(
-                    SpecFunctionCall::FilterTemplateSuggestions {
-                        function: f,
-                        suggestions: TemplateSuggestions::Returned(v),
-                    },
-                    Some(run.context()),
-                );
-                run.wait_on(task, GeneratorStep::Filter);
-                GeneratorOutcome::Pending
-            }
-            _ => GeneratorOutcome::Done(custom.suggestions().clone()), // undefined → []
-        }
-    }
-
-    /// A task of `run` finished.
-    fn advance(&mut self, run: &mut GeneratorRun, res: TaskOutcome, js: &dyn SpecRuntime) -> GeneratorOutcome {
-        let v = match res {
-            Ok(v) => v,
-            Err(e) => {
-                if let Some(k) = run.take_store() {
-                    self.session.generator_cache_mut().fail(&k);
-                }
-                return GeneratorOutcome::Fail(e);
-            }
-        };
-        if let Some(k) = run.take_store() {
-            self.session.generator_cache_mut().store(&k, v.clone(), now_ms());
-        }
-        if !self.session.is_current(run) {
-            return GeneratorOutcome::Done(Vec::new()); // superseded (e.g. after a debounce): abandon
-        }
-        let arg = run.arg().clone();
-        let g = &arg.generators()[run.index()];
-        match run.step() {
-            GeneratorStep::Debounce => self.begin(run, js),
-            GeneratorStep::Script => self.script_input(run, g, v, js),
-            GeneratorStep::Exec => self.exec_output(run, g, &v, js),
-            GeneratorStep::Custom => self.custom_result(run, g, v, js),
-            GeneratorStep::PostProcess => GeneratorOutcome::Done(suggestion_rows(js.read(
-                &v,
-                SpecFunctionKind::PostProcess,
-                run.context(),
-            ))),
-            GeneratorStep::Filter => GeneratorOutcome::Done(suggestion_rows(js.read(
-                &v,
-                SpecFunctionKind::FilterTemplateSuggestions,
-                run.context(),
-            ))),
-        }
-    }
-
     /// Wait (one slice) on every running generator task; reply again when a current slot changed.
-    fn pump(&mut self, js: &dyn SpecRuntime) {
-        let mut tasks: Vec<TaskId> = self.session.runs().iter().map(|r| r.task()).collect();
-        tasks.sort_unstable();
-        tasks.dedup();
-        let deadline = self
-            .session
-            .runs()
-            .iter()
-            .map(|r| r.deadline())
-            .min()
-            .map_or(Instant::now() + SLICE, |d| d.min(Instant::now() + SLICE));
-        let results = match js.wait(&tasks, deadline) {
-            Ok(r) => r,
-            Err(Interrupted) => return, // a newer request is queued
-        };
-        let mut changed = false;
-        let mut runs = self.session.take_runs();
-        for (task, res) in tasks.iter().zip(results) {
-            let Some(res) = res else { continue };
-            let (mine, rest): (Vec<GeneratorRun>, Vec<GeneratorRun>) =
-                runs.into_iter().partition(|r| r.task() == *task);
-            runs = rest;
-            // the owner (stores into the cache) goes first so sharers see a consistent cache
-            let (owners, sharers): (Vec<GeneratorRun>, Vec<GeneratorRun>) =
-                mine.into_iter().partition(|r| r.store_key().is_some());
-            for mut run in owners.into_iter().chain(sharers) {
-                let o = self.advance(&mut run, res.clone(), js);
-                changed |= self.settle(run, o);
-            }
-            js.forget(&[*task]);
-        }
-        let now = Instant::now();
-        let (expired, alive): (Vec<GeneratorRun>, Vec<GeneratorRun>) =
-            runs.into_iter().partition(|r| now >= r.deadline());
-        self.session.keep_runs(alive);
-        for mut run in expired {
-            if let Some(k) = run.take_store() {
-                self.session.generator_cache_mut().fail(&k);
-            }
-            if !self.session.has_run_on(run.task()) {
-                js.forget(&[run.task()]);
-            }
-            changed |= self.settle(run, GeneratorOutcome::Fail("timed out".into()));
-        }
-        if changed && self.session.served().is_some() {
+    fn pump(&mut self) {
+        if self.generators.progress(&mut self.session, &mut |n| log_completion_notice(n)) == Some(true)
+            && self.session.served().is_some()
+        {
             let _ = self
                 .tx
                 .send(Msg::Completion(Box::new(self.reply(CompletionPhase::Generators))));
@@ -1177,6 +743,7 @@ mod tests {
             tx,
             Settings::default(),
             parser_over(&js),
+            js.clone(),
             SpecIndex::default(),
             HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
                 dir.path().join("h.jsonl"),
@@ -1213,6 +780,7 @@ mod tests {
             tx,
             Settings::default(),
             parser_over(&js),
+            js.clone(),
             SpecIndex::default(),
             HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
                 dir.path().join("h.jsonl"),
@@ -1502,7 +1070,7 @@ mod tests {
         let runtime = Rc::new(QuickJsSpecRuntime::new(inbox.clone(), &settings).unwrap());
         let (replies, from_engine) = mpsc::channel();
         let history = HistoryModule::new(Rc::new(InMemoryHistoryRepository::new(history)));
-        let engine = Engine::with(replies, settings, parser_over(&runtime), SpecIndex::default(), history, None);
+        let engine = Engine::with(replies, settings, parser_over(&runtime), runtime.clone(), SpecIndex::default(), history, None);
         for message in first {
             to_engine.send(message).unwrap();
         }
