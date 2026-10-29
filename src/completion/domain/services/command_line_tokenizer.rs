@@ -179,7 +179,21 @@ impl<'a> P<'a> {
         let (open, close) = match n.kind {
             Kind::Str | Kind::RawStr => (1, 1),
             Kind::AnsiC => (2, 1),
-            _ => (0, 0),
+            Kind::Program
+            | Kind::AssignmentList
+            | Kind::Assignment
+            | Kind::Command
+            | Kind::Compound
+            | Kind::Subshell
+            | Kind::Pipeline
+            | Kind::List
+            | Kind::Concatenation
+            | Kind::Word
+            | Kind::Expansion
+            | Kind::CmdSubst
+            | Kind::SimpleExp
+            | Kind::SpecialExp
+            | Kind::Arith => (0, 0),
         };
         let t = self.text(n).as_bytes();
         let end = t.len() - if n.complete { close } else { 0 };
