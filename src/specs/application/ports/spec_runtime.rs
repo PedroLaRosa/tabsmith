@@ -63,9 +63,12 @@ pub(crate) trait SpecRuntime {
 #[cfg(test)]
 type Answer = Box<dyn Fn(&SpecFunctionCall) -> Result<SpecFunctionResult, SpecError>>;
 
-/// Answers calls with the answers it was given, and records them, for tests. Its tasks never finish, and it
-/// ignores settings.
-// ponytail: tasks only run or are unknown; Phase 6.4 adds scripted task completion when the generator tests need it.
+/// Answers calls with the answers it was given, and records them, for tests. A task runs until a builder scripts how
+/// it finishes (`completing` a function's tasks, `completing_execs`, `finishing_sleeps`); `wait` then gives the
+/// outcome once, like the runtime, or `interrupting` interrupts every wait. It reads values with the runtime's own
+/// decoders and records the settings it is given.
+// ponytail: outcomes are scripted per function, for every exec and for every sleep, and are ready at the first wait;
+// per-task timing or the exec requests a run started come test-first when a use-case test needs them.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct InMemorySpecRuntime {
@@ -75,7 +78,7 @@ pub(crate) struct InMemorySpecRuntime {
     exec_completion: Option<TaskOutcome>,
     sleeps_finish: bool,
     interrupts: bool,
-    settings: RefCell<Vec<Settings>>,
+    applied_settings: RefCell<Vec<Settings>>,
     /// The tasks it knows: `None` while one runs, the outcome a finished one gives.
     tasks: RefCell<HashMap<TaskId, Option<TaskOutcome>>>,
     next_task: Cell<TaskId>,
@@ -123,7 +126,7 @@ impl InMemorySpecRuntime {
 
     /// The settings applied so far, in order.
     pub(crate) fn applied_settings(&self) -> Vec<Settings> {
-        self.settings.borrow().clone()
+        self.applied_settings.borrow().clone()
     }
 
     fn start_task(&self, outcome: Option<TaskOutcome>) -> TaskId {
@@ -203,7 +206,7 @@ impl SpecRuntime for InMemorySpecRuntime {
     }
 
     fn apply_settings(&self, settings: &Settings) {
-        self.settings.borrow_mut().push(settings.clone());
+        self.applied_settings.borrow_mut().push(settings.clone());
     }
 }
 
