@@ -7,10 +7,11 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_SCROLL_WRAP_AROUND,
 };
 use crate::settings::domain::value_objects::settings::Settings;
+use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
-use crate::types::{ArgInfo, Completion, Phase};
+use crate::types::{Completion, Phase};
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
 
@@ -202,7 +203,7 @@ impl Menu {
     }
 
     /// Current argument with a name or description (argument-hint row).
-    pub fn arg_hint(&self) -> Option<&ArgInfo> {
+    pub fn arg_hint(&self) -> Option<&ArgumentHint> {
         self.last
             .as_ref()?
             .current_arg
@@ -470,7 +471,7 @@ impl Menu {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::types::ArgInfo;
+    use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     pub fn item(name: &str, kind: SuggestionKind, query: &str) -> Suggestion {
@@ -517,7 +518,7 @@ pub(crate) mod tests {
             command_text: buffer.to_string(),
             command_index: 0,
             arg_key,
-            current_arg: Some(ArgInfo {
+            current_arg: Some(ArgumentHint {
                 name: "path".into(),
                 description: "A path".into(),
             }),

@@ -1,4 +1,5 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
+use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::history::domain::entities::history_entry::HistoryEntry;
@@ -9,12 +10,6 @@ use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct ArgInfo {
-    pub name: String,
-    pub description: String,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -39,7 +34,7 @@ pub struct Completion {
     pub command_index: usize,
     /// Identity of (current arg, current subcommand) — changes when a new argument starts.
     pub arg_key: u64,
-    pub current_arg: Option<ArgInfo>,
+    pub current_arg: Option<ArgumentHint>,
     pub search_term: String,
     pub triggered_generators: Vec<GeneratorKey>,
     pub items: Vec<Suggestion>,

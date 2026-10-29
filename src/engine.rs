@@ -21,6 +21,7 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
+use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::generator_key::{argument_key, GeneratorKey};
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
@@ -56,7 +57,7 @@ use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
-    now_ms, ArgInfo, Completion, EngineMsg, Msg, Phase, Request,
+    now_ms, Completion, EngineMsg, Msg, Phase, Request,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -1154,7 +1155,7 @@ impl Engine {
             command_text: cur.cmd_text.clone(),
             command_index: pr.command_index,
             arg_key: cur.arg_key,
-            current_arg: pr.current_arg.as_ref().map(|a| ArgInfo {
+            current_arg: pr.current_arg.as_ref().map(|a| ArgumentHint {
                 name: a.name().clone().unwrap_or_default(),
                 description: a.description().clone().unwrap_or_default(),
             }),
