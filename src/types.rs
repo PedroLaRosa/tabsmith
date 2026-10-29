@@ -3,11 +3,10 @@ use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Suggestion row type (Fig `type`, plus internal `history` and `auto-execute`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -172,29 +171,6 @@ pub struct Request {
     pub cwd: PathBuf,
     pub shell: Shell,
     pub history_mode: bool,
-}
-
-/// `~/.tabsmith/run/<sid>.json`, written by `tabsmith _ pre-cmd` (SPEC §2.11, D17).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct SessionCtx {
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default)]
-    pub alias: Option<String>,
-    #[serde(default)]
-    pub ts: u64,
-}
-
-impl SessionCtx {
-    pub fn path(session_id: &str) -> anyhow::Result<PathBuf> {
-        Ok(data_directory_from_env()
-            .run_dir()?
-            .join(format!("{session_id}.json")))
-    }
-
-    pub fn load(path: &Path) -> Option<SessionCtx> {
-        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
-    }
 }
 
 /// Output of a generator process (`executeCommand` result shape).

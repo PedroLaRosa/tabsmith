@@ -14,8 +14,11 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::tracker::{Event, Extracted, Tracker};
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
+use crate::terminal_session::domain::value_objects::session_id::SessionId;
+use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
 use crate::types::{
-    Completion, EngineMsg, Insertion, Model, Msg, Phase, Request, SessionCtx,
+    Completion, EngineMsg, Insertion, Model, Msg, Phase, Request,
 };
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
@@ -320,10 +323,6 @@ fn session_id() -> String {
     )
 }
 
-fn mtime(p: &Option<PathBuf>) -> Option<SystemTime> {
-    std::fs::metadata(p.as_ref()?).ok()?.modified().ok()
-}
-
 fn write_stdout(b: &[u8]) {
     if b.is_empty() {
         return;
@@ -352,7 +351,8 @@ struct Session {
     settings: Settings,
     settings_repository: Box<dyn SettingsRepository>,
     settings_mtime: Option<SystemTime>,
-    session_path: Option<PathBuf>,
+    session_id: Option<SessionId>,
+    session_contexts: Box<dyn SessionContextRepository>,
     session_mtime: Option<SystemTime>,
     terminal_bg: Option<Rgb>,
     /// Shell of the spawned program (the tracker's `Shell=` wins once known).
@@ -521,7 +521,8 @@ impl Session {
             let _ = writer.send(typeahead);
         }
 
-        let session_path = SessionCtx::path(&sid).ok();
+        let session_id = SessionId::new(sid).ok();
+        let session_contexts = Box::new(FileSessionContextRepository::new(data_directory_from_env()));
         Ok(Session {
             rx,
             engine,
@@ -539,7 +540,8 @@ impl Session {
             settings_repository,
             settings,
             session_mtime: None,
-            session_path,
+            session_id,
+            session_contexts,
             terminal_bg,
             shell,
             req: 0,
@@ -1268,13 +1270,20 @@ impl Session {
 
     /// Settings (live reload) and the session env file from `_ pre-cmd` (D17). True when settings changed.
     fn poll_files(&mut self) -> bool {
-        let m = mtime(&self.session_path);
+        let m = self
+            .session_id
+            .as_ref()
+            .and_then(|id| self.session_contexts.last_modified(id));
         if m.is_some() && m != self.session_mtime {
             self.session_mtime = m;
-            if let Some(ctx) = self.session_path.as_deref().and_then(SessionCtx::load) {
+            if let Some(ctx) = self
+                .session_id
+                .as_ref()
+                .and_then(|id| self.session_contexts.find(id))
+            {
                 let _ = self.engine.send(EngineMsg::Session {
-                    env: ctx.env,
-                    alias: ctx.alias,
+                    env: ctx.env().clone(),
+                    alias: ctx.alias().map(str::to_owned),
                 });
             }
         }
@@ -1299,8 +1308,8 @@ impl Session {
         let _ = self.engine.send(EngineMsg::Shutdown);
         crate::js::kill_live_children(); // Windows has no atexit hook for running generators
         self.modes.restore();
-        if let Some(p) = &self.session_path {
-            let _ = std::fs::remove_file(p);
+        if let Some(id) = &self.session_id {
+            self.session_contexts.remove(id);
         }
     }
 }
@@ -1782,6 +1791,8 @@ mod tests {
 
     use crate::menu::tests::{comp, item, settings};
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
+    use crate::shared::domain::value_objects::data_directory::DataDirectory;
+    use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
     use crate::types::{Item, ItemType};
     use alacritty_terminal::event::VoidListener;
 
@@ -1817,7 +1828,8 @@ mod tests {
             settings,
             settings_repository: Box::new(InMemorySettingsRepository::default()),
             settings_mtime: None,
-            session_path: None,
+            session_id: None,
+            session_contexts: Box::new(InMemorySessionContextRepository::default()),
             session_mtime: None,
             terminal_bg: None,
             shell: Shell::Bash,
@@ -2368,7 +2380,11 @@ mod tests {
         let (mut s, _) = session("{}");
         let (engine, sent_to_engine) = mpsc::channel();
         s.engine = engine;
-        s.session_path = Some(temp_dir.path().join("run/abc.json"));
+        s.session_id = SessionId::new("abc".to_string()).ok();
+        s.session_contexts = Box::new(FileSessionContextRepository::new(DataDirectory::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+        )));
         (s, sent_to_engine)
     }
 
