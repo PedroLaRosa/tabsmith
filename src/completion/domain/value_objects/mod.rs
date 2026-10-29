@@ -1,9 +1,12 @@
 pub(crate) mod alias_table;
+pub(crate) mod annotation_kind;
 pub(crate) mod argument_hint;
 pub(crate) mod command_line;
 pub(crate) mod completion_phase;
 pub(crate) mod completion_result;
 pub(crate) mod generator_key;
 pub(crate) mod insertion;
+pub(crate) mod parsed_command_line;
 pub(crate) mod suggestion;
 pub(crate) mod token;
+pub(crate) mod token_annotation;

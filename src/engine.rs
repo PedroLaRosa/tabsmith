@@ -8,7 +8,9 @@
 use crate::inline::{self, GhostCache, Source};
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
-use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
+use crate::completion::domain::completion_error::CompletionError;
+use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
+use crate::parser::{ParseCtx, Parser};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
     AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
@@ -311,7 +313,7 @@ enum Outcome {
 struct Current {
     req: CompletionRequest,
     cursor: usize,
-    pr: ParseResult,
+    pr: ParsedCommandLine,
     cmd_text: String,
     arg_key: u64,
     fuzzy: bool,
@@ -549,8 +551,8 @@ impl Engine {
         };
         let pr = match self.parser.parse(&cmd, &pctx) {
             Ok(pr) => pr,
-            Err(ParseError::Aborted) => return None,
-            Err(ParseError::NoSuggestions(e)) => {
+            Err(CompletionError::Aborted) => return None,
+            Err(CompletionError::NoSuggestions(e)) => {
                 logger::debug(&format!("engine: no suggestions: {e}"));
                 return Some(self.error(req, cursor, true));
             }
@@ -622,7 +624,7 @@ impl Engine {
     }
 
     /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
-    fn queries(&self, pr: &ParseResult, shell: Shell, js: &QuickJsSpecRuntime) -> Option<Vec<Query>> {
+    fn queries(&self, pr: &ParsedCommandLine, shell: Shell, js: &QuickJsSpecRuntime) -> Option<Vec<Query>> {
         let Some(arg) = &pr.current_arg else {
             return Some(Vec::new());
         };
@@ -660,7 +662,7 @@ impl Engine {
     /// SPEC §6.6.1: decide triggers (no mutation until every JS trigger answered), then start runs.
     fn update_slots(
         &mut self,
-        pr: &ParseResult,
+        pr: &ParsedCommandLine,
         ctx: &GeneratorContext,
         tokens: &[String],
         js: &QuickJsSpecRuntime,

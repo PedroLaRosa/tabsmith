@@ -58,7 +58,7 @@ fn oarg(s: &Rc<Subcommand>, flag: &str) -> Option<Rc<Arg>> {
     Some(s.options()[i].args()[0].clone())
 }
 
-fn flags(r: &ParseResult) -> u8 {
+fn flags(r: &ParsedCommandLine) -> u8 {
     r.suggest_subcommands as u8 | (r.suggest_options as u8) << 1 | (r.suggest_args as u8) << 2
 }
 
@@ -66,7 +66,7 @@ fn ptr(a: &Option<Rc<Arg>>) -> Option<*const Arg> {
     a.as_ref().map(Rc::as_ptr)
 }
 
-type Callback = Box<dyn Fn(&[JsArg]) -> Result<Value, ParseError>>;
+type Callback = Box<dyn Fn(&[JsArg]) -> Result<Value, CompletionError>>;
 
 /// Specs by location (`name` for globals, `dir|name` for locals), JS functions by id; records every load.
 #[derive(Default)]
@@ -89,7 +89,7 @@ impl Mock {
 }
 
 impl Host for Mock {
-    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, ParseError> {
+    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, CompletionError> {
         self.loads.push(loc.clone());
         let key = match loc {
             SpecLocation::Global { name } => name.clone(),
@@ -98,7 +98,7 @@ impl Host for Mock {
         Ok(self.specs.get(&key).cloned())
     }
 
-    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, ParseError> {
+    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, CompletionError> {
         let context = GeneratorContext::default();
         let (f, args) = call_arguments(&call, &context);
         let v = (self.fns.get(&f).ok_or_else(|| no("unknown fn"))?)(&args)?;
@@ -119,7 +119,7 @@ fn json_arg(args: &[JsArg], i: usize) -> Value {
     }
 }
 
-fn run(mock: &mut Mock, buf: &str) -> Result<ParseResult, ParseError> {
+fn run(mock: &mut Mock, buf: &str) -> Result<ParsedCommandLine, CompletionError> {
     ParseCaches::default().parse(&cmd(buf), Path::new("/cwd"), false, mock)
 }
 
@@ -250,8 +250,8 @@ fn result_fields() {
     assert_eq!(
         r.annotations.last().unwrap().parts,
         [
-            (AnnKind::Option, "-o".into()),
-            (AnnKind::Option, "n".into())
+            (AnnotationKind::Option, "-o".into()),
+            (AnnotationKind::Option, "n".into())
         ]
     );
     assert_eq!(run(&mut m, "cmd man -oarg").unwrap().option_chain, None);
@@ -269,15 +269,15 @@ fn result_fields() {
     );
     assert_eq!(r.tokens, ["cmd", "man", "-m", "x", ""]);
     assert_eq!(*r.passed_options[0].names(), ["-m", "--man"]);
-    let kinds: Vec<AnnKind> = r.annotations.iter().map(|a| a.kind).collect();
+    let kinds: Vec<AnnotationKind> = r.annotations.iter().map(|a| a.kind).collect();
     assert_eq!(
         kinds,
         [
-            AnnKind::Subcommand,
-            AnnKind::Subcommand,
-            AnnKind::Option,
-            AnnKind::OptionArg,
-            AnnKind::SubcommandArg
+            AnnotationKind::Subcommand,
+            AnnotationKind::Subcommand,
+            AnnotationKind::Option,
+            AnnotationKind::OptionArg,
+            AnnotationKind::SubcommandArg
         ]
     );
 }
@@ -295,7 +295,7 @@ fn exceptions_and_first_token() {
     );
     assert!(matches!(
         run(&mut m, "cmd notASubcommand "),
-        Err(ParseError::NoSuggestions(_))
+        Err(CompletionError::NoSuggestions(_))
     ));
     assert!(run(&mut m, "unknown x").is_err());
 }
@@ -544,7 +544,7 @@ fn is_repeatable() {
             .map(|a| a.kind)
             .collect::<Vec<_>>()
     };
-    use AnnKind::{Option as Op, OptionArg as OA, Subcommand as Sc, SubcommandArg as SA};
+    use AnnotationKind::{Option as Op, OptionArg as OA, Subcommand as Sc, SubcommandArg as SA};
     assert_eq!(kinds(&mut m, "x -f -f"), [Sc, Op, SA]);
     assert_eq!(kinds(&mut m, "x -v -v -v"), [Sc, Op, Op, Op]);
     assert_eq!(kinds(&mut m, "x -q -q"), [Sc, Op, Op]); // absent: unlimited in the parser
@@ -761,6 +761,6 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
 fn aborts_propagate() {
     let g = spec(json!({"name": "g", "generateSpec": {"$fn": 1}}));
     let mut m = Mock::with(&[("g", &g)]);
-    m.fns.insert(1, Box::new(|_| Err(ParseError::Aborted)));
-    assert!(matches!(run(&mut m, "g x"), Err(ParseError::Aborted)));
+    m.fns.insert(1, Box::new(|_| Err(CompletionError::Aborted)));
+    assert!(matches!(run(&mut m, "g x"), Err(CompletionError::Aborted)));
 }

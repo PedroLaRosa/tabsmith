@@ -2,7 +2,8 @@
 //! insertion text, history rows and first-token items (SPEC §6.5–6.11).
 //! OWNER: engine agent (internal API; only `engine.rs` uses it). Everything here is pure (no JS); the engine
 //! resolves function triggers / `getQueryTerm`s and runs generators.
-use crate::parser::{AnnKind, ParseResult};
+use crate::completion::domain::value_objects::annotation_kind::AnnotationKind;
+use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
 use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
@@ -201,7 +202,7 @@ pub struct GenView<'a> {
 }
 
 /// Options offered at this level: exclusiveOn / repeat limits / dependsOn priority, alphabetical.
-fn static_options(pr: &ParseResult) -> Vec<Sugg> {
+fn static_options(pr: &ParsedCommandLine) -> Vec<Sugg> {
     let passed = &pr.passed_options;
     let excluded: HashSet<&str> = passed
         .iter()
@@ -267,7 +268,7 @@ fn short_name(s: &Sugg) -> Option<String> {
 
 /// Build the unfiltered list for a parse result: subcommands, args (static + generators), additional
 /// suggestions, options, then option-chain rewriting.
-pub fn assemble(pr: &ParseResult, gens: &[GenView]) -> Vec<Sugg> {
+pub fn assemble(pr: &ParsedCommandLine, gens: &[GenView]) -> Vec<Sugg> {
     let comp = &pr.completion;
     let chain = pr.option_chain.as_deref();
     let mut out = Vec::new();
@@ -1326,15 +1327,15 @@ pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<SpecSuggesti
 }
 
 /// `help` template: subcommand names of the level above the triggering subcommand, minus its aliases.
-pub fn help_items(pr: &ParseResult) -> Vec<SpecSuggestion> {
+pub fn help_items(pr: &ParsedCommandLine) -> Vec<SpecSuggestion> {
     let trig = pr
         .annotations
         .iter()
         .rev()
-        .find(|a| matches!(a.kind, AnnKind::Subcommand | AnnKind::Option));
+        .find(|a| matches!(a.kind, AnnotationKind::Subcommand | AnnotationKind::Option));
     let n = pr.path.len();
     let (level, exclude): (&Subcommand, &[String]) = match trig {
-        Some(a) if a.kind == AnnKind::Subcommand && n >= 2 => {
+        Some(a) if a.kind == AnnotationKind::Subcommand && n >= 2 => {
             (&pr.path[n - 2], pr.path[n - 1].names())
         }
         _ => (pr.path.last().unwrap_or(&pr.completion), &[]),
@@ -1436,14 +1437,14 @@ pub fn first_token_items(
 mod tests {
     use super::*;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
-    use crate::parser::Annotation;
+    use crate::completion::domain::value_objects::token_annotation::TokenAnnotation;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
     use serde_json::json;
 
-    fn pr_for(comp: Subcommand, search: &str) -> ParseResult {
+    fn pr_for(comp: Subcommand, search: &str) -> ParsedCommandLine {
         let comp = Rc::new(comp);
-        ParseResult {
+        ParsedCommandLine {
             completion: comp.clone(),
             path: vec![comp],
             current_arg: None,
@@ -1819,8 +1820,8 @@ mod tests {
         let mut pr = pr_for(comp, "-la");
         pr.passed_options = vec![l];
         pr.option_chain = Some("-la".into());
-        pr.annotations = vec![Annotation {
-            kind: AnnKind::Option,
+        pr.annotations = vec![TokenAnnotation {
+            kind: AnnotationKind::Option,
             text: "-la".into(),
             parts: vec![],
         }];
@@ -2496,8 +2497,8 @@ mod tests {
         let mut pr = pr_for(Subcommand::default(), "");
         pr.completion = help.clone();
         pr.path = vec![root, help];
-        pr.annotations = vec![Annotation {
-            kind: AnnKind::Subcommand,
+        pr.annotations = vec![TokenAnnotation {
+            kind: AnnotationKind::Subcommand,
             text: "help".into(),
             parts: vec![],
         }];

@@ -2,11 +2,14 @@
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DEVELOPER_MODE;
 use crate::settings::domain::value_objects::settings::Settings;
+use crate::completion::domain::completion_error::CompletionError;
+use crate::completion::domain::value_objects::annotation_kind::AnnotationKind;
 use crate::completion::domain::value_objects::command_line::CommandLine;
+use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
+use crate::completion::domain::value_objects::token_annotation::TokenAnnotation;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::repositories::spec_repository::SpecRepository;
-use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
@@ -33,78 +36,8 @@ mod tests;
 /// Deadline for one spec callback (SPEC §6.3).
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AnnKind {
-    Subcommand,
-    Option,
-    OptionArg,
-    SubcommandArg,
-    /// Token that could not be consumed (only possible for the final token).
-    None,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Annotation {
-    /// For a composite token: the kind of its last sub-token.
-    pub kind: AnnKind,
-    pub text: String,
-    /// Sub-tokens of a composite token (`-abc`, `--opt=val`), else empty.
-    pub parts: Vec<(AnnKind, String)>,
-}
-
-/// Outcome of parsing the current command (SPEC §6.4 `result(st)`).
-#[derive(Clone, Debug)]
-pub struct ParseResult {
-    /// The subcommand level the cursor is in.
-    pub completion: Rc<Subcommand>,
-    /// Root..=current chain of subcommands (for the `help` template).
-    pub path: Vec<Rc<Subcommand>>,
-    pub current_arg: Option<Rc<Arg>>,
-    pub search_term: String,
-    pub suggest_subcommands: bool,
-    pub suggest_options: bool,
-    pub suggest_args: bool,
-    /// Options already passed at this level.
-    pub passed_options: Vec<Rc<SpecOption>>,
-    /// Persistent options inherited at this level, in lookup order (parent first: parent wins on name clash).
-    pub persistent: Vec<Rc<SpecOption>>,
-    pub annotations: Vec<Annotation>,
-    /// Index of the token that names the spec in use (`sudo git ch` → 1).
-    pub command_index: usize,
-    /// Token texts after alias / `parserDirectives.alias` substitution.
-    pub tokens: Vec<String>,
-    /// Raw text of the last token as typed; for an option value inside the token (`--opt=val`, `-oval`) only
-    /// the value part.
-    pub raw_last_token: String,
-    pub directives: ParserDirectives,
-    /// The composite option chain being typed (`-la`), if the last annotation is one ending in an option.
-    pub option_chain: Option<String>,
-    /// Single-token command: suggest first tokens (SPEC §6.9) instead of spec items.
-    pub first_token: bool,
-    /// Name of the root spec (`git`), for recency keys and caches.
-    pub spec_name: String,
-}
-
-#[derive(Debug)]
-pub enum ParseError {
-    Aborted,
-    /// No suggestions (unknown spec, unconsumable token, load failure). Logged by the caller.
-    NoSuggestions(String),
-}
-
-impl From<SpecError> for ParseError {
-    fn from(e: SpecError) -> Self {
-        match e {
-            SpecError::Aborted => ParseError::Aborted,
-            SpecError::Timeout | SpecError::Invalid(_) | SpecError::BundleUnavailable(_) => {
-                ParseError::NoSuggestions(e.to_string())
-            }
-        }
-    }
-}
-
-fn no(msg: impl Into<String>) -> ParseError {
-    ParseError::NoSuggestions(msg.into())
+fn no(msg: impl Into<String>) -> CompletionError {
+    CompletionError::NoSuggestions(msg.into())
 }
 
 /// Everything the parser needs from the session.
@@ -143,7 +76,7 @@ impl Parser {
     }
 
     /// Parse the command under the cursor against its spec (SPEC §6.4).
-    pub fn parse(&mut self, cmd: &CommandLine, ctx: &ParseCtx) -> Result<ParseResult, ParseError> {
+    pub fn parse(&mut self, cmd: &CommandLine, ctx: &ParseCtx) -> Result<ParsedCommandLine, CompletionError> {
         let dev = dev_mode(ctx.settings);
         let mut host = JsHost {
             repository: &*self.repository,
@@ -161,10 +94,10 @@ impl Parser {
         &self,
         loc: &SpecLocation,
         ctx: &ParseCtx,
-    ) -> Result<Option<Rc<Subcommand>>, ParseError> {
+    ) -> Result<Option<Rc<Subcommand>>, CompletionError> {
         self.repository
             .find(loc, &SpecLookup::new(ctx.settings, ctx.index, &gen_ctx(ctx)))
-            .map_err(ParseError::from)
+            .map_err(CompletionError::from)
     }
 }
 
@@ -190,9 +123,9 @@ fn gen_ctx(ctx: &ParseCtx) -> GeneratorContext {
 
 /// What the state machine needs from outside (spec files, JS callbacks, re-tokenizing); mocked in tests.
 trait Host {
-    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, ParseError>;
+    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, CompletionError>;
     /// Call a spec function; its `executeShellCommand` is bound to the session's exec.
-    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, ParseError>;
+    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, CompletionError>;
     fn substitute(&mut self, cmd: &CommandLine, index: usize, value: &str) -> Option<CommandLine>;
 }
 
@@ -204,13 +137,13 @@ struct JsHost<'a, 'c> {
 }
 
 impl Host for JsHost<'_, '_> {
-    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, ParseError> {
+    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, CompletionError> {
         self.repository
             .find(loc, &SpecLookup::new(self.ctx.settings, self.ctx.index, &self.generator))
-            .map_err(ParseError::from)
+            .map_err(CompletionError::from)
     }
 
-    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, ParseError> {
+    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, CompletionError> {
         Ok(SpecRuntime::call(self.runtime, call, Some(&self.generator), TIMEOUT)?)
     }
 
@@ -268,7 +201,7 @@ struct State {
     persistent: Vec<Rc<SpecOption>>,
     opt_args: ArgState,
     sub_args: ArgState,
-    annotations: Vec<Annotation>,
+    annotations: Vec<TokenAnnotation>,
     passed: Vec<Rc<SpecOption>>,
     command_index: usize,
     entered_sub_args: bool,
@@ -279,8 +212,8 @@ struct State {
     spec_name: String,
 }
 
-fn ann(kind: AnnKind, text: &str) -> Annotation {
-    Annotation {
+fn ann(kind: AnnotationKind, text: &str) -> TokenAnnotation {
+    TokenAnnotation {
         kind,
         text: text.into(),
         parts: Vec::new(),
@@ -295,7 +228,7 @@ impl State {
             persistent: spec.persistent().clone(),
             opt_args: ArgState::default(),
             sub_args: ArgState::new(spec.args()),
-            annotations: vec![ann(AnnKind::Subcommand, text)],
+            annotations: vec![ann(AnnotationKind::Subcommand, text)],
             passed: Vec::new(),
             command_index: 0,
             entered_sub_args: false,
@@ -389,7 +322,7 @@ fn subcommand(st: &State, token: &str, fin: bool) -> Option<State> {
         .get(*st.completion.sub_index().get(token)?)?
         .clone();
     let mut s = st.clone();
-    s.annotations.push(ann(AnnKind::Subcommand, token));
+    s.annotations.push(ann(AnnotationKind::Subcommand, token));
     if fin {
         return Some(s); // siblings stay suggestable
     }
@@ -418,7 +351,7 @@ fn option(st: &State, flag: &str, fin: bool) -> Option<State> {
         }
     }
     let mut s = st.clone();
-    s.annotations.push(ann(AnnKind::Option, flag));
+    s.annotations.push(ann(AnnotationKind::Option, flag));
     if !fin {
         s.opt_args = ArgState::new(o.args());
         s.passed.push(o);
@@ -429,7 +362,7 @@ fn option(st: &State, flag: &str, fin: bool) -> Option<State> {
 fn option_arg(st: &State, token: &str, fin: bool) -> Option<State> {
     st.opt_args.cur()?;
     let mut s = st.clone();
-    s.annotations.push(ann(AnnKind::OptionArg, token));
+    s.annotations.push(ann(AnnotationKind::OptionArg, token));
     if !fin {
         s.opt_args.advance();
     }
@@ -439,7 +372,7 @@ fn option_arg(st: &State, token: &str, fin: bool) -> Option<State> {
 fn subcommand_arg(st: &State, token: &str, fin: bool) -> Option<State> {
     st.sub_args.cur()?;
     let mut s = st.clone();
-    s.annotations.push(ann(AnnKind::SubcommandArg, token));
+    s.annotations.push(ann(AnnotationKind::SubcommandArg, token));
     if !fin {
         s.sub_args.advance();
         s.entered_sub_args = true;
@@ -454,14 +387,14 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
     if token == "--" {
         let mut s = st.clone();
         s.end_of_options = true;
-        s.annotations.push(ann(AnnKind::Option, token));
+        s.annotations.push(ann(AnnotationKind::Option, token));
         s.opt_args = ArgState::default();
         return Some(s);
     }
-    let composite = |mut s: State, parts: Vec<(AnnKind, String)>| {
+    let composite = |mut s: State, parts: Vec<(AnnotationKind, String)>| {
         s.annotations.truncate(st.annotations.len());
-        let kind = parts.last().map_or(AnnKind::Option, |p| p.0);
-        s.annotations.push(Annotation {
+        let kind = parts.last().map_or(AnnotationKind::Option, |p| p.0);
+        s.annotations.push(TokenAnnotation {
             kind,
             text: token.into(),
             parts,
@@ -485,8 +418,8 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
             return Some(composite(
                 s,
                 vec![
-                    (AnnKind::Option, format!("{flag}{c}")),
-                    (AnnKind::OptionArg, val.into()),
+                    (AnnotationKind::Option, format!("{flag}{c}")),
+                    (AnnotationKind::OptionArg, val.into()),
                 ],
             ));
         }
@@ -513,7 +446,7 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
             None => return None,
         }
         parts.push((
-            AnnKind::Option,
+            AnnotationKind::Option,
             if i == 1 { flag } else { chars[i].to_string() },
         ));
         if mandatory_or_var(cur.opt_args.cur()) {
@@ -527,7 +460,7 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
         }
         cur = option_arg(&cur, &opt_val, fin)?;
         passed = cur.passed.clone();
-        parts.push((AnnKind::OptionArg, opt_val));
+        parts.push((AnnotationKind::OptionArg, opt_val));
     }
     if fin {
         cur.passed = passed; // the letter being typed stays suggestable
@@ -535,7 +468,7 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
     Some(composite(cur, parts))
 }
 
-fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -> ParseResult {
+fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -> ParsedCommandLine {
     let last = st.annotations.last();
     let mut search_term = last.map(|a| a.text.clone()).unwrap_or_default();
     let mut only_args = st.end_of_options;
@@ -545,7 +478,7 @@ fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -
     if let Some(a) = last.filter(|a| !a.parts.is_empty()) {
         arg_st = &st.opt_args;
         match a.parts.last() {
-            Some((AnnKind::OptionArg, t)) => {
+            Some((AnnotationKind::OptionArg, t)) => {
                 search_term = t.clone();
                 only_args = true;
                 // `--color=al` / `-oal`: only the value is replaced, never the flag in front of it
@@ -565,7 +498,7 @@ fn result(st: State, last_text: &str, raw_last_token: &str, first_token: bool) -
     if let Some(t) = tokens.last_mut() {
         *t = last_text.into();
     }
-    ParseResult {
+    ParsedCommandLine {
         current_arg: arg_st.cur().cloned(),
         search_term,
         suggest_subcommands: !only_args && st.can_subcommands(),
@@ -607,7 +540,7 @@ impl ParseCaches {
         cwd: &Path,
         dev: bool,
         host: &mut dyn Host,
-    ) -> Result<ParseResult, ParseError> {
+    ) -> Result<ParsedCommandLine, CompletionError> {
         let last = cmd.tokens().last().ok_or_else(|| no("no tokens"))?;
         let texts: Vec<String> = cmd.tokens().iter().map(|t| t.text().to_string()).collect();
         if cmd.tokens().len() == 1 {
@@ -634,7 +567,7 @@ impl ParseCaches {
         let st = self.parse_prefix(cmd, vec![loc], 0, cwd, dev, host, 0)?;
         let st = update(&st, last.text(), true).unwrap_or_else(|| {
             let mut st = st;
-            st.annotations.push(ann(AnnKind::None, last.text()));
+            st.annotations.push(ann(AnnotationKind::None, last.text()));
             st
         });
         Ok(result(st, last.text(), last.raw(), false))
@@ -651,7 +584,7 @@ impl ParseCaches {
         dev: bool,
         host: &mut dyn Host,
         depth: usize,
-    ) -> Result<State, ParseError> {
+    ) -> Result<State, CompletionError> {
         if depth > MAX_DEPTH {
             return Err(no("loadSpec recursion too deep"));
         }
@@ -702,14 +635,14 @@ impl ParseCaches {
             let token = cur.tokens()[start + i].text().to_string();
             let last_arg = st.arg_state().cur().cloned();
             let last_kind = if st.prefer_opt_arg() {
-                AnnKind::OptionArg
+                AnnotationKind::OptionArg
             } else {
-                AnnKind::SubcommandArg
+                AnnotationKind::SubcommandArg
             };
             let last_state = st.clone();
             st = update(&st, &token, false)
                 .ok_or_else(|| no(format!("cannot consume {token:?}")))?;
-            let last_type = st.annotations.last().map_or(AnnKind::None, |a| a.kind);
+            let last_type = st.annotations.last().map_or(AnnotationKind::None, |a| a.kind);
             let mut alias_err = None;
             if let Some(alias) = last_arg
                 .as_ref()
@@ -723,13 +656,13 @@ impl ParseCaches {
                         st = last_state;
                         continue; // re-parse this position with the expanded words
                     }
-                    Err(e) if substituted.is_empty() || matches!(e, ParseError::Aborted) => {
+                    Err(e) if substituted.is_empty() || matches!(e, CompletionError::Aborted) => {
                         return Err(e)
                     }
                     Err(e) => alias_err = Some(e),
                 }
             }
-            let mut ls = if last_type == AnnKind::Subcommand {
+            let mut ls = if last_type == AnnotationKind::Subcommand {
                 st.completion.load_spec().clone()
             } else {
                 None
@@ -787,7 +720,7 @@ impl ParseCaches {
         token: &str,
         alias: &TextOrFunction,
         host: &mut dyn Host,
-    ) -> Result<CommandLine, ParseError> {
+    ) -> Result<CommandLine, CompletionError> {
         let value = match alias {
             TextOrFunction::Str(s) => s.clone(),
             TextOrFunction::Fn(f) => {
@@ -821,7 +754,7 @@ impl ParseCaches {
         dev: bool,
         host: &mut dyn Host,
         depth: usize,
-    ) -> Result<Option<State>, ParseError> {
+    ) -> Result<Option<State>, CompletionError> {
         let ls = match (ls, token) {
             (Some(SpecLoadDirective::Fn(f)), Some(t)) => {
                 match host.call(SpecFunctionCall::LoadSpec {
@@ -871,7 +804,7 @@ impl ParseCaches {
         tokens: &[String],
         dev: bool,
         host: &mut dyn Host,
-    ) -> Result<State, ParseError> {
+    ) -> Result<State, CompletionError> {
         let Some(f) = st.completion.generate_spec() else {
             return Ok(st);
         };
@@ -882,9 +815,9 @@ impl ParseCaches {
                     function: *kf,
                     tokens: tokens.to_vec(),
                 }) {
-                    Err(ParseError::Aborted) => return Err(ParseError::Aborted),
+                    Err(CompletionError::Aborted) => return Err(CompletionError::Aborted),
                     Ok(SpecFunctionResult::GenerateSpecCacheKey(k)) => k,
-                    Ok(_) | Err(ParseError::NoSuggestions(_)) => None,
+                    Ok(_) | Err(CompletionError::NoSuggestions(_)) => None,
                 }
             }
             None => None,
@@ -914,7 +847,7 @@ impl ParseCaches {
                         }
                         g
                     }
-                    Err(ParseError::Aborted) => return Err(ParseError::Aborted),
+                    Err(CompletionError::Aborted) => return Err(CompletionError::Aborted),
                     Err(e) => {
                         logger::warn(&format!("generateSpec ({}): {e:?}", tokens[0])); // spec name only: logs never hold typed text
                         return Ok(st);
