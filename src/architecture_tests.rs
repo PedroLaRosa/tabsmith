@@ -155,14 +155,13 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let test_file = path.ends_with("/tests.rs");
     let mut open_braces = Vec::new();
     let mut test_only_item = TestOnlyItem::default();
-    let mut imported_names = ImportedNames::default();
+    let imported_names = ImportedNames::in_source(source);
     let mut found = Vec::new();
     for (index, line) in source.lines().enumerate() {
         let code = without_line_comment(line);
         test_only_item.open_at(code, open_braces.len());
         let paths = paths_in(code, &mut open_braces);
         let production = !test_only_item.holds(code, open_braces.len()) && !test_file;
-        imported_names.record(&paths);
         let resolved = imported_names.resolve(&paths);
         let checks = [
             (
@@ -230,15 +229,24 @@ impl TestOnlyItem {
 
 /// The short names crate paths bring in: after `use crate::history;`, `use crate::history::{self, ..}` or
 /// `use crate::history::application;`, `history::..` and `application::..` read as the crate paths they stand for.
-// ponytail: every crate path's last segment is recorded, not only those on `use` lines (code that compiles uses a
-// short name only after importing it), file-wide rather than per scope; `as` renames and glob imports are not
-// followed.
+// ponytail: every crate path's last segment is recorded, not only those on `use` lines, file-wide rather than per
+// scope (a name imported twice reads as its last import everywhere); `as` renames and glob imports are not followed.
 #[derive(Default)]
 struct ImportedNames<'a> {
     full_paths: HashMap<&'a str, Vec<&'a str>>,
 }
 
 impl<'a> ImportedNames<'a> {
+    /// The names `source` imports, read before any line is checked: a `use` may come after the code that uses it.
+    fn in_source(source: &'a str) -> Self {
+        let mut imported_names = Self::default();
+        let mut open_braces = Vec::new();
+        for line in source.lines() {
+            imported_names.record(&paths_in(without_line_comment(line), &mut open_braces));
+        }
+        imported_names
+    }
+
     fn record(&mut self, paths: &[Vec<&'a str>]) {
         for path in paths.iter().filter(|path| path.first() == Some(&"crate")) {
             let full_path = path.strip_suffix(&["self"]).unwrap_or(path);
@@ -795,6 +803,16 @@ mod tests {
         let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
 
         assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
+    }
+
+    #[test]
+    fn should_flag_another_modules_infrastructure_reached_by_a_short_name_imported_below_it() {
+        let source = "let repo = history::infrastructure::jsonl_history_repository::JsonlHistoryRepository::new(p);\n\
+                      use crate::history;\n";
+
+        let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
     }
 
     #[test]
