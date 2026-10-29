@@ -58,7 +58,10 @@ impl SpecRuntime for InMemorySpecRuntime {
         _timeout: Duration,
     ) -> Result<SpecFunctionResult, SpecError> {
         self.calls.borrow_mut().push(call.clone());
-        (self.answers[&call.function()])(&call)
+        match self.answers.get(&call.function()) {
+            Some(answer) => answer(&call),
+            None => Err(SpecError::Invalid("unknown fn".into())),
+        }
     }
 }
 
@@ -102,5 +105,18 @@ mod tests {
         let _ = runtime.call(query_term.clone(), None, Duration::from_secs(5));
 
         assert_eq!(runtime.calls(), vec![trigger, query_term]);
+    }
+
+    #[test]
+    fn should_reject_an_unknown_function() {
+        let runtime = InMemorySpecRuntime::default();
+        let call = SpecFunctionCall::Alias {
+            function: 3,
+            token: "co".into(),
+        };
+
+        let result = runtime.call(call, None, Duration::from_secs(5));
+
+        assert!(matches!(result, Err(SpecError::Invalid(text)) if text == "unknown fn"));
     }
 }
