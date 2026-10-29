@@ -6,10 +6,11 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER,
 };
 use crate::settings::domain::value_objects::settings::Settings;
+use crate::specs::domain::services::spec_locator::find_global_spec;
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use anyhow::Context;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// The solid `tar | zstd -19` of `@withfig/autocomplete/build` (SPEC D11).
@@ -190,24 +191,9 @@ fn dev_folder(settings: &Settings) -> Option<PathBuf> {
     })
 }
 
-/// [`resolve`] over explicit roots (first wins). Only plain relative names: absolute, drive-relative (`C:foo`),
-/// `.` and `..` components are rejected.
+/// [`resolve`] over explicit roots, probing the real file system ([`find_global_spec`]).
 pub(crate) fn resolve_in(name: &str, roots: &[PathBuf], index: &SpecIndex) -> Option<PathBuf> {
-    if name.is_empty()
-        || !Path::new(name)
-            .components()
-            .all(|c| matches!(c, Component::Normal(_)))
-    {
-        return None;
-    }
-    let diff = index.diff_versioned().contains(name);
-    roots.iter().find_map(|root| {
-        let file = root.join(format!("{name}.js"));
-        if !diff && file.is_file() {
-            return Some(file);
-        }
-        Some(root.join(name).join("index.js")).filter(|f| f.is_file())
-    })
+    find_global_spec(name, roots, index, |p| p.is_file())
 }
 
 /// Test helpers shared with `js` tests: partial extraction of the real bundle into temp dirs.
