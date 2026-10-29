@@ -500,6 +500,11 @@ pub(crate) fn call_arguments(
 ) -> (SpecFunctionRef, Vec<JsArg>) {
     let arguments = match call {
         SpecFunctionCall::QueryTerm { search_term, .. } => vec![JsArg::Json(json!(search_term))],
+        SpecFunctionCall::Trigger {
+            new_token,
+            old_token,
+            ..
+        } => vec![JsArg::Json(json!(new_token)), JsArg::Json(json!(old_token))],
         _ => Vec::new(),
     };
     (call.function(), arguments)

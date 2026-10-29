@@ -457,3 +457,20 @@ fn should_pass_a_query_term_function_the_search_term() {
 
     assert_eq!(arguments, (3, vec![JsArg::Json(json!(search_term))]));
 }
+
+#[test]
+fn should_pass_a_trigger_the_new_and_the_old_token() {
+    let (new, old) = ("a/", "a");
+    let call = SpecFunctionCall::Trigger {
+        function: 4,
+        new_token: new.into(),
+        old_token: old.into(),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(
+        arguments,
+        (4, vec![JsArg::Json(json!(new)), JsArg::Json(json!(old))])
+    );
+}
