@@ -48,6 +48,12 @@ impl SetUpTabsmithUseCase {
         let manual = !automatic;
         if manual {
             report(SetupProgress::ManualInstructions(manual_install_instructions::text(paths, shells)));
+            let _ = self.installer.apply(
+                paths,
+                shells,
+                |i| i.whole_file_phase().is_none(),
+                |i| self.installer.write_scripts(paths, i),
+            );
         }
         Ok(manual)
     }
@@ -175,6 +181,31 @@ mod tests {
                         &[Shell::Bash, Shell::Zsh]
                     ))],
             "{manual:?} {events:?}"
+        );
+    }
+
+    /// The manual lines source the `~/.tabsmith/shell/` script files; fish's integrations are whole `conf.d` files,
+    /// which the manual lines do not cover.
+    #[test]
+    fn should_write_the_script_files_of_the_dotfile_integrations_after_the_manual_instructions() {
+        let bed = test_bed();
+        let mut writes_when_reported = Vec::new();
+
+        let _ = bed.use_case.execute(&paths(), &[Shell::Zsh, Shell::Fish], false, |_| {
+            writes_when_reported.push(bed.dotfiles.writes().len())
+        });
+
+        assert_eq!(
+            (writes_when_reported, bed.dotfiles.writes()),
+            (
+                vec![0],
+                vec![
+                    PathBuf::from("/home/u/.tabsmith/shell/zshrc.pre.zsh"),
+                    PathBuf::from("/home/u/.tabsmith/shell/zshrc.post.zsh"),
+                    PathBuf::from("/home/u/.tabsmith/shell/zprofile.pre.zsh"),
+                    PathBuf::from("/home/u/.tabsmith/shell/zprofile.post.zsh"),
+                ]
+            )
         );
     }
 }
