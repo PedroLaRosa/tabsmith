@@ -42,6 +42,7 @@ enum Rule {
     ModuleBoundary,
     SharedKernel,
     ModuleDeclarations,
+    SplicedCode,
 }
 
 impl Rule {
@@ -58,6 +59,7 @@ impl Rule {
             Rule::ModuleBoundary => "uses another module's use case or infrastructure, or bootstrap",
             Rule::SharedKernel => "shared uses a crate module other than shared",
             Rule::ModuleDeclarations => "a mod.rs imports, re-exports or holds an item; it only declares its children",
+            Rule::SplicedCode => "compiles in a file the rules never read (#[path], include!)",
         }
     }
 }
@@ -175,6 +177,7 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
             ),
             (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(&paths)),
             (Rule::ModuleDeclarations, path.ends_with("/mod.rs") && !only_declares_children(code)),
+            (Rule::SplicedCode, splices_in_unread_code(code)),
         ];
         let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
         found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
@@ -377,6 +380,15 @@ fn only_declares_children(code: &str) -> bool {
     let declaration = item.strip_prefix("pub(crate) ").unwrap_or(item);
     let child = declaration.strip_prefix("mod ").and_then(|rest| rest.strip_suffix(';'));
     item.is_empty() || child.is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+}
+
+/// `#[path = ..]` and `include!` compile a file the rules never read into the module.
+fn splices_in_unread_code(code: &str) -> bool {
+    code.contains("#[path")
+        || code.split_inclusive(|c: char| !is_path_char(c)).any(|piece| {
+            let name = piece.strip_suffix('!').map(|path| path.rsplit("::").next().unwrap_or(path));
+            name == Some("include")
+        })
 }
 
 /// The lines of `main_rs` every module would see as `crate::<name>`, a path rules 1-3 cannot read as the shared
@@ -1087,6 +1099,28 @@ mod tests {
                 Violation { line: 5, rule: Rule::ModuleDeclarations },
                 Violation { line: 6, rule: Rule::ModuleDeclarations },
                 Violation { line: 7, rule: Rule::ModuleDeclarations },
+            ]
+        );
+    }
+
+    /// `#[path]` and `include!` compile `src/leak.rs` into the domain, a file outside every module the rules read.
+    #[test]
+    fn should_flag_a_file_that_splices_in_a_file_the_rules_never_read() {
+        let declaration = "#[path = \"../../leak.rs\"]\n\
+                           pub(crate) mod leak;\n";
+        let splice = "pub(crate) fn decide() {}\n\
+                      include!(\"../../leak.rs\");\n";
+
+        let found = [
+            violations_in("shell_integration/domain/mod.rs", declaration),
+            violations_in("shell_integration/domain/spliced.rs", splice),
+        ];
+
+        assert_eq!(
+            found,
+            [
+                vec![Violation { line: 1, rule: Rule::SplicedCode }],
+                vec![Violation { line: 2, rule: Rule::SplicedCode }],
             ]
         );
     }
