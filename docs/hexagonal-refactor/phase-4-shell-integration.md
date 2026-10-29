@@ -1,6 +1,7 @@
 # Phase 4 (shell_integration): preparation
 
-Status: **prepared, not started.** Phase 4 starts from the end of Phase 3 (history), with the gate green. This prep was
+Status: **done** at `ab7052b` (`6f38da1..ab7052b`, gate green). The decisions it took and their deviations are in
+the plan's section 9 "Phase 4 notes"; where they differ from the briefs below, the notes win. This prep was
 researched on a frozen snapshot of `a3953cf` (end of Phase 2) by five researchers (domain, ports/adapters, use
 cases/CLI, tests/scripts, session context) and merged here; the step prompts are in
 `phase-4-shell-integration.args.json` next to this file.

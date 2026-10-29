@@ -12,10 +12,10 @@ implementation session needs that the plan does not.
 | 1 composition root, fitness test, shared kernel | done | `af1b304..52dcf85` |
 | 2 settings | done | `52dcf85..c7b796e` |
 | 3 history | done | `a3953cf..f485ea7`, see [`phase-3-history.md`](phase-3-history.md) |
-| 4 shell_integration | done (also starts terminal_session's session context) | `6f38da1..03024f0`, see [`phase-4-shell-integration.md`](phase-4-shell-integration.md) |
+| 4 shell_integration | done (also starts terminal_session's session context) | `6f38da1..ab7052b`, see [`phase-4-shell-integration.md`](phase-4-shell-integration.md) |
 | 5-11 | not started | |
 
-At `03024f0`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 758 passed, 0 failed, 1 ignored (the
+At `ab7052b`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 761 passed, 0 failed, 1 ignored (the
 baseline was 283). clippy shows 3 warnings (baseline 3). The 131-command golden CLI capture is byte-identical to
 the baseline. The test lock has 0 baseline tests missing. 63 baseline tests are CHANGED, each one a reviewed
 restructuring (15 against the `phase4-start` tag, each in Phase 4's "Test moves" table). The only DUPLICATE test

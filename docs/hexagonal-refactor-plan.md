@@ -1,6 +1,6 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2, 3 and 4 are done on branch `refactor/hexagonal-architecture` (gate green at `03024f0`).
+Status: Phases 0, 1, 2, 3 and 4 are done on branch `refactor/hexagonal-architecture` (gate green at `ab7052b`).
 Phase 5 is next. Working notes, tools, the per-file source map and the Phase 3 and 4 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
@@ -137,7 +137,10 @@ pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) 
    cannot read as one;
 7. anything in `src/main.rs` but attributes, child declarations and `fn main`, and a `use` item anywhere in it: every
    module sees the crate root's private items as `crate::<name>` (`crate::logger`, `crate::Cli`), a path that rules
-   1-3 cannot read as the shared infrastructure or bootstrap, so `main` names what it calls by full path.
+   1-3 cannot read as the shared infrastructure or bootstrap, so `main` names what it calls by full path;
+8. a `#[path]` attribute, an `include!`, or a `#[macro_export]` or `#[macro_use]` macro in a registered module or in
+   `src/main.rs`: each compiles code the rules never read into a module (a file outside it, or a macro body the
+   domain calls as `crate::name!` or `name!`, a path that names no logger or infrastructure).
 
 It starts with the module list empty, and each phase adds the module it finishes.
 
@@ -580,8 +583,8 @@ deleted, gate green (524 passed). See the Phase 3 notes in section 9.
    - `ReportSessionContextUseCase` and `cli/pre_cmd_command.rs`.
 6. Delete `integrations.rs`.
 
-Done at `03024f0`: `shell_integration` registered in the architecture test, `integrations.rs` and `types::SessionCtx`
-deleted, gate green (758 passed). terminal_session stays unregistered until Phase 9. See the Phase 4 notes in
+Done at `ab7052b`: `shell_integration` registered in the architecture test, `integrations.rs` and `types::SessionCtx`
+deleted, gate green (761 passed). terminal_session stays unregistered until Phase 9. See the Phase 4 notes in
 section 9.
 
 ### Phase 5: specs
@@ -886,7 +889,9 @@ which cites the code behind each):
   takes the `SpecBundleInstaller` as a second parameter (P12); bootstrap builds the module in each command arm that
   needs it. `SessionContextRepository` has `last_modified` beside `save`/`find`/`remove`/`prune_older_than` (P17):
   the pty reloads a context only when its file's modification time changed. `embedded_shell_scripts/tests.rs` holds
-  24 moved script tests (the plan said 22 real-shell tests plus the snapshot tests).
+  24 moved script tests (the plan said 22 real-shell tests plus the snapshot tests). `IntegrationStatusReport` keeps
+  P10's `failures: Vec<IntegrationFailure>` although status builds only `Listing` failures; the status JSON's
+  `Operation` arm says it is never reached (no listing-only type, so every run still words a failure alike).
 - **Accessors in place of `to_primitives()`**: `Integration` (P5) and `SessionContext` (P17) keep read-only
   accessors instead of section 1's `to_primitives()`. `GetIntegrationStatusUseCase` maps `describe()`,
   `shell().name()` and `file_name()` into each `IntegrationStatus` row, which also carries the check result (not an
@@ -906,10 +911,13 @@ which cites the code behind each):
 - **Fitness rules**: the Phase 4 review added rule 7 (no `use` item in `src/main.rs`, whose private imports every
   module could reach as `crate::<name>`; `main` calls by full path), turned rule 6 into an allow-list (a `mod.rs`
   holds only attributes and child declarations, so no `type` alias or wrapper fn either) and made rules 1-2 read the
-  crate an `extern crate .. as ..` line links. Rule 3 flags only `*_use_case` and `infrastructure` paths, so it
-  cannot see the `IntegrationInstaller` application service; legacy `doctor.rs` builds one (P14), so Phase 10 greps
-  diagnostics for it by hand. The rules still do not check the `anyhow` rule: at the end of Phase 4 a grep finds it
-  in shell_integration only in `infrastructure/cli` and test code.
+  crate an `extern crate .. as ..` line links. Its second round added rule 8 (`#[path]`, `include!`, `#[macro_export]`
+  and `#[macro_use]`). The checker reads only the registered modules and `src/main.rs`, so a macro exported from
+  bootstrap or a legacy file still passes, as do `#[cfg_attr(.., path = ..)]` and a space after `#[` or before
+  `!`. Rule 3 flags only `*_use_case` and `infrastructure` paths, so it cannot see the `IntegrationInstaller`
+  application service; legacy `doctor.rs` builds one (P14), so Phase 10 greps diagnostics for it by hand. The rules
+  still do not check the `anyhow` rule: at the end of Phase 4 a grep finds it in shell_integration only in
+  `infrastructure/cli` and test code.
 - **terminal_session** is not registered (Phase 9 finishes it); each step checked it locally. `_ pre-cmd` runs
   through `infrastructure/cli/pre_cmd_command.rs` and `ReportSessionContextUseCase` (save, then prune the contexts
   unchanged for a day). `types::SessionCtx` is gone: `EngineMsg::Session { env, alias }` already has its Phase 6
