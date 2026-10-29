@@ -40,7 +40,7 @@ impl RenderInitScriptUseCase {
             phase,
             template,
             &self.environment.current_executable()?,
-            || None,
+            || self.environment.parent_shell(),
             || decide(&self.environment.launch_facts()).launches(),
         ))
     }
@@ -100,6 +100,22 @@ mod tests {
         assert_eq!(
             script.text(),
             "set -g SHOULD_TABSMITH_LAUNCH 1\nbody '/usr/local/bin/tabsmith'"
+        );
+    }
+
+    #[test]
+    fn should_open_the_zsh_pre_script_with_the_parent_shell_the_environment_gives() {
+        let environment = Rc::new(
+            RecordingShellEnvironment::default().with_parent_shell(Some("/usr/bin/zsh".into())),
+        );
+
+        let script = use_case(&environment)
+            .execute(Shell::Zsh, IntegrationPhase::Pre, false)
+            .unwrap();
+
+        assert_eq!(
+            script.text(),
+            "TABSMITH_SHELL='/usr/bin/zsh'\nSHOULD_TABSMITH_LAUNCH=1\nbody '/usr/local/bin/tabsmith'"
         );
     }
 }
