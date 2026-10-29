@@ -27,6 +27,7 @@ use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::services::history_suggestions;
+use crate::completion::domain::services::path_template;
 use crate::completion::domain::services::suggestion_assembler;
 use crate::completion::domain::services::suggestion_finalizer;
 use crate::completion::domain::services::suggestion_ranker;
@@ -751,7 +752,7 @@ impl Engine {
             self.slot_arg = Some(arg.clone());
         }
         let help = if gens.iter().any(|g| g.template().iter().any(|t| t == "help")) {
-            suggest::help_items(pr)
+            path_template::help_items(pr)
         } else {
             Vec::new()
         };
@@ -839,7 +840,7 @@ impl Engine {
             let mut items = Vec::new();
             let files = g.template().iter().any(|t| t == "filepaths");
             if is_path_template(g) && !run.ctx.cwd().is_empty() {
-                let dir = suggest::inserted_directory(
+                let dir = path_template::inserted_directory(
                     run.ctx.cwd(),
                     run.ctx.search_term(),
                     run.ctx.env(),
