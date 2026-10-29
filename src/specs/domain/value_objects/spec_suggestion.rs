@@ -1,7 +1,7 @@
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
 /// A static suggestion, `additionalSuggestions` entry or generator result, before filtering.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SpecSuggestion {
     names: Vec<String>,
     display_name: Option<String>,
