@@ -2,6 +2,9 @@
 use super::*;
 use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::shell_parser::Token;
+use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
+use crate::specs::infrastructure::adapters::fig_spec_mapper::function_result;
+use crate::specs::infrastructure::adapters::quickjs_spec_runtime::call_arguments;
 use serde_json::json;
 use std::cell::RefCell;
 
@@ -106,8 +109,11 @@ impl Host for Mock {
         Ok(self.specs.get(&key).cloned())
     }
 
-    fn call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>) -> Result<Value, ParseError> {
-        (self.fns.get(&f).ok_or_else(|| no("unknown fn"))?)(&args)
+    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, ParseError> {
+        let context = GeneratorContext::default();
+        let (f, args) = call_arguments(&call, &context);
+        let v = (self.fns.get(&f).ok_or_else(|| no("unknown fn"))?)(&args)?;
+        Ok(function_result(call.kind(), &v, &context))
     }
 
     fn substitute(&mut self, c: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo> {

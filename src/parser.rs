@@ -14,7 +14,8 @@ use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
 use crate::specs::domain::value_objects::repeatability::Repeatability;
 use crate::specs::domain::value_objects::semantic_version::semver_clean;
-use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
+use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
+use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
 use crate::specs::domain::services::spec_locator::spec_location;
 use crate::specs::domain::services::spec_version_selector::versions_to_apply;
@@ -486,8 +487,8 @@ fn truthy(v: Option<&Value>) -> bool {
 /// What the state machine needs from outside (spec files, JS callbacks, re-tokenizing); mocked in tests.
 trait Host {
     fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, ParseError>;
-    /// Call a spec function; `JsArg::Exec` is bound to the session's exec.
-    fn call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>) -> Result<Value, ParseError>;
+    /// Call a spec function; its `executeShellCommand` is bound to the session's exec.
+    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, ParseError>;
     fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo>;
 }
 
@@ -503,8 +504,8 @@ impl Host for JsHost<'_, '_> {
         self.loader.load(loc, self.ctx, self.js, &self.generator)
     }
 
-    fn call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>) -> Result<Value, ParseError> {
-        Ok(self.js.call_json(f, args, Some(&self.generator), TIMEOUT)?)
+    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, ParseError> {
+        Ok(SpecRuntime::call(self.js, call, Some(&self.generator), TIMEOUT)?)
     }
 
     fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo> {
@@ -1084,10 +1085,15 @@ impl ParseCaches {
         let value = match alias {
             TextOrFunction::Str(s) => s.clone(),
             TextOrFunction::Fn(f) => {
-                let v = host.call(*f, vec![JsArg::Json(token.into()), JsArg::Exec])?;
-                v.as_str()
-                    .ok_or_else(|| no("alias did not return a string"))?
-                    .to_string()
+                let SpecFunctionResult::Alias(Some(value)) =
+                    host.call(SpecFunctionCall::Alias {
+                        function: *f,
+                        token: token.to_string(),
+                    })?
+                else {
+                    return Err(no("alias did not return a string"));
+                };
+                value
             }
         };
         // `git config --get` output ends with "\n"; a newline would not split words in the re-tokenized command.
@@ -1111,9 +1117,15 @@ impl ParseCaches {
         depth: usize,
     ) -> Result<Option<State>, ParseError> {
         let ls = match (ls, token) {
-            (Some(SpecLoadDirective::Fn(f)), Some(t)) => fig_spec_mapper::load_spec_result(
-                &host.call(f, vec![JsArg::Json(t.into()), JsArg::Exec])?,
-            ),
+            (Some(SpecLoadDirective::Fn(f)), Some(t)) => {
+                match host.call(SpecFunctionCall::LoadSpec {
+                    function: f,
+                    token: t.to_string(),
+                })? {
+                    SpecFunctionResult::LoadSpec(directive) => directive,
+                    _ => None,
+                }
+            }
             (Some(SpecLoadDirective::Fn(_)), None) => None, // function loadSpecs are skipped at the root
             (ls, _) => ls,
         };
@@ -1159,13 +1171,16 @@ impl ParseCaches {
         };
         let cache_key = match st.completion.generate_spec_cache_key() {
             Some(TextOrFunction::Str(k)) => Some(k.clone()),
-            Some(TextOrFunction::Fn(kf)) => match host.call(
-                *kf,
-                vec![JsArg::Json(serde_json::json!({ "tokens": tokens }))],
-            ) {
-                Err(ParseError::Aborted) => return Err(ParseError::Aborted),
-                r => r.ok().and_then(|v| v.as_str().map(String::from)),
-            },
+            Some(TextOrFunction::Fn(kf)) => {
+                match host.call(SpecFunctionCall::GenerateSpecCacheKey {
+                    function: *kf,
+                    tokens: tokens.to_vec(),
+                }) {
+                    Err(ParseError::Aborted) => return Err(ParseError::Aborted),
+                    Ok(SpecFunctionResult::GenerateSpecCacheKey(k)) => k,
+                    Ok(_) | Err(ParseError::NoSuggestions(_)) => None,
+                }
+            }
             None => None,
         }
         .filter(|_| !dev)
@@ -1174,8 +1189,14 @@ impl ParseCaches {
             Some(g) => g.clone(),
             None => {
                 let generated = host
-                    .call(f, vec![JsArg::Json(serde_json::json!(tokens)), JsArg::Exec])
-                    .and_then(|v| normalise(&v).map_err(|e| no(e.to_string())));
+                    .call(SpecFunctionCall::GenerateSpec {
+                        function: f,
+                        tokens: tokens.to_vec(),
+                    })
+                    .and_then(|r| match r {
+                        SpecFunctionResult::GenerateSpec(s) => s.map(|spec| *spec).map_err(no),
+                        _ => Err(no("spec is not an object")),
+                    });
                 match generated {
                     Ok(g) => {
                         let g = Rc::new(g);
