@@ -22,18 +22,19 @@ impl ReinstallIntegrationsUseCase {
         }
     }
 
-    /// Ok(true) if something was installed again.
+    /// Ok(true) if something was installed again. A failure to take the integrations out stops the run before the
+    /// install.
     pub(crate) fn execute(
         &self,
         paths: &IntegrationPaths,
         shells: &[Shell],
     ) -> Result<bool, Vec<IntegrationFailure>> {
-        let _ = self.installer.apply(
+        self.installer.apply(
             paths,
             shells,
             |i| self.installer.has_traces(paths, i),
             |i| self.installer.uninstall(paths, i),
-        );
+        )?;
         let installed = self.installer.install_missing(paths, shells);
         self.restart_reminder.save_pending();
         installed
@@ -97,6 +98,32 @@ mod tests {
         assert_eq!(
             (reinstalled.unwrap(), installed, restart_reminder.is_pending()),
             (true, true, true)
+        );
+    }
+
+    /// pwsh cannot be listed, so the uninstall half fails: nothing is installed and no reminder is saved (T30).
+    #[test]
+    fn should_stop_before_installing_when_the_uninstall_half_fails() {
+        let dotfiles = Rc::new(InMemoryDotfileRepository::default());
+        let environment = Rc::new(
+            RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+        );
+        let restart_reminder = Rc::new(InMemoryRestartReminderRepository::default());
+        let use_case = ReinstallIntegrationsUseCase::new(
+            installer(dotfiles.clone(), environment.clone()),
+            restart_reminder.clone(),
+        );
+
+        let reinstalled = use_case.execute(&paths(), &[Shell::Zsh, Shell::Pwsh]);
+
+        assert!(
+            reinstalled.is_err()
+                && dotfiles.writes().is_empty()
+                && environment.asked() == ["pwsh_profile"]
+                && !restart_reminder.is_pending(),
+            "{reinstalled:?} {:?} {:?}",
+            dotfiles.writes(),
+            environment.asked()
         );
     }
 }
