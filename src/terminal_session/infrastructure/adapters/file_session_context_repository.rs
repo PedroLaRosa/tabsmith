@@ -21,7 +21,7 @@ impl FileSessionContextRepository {
         FileSessionContextRepository { data_directory }
     }
 
-    fn file(&self, id: &SessionId) -> Result<PathBuf, SharedError> {
+    fn run_file(&self, id: &SessionId) -> Result<PathBuf, SharedError> {
         Ok(self
             .data_directory
             .run_dir()?
@@ -33,7 +33,7 @@ impl SessionContextRepository for FileSessionContextRepository {
     /// Compact JSON written with [`AtomicFile::write_private`]: `run/` 0700 (a purged data directory is not
     /// recreated), the file 0600.
     fn save(&self, context: &SessionContext) -> Result<(), TerminalSessionError> {
-        let path = self.file(context.id()).map_err(storage_error)?;
+        let path = self.run_file(context.id()).map_err(storage_error)?;
         let json =
             serde_json::to_string(&SessionContextRecord::from(context)).map_err(storage_error)?;
         AtomicFile::new(&path)
@@ -44,7 +44,7 @@ impl SessionContextRepository for FileSessionContextRepository {
     /// `None` for a file that is missing, unreadable, not UTF-8 or not a record (`"env": null` too), as
     /// `SessionCtx::load` was.
     fn find(&self, id: &SessionId) -> Option<SessionContext> {
-        let path = self.file(id).ok()?;
+        let path = self.run_file(id).ok()?;
         let record: SessionContextRecord =
             serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
         Some(record.into_context(id.clone()))
@@ -52,13 +52,13 @@ impl SessionContextRepository for FileSessionContextRepository {
 
     /// Follows a symlinked run file, as the pty's `mtime` did; `None` when the file or its path is unknown.
     fn last_modified(&self, id: &SessionId) -> Option<SystemTime> {
-        let path = self.file(id).ok()?;
+        let path = self.run_file(id).ok()?;
         std::fs::metadata(path).ok()?.modified().ok()
     }
 
     /// A symlinked run file loses the link, not its target; every error is ignored.
     fn remove(&self, id: &SessionId) {
-        if let Ok(path) = self.file(id) {
+        if let Ok(path) = self.run_file(id) {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -135,6 +135,10 @@ mod tests {
         SessionId::new(id.to_string()).unwrap()
     }
 
+    fn empty_context(id: &str) -> SessionContext {
+        SessionContext::new(session_id(id), HashMap::new(), None, 0)
+    }
+
     /// The bytes `_ pre-cmd` has always written: compact, no trailing newline, keys env, alias, ts in that order.
     #[test]
     fn should_save_the_context_as_compact_json_with_env_alias_and_ts_in_that_order() {
@@ -181,7 +185,7 @@ mod tests {
     fn should_give_the_modification_time_of_the_run_file_once_the_session_reported() {
         let temp_dir = TempDir::new("session-mtime");
         let repository = repository_in(&temp_dir);
-        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+        let context = empty_context("abc123");
         let before = repository.last_modified(&session_id("abc123"));
 
         repository.save(&context).unwrap();
@@ -197,7 +201,7 @@ mod tests {
     fn should_delete_the_run_file_of_a_removed_session() {
         let temp_dir = TempDir::new("session-remove");
         let repository = repository_in(&temp_dir);
-        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+        let context = empty_context("abc123");
         repository.save(&context).unwrap();
 
         repository.remove(&session_id("abc123"));
@@ -267,7 +271,7 @@ mod tests {
     #[test]
     fn should_fail_to_save_without_a_home_directory_with_the_original_message() {
         let repository = FileSessionContextRepository::new(DataDirectory::new(None, None));
-        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+        let context = empty_context("abc123");
 
         let error = repository.save(&context).unwrap_err();
 
@@ -285,7 +289,7 @@ mod tests {
         let root = temp_dir.path().join("purged");
         let repository =
             FileSessionContextRepository::new(DataDirectory::new(Some(root.clone()), None));
-        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+        let context = empty_context("abc123");
 
         let error = repository.save(&context).unwrap_err();
 
@@ -302,7 +306,7 @@ mod tests {
         let repository = repository_in(&temp_dir);
         let path = temp_dir.path().join("run/abc123.json");
         std::fs::create_dir_all(&path).unwrap();
-        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+        let context = empty_context("abc123");
 
         let error = repository.save(&context).unwrap_err();
 
