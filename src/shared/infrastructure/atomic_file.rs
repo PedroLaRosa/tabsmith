@@ -108,8 +108,9 @@ mod tests {
     #[cfg(unix)]
     use serde_json::Map;
 
-    /// The write_private half of the `_ pre-cmd` run file scenario (the SessionCtx round trip stays in
-    /// integrations.rs as `integrations_pre_cmd_file_session_ctx`). The bytes are that SessionCtx, serialized.
+    /// The write_private half of the `_ pre-cmd` run file scenario (the session context round trip is
+    /// `integrations_pre_cmd_file_session_ctx` in terminal_session's file_session_context_repository.rs). The bytes
+    /// are that session context's run file.
     #[cfg(unix)]
     #[test]
     fn integrations_pre_cmd_file() {
@@ -142,8 +143,8 @@ mod tests {
 
     /// Dotfiles are replaced atomically: whoever holds the old file sees it whole, a symlinked dotfile stays a
     /// symlink, permissions stay, no temp file is left, and a read-only file still reports PermissionDenied.
-    /// The write half of this scenario; Integration::install/uninstall on it stay in integrations.rs
-    /// (`integrations_dotfile_write_is_atomic_install`).
+    /// The write half of this scenario; installing and uninstalling an `Integration` on it is
+    /// `integrations_dotfile_write_is_atomic_install` in shell_integration's file_dotfile_repository/tests.rs.
     #[cfg(unix)]
     #[test]
     fn integrations_dotfile_write_is_atomic() {

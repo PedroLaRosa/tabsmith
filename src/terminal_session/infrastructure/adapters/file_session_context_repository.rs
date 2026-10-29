@@ -41,8 +41,7 @@ impl SessionContextRepository for FileSessionContextRepository {
             .map_err(storage_error)
     }
 
-    /// `None` for a file that is missing, unreadable, not UTF-8 or not a record (`"env": null` too), as
-    /// `SessionCtx::load` was.
+    /// `None` for a file that is missing, unreadable, not UTF-8 or not a record (`"env": null` too).
     fn find(&self, id: &SessionId) -> Option<SessionContext> {
         let path = self.run_file(id).ok()?;
         let record: SessionContextRecord =
@@ -365,7 +364,7 @@ mod tests {
     }
 
     /// The file modes and the purge guard of this scenario are asserted in shared atomic_file.rs
-    /// (`integrations_pre_cmd_file`); this half keeps the SessionCtx round trip.
+    /// (`integrations_pre_cmd_file`); this half keeps the session context round trip.
     #[cfg(unix)]
     #[test]
     fn integrations_pre_cmd_file_session_ctx() {
