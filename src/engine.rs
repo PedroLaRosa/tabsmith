@@ -131,7 +131,7 @@ fn gen_key(arg: &Rc<Arg>, idx: usize) -> GenKey {
 
 /// `filepaths` / `folders` templates behave like the bundled `filepaths()` helper (trigger, query term).
 fn is_path_template(g: &Generator) -> bool {
-    g.template
+    g.template()
         .iter()
         .any(|t| t == "filepaths" || t == "folders")
 }
@@ -534,7 +534,7 @@ impl Engine {
                     backslash: shell == Shell::Pwsh,
                 }
             } else {
-                match &g.get_query_term {
+                match g.get_query_term() {
                     None => Query::Term,
                     Some(TextOrFunction::Str(s)) => Query::Str(s.clone()),
                     Some(TextOrFunction::Fn(f)) => match js.call(
@@ -575,7 +575,7 @@ impl Engine {
             } else if is_path_template(g) {
                 suggest::dir_changed(new, old, ctx.shell == Shell::Pwsh.name())
             } else {
-                match &g.trigger {
+                match g.trigger() {
                     None => arg.as_ref().is_some_and(|a| a.debounce.is_some()),
                     Some(GeneratorTrigger::Fn(f)) => match js.call(
                         *f,
@@ -609,7 +609,7 @@ impl Engine {
                 .collect();
             self.slot_arg = Some(arg.clone());
         }
-        let help = if gens.iter().any(|g| g.template.iter().any(|t| t == "help")) {
+        let help = if gens.iter().any(|g| g.template().iter().any(|t| t == "help")) {
             suggest::help_items(pr)
         } else {
             Vec::new()
@@ -628,7 +628,7 @@ impl Engine {
             let debounce = arg.debounce.map(|ms| if ms > 0 { ms } else { 200 });
             // ponytail: one deadline for the whole run (custom generators may exec several times)
             let budget =
-                debounce.unwrap_or(0) + 2 * floor.max(gens[i].script_timeout.unwrap_or(0)) + 1000;
+                debounce.unwrap_or(0) + 2 * floor.max(gens[i].script_timeout().unwrap_or(0)) + 1000;
             let mut run = Run {
                 slot: i,
                 gen_id: self.next_gen,
@@ -694,9 +694,9 @@ impl Engine {
     fn begin(&mut self, run: &mut Run, js: &mut Js) -> Outcome {
         let arg = run.arg.clone();
         let g = &arg.generators[run.idx];
-        if !g.template.is_empty() {
+        if !g.template().is_empty() {
             let mut items = Vec::new();
-            let files = g.template.iter().any(|t| t == "filepaths");
+            let files = g.template().iter().any(|t| t == "filepaths");
             if is_path_template(g) && !run.ctx.cwd.is_empty() {
                 let dir = suggest::inserted_directory(
                     &run.ctx.cwd,
@@ -707,7 +707,7 @@ impl Engine {
                 items = suggest::list_dir(&dir, files, run.ctx.is_dangerous);
             }
             items.extend(run.help.iter().cloned()); // `history` template: [] (F6)
-            return match g.filter_template_suggestions {
+            return match g.filter_template_suggestions() {
                 Some(f) => {
                     run.task = js.start_call(
                         f,
@@ -723,7 +723,7 @@ impl Engine {
         if run.ctx.cwd.is_empty() {
             return Outcome::Done(Vec::new()); // no context for script/custom generators
         }
-        if let Some(script) = &g.script {
+        if let Some(script) = g.script() {
             return match script {
                 GeneratorScript::Fn(f) => {
                     run.task =
@@ -736,14 +736,14 @@ impl Engine {
                 GeneratorScript::Object(o) => self.script_input(run, g, spec_value_to_json(o), js),
             };
         }
-        let Some(custom) = g.custom else {
+        let Some(custom) = g.custom() else {
             return Outcome::Done(Vec::new());
         };
-        let key = g.cache.as_ref().map(|c| {
+        let key = g.cache().as_ref().map(|c| {
             suggest::cache_key(
                 c,
                 &run.ctx.cwd,
-                c.cache_key.clone().unwrap_or_else(|| run.tokens.join(" ")),
+                c.cache_key().clone().unwrap_or_else(|| run.tokens.join(" ")),
             )
         });
         let args = vec![
@@ -770,7 +770,7 @@ impl Engine {
         js: &mut Js,
         start: impl FnOnce(&mut Js) -> TaskId,
     ) -> Result<Value, Outcome> {
-        let (Some(cfg), Some(key)) = (&g.cache, key) else {
+        let (Some(cfg), Some(key)) = (g.cache(), key) else {
             run.task = start(js);
             run.step = step;
             return Err(Outcome::Pending);
@@ -811,7 +811,7 @@ impl Engine {
         }; // falsy → []
         let key_src = input.to_string();
         let timeout = script_timeout(&self.settings)
-            .max(g.script_timeout.unwrap_or(0))
+            .max(g.script_timeout().unwrap_or(0))
             .max(input.get("timeout").and_then(Value::as_u64).unwrap_or(0));
         input["timeout"] = json!(timeout);
         let exec: ExecInput = match serde_json::from_value(input) {
@@ -819,9 +819,9 @@ impl Engine {
             Err(e) => return Outcome::Fail(format!("bad script input: {e}")),
         };
         let key = g
-            .cache
+            .cache()
             .as_ref()
-            .map(|c| suggest::cache_key(c, &run.ctx.cwd, c.cache_key.clone().unwrap_or(key_src)));
+            .map(|c| suggest::cache_key(c, &run.ctx.cwd, c.cache_key().clone().unwrap_or(key_src)));
         let ctx = run.ctx.clone();
         match self.fetch(run, g, key, Step::Exec, js, move |js| {
             js.start_exec(exec, &ctx)
@@ -834,7 +834,7 @@ impl Engine {
     /// `splitOn` takes precedence over `postProcess`; neither → [].
     fn exec_output(&mut self, run: &mut Run, g: &Generator, v: &Value, js: &mut Js) -> Outcome {
         let stdout = v.get("stdout").and_then(Value::as_str).unwrap_or("");
-        if let Some(sep) = &g.split_on {
+        if let Some(sep) = g.split_on() {
             let t = stdout.trim();
             if t.is_empty() {
                 return Outcome::Done(Vec::new());
@@ -845,7 +845,7 @@ impl Engine {
                     .collect(),
             );
         }
-        let Some(pp) = g.post_process else {
+        let Some(pp) = g.post_process() else {
             return Outcome::Done(Vec::new());
         };
         run.task = js.start_call(
@@ -863,7 +863,7 @@ impl Engine {
             .as_array()
             .and_then(|a| a.first())
             .is_some_and(|x| x.get("context").is_some());
-        match g.filter_template_suggestions {
+        match g.filter_template_suggestions() {
             Some(f) if templated => {
                 run.task = js.start_call(f, vec![JsArg::Json(v)], Some(&run.ctx));
                 run.step = Step::Filter;

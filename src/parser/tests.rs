@@ -588,7 +588,7 @@ fn inline_and_function_load_specs() {
     let r = run(&mut m, "y inl ").unwrap();
     assert_eq!(r.completion.names, ["inner"]);
     assert_eq!(r.current_arg.unwrap().name.as_deref(), Some("a"));
-    assert!(r.directives.options_must_precede_args);
+    assert!(r.directives.options_must_precede_args());
 }
 
 #[test]

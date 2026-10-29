@@ -33,30 +33,29 @@ pub(crate) fn normalise(v: &Value) -> Result<Subcommand, SpecError> {
 /// Parse one suggestion: a string or an object with `name` (string or array).
 pub(crate) fn suggestion_from_json(v: &Value) -> Option<SpecSuggestion> {
     if let Some(s) = v.as_str() {
-        return Some(SpecSuggestion {
-            names: vec![s.to_string()],
-            ..Default::default()
-        });
+        return Some(SpecSuggestion::default().with_names(vec![s.to_string()]));
     }
     let names = strs(v.get("name"));
     if !v.is_object() || names.is_empty() {
         return None;
     }
-    Some(SpecSuggestion {
-        names,
-        display_name: s(v, "displayName"),
-        insert_value: s(v, "insertValue"),
-        description: s(v, "description"),
-        kind: v
-            .get("type")
-            .and_then(Value::as_str)
-            .map(from_fig),
-        priority: v.get("priority").and_then(Value::as_f64),
-        hidden: b(v, "hidden"),
-        is_dangerous: b(v, "isDangerous"),
-        template_type: v.get("context").and_then(|c| s(c, "templateType")),
-        icon: s(v, "icon"),
-    })
+    Some(
+        SpecSuggestion::default()
+            .with_names(names)
+            .with_display_name(s(v, "displayName"))
+            .with_insert_value(s(v, "insertValue"))
+            .with_description(s(v, "description"))
+            .with_kind(
+                v.get("type")
+                    .and_then(Value::as_str)
+                    .map(from_fig),
+            )
+            .with_priority(v.get("priority").and_then(Value::as_f64))
+            .with_hidden(b(v, "hidden"))
+            .with_is_dangerous(b(v, "isDangerous"))
+            .with_template_type(v.get("context").and_then(|c| s(c, "templateType")))
+            .with_icon(s(v, "icon")),
+    )
 }
 
 /// Fig type string → type (`mixin` → Special, unknown → Arg).
@@ -125,16 +124,15 @@ fn subcommand(v: &Value) -> Subcommand {
     };
     if let Some(d) = v.get("parserDirectives").filter(|d| d.is_object()) {
         sc.has_directives = true;
-        sc.directives = ParserDirectives {
-            flags_posix_noncompliant: b(d, "flagsArePosixNoncompliant"),
-            options_must_precede_args: b(d, "optionsMustPrecedeArguments"),
+        sc.directives = ParserDirectives::default()
+            .with_flags_posix_noncompliant(b(d, "flagsArePosixNoncompliant"))
+            .with_options_must_precede_args(b(d, "optionsMustPrecedeArguments"))
             // The separators form a set: a string is a set of chars.
-            option_arg_separators: match d.get("optionArgSeparators") {
+            .with_option_arg_separators(match d.get("optionArgSeparators") {
                 Some(Value::String(x)) => x.chars().map(String::from).collect(),
                 Some(Value::Array(_)) => strs(d.get("optionArgSeparators")),
                 _ => vec!["=".into()],
-            },
-        };
+            });
     }
     for o in objects(v.get("options")).map(option) {
         if o.is_persistent {
@@ -221,19 +219,19 @@ fn generator(v: &Value) -> Generator {
     let template = strs(v.get("template"));
     // Path templates re-run when the directory part changes and query only the basename (SPEC §6.2, §6.6.4).
     let path_template = template.iter().any(|t| t == "filepaths" || t == "folders");
-    Generator {
-        script: v.get("script").and_then(|x| match x {
+    Generator::default()
+        .with_script(v.get("script").and_then(|x| match x {
             Value::Array(_) => Some(GeneratorScript::Argv(strs(Some(x)))),
             Value::String(c) => Some(GeneratorScript::Shell(c.clone())),
             Value::Object(_) => {
                 Some(fn_id(x).map_or_else(|| GeneratorScript::Object(spec_value_from_json(x)), GeneratorScript::Fn))
             }
             _ => None,
-        }),
-        post_process: v.get("postProcess").and_then(fn_id),
-        split_on: s(v, "splitOn"),
-        custom: v.get("custom").and_then(fn_id),
-        trigger: match v.get("trigger") {
+        }))
+        .with_post_process(v.get("postProcess").and_then(fn_id))
+        .with_split_on(s(v, "splitOn"))
+        .with_custom(v.get("custom").and_then(fn_id))
+        .with_trigger(match v.get("trigger") {
             Some(Value::String(t)) => Some(GeneratorTrigger::Str(t.clone())),
             Some(t) if fn_id(t).is_some() => fn_id(t).map(GeneratorTrigger::Fn),
             Some(t) => match t.get("on").and_then(Value::as_str) {
@@ -246,24 +244,26 @@ fn generator(v: &Value) -> Generator {
             },
             None if path_template => Some(GeneratorTrigger::Str("/".into())),
             None => None,
-        },
-        get_query_term: v
-            .get("getQueryTerm")
-            .and_then(str_or_fn)
-            .or_else(|| path_template.then(|| TextOrFunction::Str("/".into()))),
-        cache: v.get("cache").filter(|c| c.is_object()).map(|c| GeneratorCachePolicy {
-            ttl_ms: c.get("ttl").and_then(Value::as_f64).unwrap_or(0.0) as u64,
-            max_age: c.get("strategy").and_then(Value::as_str) == Some("max-age"),
-            cache_by_directory: b(c, "cacheByDirectory"),
-            cache_key: s(c, "cacheKey"),
-        }),
-        script_timeout: v
-            .get("scriptTimeout")
-            .and_then(Value::as_f64)
-            .map(|ms| ms as u64),
-        filter_template_suggestions: v.get("filterTemplateSuggestions").and_then(fn_id),
-        template,
-    }
+        })
+        .with_get_query_term(
+            v.get("getQueryTerm")
+                .and_then(str_or_fn)
+                .or_else(|| path_template.then(|| TextOrFunction::Str("/".into()))),
+        )
+        .with_cache(v.get("cache").filter(|c| c.is_object()).map(|c| {
+            GeneratorCachePolicy::default()
+                .with_ttl_ms(c.get("ttl").and_then(Value::as_f64).unwrap_or(0.0) as u64)
+                .with_max_age(c.get("strategy").and_then(Value::as_str) == Some("max-age"))
+                .with_cache_by_directory(b(c, "cacheByDirectory"))
+                .with_cache_key(s(c, "cacheKey"))
+        }))
+        .with_script_timeout(
+            v.get("scriptTimeout")
+                .and_then(Value::as_f64)
+                .map(|ms| ms as u64),
+        )
+        .with_filter_template_suggestions(v.get("filterTemplateSuggestions").and_then(fn_id))
+        .with_template(template)
 }
 
 /// String → one global location; `{"$fn"}` → function; other object → inline subcommand.
@@ -346,9 +346,9 @@ pub(crate) fn template_json(items: &[SpecSuggestion]) -> Value {
         items
             .iter()
             .map(|s| {
-                json!({"name": s.names.first(), "type": fig_type(s.kind.unwrap_or(SuggestionKind::Arg)),
-                       "insertValue": s.insert_value, "isDangerous": s.is_dangerous,
-                       "context": {"templateType": s.template_type}})
+                json!({"name": s.names().first(), "type": fig_type(s.kind().unwrap_or(SuggestionKind::Arg)),
+                       "insertValue": s.insert_value(), "isDangerous": s.is_dangerous(),
+                       "context": {"templateType": s.template_type()}})
             })
             .collect(),
     )
@@ -504,13 +504,13 @@ mod tests {
         assert_eq!(a.filter_strategy, FilterStrategy::Fuzzy);
         let g = &a.generators[0];
         assert_eq!(
-            (g.trigger.clone(), g.get_query_term.clone(), g.custom),
+            (g.trigger().clone(), g.get_query_term().clone(), g.custom()),
             (Some(GeneratorTrigger::Fn(0)), Some(TextOrFunction::Fn(1)), Some(2))
         );
         assert_eq!(
             a.suggestions
                 .iter()
-                .map(|x| (x.names[0].as_str(), x.hidden))
+                .map(|x| (x.names()[0].as_str(), x.hidden()))
                 .collect::<Vec<_>>(),
             [("-", true), ("~", true)]
         );
@@ -525,9 +525,9 @@ mod tests {
         assert_eq!(check.opt_index["--format"], (false, 0));
         assert_eq!(opt(check, "--format").args[0].suggestions.len(), 5);
         let g = &check.args[0].generators[0];
-        assert_eq!(g.template, ["filepaths"]);
+        assert_eq!(*g.template(), ["filepaths"]);
         assert_eq!(
-            (g.trigger.clone(), g.get_query_term.clone()),
+            (g.trigger().clone(), g.get_query_term().clone()),
             (
                 Some(GeneratorTrigger::Str("/".into())),
                 Some(TextOrFunction::Str("/".into()))
@@ -535,11 +535,11 @@ mod tests {
         );
         assert!(check.args[0].is_variadic);
         assert_eq!(
-            sub(&s, "start").args[0].generators[0].template,
+            *sub(&s, "start").args[0].generators[0].template(),
             ["filepaths", "folders"]
         );
         assert_eq!(
-            sub(&s, "init").args[0].generators[0].trigger,
+            *sub(&s, "init").args[0].generators[0].trigger(),
             Some(GeneratorTrigger::Str("/".into()))
         );
     }
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(opt(&s, "--mode").requires_separator.as_deref(), Some(""));
         assert_eq!(opt(&s, "-m").requires_separator, None);
         assert!(opt(&s, "-m").hidden);
-        assert_eq!(opt(&s, "--mode").args[0].suggestions[1].names, ["server"]);
+        assert_eq!(*opt(&s, "--mode").args[0].suggestions[1].names(), ["server"]);
     }
 
     #[test]
@@ -559,10 +559,10 @@ mod tests {
         assert_eq!(s.generate_spec, Some(7));
         assert_eq!(s.args[0].alias_directive, Some(TextOrFunction::Fn(8)));
         assert!(s.has_directives);
-        assert_eq!(s.directives.option_arg_separators, ["=", ":"]); // a string is a set of chars
+        assert_eq!(*s.directives.option_arg_separators(), ["=", ":"]); // a string is a set of chars
         let short = &s.additional_suggestions[0];
         assert_eq!(
-            (short.kind, short.insert_value.as_deref()),
+            (short.kind(), short.insert_value().as_deref()),
             (Some(SuggestionKind::Shortcut), Some("commit -m '{cursor}'"))
         );
         assert_eq!(opt(&s, "-C").is_repeatable, Repeatability::Unlimited);
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(a.options_can_break_variadic, Some(false));
         let g = &a.generators[0];
         assert_eq!(
-            g.script,
+            *g.script(),
             Some(GeneratorScript::Argv(vec![
                 "git".into(),
                 "--no-optional-locks".into(),
@@ -592,45 +592,46 @@ mod tests {
                 "--short".into()
             ]))
         );
-        assert_eq!(g.post_process, Some(9));
+        assert_eq!(g.post_process(), Some(9));
         assert_eq!(
-            g.cache,
-            Some(GeneratorCachePolicy {
-                ttl_ms: 1000,
-                max_age: true,
-                cache_by_directory: true,
-                cache_key: None
-            })
+            *g.cache(),
+            Some(
+                GeneratorCachePolicy::default()
+                    .with_ttl_ms(1000)
+                    .with_max_age(true)
+                    .with_cache_by_directory(true)
+                    .with_cache_key(None)
+            )
         );
 
         let co = sub(&s, "checkout");
         let (g0, g1) = (&co.args[0].generators[0], &co.args[0].generators[1]);
         assert_eq!(
-            (g0.script.clone(), g0.trigger.clone(), g0.script_timeout),
+            (g0.script().clone(), g0.trigger().clone(), g0.script_timeout()),
             (
                 Some(GeneratorScript::Fn(10)),
                 Some(GeneratorTrigger::Threshold(2)),
                 Some(15000)
             )
         );
-        assert_eq!(g0.get_query_term, Some(TextOrFunction::Str("/".into())));
+        assert_eq!(*g0.get_query_term(), Some(TextOrFunction::Str("/".into())));
         assert_eq!(
             (
-                g1.custom,
-                g1.trigger.clone(),
-                g1.filter_template_suggestions
+                g1.custom(),
+                g1.trigger().clone(),
+                g1.filter_template_suggestions()
             ),
             (Some(12), Some(GeneratorTrigger::Change), Some(13))
         );
         assert_eq!(co.args[0].suggest_current_token, Some(true));
-        assert_eq!(co.args[1].generators[0].template, ["filepaths"]);
+        assert_eq!(*co.args[1].generators[0].template(), ["filepaths"]);
 
         assert!(
             matches!(&sub(&s, "flow").load_spec, Some(SpecLoadDirective::Locations(l)) if l == &[SpecLocation::Global { name: "git-flow".into() }])
         );
         let help = &sub(&s, "help").args[0];
         assert_eq!(
-            (help.default.as_deref(), help.generators[0].trigger.clone()),
+            (help.default.as_deref(), help.generators[0].trigger().clone()),
             (Some("git"), None)
         );
     }
@@ -649,9 +650,9 @@ mod tests {
             Some(":")
         );
         assert!(opt(man, "--req-eq").requires_equals);
-        assert_eq!(sub(&s, "oas").directives.option_arg_separators, ["=", ":"]);
-        assert!(sub(&s, "pnf").directives.flags_posix_noncompliant);
-        assert!(sub(&s, "ompa").directives.options_must_precede_args);
+        assert_eq!(*sub(&s, "oas").directives.option_arg_separators(), ["=", ":"]);
+        assert!(sub(&s, "pnf").directives.flags_posix_noncompliant());
+        assert!(sub(&s, "ompa").directives.options_must_precede_args());
         assert_eq!(sub(&s, "generateSpec").generate_spec, Some(1));
         assert_eq!(
             sub(&s, "module").args[0].is_module.as_deref(),
@@ -684,14 +685,14 @@ mod tests {
 
     #[test]
     fn suggestions_and_load_spec_results() {
-        assert_eq!(suggestion_from_json(&json!("a")).unwrap().names, ["a"]);
+        assert_eq!(*suggestion_from_json(&json!("a")).unwrap().names(), ["a"]);
         let o = suggestion_from_json(&json!({"name": ["x", "y"], "type": "folder", "context": {"templateType": "folders"}, "priority": 80})).unwrap();
         assert_eq!(
             (
-                o.names.len(),
-                o.kind,
-                o.template_type.as_deref(),
-                o.priority
+                o.names().len(),
+                o.kind(),
+                o.template_type().as_deref(),
+                o.priority()
             ),
             (2, Some(SuggestionKind::Folder), Some("folders"), Some(80.0))
         );
@@ -745,13 +746,13 @@ mod tests {
         let s = normalise(&spec).unwrap();
 
         let generators = &s.args[0].generators;
-        let Some(GeneratorScript::Object(object)) = &generators[0].script else {
-            panic!("not an object script: {:?}", generators[0].script);
+        let Some(GeneratorScript::Object(object)) = generators[0].script() else {
+            panic!("not an object script: {:?}", generators[0].script());
         };
         let back = spec_value_to_json(object);
         assert_eq!(back, script);
         assert_eq!(back.to_string(), script.to_string());
-        assert_eq!(generators[1].script, Some(GeneratorScript::Fn(7)));
+        assert_eq!(*generators[1].script(), Some(GeneratorScript::Fn(7)));
     }
 
     #[test]
@@ -794,9 +795,9 @@ mod tests {
         let items =
             post_process_items(&json!(["a", "", null, 0, {"description": "no name"}]), true);
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].names, ["a"]);
-        assert_eq!(items[0].insert_value.as_deref(), Some("a"));
-        assert!(items[0].is_dangerous);
+        assert_eq!(*items[0].names(), ["a"]);
+        assert_eq!(items[0].insert_value().as_deref(), Some("a"));
+        assert!(items[0].is_dangerous());
         assert!(post_process_items(&json!(null), false).is_empty());
     }
 }

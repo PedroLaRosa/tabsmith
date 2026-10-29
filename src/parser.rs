@@ -710,7 +710,7 @@ impl State {
     }
 
     fn can_options(&self) -> bool {
-        if (self.entered_sub_args && self.directives.options_must_precede_args)
+        if (self.entered_sub_args && self.directives.options_must_precede_args())
             || self.end_of_options
         {
             return false;
@@ -847,10 +847,10 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
         });
         s
     };
-    if st.directives.flags_posix_noncompliant || token.starts_with("--") || !token.starts_with('-')
+    if st.directives.flags_posix_noncompliant() || token.starts_with("--") || !token.starts_with('-')
     {
         // Separators are matched char by char (a Set of strings vs. the token's chars).
-        let seps = &st.directives.option_arg_separators;
+        let seps = st.directives.option_arg_separators();
         if let Some((pos, c)) = token.char_indices().find(|&(_, c)| {
             seps.iter()
                 .any(|s| s.len() == c.len_utf8() && s.starts_with(c))

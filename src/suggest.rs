@@ -159,18 +159,18 @@ impl Sugg {
         query: Query,
     ) -> Sugg {
         Sugg {
-            names: s.names.clone(),
-            display_name: s.display_name.clone(),
-            insert_value: s.insert_value.clone(),
-            description: s.description.clone(),
-            priority: s.priority.unwrap_or(0.0),
-            hidden: s.hidden,
-            is_dangerous: s.is_dangerous || dangerous,
+            names: s.names().clone(),
+            display_name: s.display_name().clone(),
+            insert_value: s.insert_value().clone(),
+            description: s.description().clone(),
+            priority: s.priority().unwrap_or(0.0),
+            hidden: s.hidden(),
+            is_dangerous: s.is_dangerous() || dangerous,
             query,
             generator,
-            template_type: s.template_type.clone(),
-            icon: s.icon.clone(),
-            ..Sugg::new("", s.kind.unwrap_or(SuggestionKind::Arg))
+            template_type: s.template_type().clone(),
+            icon: s.icon().clone(),
+            ..Sugg::new("", s.kind().unwrap_or(SuggestionKind::Arg))
         }
     }
 }
@@ -245,7 +245,7 @@ fn static_options(pr: &ParseResult) -> Vec<Sugg> {
                 continue;
             }
         }
-        let mut s = Sugg::from_opt(o, &pr.directives.option_arg_separators);
+        let mut s = Sugg::from_opt(o, pr.directives.option_arg_separators());
         if o.names.iter().any(|n| unmet.contains(n.as_str())) {
             s.priority = 75.0;
         }
@@ -297,7 +297,7 @@ pub fn assemble(pr: &ParseResult, gens: &[GenView]) -> Vec<Sugg> {
         .additional_suggestions
         .iter()
         // untyped rows are not `arg`s: dropped inside an option chain (only option/arg types are kept)
-        .filter(|s| chain.is_none() || s.kind.is_some())
+        .filter(|s| chain.is_none() || s.kind().is_some())
         .map(|s| Sugg::from_suggestion(s, comp.is_dangerous, None, Query::Term))
         .collect();
     additional.sort_by(cmp_first);
@@ -1088,7 +1088,7 @@ pub fn dir_changed(new: &str, old: &str, backslash: bool) -> bool {
 
 /// `[cacheByDirectory ? cwd : "", key].join(",")`.
 pub fn cache_key(cfg: &GeneratorCachePolicy, cwd: &str, key: String) -> String {
-    format!("{},{key}", if cfg.cache_by_directory { cwd } else { "" })
+    format!("{},{key}", if cfg.cache_by_directory() { cwd } else { "" })
 }
 
 /// Cache decision for a generator run.
@@ -1124,9 +1124,9 @@ impl GenCache {
                 at,
                 inflight,
             }) => {
-                if now.saturating_sub(*at) <= cfg.ttl_ms {
+                if now.saturating_sub(*at) <= cfg.ttl_ms() {
                     Lookup::Fresh(v.clone())
-                } else if cfg.max_age {
+                } else if cfg.max_age() {
                     inflight.map_or(Lookup::Miss, Lookup::Shared)
                 } else {
                     Lookup::Stale {
@@ -1307,18 +1307,18 @@ pub fn list_dir(dir: &Path, files: bool, is_dangerous: bool) -> Vec<SpecSuggesti
             if !folder && !files {
                 return None;
             }
-            Some(SpecSuggestion {
-                insert_value: Some(n.clone()),
-                kind: Some(if folder {
-                    SuggestionKind::Folder
-                } else {
-                    SuggestionKind::File
-                }),
-                is_dangerous,
-                template_type: Some(if folder { "folders" } else { "filepaths" }.into()),
-                names: vec![n],
-                ..Default::default()
-            })
+            Some(
+                SpecSuggestion::default()
+                    .with_insert_value(Some(n.clone()))
+                    .with_kind(Some(if folder {
+                        SuggestionKind::Folder
+                    } else {
+                        SuggestionKind::File
+                    }))
+                    .with_is_dangerous(is_dangerous)
+                    .with_template_type(Some(if folder { "folders" } else { "filepaths" }.into()))
+                    .with_names(vec![n]),
+            )
         })
         .collect()
 }
@@ -1342,12 +1342,12 @@ pub fn help_items(pr: &ParseResult) -> Vec<SpecSuggestion> {
         .iter()
         .flat_map(|s| s.names.iter())
         .filter(|n| !exclude.contains(n))
-        .map(|n| SpecSuggestion {
-            names: vec![n.clone()],
-            insert_value: Some(n.clone()),
-            kind: Some(SuggestionKind::Special),
-            template_type: Some("help".into()),
-            ..Default::default()
+        .map(|n| {
+            SpecSuggestion::default()
+                .with_names(vec![n.clone()])
+                .with_insert_value(Some(n.clone()))
+                .with_kind(Some(SuggestionKind::Special))
+                .with_template_type(Some("help".into()))
         })
         .collect()
 }
@@ -1734,15 +1734,10 @@ mod tests {
     #[test]
     fn cache_ttl_swr_max_age() {
         let mut c = GenCache::default();
-        let swr = GeneratorCachePolicy {
-            ttl_ms: 1000,
-            ..Default::default()
-        };
-        let max_age = GeneratorCachePolicy {
-            ttl_ms: 1000,
-            max_age: true,
-            ..Default::default()
-        };
+        let swr = GeneratorCachePolicy::default().with_ttl_ms(1000);
+        let max_age = GeneratorCachePolicy::default()
+            .with_ttl_ms(1000)
+            .with_max_age(true);
         assert_eq!(c.lookup("k", &swr, 0), Lookup::Miss);
         c.start("k", 7);
         assert_eq!(c.lookup("k", &swr, 0), Lookup::Shared(7));
@@ -1775,10 +1770,7 @@ mod tests {
                 refresh: true
             }
         );
-        let by_dir = GeneratorCachePolicy {
-            cache_by_directory: true,
-            ..Default::default()
-        };
+        let by_dir = GeneratorCachePolicy::default().with_cache_by_directory(true);
         assert_eq!(
             cache_key(&by_dir, "/w", "git branch".into()),
             "/w,git branch"
@@ -2452,18 +2444,18 @@ mod tests {
         std::fs::create_dir(d.join("src")).unwrap();
         let got: Vec<String> = list_dir(&d, true, false)
             .into_iter()
-            .map(|s| s.names[0].clone())
+            .map(|s| s.names()[0].clone())
             .collect();
         assert_eq!(got, ["a.txt", "B.txt", "c.txt", "src/", ".hidden", "../"]);
         let folders = list_dir(&d, false, false);
         assert_eq!(
             folders
                 .iter()
-                .map(|s| s.names[0].as_str())
+                .map(|s| s.names()[0].as_str())
                 .collect::<Vec<_>>(),
             ["src/", "../"]
         );
-        assert_eq!(folders[0].template_type.as_deref(), Some("folders"));
+        assert_eq!(folders[0].template_type().as_deref(), Some("folders"));
         assert!(list_dir(&d.join("missing"), true, false).is_empty());
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -2478,7 +2470,7 @@ mod tests {
         }
         let got: Vec<String> = list_dir(&d, true, false)
             .into_iter()
-            .map(|s| s.names[0].clone())
+            .map(|s| s.names()[0].clone())
             .collect();
         assert_eq!(got, ["ok", "../"]);
         std::fs::remove_dir_all(&d).unwrap();
@@ -2532,7 +2524,7 @@ mod tests {
         }];
         let got: Vec<String> = help_items(&pr)
             .into_iter()
-            .map(|s| s.names[0].clone())
+            .map(|s| s.names()[0].clone())
             .collect();
         assert_eq!(got, ["add", "commit", "ci"]);
     }
