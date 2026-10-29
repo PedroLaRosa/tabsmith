@@ -75,6 +75,7 @@ pub(crate) struct InMemorySpecRuntime {
     exec_completion: Option<TaskOutcome>,
     sleeps_finish: bool,
     interrupts: bool,
+    settings: RefCell<Vec<Settings>>,
     /// The tasks it knows: `None` while one runs, the outcome a finished one gives.
     tasks: RefCell<HashMap<TaskId, Option<TaskOutcome>>>,
     next_task: Cell<TaskId>,
@@ -118,6 +119,11 @@ impl InMemorySpecRuntime {
     /// The calls received so far, in order.
     pub(crate) fn calls(&self) -> Vec<SpecFunctionCall> {
         self.calls.borrow().clone()
+    }
+
+    /// The settings applied so far, in order.
+    pub(crate) fn applied_settings(&self) -> Vec<Settings> {
+        self.settings.borrow().clone()
     }
 
     fn start_task(&self, outcome: Option<TaskOutcome>) -> TaskId {
@@ -196,12 +202,16 @@ impl SpecRuntime for InMemorySpecRuntime {
             .to_string()
     }
 
-    fn apply_settings(&self, _settings: &Settings) {}
+    fn apply_settings(&self, settings: &Settings) {
+        self.settings.borrow_mut().push(settings.clone());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DISABLE_FOR_COMMANDS;
+    use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 
     #[test]
@@ -360,5 +370,17 @@ mod tests {
         let second = runtime.wait(&[debounce], Instant::now());
 
         assert_eq!((first, second), (Err(Interrupted), Err(Interrupted)));
+    }
+
+    #[test]
+    fn should_record_the_settings_it_was_given() {
+        let runtime = InMemorySpecRuntime::default();
+        let disabled = SettingValue::List(vec![SettingValue::Text("git".into())]);
+        let saved = Settings::default().with(AUTOCOMPLETE_DISABLE_FOR_COMMANDS, disabled);
+
+        runtime.apply_settings(&Settings::default());
+        runtime.apply_settings(&saved);
+
+        assert_eq!(runtime.applied_settings(), vec![Settings::default(), saved]);
     }
 }
