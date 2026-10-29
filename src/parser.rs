@@ -18,12 +18,12 @@ use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
 use crate::specs::domain::services::spec_locator::spec_location;
-use crate::specs::domain::services::spec_version_selector::versions_to_apply;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_option::SpecOption;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, normalise};
+use crate::specs::infrastructure::adapters::fig_version_diff::apply_versions;
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime};
@@ -365,120 +365,6 @@ fn cli_version(
             .and_then(Value::as_str)
             .and_then(semver_clean),
     })
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// Diff-versioned specs (SPEC §6.3)
-
-/// Apply every diff whose version is `<= target` (all when `target` is None), in semver order.
-fn apply_versions(base: Value, diffs: &Map<String, Value>, target: Option<&str>) -> Value {
-    versions_to_apply(diffs.keys().map(String::as_str), target)
-        .into_iter()
-        .fold(base, |base, version| merge_subcommand(&base, &diffs[version]))
-}
-
-fn merge_subcommand(base: &Value, diff: &Value) -> Value {
-    if diff.is_null() {
-        return base.clone();
-    }
-    let mut out = shallow_merge(base, diff);
-    if truthy(diff.get("subcommands")) {
-        out["subcommands"] = merge_named(
-            base.get("subcommands"),
-            diff.get("subcommands"),
-            merge_subcommand,
-        );
-    }
-    if truthy(diff.get("options")) {
-        out["options"] = merge_named(base.get("options"), diff.get("options"), merge_option);
-    }
-    if truthy(diff.get("args")) {
-        out["args"] = merge_args(base.get("args"), diff.get("args"));
-    }
-    out
-}
-
-fn merge_option(base: &Value, diff: &Value) -> Value {
-    let mut out = shallow_merge(base, diff);
-    if truthy(diff.get("args")) {
-        out["args"] = merge_args(base.get("args"), diff.get("args"));
-    }
-    out
-}
-
-/// Diff items matched to base items by name overlap; `remove` drops the match. Order: diff items, then untouched base.
-fn merge_named(
-    base: Option<&Value>,
-    diff: Option<&Value>,
-    merge: fn(&Value, &Value) -> Value,
-) -> Value {
-    let (bl, dl) = (make_array(base), make_array(diff));
-    let mut used = vec![false; bl.len()];
-    let mut out = Vec::new();
-    for d in &dl {
-        let dn = names(d);
-        match (0..bl.len()).find(|&j| !used[j] && names(&bl[j]).iter().any(|n| dn.contains(n))) {
-            None => out.push(d.clone()),
-            Some(j) => {
-                used[j] = true;
-                if d.get("remove").is_none() {
-                    out.push(merge(&bl[j], d));
-                }
-            }
-        }
-    }
-    out.extend(
-        bl.iter()
-            .zip(used)
-            .filter(|(_, u)| !u)
-            .map(|(b, _)| b.clone()),
-    );
-    Value::Array(out)
-}
-
-/// Positional merge; the index is taken after filtering out removed args (quirk kept).
-fn merge_args(base: Option<&Value>, diff: Option<&Value>) -> Value {
-    let bl = make_array(base);
-    let dl = make_array(diff)
-        .into_iter()
-        .filter(|d| !truthy(d.get("remove")));
-    Value::Array(
-        dl.enumerate()
-            .map(|(i, d)| shallow_merge(bl.get(i).unwrap_or(&Value::Null), &d))
-            .collect(),
-    )
-}
-
-/// `{...base, ...diff}`.
-fn shallow_merge(base: &Value, diff: &Value) -> Value {
-    let mut out = base.as_object().cloned().unwrap_or_default();
-    for (k, v) in diff.as_object().into_iter().flatten() {
-        out.insert(k.clone(), v.clone());
-    }
-    Value::Object(out)
-}
-
-fn make_array(v: Option<&Value>) -> Vec<Value> {
-    match v {
-        Some(Value::Array(a)) => a.clone(),
-        Some(x) if truthy(Some(x)) => vec![x.clone()],
-        _ => Vec::new(),
-    }
-}
-
-fn names(v: &Value) -> Vec<Value> {
-    make_array(v.get("name"))
-}
-
-/// JS truthiness.
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(_) => true,
-    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------

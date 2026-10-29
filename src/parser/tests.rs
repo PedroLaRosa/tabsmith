@@ -658,66 +658,6 @@ fn load_spec_cycle_is_an_error() {
 }
 
 #[test]
-fn diff_merge() {
-    let base = json!({
-        "name": "h", "description": "old",
-        "subcommands": [{"name": "a", "description": "A"}, {"name": ["b", "bb"], "description": "B"}, {"name": "c"}],
-        "options": [{"name": "--x", "args": [{"name": "x1"}, {"name": "x2"}]}, {"name": "--y"}],
-        "args": [{"name": "p0", "description": "d0"}, {"name": "p1", "description": "d1"}]
-    });
-    let diff = json!({
-        "description": "new",
-        "subcommands": [{"name": "bb", "description": "B2"}, {"name": "new"}, {"name": "c", "remove": true}],
-        "options": [{"name": "--x", "args": [{"name": "gone", "remove": true}, {"description": "second"}]}],
-        "args": [{"remove": true}, {"description": "z"}]
-    });
-    let out = merge_subcommand(&base, &diff);
-    assert_eq!(out["description"], "new");
-    // diff items first (merged, new), then untouched base items; `remove` drops the match
-    assert_eq!(
-        out["subcommands"],
-        json!([{"name": "bb", "description": "B2"}, {"name": "new"}, {"name": "a", "description": "A"}])
-    );
-    // merge_args indexes after filtering: "second" lands on x1, "z" on p0 (quirk kept)
-    assert_eq!(
-        out["options"],
-        json!([{"name": "--x", "args": [{"name": "x1", "description": "second"}]}, {"name": "--y"}])
-    );
-    assert_eq!(out["args"], json!([{"name": "p0", "description": "z"}]));
-    assert_eq!(merge_subcommand(&base, &Value::Null), base);
-    assert_eq!(
-        merge_subcommand(&base, &json!({"subcommands": []}))["subcommands"],
-        base["subcommands"]
-    );
-}
-
-#[test]
-fn version_pick() {
-    let base = json!({"name": "h", "description": "base"});
-    let diffs = json!({
-        "9.0.0": {"description": "nine"},
-        "8.10.0": {"description": "eight-ten"},
-        "8.2.0": {"description": "eight-two", "subcommands": [{"name": "x"}]}
-    });
-    let diffs = diffs.as_object().unwrap();
-    let desc = |t: Option<&str>| {
-        apply_versions(base.clone(), diffs, t)["description"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    };
-    assert_eq!(desc(Some("8.10.0")), "eight-ten"); // semver order, not string order
-    assert_eq!(desc(Some("8.5.0")), "eight-two");
-    assert_eq!(desc(None), "nine");
-    assert_eq!(desc(Some("1.0.0")), "base");
-    assert_eq!(desc(Some("garbage")), "nine");
-    assert_eq!(
-        apply_versions(base.clone(), diffs, Some("8.10.0"))["subcommands"],
-        json!([{"name": "x"}])
-    );
-}
-
-#[test]
 fn cached_nested_state_keeps_this_commands_prefix() {
     let wrapper =
         |n: &str| spec(json!({"name": n, "args": {"name": "command", "isCommand": true}}));
