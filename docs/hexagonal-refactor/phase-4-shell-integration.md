@@ -584,10 +584,14 @@ Each settles a plan gap or a conflict between the researchers. Deviations from t
   `integrations` import (left in place it is an unused-import warning, over the clippy budget, T57). The last step
   registers `shell_integration`, records P1-P17's deviations and hand-offs in plan section 9 (Phase 4 notes, including
   that `Integration` (P5) and `SessionContext` (P17) keep read-only accessors in place of the plan's `to_primitives()`,
-  that the Phase 4 review added fitness rule 7 (no `use` item in `src/main.rs`, so `main` calls by full path),
-  that fitness rule 3 cannot see the `IntegrationInstaller` application service, and that `DataDirectory::shell_dir()`
-  /`backups_dir()` stay unused, P1), updates the plan's status lines and the glossary, and re-points the
-  `atomic_file.rs` doc comments (111-112, 145-147) to the new test homes.
+  that the Phase 4 review added fitness rule 7 (`src/main.rs` holds only attributes, `mod` declarations and
+  `fn main`, with no `use` item, so `main` calls by full path), turned rule 6 into an allow-list (a `mod.rs` holds
+  only attributes and child declarations, so no `type` alias or wrapper fn either) and made rules 1-2 read the crate
+  an `extern crate .. as ..` line links, that fitness rule 3 cannot see the `IntegrationInstaller` application
+  service, that `DataDirectory::shell_dir()`/`backups_dir()` stay unused, P1, and the 16 Phase 4 commit subjects over the 72-character limit, left in history:
+  f5b1b99, 9f5ff3a, c6cede1, 2cfa53b, d78fd05, d39adaa, a9aa205, b33b9e6, b78bf3b, bc3929d, 2875954, step 9's
+  8191e36, c6b6533, ea2dc6b, 10a30a5, and 140fad1), updates the plan's status lines and the glossary, and re-points
+  the `atomic_file.rs` doc comments (111-112, 145-147) to the new test homes.
 
 ### Hand-off notes for later phases
 - **Phase 5**: switch `bootstrap/bridges.rs` `SpecBundleBridge` to `specs::InstallSpecBundleUseCase`. That use case
