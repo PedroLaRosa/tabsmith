@@ -80,7 +80,7 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
         .spawn(move || {
             // QuickJS is !Send: the runtime is created on this thread.
             match QuickJsSpecRuntime::new(erx, inner, settings.clone()) {
-                Ok(mut js) => Engine::new(tx, settings).run(&mut js),
+                Ok(js) => Engine::new(tx, settings).run(&js),
                 Err(e) => logger::error(&format!("engine: js host: {e:#}")),
             }
         });
@@ -316,7 +316,7 @@ impl Engine {
         }
     }
 
-    fn run(mut self, js: &mut QuickJsSpecRuntime) {
+    fn run(mut self, js: &QuickJsSpecRuntime) {
         let mut pending: Option<Request> = None;
         'outer: loop {
             if pending.is_none() && self.runs.is_empty() {
@@ -351,7 +351,7 @@ impl Engine {
     }
 
     /// Handle one message; `false` = shut down.
-    fn handle(&mut self, m: EngineMsg, pending: &mut Option<Request>, js: &mut QuickJsSpecRuntime) -> bool {
+    fn handle(&mut self, m: EngineMsg, pending: &mut Option<Request>, js: &QuickJsSpecRuntime) -> bool {
         match m {
             EngineMsg::Complete(r) => *pending = Some(r),
             EngineMsg::CommandFinished(_) | EngineMsg::CommandEnded => {
@@ -372,7 +372,7 @@ impl Engine {
                 shell,
             } => self.llm(req, buffer, cwd, shell),
             EngineMsg::Settings(s) => {
-                js.set_settings(s.clone());
+                js.apply_settings(&s);
                 self.settings = s;
                 self.parser.clear_caches();
                 self.reset_slots();
@@ -423,7 +423,7 @@ impl Engine {
     // Requests
 
     /// Phase-Parse reply for `req`; `None` when a newer request aborted it (it is queued in `js`).
-    fn compute(&mut self, req: &Request, js: &mut QuickJsSpecRuntime) -> Option<Completion> {
+    fn compute(&mut self, req: &Request, js: &QuickJsSpecRuntime) -> Option<Completion> {
         let cursor = req.cursor.min(req.buffer.len());
         // SPEC §6.1.5 mid-word guard
         if !req.buffer.is_char_boundary(cursor)
@@ -529,7 +529,7 @@ impl Engine {
     }
 
     /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
-    fn queries(&self, pr: &ParseResult, shell: Shell, js: &mut QuickJsSpecRuntime) -> Option<Vec<Query>> {
+    fn queries(&self, pr: &ParseResult, shell: Shell, js: &QuickJsSpecRuntime) -> Option<Vec<Query>> {
         let Some(arg) = &pr.current_arg else {
             return Some(Vec::new());
         };
@@ -543,7 +543,7 @@ impl Engine {
                 match g.get_query_term() {
                     None => Query::Term,
                     Some(TextOrFunction::Str(s)) => Query::Str(s.clone()),
-                    Some(TextOrFunction::Fn(f)) => match js.call(
+                    Some(TextOrFunction::Fn(f)) => match js.call_json(
                         *f,
                         vec![JsArg::Json(json!(pr.search_term))],
                         None,
@@ -570,7 +570,7 @@ impl Engine {
         pr: &ParseResult,
         ctx: &GeneratorContext,
         tokens: &[String],
-        js: &mut QuickJsSpecRuntime,
+        js: &QuickJsSpecRuntime,
     ) -> Option<Vec<GenKey>> {
         let arg = pr.current_arg.clone();
         let same = match (&arg, &self.slot_arg) {
@@ -588,7 +588,7 @@ impl Engine {
             } else {
                 match g.trigger() {
                     None => arg.as_ref().is_some_and(|a| a.debounce().is_some()),
-                    Some(GeneratorTrigger::Fn(f)) => match js.call(
+                    Some(GeneratorTrigger::Fn(f)) => match js.call_json(
                         *f,
                         vec![JsArg::Json(json!(new)), JsArg::Json(json!(old))],
                         None,
@@ -706,7 +706,7 @@ impl Engine {
     }
 
     /// First step after the (optional) debounce: template, script or custom.
-    fn begin(&mut self, run: &mut Run, js: &mut QuickJsSpecRuntime) -> Outcome {
+    fn begin(&mut self, run: &mut Run, js: &QuickJsSpecRuntime) -> Outcome {
         let arg = run.arg.clone();
         let g = &arg.generators()[run.idx];
         if !g.template().is_empty() {
@@ -782,8 +782,8 @@ impl Engine {
         g: &Generator,
         key: Option<String>,
         step: Step,
-        js: &mut QuickJsSpecRuntime,
-        start: impl FnOnce(&mut QuickJsSpecRuntime) -> TaskId,
+        js: &QuickJsSpecRuntime,
+        start: impl FnOnce(&QuickJsSpecRuntime) -> TaskId,
     ) -> Result<Value, Outcome> {
         let (Some(cfg), Some(key)) = (g.cache(), key) else {
             run.task = start(js);
@@ -820,7 +820,7 @@ impl Engine {
     }
 
     /// SPEC §6.6.3: script value → exec input → (cached) exec.
-    fn script_input(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut QuickJsSpecRuntime) -> Outcome {
+    fn script_input(&mut self, run: &mut Run, g: &Generator, v: Value, js: &QuickJsSpecRuntime) -> Outcome {
         let Some(mut input) = script_exec_input(v, run.ctx.cwd()) else {
             return Outcome::Done(Vec::new());
         }; // falsy → []
@@ -847,7 +847,7 @@ impl Engine {
     }
 
     /// `splitOn` takes precedence over `postProcess`; neither → [].
-    fn exec_output(&mut self, run: &mut Run, g: &Generator, v: &Value, js: &mut QuickJsSpecRuntime) -> Outcome {
+    fn exec_output(&mut self, run: &mut Run, g: &Generator, v: &Value, js: &QuickJsSpecRuntime) -> Outcome {
         let stdout = v.get("stdout").and_then(Value::as_str).unwrap_or("");
         if let Some(sep) = g.split_on() {
             let t = stdout.trim();
@@ -873,7 +873,7 @@ impl Engine {
     }
 
     /// Custom result; `filterTemplateSuggestions` applies when the first item has a `context`.
-    fn custom_result(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut QuickJsSpecRuntime) -> Outcome {
+    fn custom_result(&mut self, run: &mut Run, g: &Generator, v: Value, js: &QuickJsSpecRuntime) -> Outcome {
         let templated = v
             .as_array()
             .and_then(|a| a.first())
@@ -889,7 +889,7 @@ impl Engine {
     }
 
     /// A task of `run` finished.
-    fn advance(&mut self, run: &mut Run, res: TaskResult, js: &mut QuickJsSpecRuntime) -> Outcome {
+    fn advance(&mut self, run: &mut Run, res: TaskResult, js: &QuickJsSpecRuntime) -> Outcome {
         let v = match res {
             Ok(v) => v,
             Err(e) => {
@@ -918,7 +918,7 @@ impl Engine {
     }
 
     /// Wait (one slice) on every running generator task; reply again when a current slot changed.
-    fn pump(&mut self, js: &mut QuickJsSpecRuntime) {
+    fn pump(&mut self, js: &QuickJsSpecRuntime) {
         let mut tasks: Vec<TaskId> = self.runs.iter().map(|r| r.task).collect();
         tasks.sort_unstable();
         tasks.dedup();
@@ -928,7 +928,7 @@ impl Engine {
             .map(|r| r.deadline)
             .min()
             .map_or(Instant::now() + SLICE, |d| d.min(Instant::now() + SLICE));
-        let results = match js.wait(&tasks, deadline) {
+        let results = match js.wait_json(&tasks, deadline) {
             Ok(r) => r,
             Err(SpecError::Aborted) => return, // a newer request is queued
             Err(
@@ -1267,12 +1267,12 @@ mod tests {
             None,
         );
         let (jtx, jrx) = std::sync::mpsc::channel();
-        let mut js = QuickJsSpecRuntime::new(jrx, jtx, Settings::default()).unwrap();
+        let js = QuickJsSpecRuntime::new(jrx, jtx, Settings::default()).unwrap();
         assert!(e.first_token_items(&HashMap::new(), None, None).is_empty());
         assert!(e.handle(
             EngineMsg::Session { env: HashMap::new(), alias: None },
             &mut None,
-            &mut js
+            &js
         ));
         let aliases = HashMap::from([("zzal".to_string(), "git status".to_string())]);
         assert_eq!(

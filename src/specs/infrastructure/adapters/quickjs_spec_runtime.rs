@@ -102,14 +102,16 @@ pub(crate) struct QuickJsSpecRuntime {
     /// Interrupt deadline checked by QuickJS while running JS (`None` = no limit).
     deadline: Rc<Cell<Option<Instant>>>,
     rx: Receiver<EngineMsg>,
-    deferred: VecDeque<EngineMsg>,
+    deferred: RefCell<VecDeque<EngineMsg>>,
     /// Serialized namespaces by path, with the file's (mtime, len) when evaluated: an edited file (developer mode)
     /// is evaluated again. Old fn ids stay valid (`__ts.fns` only grows).
-    modules: HashMap<PathBuf, (Stamp, Map<String, Value>)>,
+    modules: RefCell<ModuleCache>,
 }
 
 /// A file's (mtime, len); `None` if it cannot be stat'ed.
 type Stamp = Option<(Option<SystemTime>, u64)>;
+
+type ModuleCache = HashMap<PathBuf, (Stamp, Map<String, Value>)>;
 
 impl QuickJsSpecRuntime {
     /// Create the runtime (memory limit, interrupt handler), evaluate the prelude.
@@ -204,16 +206,16 @@ impl QuickJsSpecRuntime {
             tasks,
             deadline,
             rx,
-            deferred: VecDeque::new(),
-            modules: HashMap::new(),
+            deferred: RefCell::new(VecDeque::new()),
+            modules: RefCell::new(HashMap::new()),
         })
     }
 
     /// Next message for the engine loop: deferred messages first (incl. a request that aborted a wait), then a
     /// blocking receive. `ExecDone`/`Timer` are consumed internally. `None` when all senders are gone.
-    pub(crate) fn next_msg(&mut self) -> Option<EngineMsg> {
+    pub(crate) fn next_msg(&self) -> Option<EngineMsg> {
         loop {
-            if let Some(m) = self.deferred.pop_front() {
+            if let Some(m) = self.deferred.borrow_mut().pop_front() {
                 return Some(m);
             }
             let m = self.rx.recv().ok()?;
@@ -224,9 +226,9 @@ impl QuickJsSpecRuntime {
     }
 
     /// Like `next_msg` but non-blocking.
-    pub(crate) fn try_next_msg(&mut self) -> Option<EngineMsg> {
+    pub(crate) fn try_next_msg(&self) -> Option<EngineMsg> {
         loop {
-            if let Some(m) = self.deferred.pop_front() {
+            if let Some(m) = self.deferred.borrow_mut().pop_front() {
                 return Some(m);
             }
             let m = self.rx.try_recv().ok()?;
@@ -236,23 +238,25 @@ impl QuickJsSpecRuntime {
         }
     }
 
-    pub(crate) fn set_settings(&mut self, settings: Settings) {
-        self.tasks.borrow_mut().timeout_ms = script_timeout(&settings);
+    pub(crate) fn apply_settings(&self, settings: &Settings) {
+        self.tasks.borrow_mut().timeout_ms = script_timeout(settings);
     }
 
     /// Evaluate a spec module once (cached by path until its mtime/size changes) and return its exports, serialized
     /// (functions → `{"$fn": id}`), e.g. `{"default": {...}, "versions": {...}, "getVersionCommand": {"$fn": 3}}`.
     /// Empty file → empty map. 5 s deadline.
-    pub(crate) fn load_module(&mut self, path: &Path) -> Result<Map<String, Value>, SpecError> {
+    pub(crate) fn load_module(&self, path: &Path) -> Result<Map<String, Value>, SpecError> {
         let stamp = std::fs::metadata(path)
             .ok()
             .map(|m| (m.modified().ok(), m.len()));
-        if let Some((_, ns)) = self
+        let cached = self
             .modules
+            .borrow()
             .get(path)
             .filter(|(s, _)| stamp.is_some() && *s == stamp)
-        {
-            return Ok(ns.clone()); // ponytail: clone per call; the parser caches normalised specs anyway
+            .map(|(_, ns)| ns.clone()); // ponytail: clone per call; the parser caches normalised specs anyway
+        if let Some(ns) = cached {
+            return Ok(ns);
         }
         let src = std::fs::read_to_string(path)
             .map_err(|e| SpecError::Invalid(format!("{}: {e}", path.display())))?;
@@ -285,13 +289,13 @@ impl QuickJsSpecRuntime {
                 Err(e) => return Err(SpecError::Invalid(format!("{}: {e}", path.display()))),
             }
         };
-        self.modules.insert(path.to_path_buf(), (stamp, ns.clone()));
+        self.modules.borrow_mut().insert(path.to_path_buf(), (stamp, ns.clone()));
         Ok(ns)
     }
 
     /// Start a JS callback `fns[f](...args)`; the result is the serialized return value (Promises awaited).
     pub(crate) fn start_call(
-        &mut self,
+        &self,
         f: SpecFunctionRef,
         args: Vec<JsArg>,
         ctx: Option<&GeneratorContext>,
@@ -339,7 +343,7 @@ impl QuickJsSpecRuntime {
     }
 
     /// Start a native process (SPEC §9.3) on a worker thread; result `{stdout, stderr, status}`.
-    pub(crate) fn start_exec(&mut self, input: ExecRequest, ctx: &GeneratorContext) -> TaskId {
+    pub(crate) fn start_exec(&self, input: ExecRequest, ctx: &GeneratorContext) -> TaskId {
         let mut h = self.tasks.borrow_mut();
         let id = h.id();
         h.live.insert(id);
@@ -351,14 +355,15 @@ impl QuickJsSpecRuntime {
     /// Pending tasks stay alive and can be waited on again; finished results are delivered once (then dropped,
     /// like `forget`; an unknown/forgotten task yields `Some(Err)`). `Err(Aborted)` when a newer `Complete`
     /// arrived (or is already queued); no task is dropped then.
-    pub(crate) fn wait(
-        &mut self,
+    pub(crate) fn wait_json(
+        &self,
         tasks: &[TaskId],
         deadline: Instant,
     ) -> Result<Vec<Option<TaskResult>>, SpecError> {
         loop {
             if self
                 .deferred
+                .borrow()
                 .iter()
                 .any(|m| matches!(m, EngineMsg::Complete(_)))
             {
@@ -386,7 +391,7 @@ impl QuickJsSpecRuntime {
             match self.rx.recv_timeout(next.saturating_duration_since(now)) {
                 Ok(m) => {
                     if let Some(m) = self.internal(m) {
-                        self.deferred.push_back(m); // the Complete check at the top aborts
+                        self.deferred.borrow_mut().push_back(m); // the Complete check at the top aborts
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -396,15 +401,15 @@ impl QuickJsSpecRuntime {
     }
 
     /// Convenience: start + wait for one callback.
-    pub(crate) fn call(
-        &mut self,
+    pub(crate) fn call_json(
+        &self,
         f: SpecFunctionRef,
         args: Vec<JsArg>,
         ctx: Option<&GeneratorContext>,
         timeout: Duration,
     ) -> Result<Value, SpecError> {
         let task = self.start_call(f, args, ctx);
-        let r = self.wait(&[task], Instant::now() + timeout);
+        let r = self.wait_json(&[task], Instant::now() + timeout);
         match r.map(|mut v| v.pop().flatten()) {
             Ok(Some(Ok(v))) => Ok(v),
             Ok(Some(Err(e))) => Err(SpecError::Invalid(e)),
@@ -420,7 +425,7 @@ impl QuickJsSpecRuntime {
     }
 
     /// Start a timer task that completes (with `null`) after `ms` (generator debounce).
-    pub(crate) fn start_sleep(&mut self, ms: u64) -> TaskId {
+    pub(crate) fn start_sleep(&self, ms: u64) -> TaskId {
         let mut h = self.tasks.borrow_mut();
         let id = h.id();
         h.live.insert(id);
@@ -430,7 +435,7 @@ impl QuickJsSpecRuntime {
     }
 
     /// Drop the result/bookkeeping of tasks the caller no longer cares about.
-    pub(crate) fn forget(&mut self, tasks: &[TaskId]) {
+    pub(crate) fn forget(&self, tasks: &[TaskId]) {
         let mut h = self.tasks.borrow_mut();
         for t in tasks {
             h.live.remove(t);
@@ -449,7 +454,7 @@ impl QuickJsSpecRuntime {
     }
 
     /// Handle `ExecDone`/`Timer`; return any other message.
-    fn internal(&mut self, m: EngineMsg) -> Option<EngineMsg> {
+    fn internal(&self, m: EngineMsg) -> Option<EngineMsg> {
         match m {
             EngineMsg::ExecDone { id, out } => {
                 self.finish(id, out.map(|o| process_output_json(&o)));
@@ -465,7 +470,7 @@ impl QuickJsSpecRuntime {
     }
 
     /// Deliver a host-op result: to the task table if it is an engine task, else to the waiting JS promise.
-    fn finish(&mut self, id: u64, r: TaskResult) {
+    fn finish(&self, id: u64, r: TaskResult) {
         let r = {
             let mut h = self.tasks.borrow_mut();
             if h.live.contains(&id) {
@@ -496,7 +501,7 @@ impl QuickJsSpecRuntime {
 
     /// Fire due timers, then run queued Promise jobs until `deadline` (at least `MIN_PUMP` from now). The slice only
     /// stops starting jobs: each job gets its own CPU limit (>= `SLICE`), so a long postProcess is not killed.
-    fn pump(&mut self, deadline: Instant) {
+    fn pump(&self, deadline: Instant) {
         let now = Instant::now();
         let due: Vec<u64> = {
             let mut h = self.tasks.borrow_mut();
@@ -520,7 +525,7 @@ impl QuickJsSpecRuntime {
         self.arm_off();
     }
 
-    fn collect(&mut self, tasks: &[TaskId]) -> Vec<Option<TaskResult>> {
+    fn collect(&self, tasks: &[TaskId]) -> Vec<Option<TaskResult>> {
         let mut h = self.tasks.borrow_mut();
         tasks
             .iter()
@@ -554,19 +559,19 @@ mod tests {
     }
 
     /// Write a module `name` with `src` into `dir` and load it.
-    fn module(js: &mut QuickJsSpecRuntime, dir: &TempDir, name: &str, src: &str) -> Map<String, Value> {
+    fn module(js: &QuickJsSpecRuntime, dir: &TempDir, name: &str, src: &str) -> Map<String, Value> {
         let p = dir.path().join(name);
         std::fs::write(&p, src).unwrap();
         js.load_module(&p).unwrap()
     }
 
     fn call_default(
-        js: &mut QuickJsSpecRuntime,
+        js: &QuickJsSpecRuntime,
         ns: &Map<String, Value>,
         args: Vec<JsArg>,
         ctx: Option<&GeneratorContext>,
     ) -> Result<Value, SpecError> {
-        js.call(
+        js.call_json(
             fn_id(&ns["default"]).unwrap(),
             args,
             ctx,
@@ -616,16 +621,16 @@ mod tests {
 
     #[test]
     fn loads_hand_written_es_modules() {
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let dir = TempDir::new("esm");
         let src = "export const sub = { name: \"ok\" };\nconst spec = { name: \"zz\", subcommands: [sub] };\nexport default spec;\n";
-        let ns = module(&mut js, &dir, "zz.js", src);
+        let ns = module(&js, &dir, "zz.js", src);
         assert_eq!(
             ns["default"],
             json!({"name": "zz", "subcommands": [{"name": "ok"}]})
         );
         let ns = module(
-            &mut js,
+            &js,
             &dir,
             "inline.js",
             "export default {\n  name: \"inline\",\n} // end",
@@ -634,7 +639,7 @@ mod tests {
         // The esbuild form still wins.
         assert_eq!(
             module(
-                &mut js,
+                &js,
                 &dir,
                 "eb.js",
                 "var s={name:\"eb\"};export{s as default};"
@@ -645,10 +650,10 @@ mod tests {
 
     #[test]
     fn serializes_functions_and_values() {
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let dir = TempDir::new("ser");
         let ns = module(
-            &mut js,
+            &js,
             &dir,
             "m.js",
             "var f=()=>1,c={};c.self=c;var s={a:f,b:[f,1,undefined],u:undefined,r:/x+/g,n:null,big:10n,c,sym:Symbol()};\
@@ -668,11 +673,11 @@ mod tests {
         // Cached by path: same ids, no re-evaluation.
         assert_eq!(js.load_module(&dir.path().join("m.js")).unwrap(), ns);
         assert_eq!(
-            js.call(fa, vec![], None, Duration::from_secs(2)),
+            js.call_json(fa, vec![], None, Duration::from_secs(2)),
             Ok(json!(1))
         );
         // Empty file → empty namespace; syntax error → Other.
-        assert!(module(&mut js, &dir, "empty.js", " \n").is_empty());
+        assert!(module(&js, &dir, "empty.js", " \n").is_empty());
         std::fs::write(dir.path().join("bad.js"), "var = ;export{a as default};").unwrap();
         assert!(matches!(
             js.load_module(&dir.path().join("bad.js")),
@@ -689,7 +694,7 @@ mod tests {
             "aws/s3.js",
             "heroku/index.js",
         ]);
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let ls = js.load_module(&b.path().join("ls.js")).unwrap();
         assert_eq!(ls["default"]["name"], "ls");
         let s3 = js.load_module(&b.path().join("aws/s3.js")).unwrap();
@@ -703,7 +708,7 @@ mod tests {
         assert!(fn_id(&git["gitGenerators"]["commits"]["postProcess"]).is_some());
         let pp = fn_id(&git["gitGenerators"]["remotes"]["postProcess"]).unwrap();
         let stdout = "origin\tgit@github.com:a/b.git (fetch)\norigin\tgit@github.com:a/b.git (push)\nup\thttps://gitlab.com/x (fetch)";
-        let out = js.call(
+        let out = js.call_json(
             pp,
             vec![
                 JsArg::Json(stdout.into()),
@@ -728,7 +733,7 @@ mod tests {
             (json!("8.1.0"), "heroku/8.0.0"),
             (Value::Null, "heroku/8.6.0"),
         ] {
-            let r = call_default(&mut js, &heroku, vec![JsArg::Json(v.clone())], None).unwrap();
+            let r = call_default(&js, &heroku, vec![JsArg::Json(v.clone())], None).unwrap();
             assert_eq!(r["versionedSpecPath"], want, "version {v}");
         }
     }
@@ -739,7 +744,7 @@ mod tests {
     fn git_alias_directive_with_fake_git() {
         let bin = fake_bin(&[("git", r#"[ "$3" = alias.co ] && echo checkout || exit 1"#)]);
         let b = crate::specs::infrastructure::adapters::embedded_spec_bundle::testing::bundle_subset(&["git.js"]);
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let git = js.load_module(&b.path().join("git.js")).unwrap();
         let alias = fn_id(
             find_key(&git["default"], "parserDirectives")
@@ -755,17 +760,17 @@ mod tests {
             String::new(),
             false,
         );
-        let run = |js: &mut QuickJsSpecRuntime, tok: &str| {
-            js.call(
+        let run = |js: &QuickJsSpecRuntime, tok: &str| {
+            js.call_json(
                 alias,
                 vec![JsArg::Json(tok.into()), JsArg::Exec],
                 Some(&ctx),
                 Duration::from_secs(5),
             )
         };
-        assert_eq!(run(&mut js, "co"), Ok(json!("checkout")));
+        assert_eq!(run(&js, "co"), Ok(json!("checkout")));
         assert!(
-            matches!(run(&mut js, "nope"), Err(SpecError::Invalid(e)) if e.contains("Failed parsing alias"))
+            matches!(run(&js, "nope"), Err(SpecError::Invalid(e)) if e.contains("Failed parsing alias"))
         );
     }
 
@@ -775,9 +780,9 @@ mod tests {
     fn custom_generator_executes_commands() {
         let bin = fake_bin(&[("echo", r#"printf 'fake:%s\n' "$*""#)]);
         let cwd = TempDir::new("cwd");
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let ns = module(
-            &mut js,
+            &js,
             &cwd,
             "gen.js",
             "var g=async(tokens,exec,ctx)=>{let r=await exec({command:\"echo\",args:[tokens[0],ctx.searchTerm]});\
@@ -798,7 +803,7 @@ mod tests {
             JsArg::Exec,
             JsArg::Json(context_json(&ctx)),
         ];
-        let out = call_default(&mut js, &ns, args, Some(&ctx)).unwrap();
+        let out = call_default(&js, &ns, args, Some(&ctx)).unwrap();
         let real_cwd = cwd.path().canonicalize().unwrap().display().to_string();
         assert_eq!(out[0], "fake:git term");
         assert_eq!(out[1], 0);
@@ -818,21 +823,21 @@ mod tests {
 
     #[test]
     fn set_timeout_ordering_and_intl() {
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let dir = TempDir::new("timers");
         let ns = module(
-            &mut js,
+            &js,
             &dir,
             "t.js",
             "var f=()=>new Promise(res=>{const o=[];setTimeout(()=>o.push(\"b\"),30);setTimeout(x=>o.push(x),0,\"a\");\
              const c=setTimeout(()=>o.push(\"never\"),10);clearTimeout(c);setTimeout(()=>res(o),60)});export{f as default};",
         );
         assert_eq!(
-            call_default(&mut js, &ns, vec![], None),
+            call_default(&js, &ns, vec![], None),
             Ok(json!(["a", "b"]))
         );
         let ns = module(
-            &mut js,
+            &js,
             &dir,
             "i.js",
             "var f=n=>new Intl.NumberFormat(void 0,{notation:\"compact\",compactDisplay:\"short\",maximumSignificantDigits:3}).format(n);\
@@ -845,7 +850,7 @@ mod tests {
             (2_000_000_000, "2B"),
         ] {
             assert_eq!(
-                call_default(&mut js, &ns, vec![JsArg::Json(json!(n))], None),
+                call_default(&js, &ns, vec![JsArg::Json(json!(n))], None),
                 Ok(json!(want))
             );
         }
@@ -853,16 +858,16 @@ mod tests {
 
     #[test]
     fn interrupt_stops_infinite_loop() {
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let dir = TempDir::new("loop");
         let ns = module(
-            &mut js,
+            &js,
             &dir,
             "l.js",
             "var f=()=>{while(true){}};var g=x=>x*2;export{f as default,g};",
         );
         let t0 = Instant::now();
-        let r = js.call(
+        let r = js.call_json(
             fn_id(&ns["default"]).unwrap(),
             vec![],
             None,
@@ -875,7 +880,7 @@ mod tests {
         assert!(t0.elapsed() < Duration::from_secs(3));
         // The runtime is still usable.
         assert_eq!(
-            js.call(
+            js.call_json(
                 fn_id(&ns["g"]).unwrap(),
                 vec![JsArg::Json(json!(21))],
                 None,
@@ -888,16 +893,16 @@ mod tests {
     /// The engine waits in 50 ms slices; a callback needing more CPU than one slice must still finish.
     #[test]
     fn long_callback_survives_short_pump_slices() {
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let dir = TempDir::new("slice");
-        let ns = module(&mut js, &dir, "b.js", "var f=ms=>{const t=Date.now();while(Date.now()-t<ms){}return ms};export{f as default};");
+        let ns = module(&js, &dir, "b.js", "var f=ms=>{const t=Date.now();while(Date.now()-t<ms){}return ms};export{f as default};");
         let f = fn_id(&ns["default"]).unwrap();
         let tasks = [200, 40].map(|ms| js.start_call(f, vec![JsArg::Json(json!(ms))], None));
         let t0 = Instant::now();
         let mut got = vec![None, None];
         while got.iter().any(Option::is_none) && t0.elapsed() < Duration::from_secs(3) {
             for (g, r) in got.iter_mut().zip(
-                js.wait(&tasks, Instant::now() + Duration::from_millis(50))
+                js.wait_json(&tasks, Instant::now() + Duration::from_millis(50))
                     .unwrap(),
             ) {
                 if g.is_none() {
@@ -911,11 +916,11 @@ mod tests {
     /// Developer mode: an edited spec file is re-evaluated, an unchanged one is not (see `serializes_…`).
     #[test]
     fn load_module_reloads_edited_file() {
-        let (mut js, _tx) = js();
+        let (js, _tx) = js();
         let dir = TempDir::new("reload");
         assert_eq!(
             module(
-                &mut js,
+                &js,
                 &dir,
                 "m.js",
                 "var s={name:\"v1\"};export{s as default};"
@@ -923,7 +928,7 @@ mod tests {
             "v1"
         );
         let ns = module(
-            &mut js,
+            &js,
             &dir,
             "m.js",
             "var s={name:\"v2-edited\"};export{s as default};",
@@ -933,7 +938,7 @@ mod tests {
 
     #[test]
     fn wait_aborts_and_defers_on_complete() {
-        let (mut js, tx) = js();
+        let (js, tx) = js();
         let req = |id| Request {
             id,
             buffer: "git ".into(),
@@ -948,13 +953,13 @@ mod tests {
         tx.send(EngineMsg::Shutdown).unwrap();
         let t0 = Instant::now();
         assert_eq!(
-            js.wait(&[slow], Instant::now() + Duration::from_secs(5)),
+            js.wait_json(&[slow], Instant::now() + Duration::from_secs(5)),
             Err(SpecError::Aborted)
         );
         assert!(t0.elapsed() < Duration::from_secs(1));
         // Still queued → a new wait aborts at once.
         assert_eq!(
-            js.wait(&[slow], Instant::now() + Duration::from_secs(5)),
+            js.wait_json(&[slow], Instant::now() + Duration::from_secs(5)),
             Err(SpecError::Aborted)
         );
         assert!(matches!(js.next_msg(), Some(EngineMsg::ToggleFuzzy)));
@@ -962,7 +967,7 @@ mod tests {
         // Non-Complete messages are deferred without aborting; the slow task is still pending.
         let quick = js.start_sleep(10);
         let r = js
-            .wait(&[quick, slow], Instant::now() + Duration::from_millis(300))
+            .wait_json(&[quick, slow], Instant::now() + Duration::from_millis(300))
             .unwrap();
         assert_eq!(r, vec![Some(Ok(Value::Null)), None]);
         assert!(matches!(js.try_next_msg(), Some(EngineMsg::Shutdown)));
@@ -970,7 +975,7 @@ mod tests {
         js.forget(&[slow]);
         let unknown = |t| Some(Err(format!("unknown task {t}")));
         assert_eq!(
-            js.wait(&[slow, quick], Instant::now()).unwrap(),
+            js.wait_json(&[slow, quick], Instant::now()).unwrap(),
             vec![unknown(slow), unknown(quick)]
         );
         // Exec tasks deliver `{stdout, stderr, status}`; ExecDone is consumed internally.
@@ -979,7 +984,7 @@ mod tests {
             &GeneratorContext::default(),
         );
         let r = js
-            .wait(&[e], Instant::now() + Duration::from_secs(5))
+            .wait_json(&[e], Instant::now() + Duration::from_secs(5))
             .unwrap();
         assert_eq!(
             r,

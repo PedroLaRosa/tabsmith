@@ -152,7 +152,7 @@ impl Parser {
         &mut self,
         cmd: &CommandInfo,
         ctx: &ParseCtx,
-        js: &mut QuickJsSpecRuntime,
+        js: &QuickJsSpecRuntime,
     ) -> Result<ParseResult, ParseError> {
         let dev = dev_mode(ctx.settings);
         let mut host = JsHost {
@@ -170,7 +170,7 @@ impl Parser {
         &mut self,
         loc: &SpecLocation,
         ctx: &ParseCtx,
-        js: &mut QuickJsSpecRuntime,
+        js: &QuickJsSpecRuntime,
     ) -> Result<Option<Rc<Subcommand>>, ParseError> {
         self.loader.load(loc, ctx, js, &gen_ctx(ctx))
     }
@@ -211,7 +211,7 @@ impl Loader {
         &mut self,
         loc: &SpecLocation,
         ctx: &ParseCtx,
-        js: &mut QuickJsSpecRuntime,
+        js: &QuickJsSpecRuntime,
         generator: &GeneratorContext,
     ) -> Result<Option<Rc<Subcommand>>, ParseError> {
         let (SpecLocation::Global { name } | SpecLocation::Local { name, .. }) = loc;
@@ -261,7 +261,7 @@ impl Loader {
         name: &str,
         path: &Path,
         dev: bool,
-        js: &mut QuickJsSpecRuntime,
+        js: &QuickJsSpecRuntime,
         generator: &GeneratorContext,
     ) -> Result<Option<Value>, ParseError> {
         let memo = format!("cliVersion-{name}");
@@ -277,7 +277,7 @@ impl Loader {
             .and_then(fig_spec_mapper::fn_id)
             .ok_or_else(|| no("default is not a function"))?;
         let arg = version.map_or(Value::Null, Value::String);
-        let r = js.call(default, vec![JsArg::Json(arg)], Some(generator), TIMEOUT)?;
+        let r = js.call_json(default, vec![JsArg::Json(arg)], Some(generator), TIMEOUT)?;
         let Some(vsp) = r.get("versionedSpecPath").and_then(Value::as_str) else {
             return Ok(Some(r).filter(Value::is_object));
         };
@@ -330,7 +330,7 @@ fn spec_file(loc: &SpecLocation, ctx: &ParseCtx) -> Option<PathBuf> {
 fn cli_version(
     exports: &Map<String, Value>,
     name: &str,
-    js: &mut QuickJsSpecRuntime,
+    js: &QuickJsSpecRuntime,
     generator: &GeneratorContext,
     inflight: &mut HashMap<String, TaskId>,
 ) -> Result<Option<String>, ParseError> {
@@ -347,7 +347,7 @@ fn cli_version(
             generator,
         ),
     });
-    let r = js.wait(&[id], Instant::now() + TIMEOUT);
+    let r = js.wait_json(&[id], Instant::now() + TIMEOUT);
     if matches!(r, Err(SpecError::Aborted)) {
         return Err(ParseError::Aborted);
     }
@@ -492,7 +492,7 @@ trait Host {
 
 struct JsHost<'a, 'c> {
     loader: &'a mut Loader,
-    js: &'a mut QuickJsSpecRuntime,
+    js: &'a QuickJsSpecRuntime,
     ctx: &'a ParseCtx<'c>,
     generator: GeneratorContext,
 }
@@ -503,7 +503,7 @@ impl Host for JsHost<'_, '_> {
     }
 
     fn call(&mut self, f: SpecFunctionRef, args: Vec<JsArg>) -> Result<Value, ParseError> {
-        Ok(self.js.call(f, args, Some(&self.generator), TIMEOUT)?)
+        Ok(self.js.call_json(f, args, Some(&self.generator), TIMEOUT)?)
     }
 
     fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo> {

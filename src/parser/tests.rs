@@ -773,7 +773,7 @@ fn cli_version_detection_survives_an_aborted_parse() {
     // cli-version-respawn-per-keystroke: an abort keeps the detection running; the next parse reuses it
     use crate::types::{EngineMsg, Request};
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut js = QuickJsSpecRuntime::new(rx, tx.clone(), Settings::default()).unwrap();
+    let js = QuickJsSpecRuntime::new(rx, tx.clone(), Settings::default()).unwrap();
     let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("cliver");
     let p = dir.path().join("v.js");
     let src = "var v=async()=>{await new Promise(r=>setTimeout(r,200));globalThis.n=(globalThis.n||0)+1;return `${globalThis.n}.0.0`};export{v as getVersionCommand};";
@@ -790,13 +790,13 @@ fn cli_version_detection_survives_an_aborted_parse() {
     };
     tx.send(EngineMsg::Complete(req)).unwrap();
     assert!(matches!(
-        cli_version(&exports, "az", &mut js, &generator, &mut inflight),
+        cli_version(&exports, "az", &js, &generator, &mut inflight),
         Err(ParseError::Aborted)
     ));
     assert_eq!(inflight.len(), 1);
     assert!(matches!(js.next_msg(), Some(EngineMsg::Complete(_))));
     assert_eq!(
-        cli_version(&exports, "az", &mut js, &generator, &mut inflight)
+        cli_version(&exports, "az", &js, &generator, &mut inflight)
             .unwrap()
             .as_deref(),
         Some("1.0.0")
@@ -808,7 +808,7 @@ fn cli_version_detection_survives_an_aborted_parse() {
 fn spec_identity_survives_dev_reload_and_cache_clear() {
     // arg-key-pointer-identity-devmode: an unchanged spec keeps its Rc (the engine's arg/generator keys)
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut js = QuickJsSpecRuntime::new(rx, tx, Settings::default()).unwrap();
+    let js = QuickJsSpecRuntime::new(rx, tx, Settings::default()).unwrap();
     let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("devid");
     let build = dir.path().join(".fig").join("autocomplete").join("build");
     std::fs::create_dir_all(&build).unwrap();
@@ -836,11 +836,11 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
         name: "mk".into(),
     };
     let mut p = Parser::new();
-    let a = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
-    let b = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
+    let a = p.load_spec(&loc, &ctx, &js).unwrap().unwrap();
+    let b = p.load_spec(&loc, &ctx, &js).unwrap().unwrap();
     let first = p.caches.first.clone();
     p.clear_caches(); // settings save
-    let c = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
+    let c = p.load_spec(&loc, &ctx, &js).unwrap().unwrap();
     assert!(Rc::ptr_eq(&a, &b) && Rc::ptr_eq(&a, &c) && Rc::ptr_eq(&first, &p.caches.first));
     // an edited spec still reloads in developer mode
     std::fs::write(
@@ -848,7 +848,7 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
         r#"var s={name:"mk",args:{name:"target"}};export{s as default};"#,
     )
     .unwrap();
-    let d = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
+    let d = p.load_spec(&loc, &ctx, &js).unwrap().unwrap();
     assert_eq!(d.args()[0].name().as_deref(), Some("target"));
 }
 
