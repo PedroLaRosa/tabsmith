@@ -489,7 +489,7 @@ pub(crate) fn function_result(
             _ => None,
         }),
         SpecFunctionKind::Trigger => SpecFunctionResult::Trigger(truthy(v)),
-        SpecFunctionKind::Alias => SpecFunctionResult::Alias(None),
+        SpecFunctionKind::Alias => SpecFunctionResult::Alias(v.as_str().map(String::from)),
         SpecFunctionKind::LoadSpec => SpecFunctionResult::LoadSpec(None),
         SpecFunctionKind::GenerateSpecCacheKey => SpecFunctionResult::GenerateSpecCacheKey(None),
         SpecFunctionKind::GenerateSpec => SpecFunctionResult::GenerateSpec(Err(String::new())),

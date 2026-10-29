@@ -450,3 +450,16 @@ fn should_read_a_trigger_by_js_truthiness() {
 
     assert_eq!(fired, vec![true, false, false]);
 }
+
+#[test]
+fn should_read_an_alias_only_from_a_string_and_keep_it_untrimmed() {
+    let context = GeneratorContext::default();
+
+    let (text, number) = (
+        function_result(SpecFunctionKind::Alias, &json!("checkout\n"), &context),
+        function_result(SpecFunctionKind::Alias, &json!(5), &context),
+    );
+
+    assert!(matches!(text, SpecFunctionResult::Alias(Some(alias)) if alias == "checkout\n"));
+    assert!(matches!(number, SpecFunctionResult::Alias(None)));
+}
