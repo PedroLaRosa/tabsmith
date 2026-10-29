@@ -876,26 +876,26 @@ impl Session {
     }
 
     fn on_completion(&mut self, c: CompletionResult) {
-        if c.req != self.req {
+        if c.request_id() != self.req {
             return; // only the latest request is served
         }
-        if self.echo_pending.is_some_and(|r| c.req > r) {
+        if self.echo_pending.is_some_and(|r| c.request_id() > r) {
             self.echo_pending = None;
         }
-        if c.phase == CompletionPhase::Parse || c.ghost.is_some() {
-            self.ghost = c.ghost.clone().map(|g| (c.buffer.clone(), g));
+        if c.phase() == CompletionPhase::Parse || c.ghost().is_some() {
+            self.ghost = c.ghost().map(String::from).map(|g| (c.buffer().to_string(), g));
         }
         // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
         // command) too: the inline source depends on the buffer only. A mid-word cursor fails the length check.
-        if c.phase == CompletionPhase::Parse
-            && c.ghost.is_none()
-            && c.cursor == c.buffer.len()
+        if c.phase() == CompletionPhase::Parse
+            && c.ghost().is_none()
+            && c.cursor() == c.buffer().len()
             && self.llm_enabled()
         {
             let debounce = self.settings.i64(INLINE_DEBOUNCE_MS).max(0) as u64;
             self.llm_at = Some(self.changed_at + Duration::from_millis(debounce));
         }
-        if c.loading && self.spinner_at.is_none() {
+        if c.is_loading() && self.spinner_at.is_none() {
             self.spinner_at = Some(Instant::now() + SPINNER_TICK);
         }
         self.menu.on_completion(c, &self.settings);
@@ -1160,7 +1160,7 @@ impl Session {
         if self.tracker.preexec {
             return;
         }
-        let from = self.menu.last().map(|c| (c.buffer.clone(), c.cursor));
+        let from = self.menu.last().map(|c| (c.buffer().to_string(), c.cursor()));
         let Some((ib, at)) =
             from.or_else(|| self.cur.as_ref().map(|e| (e.buffer.clone(), e.cursor)))
         else {
@@ -1252,7 +1252,7 @@ impl Session {
         }
         if due(self.spinner_at) {
             self.spinner_at = None;
-            if self.menu.last().is_some_and(|c| c.loading) {
+            if self.menu.last().is_some_and(|c| c.is_loading()) {
                 self.spinner += 1;
                 self.spinner_at = Some(now + SPINNER_TICK);
                 redraw |= self.menu.loading();
@@ -1880,8 +1880,7 @@ mod tests {
     fn reply(s: &mut Session, items: Vec<Suggestion>, ghost: Option<&str>) {
         let (buffer, _) = s.sent.clone().expect("a request was sent");
         let mut c = comp(&buffer, 1, items);
-        c.req = s.req;
-        c.ghost = ghost.map(String::from);
+        c = c.with_request_id(s.req).with_ghost(ghost.map(String::from));
         s.on_completion(c.clone());
         s.on_completion(c);
     }
@@ -1948,9 +1947,9 @@ mod tests {
                 item("b.txt", SuggestionKind::File, ""),
             ],
         );
-        c.req = s.req;
+        c = c.with_request_id(s.req);
         s.on_completion(c.clone());
-        c.arg_key = 2; // a new argument: hidden until Tab, with items
+        c = c.with_arg_key(2); // a new argument: hidden until Tab, with items
         s.on_completion(c);
         assert!(s.menu.has_items());
         s.on_input(b"\t\t");
@@ -2143,7 +2142,7 @@ mod tests {
             2,
             vec![item("my file.txt", SuggestionKind::File, "")],
         );
-        c.req = s.req;
+        c = c.with_request_id(s.req);
         s.on_completion(c);
         assert!(!s.menu.intercepting(&s.settings));
         let req = s.req;

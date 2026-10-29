@@ -24,7 +24,7 @@ use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
-use crate::completion::domain::value_objects::completion_result::CompletionResult;
+use crate::completion::domain::value_objects::completion_result::{CompletionResult, CompletionResultParts};
 use crate::completion::domain::value_objects::generator_key::{argument_key, GeneratorKey};
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
@@ -616,7 +616,7 @@ impl Engine {
         self.cur = None;
         let mut c = CompletionResult::error(req.id, req.buffer.clone(), cursor);
         if ghost {
-            c.ghost = self.ghost(req, cursor, None);
+            c = c.with_ghost(self.ghost(req, cursor, None));
         }
         c
     }
@@ -1148,7 +1148,7 @@ impl Engine {
             .map(|(x, p)| suggest::to_item(x, p, &ic))
             .collect();
         let ghost = self.ghost(&cur.req, cur.cursor, Some(&items));
-        CompletionResult {
+        CompletionResult::new(CompletionResultParts {
             req: cur.req.id,
             phase,
             error: false,
@@ -1158,9 +1158,11 @@ impl Engine {
             command_text: cur.cmd_text.clone(),
             command_index: pr.command_index,
             arg_key: cur.arg_key,
-            current_arg: pr.current_arg.as_ref().map(|a| ArgumentHint {
-                name: a.name().clone().unwrap_or_default(),
-                description: a.description().clone().unwrap_or_default(),
+            current_arg: pr.current_arg.as_ref().map(|a| {
+                ArgumentHint::new(
+                    a.name().clone().unwrap_or_default(),
+                    a.description().clone().unwrap_or_default(),
+                )
             }),
             search_term: pr.search_term.clone(),
             triggered_generators: if phase == CompletionPhase::Parse {
@@ -1172,7 +1174,7 @@ impl Engine {
             loading: self.slots.iter().any(|s| s.loading),
             ghost,
             fuzzy: cur.fuzzy,
-        }
+        })
     }
 
     /// Local inline ghost (SPEC §6.11). Also computed for parse-error replies (commands without a spec).
@@ -1622,13 +1624,13 @@ mod tests {
 
     fn observe(c: &CompletionResult) -> Reply {
         Reply {
-            request: c.req,
-            generators: c.phase == CompletionPhase::Generators,
-            error: c.error,
-            cursor: c.cursor,
-            loading: c.loading,
-            rows: c.items.iter().map(|i| i.first_name().to_string()).collect(),
-            ghost: c.ghost.clone(),
+            request: c.request_id(),
+            generators: c.phase() == CompletionPhase::Generators,
+            error: c.is_error(),
+            cursor: c.cursor(),
+            loading: c.is_loading(),
+            rows: c.suggestions().iter().map(|i| i.first_name().to_string()).collect(),
+            ghost: c.ghost().map(String::from),
         }
     }
 

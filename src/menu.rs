@@ -107,30 +107,30 @@ impl Menu {
 
     /// Phase-Parse / phase-Generators reply for the latest request (SPEC §7.1). An error reply resets.
     pub fn on_completion(&mut self, mut c: CompletionResult, settings: &Settings) {
-        if c.error {
+        if c.is_error() {
             return self.error_reset();
         }
-        let items = std::mem::take(&mut c.items);
-        self.loading_since = if c.loading {
+        let items = c.take_suggestions();
+        self.loading_since = if c.is_loading() {
             self.loading_since.or_else(|| Some(Instant::now()))
         } else {
             None
         };
-        if c.phase == CompletionPhase::Parse {
+        if c.phase() == CompletionPhase::Parse {
             // After a reset the comparison is against the initial state: new arg, empty command text.
             let (has_new_arg, backspaced, large) = match &self.last {
-                None => (true, false, !typing(&c.command_text, "", 1)),
+                None => (true, false, !typing(c.command_text(), "", 1)),
                 Some(l) => {
-                    let n = c.tokens.len();
+                    let n = c.tokens().len();
                     // The engine serves only the latest request, so replies for the buffers in between are never
                     // seen: allow one typing edit per request since `l`.
                     // ponytail: a large change followed by skipped typing stays hidden until the next key; exact =
                     // compare with the previous request's command text (engine would have to send it).
-                    let steps = c.req.saturating_sub(l.req).max(1) as usize;
+                    let steps = c.request_id().saturating_sub(l.request_id()).max(1) as usize;
                     (
-                        l.arg_key != c.arg_key,
-                        n > 0 && n < l.tokens.len() && l.tokens[n - 1] == c.tokens[n - 1],
-                        !typing(&c.command_text, &l.command_text, steps),
+                        l.arg_key() != c.arg_key(),
+                        n > 0 && n < l.tokens().len() && l.tokens()[n - 1] == c.tokens()[n - 1],
+                        !typing(c.command_text(), l.command_text(), steps),
                     )
                 }
             };
@@ -140,7 +140,7 @@ impl Menu {
                 Vis::HiddenByInsertion => {
                     let retriggered = self
                         .last_inserted_gen
-                        .is_some_and(|g| c.triggered_generators.contains(&g));
+                        .is_some_and(|g| c.triggered_generators().contains(&g));
                     if has_new_arg || retriggered {
                         Vis::Visible
                     } else {
@@ -207,9 +207,8 @@ impl Menu {
     pub fn arg_hint(&self) -> Option<&ArgumentHint> {
         self.last
             .as_ref()?
-            .current_arg
-            .as_ref()
-            .filter(|a| !a.name.is_empty() || !a.description.is_empty())
+            .current_arg()
+            .filter(|a| !a.name().is_empty() || !a.description().is_empty())
     }
 
     /// Keys are intercepted (shown and items non-empty, SPEC §7.2.4).
@@ -370,8 +369,8 @@ impl Menu {
         let name = item.first_name();
         let record = match &self.last {
             Some(c) if !name.contains('↪') => c
-                .tokens
-                .get(c.command_index)
+                .tokens()
+                .get(c.command_index())
                 .map(|cmd| (cmd.clone(), name.to_string())),
             _ => None,
         };
@@ -473,6 +472,7 @@ impl Menu {
 pub(crate) mod tests {
     use super::*;
     use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
+    use crate::completion::domain::value_objects::completion_result::CompletionResultParts;
     use crate::completion::domain::value_objects::suggestion::SuggestionParts;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
@@ -509,7 +509,7 @@ pub(crate) mod tests {
     /// A Parse reply for `buffer` (tokens split on spaces, a trailing space adds an empty token).
     pub fn comp(buffer: &str, arg_key: u64, items: Vec<Suggestion>) -> CompletionResult {
         let tokens: Vec<String> = buffer.split(' ').map(String::from).collect();
-        CompletionResult {
+        CompletionResult::new(CompletionResultParts {
             req: 1,
             phase: CompletionPhase::Parse,
             error: false,
@@ -520,16 +520,13 @@ pub(crate) mod tests {
             command_text: buffer.to_string(),
             command_index: 0,
             arg_key,
-            current_arg: Some(ArgumentHint {
-                name: "path".into(),
-                description: "A path".into(),
-            }),
+            current_arg: Some(ArgumentHint::new("path".into(), "A path".into())),
             triggered_generators: Vec::new(),
             items,
             loading: false,
             ghost: None,
             fuzzy: false,
-        }
+        })
     }
 
     pub fn settings(json: &str) -> Settings {
@@ -626,7 +623,7 @@ pub(crate) mod tests {
         );
         m.handle(Action::InsertSelected, &s);
         let mut c = comp("git c src/", 5, vec![item("main.rs", SuggestionKind::File, "")]);
-        c.triggered_generators = vec![GeneratorKey::from_raw(7)];
+        c = c.with_triggered_generators(vec![GeneratorKey::from_raw(7)]);
         m.on_completion(c, &s);
         assert_eq!(m.vis(), Vis::Visible);
     }
@@ -698,10 +695,7 @@ pub(crate) mod tests {
     #[test]
     fn large_change_counts_skipped_requests() {
         let s = Settings::default();
-        let at = |req, buffer: &str, arg, items| CompletionResult {
-            req,
-            ..comp(buffer, arg, items)
-        };
+        let at = |req, buffer: &str, arg, items| comp(buffer, arg, items).with_request_id(req);
         let mut m = Menu::new();
         m.on_completion(at(1, "g", 1, vec![]), &s);
         m.on_completion(at(2, "gi", 1, vec![]), &s);
@@ -730,7 +724,7 @@ pub(crate) mod tests {
         assert!(!m.has_items() && !m.history_mode() && m.last().is_none());
         assert!(m.popout(&s));
         let mut c = comp("g", 1, vec![]);
-        c.loading = true;
+        c = c.with_loading(true);
         m.on_completion(c, &s);
         assert!(!m.loading(), "spinner only after 200 ms");
         m.loading_since = Some(Instant::now() - Duration::from_millis(300));
@@ -809,7 +803,7 @@ pub(crate) mod tests {
         m.handle(Action::NavigateDown, &s); // cherry-pick
                                             // Generator phase reply reorders the same items.
         let mut c = comp("git c", 2, subs("c").into_iter().rev().collect());
-        c.phase = CompletionPhase::Generators;
+        c = c.with_phase(CompletionPhase::Generators);
         m.on_completion(c, &s);
         assert_eq!(m.items()[m.selected()].names()[0], "cherry-pick");
         // Item no longer listed → back to the top, not sticky.

@@ -404,7 +404,7 @@ impl Renderer {
         let sel = menu.selected().min(items.len().saturating_sub(1));
         let query = match items.get(sel) {
             Some(it) => it.query(),
-            None => menu.last().map_or("", |c| c.search_term.as_str()),
+            None => menu.last().map_or("", |c| c.search_term()),
         };
         let menu_w = s.f64(AUTOCOMPLETE_WIDTH).max(10.0) as usize;
         let Some(l) = layout(size, cur, items.len(), max_rows(s), menu_w, width(query)) else {
@@ -610,7 +610,7 @@ fn describe(menu: &Menu) -> (String, String) {
         });
     match (own, menu.arg_hint()) {
         (Some(d), _) => (String::new(), clean(&d)),
-        (None, Some(a)) => (clean(&a.name), clean(&a.description)),
+        (None, Some(a)) => (clean(a.name()), clean(a.description())),
         (None, None) => (String::new(), String::new()),
     }
 }
@@ -1097,7 +1097,7 @@ mod tests {
     fn round_trip_arg_hint_spinner_and_wide_ghost() {
         let s = Settings::default();
         let mut c = comp("c", 1, vec![]);
-        c.loading = true;
+        c = c.with_loading(true);
         let mut m = Menu::new();
         m.on_completion(c, &s);
         assert!(m.shown(&s) && !m.intercepting(&s));
