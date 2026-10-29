@@ -480,11 +480,14 @@ pub(crate) fn spec_value_to_json(v: &SpecValue) -> Value {
 /// What a spec function returned, read the way its call's kind reads it.
 pub(crate) fn function_result(
     kind: SpecFunctionKind,
-    _v: &Value,
+    v: &Value,
     _context: &GeneratorContext,
 ) -> SpecFunctionResult {
     match kind {
-        SpecFunctionKind::QueryTerm => SpecFunctionResult::QueryTerm(None),
+        SpecFunctionKind::QueryTerm => SpecFunctionResult::QueryTerm(match v {
+            Value::String(s) => Some(s.clone()),
+            _ => None,
+        }),
         SpecFunctionKind::Trigger => SpecFunctionResult::Trigger(false),
         SpecFunctionKind::Alias => SpecFunctionResult::Alias(None),
         SpecFunctionKind::LoadSpec => SpecFunctionResult::LoadSpec(None),

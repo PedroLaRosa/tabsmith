@@ -421,3 +421,16 @@ fn should_read_every_result_as_the_variant_of_its_call_kind() {
 
     assert_eq!(read, asked);
 }
+
+#[test]
+fn should_read_a_query_term_only_from_a_string() {
+    let context = GeneratorContext::default();
+
+    let (text, list) = (
+        function_result(SpecFunctionKind::QueryTerm, &json!("ma"), &context),
+        function_result(SpecFunctionKind::QueryTerm, &json!([]), &context),
+    );
+
+    assert!(matches!(text, SpecFunctionResult::QueryTerm(Some(term)) if term == "ma"));
+    assert!(matches!(list, SpecFunctionResult::QueryTerm(None)));
+}
