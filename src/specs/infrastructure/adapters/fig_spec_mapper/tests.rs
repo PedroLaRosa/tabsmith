@@ -545,3 +545,48 @@ fn should_read_a_script_as_the_process_to_run_keyed_by_its_input_before_the_time
         }
     );
 }
+
+#[test]
+fn should_skip_a_script_that_is_not_an_exec_input() {
+    let values = [json!(null), json!(false), json!(0), json!(""), json!([])];
+
+    let resolutions: Vec<ScriptResolution> = values.into_iter().map(|v| script(v, "/repo")).collect();
+
+    assert_eq!(resolutions, vec![ScriptResolution::Skip; 5]);
+}
+
+#[test]
+fn should_reject_a_script_whose_command_is_not_a_string() {
+    let v = json!([1]);
+
+    let resolution = script(v, "/repo");
+
+    assert_eq!(
+        resolution,
+        ScriptResolution::Invalid("invalid type: integer `1`, expected a string".into())
+    );
+}
+
+#[test]
+fn should_read_a_null_script_cwd_as_no_cwd() {
+    let v = json!({"command": "ls", "cwd": null});
+
+    let resolution = script(v, "/repo");
+
+    assert!(matches!(
+        resolution,
+        ScriptResolution::Ready { request, .. } if request.cwd().is_none()
+    ));
+}
+
+#[test]
+fn should_read_a_fractional_script_timeout_as_no_timeout_asked() {
+    let v = json!({"command": "ls", "timeout": 1.5});
+
+    let resolution = script(v, "/repo");
+
+    assert!(matches!(
+        resolution,
+        ScriptResolution::Ready { request, .. } if request.timeout() == Some(0)
+    ));
+}
