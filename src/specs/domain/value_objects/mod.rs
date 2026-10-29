@@ -6,6 +6,7 @@ pub(crate) mod generator_cache_policy;
 pub(crate) mod generator_script;
 pub(crate) mod generator_trigger;
 pub(crate) mod parser_directives;
+pub(crate) mod process_output;
 pub(crate) mod repeatability;
 pub(crate) mod semantic_version;
 pub(crate) mod spec_function_ref;

@@ -1,5 +1,7 @@
 use crate::specs::domain::value_objects::exec_request::ExecRequest;
+use crate::specs::domain::value_objects::process_output::ProcessOutput;
 use serde::Deserialize;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 /// `executeCommand` input `{command, args, cwd?, env?, timeout?}` as spec code sends it.
@@ -24,6 +26,12 @@ impl From<ExecInput> for ExecRequest {
     fn from(input: ExecInput) -> Self {
         ExecRequest::new(input.command, input.args, input.cwd, input.env, input.timeout)
     }
+}
+
+/// The exec result as JS and the engine read it: `{"status", "stderr", "stdout"}` (sorted keys, as
+/// `serde_json::to_value` wrote the old serde record).
+pub(crate) fn process_output_json(output: &ProcessOutput) -> Value {
+    json!({"stdout": output.stdout(), "stderr": output.stderr(), "status": output.status()})
 }
 
 #[cfg(test)]
@@ -74,5 +82,15 @@ mod tests {
                 "missing field `command` at line 1 column 2",
             ]
         );
+    }
+
+    #[test]
+    fn should_write_a_process_output_as_its_exec_result_json() {
+        let output = ProcessOutput::new("out\nx".into(), "err".into(), 3);
+
+        let json = process_output_json(&output);
+
+        assert_eq!(json, json!({"stdout": "out\nx", "stderr": "err", "status": 3}));
+        assert_eq!(json.to_string(), r#"{"status":3,"stderr":"err","stdout":"out\nx"}"#);
     }
 }
