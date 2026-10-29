@@ -23,28 +23,14 @@ fn cmd(s: &str) -> CommandLine {
     let mut pos = 0;
     for w in s.split(' ') {
         if !w.is_empty() {
-            tokens.push(Token {
-                text: w.into(),
-                raw: w.into(),
-                start: pos,
-                end: pos + w.len(),
-            });
+            tokens.push(Token::new(w.into(), w.into(), pos, pos + w.len()));
         }
         pos += w.len() + 1;
     }
     if s.ends_with(' ') {
-        tokens.push(Token {
-            text: String::new(),
-            raw: String::new(),
-            start: s.len(),
-            end: s.len(),
-        });
+        tokens.push(Token::new(String::new(), String::new(), s.len(), s.len()));
     }
-    CommandLine {
-        tokens,
-        text: s.into(),
-        original_text: s.into(),
-    }
+    CommandLine::new(tokens, s.into(), s.into())
 }
 
 fn spec(v: Value) -> Rc<Subcommand> {
@@ -120,7 +106,7 @@ impl Host for Mock {
     }
 
     fn substitute(&mut self, c: &CommandLine, index: usize, value: &str) -> Option<CommandLine> {
-        let mut words: Vec<String> = c.tokens.iter().map(|t| t.text.clone()).collect();
+        let mut words: Vec<String> = c.tokens().iter().map(|t| t.text().to_string()).collect();
         words.splice(index..=index, value.split(' ').map(String::from));
         Some(cmd(&words.join(" ")))
     }

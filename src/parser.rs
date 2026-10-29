@@ -608,14 +608,14 @@ impl ParseCaches {
         dev: bool,
         host: &mut dyn Host,
     ) -> Result<ParseResult, ParseError> {
-        let last = cmd.tokens.last().ok_or_else(|| no("no tokens"))?;
-        let texts: Vec<String> = cmd.tokens.iter().map(|t| t.text.clone()).collect();
-        if cmd.tokens.len() == 1 {
-            if !last.text.contains('/') {
-                let st = State::initial(self.first.clone(), &last.text, "", texts);
-                return Ok(result(st, &last.text, &last.raw, true));
+        let last = cmd.tokens().last().ok_or_else(|| no("no tokens"))?;
+        let texts: Vec<String> = cmd.tokens().iter().map(|t| t.text().to_string()).collect();
+        if cmd.tokens().len() == 1 {
+            if !last.text().contains('/') {
+                let st = State::initial(self.first.clone(), last.text(), "", texts);
+                return Ok(result(st, last.text(), last.raw(), true));
             }
-            let name = if last.text == "bin/console" {
+            let name = if last.text() == "bin/console" {
                 "php/bin-console"
             } else {
                 "dotslash"
@@ -624,23 +624,23 @@ impl ParseCaches {
                 .load(&SpecLocation::Global { name: name.into() })?
                 .ok_or_else(|| no(format!("no {name} spec")))?;
             return Ok(result(
-                State::initial(spec, &last.text, name, texts),
-                &last.text,
-                &last.raw,
+                State::initial(spec, last.text(), name, texts),
+                last.text(),
+                last.raw(),
                 false,
             ));
         }
         let loc = spec_location(&texts[0], cwd, None);
         let st = self.parse_prefix(cmd, vec![loc], 0, cwd, dev, host, 0)?;
-        let st = update(&st, &last.text, true).unwrap_or_else(|| {
+        let st = update(&st, last.text(), true).unwrap_or_else(|| {
             let mut st = st;
-            st.annotations.push(ann(AnnKind::None, &last.text));
+            st.annotations.push(ann(AnnKind::None, last.text()));
             st
         });
-        Ok(result(st, &last.text, &last.raw, false))
+        Ok(result(st, last.text(), last.raw(), false))
     }
 
-    /// Parse `cmd.tokens[start..len-1]` from the first location that loads (SPEC §6.4 `parse_prefix`).
+    /// Parse `cmd.tokens()[start..len-1]` from the first location that loads (SPEC §6.4 `parse_prefix`).
     #[allow(clippy::too_many_arguments)]
     fn parse_prefix(
         &mut self,
@@ -655,7 +655,7 @@ impl ParseCaches {
         if depth > MAX_DEPTH {
             return Err(no("loadSpec recursion too deep"));
         }
-        let texts: Vec<String> = cmd.tokens[start..].iter().map(|t| t.text.clone()).collect();
+        let texts: Vec<String> = cmd.tokens()[start..].iter().map(|t| t.text().to_string()).collect();
         let key = |loc: &SpecLocation| {
             format!(
                 "{},{},{}",
@@ -690,16 +690,16 @@ impl ParseCaches {
         }
         let mut substituted: HashSet<String> = HashSet::new();
         let mut i = 1;
-        while i < cur.tokens.len() - start {
+        while i < cur.tokens().len() - start {
             if st.completion.generate_spec().is_some() {
                 let tokens: Vec<String> =
-                    cur.tokens[start..].iter().map(|t| t.text.clone()).collect();
+                    cur.tokens()[start..].iter().map(|t| t.text().to_string()).collect();
                 st = self.generate_spec(st, &tokens, dev, host)?;
             }
-            if i == cur.tokens.len() - start - 1 {
+            if i == cur.tokens().len() - start - 1 {
                 break; // the final token never loads specs
             }
-            let token = cur.tokens[start + i].text.clone();
+            let token = cur.tokens()[start + i].text().to_string();
             let last_arg = st.arg_state().cur().cloned();
             let last_kind = if st.prefer_opt_arg() {
                 AnnKind::OptionArg
@@ -769,7 +769,7 @@ impl ParseCaches {
             substituted.clear();
             i += 1;
         }
-        st.tokens = cur.tokens[start..].iter().map(|t| t.text.clone()).collect();
+        st.tokens = cur.tokens()[start..].iter().map(|t| t.text().to_string()).collect();
         if !dev {
             if self.prefix.len() >= MAX_CACHED {
                 self.prefix.clear();
@@ -840,9 +840,9 @@ impl ParseCaches {
                 let mut nested =
                     self.parse_prefix(cmd, l, start + index, cwd, dev, host, depth + 1)?;
                 nested.command_index += index;
-                let prefix = cmd.tokens[start..start + index]
+                let prefix = cmd.tokens()[start..start + index]
                     .iter()
-                    .map(|t| t.text.clone());
+                    .map(|t| t.text().to_string());
                 nested.tokens = prefix.chain(nested.tokens).collect();
                 Ok(Some(nested))
             }

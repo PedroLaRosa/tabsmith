@@ -19,8 +19,8 @@ pub(crate) fn current_command(
     let mut cmd = p.command_info(descendant_at(&tree, buffer_before_cursor.len())?);
     // `expandCommand`: only the first token, only once the user typed past it, each alias once.
     let mut used: Vec<String> = Vec::new();
-    while cmd.tokens.len() > 1 {
-        let name = cmd.tokens[0].text.clone();
+    while cmd.tokens().len() > 1 {
+        let name = cmd.tokens()[0].text().to_string();
         let Some(value) = aliases.get(&name).filter(|v| !v.is_empty()) else {
             break;
         };
@@ -36,7 +36,7 @@ pub(crate) fn current_command(
         }
         used.push(name);
     }
-    (!cmd.tokens.is_empty()).then_some(cmd)
+    (!cmd.tokens().is_empty()).then_some(cmd)
 }
 
 /// Re-tokenize `command` with the token at `index` replaced by `replacement` (parserDirectives.alias, SPEC §6.4).
@@ -48,12 +48,12 @@ pub(crate) fn substitute_token(
     replacement: &str,
     shell: Shell,
 ) -> Option<CommandLine> {
-    let tok = command.tokens.get(index)?;
+    let tok = command.tokens().get(index)?;
     let text = format!(
         "{}{}{}",
-        command.text.get(..tok.start)?,
+        command.text().get(..tok.start())?,
         replacement,
-        command.text.get(tok.end..)?
+        command.text().get(tok.end()..)?
     );
     let p = P::new(&text, shell);
     let tree = p.parse();
@@ -63,19 +63,20 @@ pub(crate) fn substitute_token(
     if node.kind != Kind::Command {
         return None;
     }
-    let mut new = p.command_info(node);
-    new.original_text = command.original_text.clone();
-    let (alias_start, alias_end) = (tok.start, tok.start + replacement.len());
+    let new = p.command_info(node);
+    let (alias_start, alias_end) = (tok.start(), tok.start() + replacement.len());
     let (mut diff, mut last_in) = (0, false);
-    for (k, t) in new.tokens.iter_mut().enumerate() {
-        let in_alias = alias_start < node.start + t.end && node.start + t.start < alias_end;
+    let mut tokens = Vec::with_capacity(new.tokens().len());
+    for (k, t) in new.tokens().iter().enumerate() {
+        let in_alias = alias_start < node.start + t.end() && node.start + t.start() < alias_end;
         if in_alias && last_in {
             diff += 1;
         }
-        t.raw = command.tokens.get(k - diff)?.raw.clone();
+        tokens.push(t.clone().with_raw(command.tokens().get(k - diff)?.raw().to_string()));
         last_in = in_alias;
     }
-    (new.tokens.len() == command.tokens.len() + diff).then_some(new)
+    (tokens.len() == command.tokens().len() + diff)
+        .then(|| CommandLine::new(tokens, new.text().to_string(), command.original_text().to_string()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -532,27 +533,13 @@ impl<'a> P<'a> {
         let mut tokens: Vec<Token> = cmd
             .children
             .iter()
-            .map(|c| Token {
-                text: self.inner(c),
-                raw: self.text(c).to_string(),
-                start: c.start - cmd.start,
-                end: c.end - cmd.start,
-            })
+            .map(|c| Token::new(self.inner(c), self.text(c).to_string(), c.start - cmd.start, c.end - cmd.start))
             .collect();
         // Trailing empty token ("typed a space, completing a new argument"). The `1` is an absolute offset.
         if cmd.children.last().map_or(1, |c| c.end) < cmd.end && text.ends_with(' ') {
-            tokens.push(Token {
-                text: String::new(),
-                raw: String::new(),
-                start: text.len(),
-                end: text.len(),
-            });
+            tokens.push(Token::new(String::new(), String::new(), text.len(), text.len()));
         }
-        CommandLine {
-            tokens,
-            original_text: text.clone(),
-            text,
-        }
+        CommandLine::new(tokens, text.clone(), text)
     }
 }
 

@@ -609,7 +609,7 @@ impl Engine {
             req: req.clone(),
             cursor,
             pr,
-            cmd_text: cmd.original_text,
+            cmd_text: cmd.original_text().to_string(),
             arg_key,
             fuzzy,
             queries,

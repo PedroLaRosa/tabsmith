@@ -12,7 +12,7 @@ fn cmd(buf: &str, shell: Shell, aliases: &[(&str, &str)]) -> Option<CommandLine>
 
 fn toks_in(buf: &str, shell: Shell, aliases: &[(&str, &str)]) -> Vec<String> {
     cmd(buf, shell, aliases)
-        .map(|c| c.tokens.into_iter().map(|t| t.text).collect())
+        .map(|c| c.tokens().iter().map(|t| t.text().to_string()).collect())
         .unwrap_or_default()
 }
 
@@ -102,12 +102,12 @@ fn unterminated_quotes() {
     );
     let c = cmd("cat 'my fi", Shell::Bash, &[]).unwrap();
     assert_eq!(
-        (c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()),
+        (c.tokens()[1].text(), c.tokens()[1].raw()),
         ("my fi", "'my fi")
     );
     let c = cmd("cat \"a b\"", Shell::Bash, &[]).unwrap();
     assert_eq!(
-        (c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()),
+        (c.tokens()[1].text(), c.tokens()[1].raw()),
         ("a b", "\"a b\"")
     );
     // An escaped quote does not terminate a string; a trailing `\` in an open string is dropped.
@@ -129,19 +129,19 @@ fn escapes() {
     // A word that starts with an escape keeps it in `raw` (fix, SPEC D22).
     let c = cmd("cd \\ fo", Shell::Bash, &[]).unwrap();
     assert_eq!(
-        (c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()),
+        (c.tokens()[1].text(), c.tokens()[1].raw()),
         (" fo", "\\ fo")
     );
     let c = cmd("cd my\\ di", Shell::Bash, &[]).unwrap();
-    assert_eq!(c.tokens[1].raw, "my\\ di");
+    assert_eq!(c.tokens()[1].raw(), "my\\ di");
 }
 
 #[test]
 fn concatenation() {
     let c = cmd("cmd --foo=\"a b\"c", Shell::Bash, &[]).unwrap();
-    assert_eq!(c.tokens.len(), 2);
+    assert_eq!(c.tokens().len(), 2);
     assert_eq!(
-        (c.tokens[1].text.as_str(), c.tokens[1].raw.as_str()),
+        (c.tokens()[1].text(), c.tokens()[1].raw()),
         ("--foo=a bc", "--foo=\"a b\"c")
     );
     assert_eq!(toks("a $'b''c'd$$$e${f}\"g\""), ["a", "bcd$$$e${f}g"]);
@@ -199,11 +199,11 @@ fn statement_structure() {
 #[test]
 fn token_offsets() {
     let c = cmd("FOO=1  git  co ", Shell::Bash, &[]).unwrap();
-    assert_eq!(c.text, "git  co ");
-    for t in &c.tokens {
-        assert_eq!(&c.text[t.start..t.end], t.raw);
+    assert_eq!(c.text(), "git  co ");
+    for t in c.tokens() {
+        assert_eq!(&c.text()[t.start()..t.end()], t.raw());
     }
-    assert_eq!((c.tokens[2].start, c.tokens[2].end), (8, 8));
+    assert_eq!((c.tokens()[2].start(), c.tokens()[2].end()), (8, 8));
 }
 
 #[test]
@@ -256,27 +256,27 @@ fn aliases_expansion() {
         ("y", "a; b"),
     ];
     let c = cmd("g co ", Shell::Bash, &aliases).unwrap();
-    assert_eq!(c.text, "git co ");
-    assert_eq!(c.original_text, "g co "); // pre-expansion text for the menu (alias-command-text-hides-menu)
-    let raws: Vec<_> = c.tokens.iter().map(|t| t.raw.as_str()).collect();
+    assert_eq!(c.text(), "git co ");
+    assert_eq!(c.original_text(), "g co "); // pre-expansion text for the menu (alias-command-text-hides-menu)
+    let raws: Vec<_> = c.tokens().iter().map(|t| t.raw()).collect();
     assert_eq!(raws, ["g", "co", ""]);
     let ll = cmd("ll ", Shell::Bash, &aliases).unwrap();
     assert_eq!(
-        (ll.text.as_str(), ll.original_text.as_str()),
+        (ll.text(), ll.original_text()),
         ("ls -G -l ", "ll ")
     );
     assert_eq!(
         cmd("echo | g ch", Shell::Bash, &aliases)
             .unwrap()
-            .original_text,
+            .original_text(),
         "g ch"
     );
     // Multi-word alias: every alias token keeps the alias' raw; later tokens map 1:1.
     let c = cmd("ll foo ", Shell::Bash, &aliases).unwrap();
     let pairs: Vec<_> = c
-        .tokens
+        .tokens()
         .iter()
-        .map(|t| (t.text.as_str(), t.raw.as_str()))
+        .map(|t| (t.text(), t.raw()))
         .collect();
     // ll → ls -l → ls -G -l
     assert_eq!(
@@ -332,20 +332,20 @@ fn parse_aliases_formats() {
 fn substitute() {
     let c = cmd("git co -b ", Shell::Bash, &[]).unwrap();
     let s = substitute_token(&c, 1, "checkout", Shell::Bash).unwrap();
-    assert_eq!(s.text, "git checkout -b ");
+    assert_eq!(s.text(), "git checkout -b ");
     let pairs: Vec<_> = s
-        .tokens
+        .tokens()
         .iter()
-        .map(|t| (t.text.as_str(), t.raw.as_str()))
+        .map(|t| (t.text(), t.raw()))
         .collect();
     assert_eq!(
         pairs,
         [("git", "git"), ("checkout", "co"), ("-b", "-b"), ("", "")]
     );
     let s = substitute_token(&c, 1, "commit -m", Shell::Bash).unwrap();
-    let texts: Vec<_> = s.tokens.iter().map(|t| t.text.as_str()).collect();
+    let texts: Vec<_> = s.tokens().iter().map(|t| t.text()).collect();
     assert_eq!(texts, ["git", "commit", "-m", "-b", ""]);
-    assert_eq!(s.tokens[2].raw, "co");
+    assert_eq!(s.tokens()[2].raw(), "co");
     assert_eq!(substitute_token(&c, 1, "log | less", Shell::Bash), None);
     assert_eq!(substitute_token(&c, 1, "", Shell::Bash), None);
     assert_eq!(substitute_token(&c, 9, "x", Shell::Bash), None);
@@ -363,7 +363,7 @@ fn pwsh() {
     assert_eq!(ps("Get-Item $(git ch"), ["git", "ch"]);
     assert_eq!(ps("a | b; git co "), ["git", "co", ""]);
     let c = cmd("cd my` di", Shell::Pwsh, &[]).unwrap();
-    assert_eq!(c.tokens[1].raw, "my` di");
+    assert_eq!(c.tokens()[1].raw(), "my` di");
 }
 
 /// Parse trees as JSON fixtures, compared on type, offsets, complete and innerText.
