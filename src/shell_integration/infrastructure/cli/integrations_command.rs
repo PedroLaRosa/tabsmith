@@ -1,5 +1,11 @@
-use crate::shared::infrastructure::terminal_style::sgr;
+use crate::shared::infrastructure::terminal_style::{sgr, stdout_tty};
 use crate::shell_integration::application::integration_failure::IntegrationFailure;
+
+/// The failures of a run over integrations as one error, the text main prints after `error: ` (the legacy
+/// `bail!`); a failed integration's description is bold when stdout is a terminal, as `paint` does.
+pub(crate) fn integration_failures_error(failures: Vec<IntegrationFailure>) -> anyhow::Error {
+    anyhow::Error::msg(failures_text(&failures, stdout_tty()))
+}
 
 /// The failures each in a paragraph of its own after a blank line, a failed integration's description in bold when
 /// `styled` (SPEC §2.6).
@@ -70,5 +76,18 @@ mod tests {
         let text = failures_text(&[failed_zshrc()], false);
 
         assert_eq!(text, "\n\nzsh pre post into .zshrc: Permission denied: /home/u/.zshrc");
+    }
+
+    /// A listing failure is never styled, so the text does not depend on whether stdout is a terminal.
+    #[test]
+    fn should_give_the_failures_text_as_the_error_main_prints() {
+        let failures = vec![IntegrationFailure::Listing {
+            shell: "pwsh".into(),
+            reason: "pwsh printed an empty $PROFILE".into(),
+        }];
+
+        let error = integration_failures_error(failures);
+
+        assert_eq!(format!("{error:#}"), "\n\npwsh: pwsh printed an empty $PROFILE");
     }
 }
