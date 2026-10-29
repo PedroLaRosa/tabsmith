@@ -24,7 +24,9 @@ use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
 use crate::specs::infrastructure::adapters::exec_input::{process_output_json, ExecInput};
-use crate::specs::infrastructure::adapters::fig_spec_mapper::{generator_context_json, template_json};
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{
+    generator_context_json, spec_value_to_json, template_json,
+};
 use crate::specs::infrastructure::adapters::process_executor::exec;
 use crate::specs::infrastructure::adapters::quickjs_module_wrapper::{wrap_module, PRELUDE};
 use rquickjs::context::EvalOptions;
@@ -529,7 +531,10 @@ pub(crate) fn call_arguments(
             suggestions: TemplateSuggestions::Listed(listed),
             ..
         } => vec![JsArg::Json(template_json(listed))],
-        _ => Vec::new(),
+        SpecFunctionCall::FilterTemplateSuggestions {
+            suggestions: TemplateSuggestions::Returned(returned),
+            ..
+        } => vec![JsArg::Json(spec_value_to_json(returned))],
     };
     (call.function(), arguments)
 }

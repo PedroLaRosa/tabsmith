@@ -3,7 +3,9 @@ use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventS
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
-use crate::specs::infrastructure::adapters::fig_spec_mapper::{fn_id, generator_context_json, template_json};
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{
+    fn_id, generator_context_json, spec_value_from_json, template_json,
+};
 #[cfg(unix)]
 use crate::specs::infrastructure::adapters::process_executor::fake_bin;
 use crate::shared::infrastructure::testing::temp_dir::TempDir;
@@ -613,4 +615,17 @@ fn should_pass_filter_template_suggestions_the_listed_suggestions_as_fig_suggest
     let arguments = call_arguments(&call, &GeneratorContext::default());
 
     assert_eq!(arguments, (12, vec![JsArg::Json(template_json(&listed))]));
+}
+
+#[test]
+fn should_pass_filter_template_suggestions_a_returned_custom_result_unchanged() {
+    let returned = json!([{"name": "main", "context": {"templateType": "folders"}, "priority": 1.5}, "dev"]);
+    let call = SpecFunctionCall::FilterTemplateSuggestions {
+        function: 13,
+        suggestions: TemplateSuggestions::Returned(spec_value_from_json(&returned)),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(arguments, (13, vec![JsArg::Json(returned)]));
 }
