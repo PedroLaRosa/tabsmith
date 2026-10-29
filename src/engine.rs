@@ -31,7 +31,6 @@ use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
     now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, ItemType, Msg, Phase, Request,
-    SessionCtx,
 };
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
@@ -292,7 +291,8 @@ struct Engine {
     index: SpecIndex,
     history: Rc<dyn HistoryRepository>,
     record_command: RecordCommandUseCase,
-    session: SessionCtx,
+    session_env: HashMap<String, String>,
+    session_alias: Option<String>,
     wrapper_env: HashMap<String, String>,
     aliases: Option<(Shell, HashMap<String, String>)>,
     recency: Arc<Mutex<Recency>>,
@@ -349,7 +349,8 @@ impl Engine {
             index,
             history,
             record_command,
-            session: SessionCtx::default(),
+            session_env: HashMap::new(),
+            session_alias: None,
             wrapper_env: std::env::vars().collect(),
             aliases: None,
             recency: Arc::new(Mutex::new(recency)),
@@ -430,8 +431,9 @@ impl Engine {
                 self.reset_slots();
                 self.first_token_cache = None;
             }
-            EngineMsg::Session(s) => {
-                self.session = s;
+            EngineMsg::Session { env, alias } => {
+                self.session_env = env;
+                self.session_alias = alias;
                 self.aliases = None;
                 self.first_token_cache = None; // aliases / PATH from this prompt
             }
@@ -449,16 +451,16 @@ impl Engine {
     }
 
     fn env(&self) -> &HashMap<String, String> {
-        if self.session.env.is_empty() {
+        if self.session_env.is_empty() {
             &self.wrapper_env
         } else {
-            &self.session.env
+            &self.session_env
         }
     }
 
     fn alias_map(&mut self, shell: Shell) -> HashMap<String, String> {
         if !matches!(&self.aliases, Some((s, _)) if *s == shell) {
-            let map = match self.session.alias.as_deref() {
+            let map = match self.session_alias.as_deref() {
                 Some(text) if !text.is_empty() => shell_parser::parse_aliases(text, shell),
                 _ => HashMap::new(),
             };
@@ -490,10 +492,10 @@ impl Engine {
         let Some(cmd) = shell_parser::current_command(before, req.shell, &aliases) else {
             return Some(self.error(req, cursor, true));
         };
-        let env = if self.session.env.is_empty() {
+        let env = if self.session_env.is_empty() {
             &self.wrapper_env
         } else {
-            &self.session.env
+            &self.session_env
         };
         let pctx = ParseCtx {
             cwd: &req.cwd,
@@ -1356,7 +1358,7 @@ mod tests {
         let mut js = Js::new(jrx, jtx, Settings::default()).unwrap();
         assert!(e.first_token_items(&HashMap::new(), None, None).is_empty());
         assert!(e.handle(
-            EngineMsg::Session(SessionCtx::default()),
+            EngineMsg::Session { env: HashMap::new(), alias: None },
             &mut None,
             &mut js
         ));
@@ -1398,7 +1400,7 @@ mod tests {
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         let alias = alias.map(str::to_owned);
-        assert!(e.handle(EngineMsg::Session(SessionCtx { env, alias, ts: 0 }), &mut None, js));
+        assert!(e.handle(EngineMsg::Session { env, alias }, &mut None, js));
     }
 
     #[test]

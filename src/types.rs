@@ -234,7 +234,10 @@ pub enum EngineMsg {
         shell: Shell,
     },
     Settings(Settings),
-    Session(SessionCtx),
+    Session {
+        env: HashMap<String, String>,
+        alias: Option<String>,
+    },
     ToggleFuzzy,
     /// Internal (js host): a spawned process finished.
     ExecDone {

@@ -1272,7 +1272,10 @@ impl Session {
         if m.is_some() && m != self.session_mtime {
             self.session_mtime = m;
             if let Some(ctx) = self.session_path.as_deref().and_then(SessionCtx::load) {
-                let _ = self.engine.send(EngineMsg::Session(ctx));
+                let _ = self.engine.send(EngineMsg::Session {
+                    env: ctx.env,
+                    alias: ctx.alias,
+                });
             }
         }
         let m = self.settings_repository.last_modified();
@@ -2385,7 +2388,7 @@ mod tests {
         sent_to_engine
             .try_iter()
             .map(|m| match m {
-                EngineMsg::Session(ctx) => (ctx.env, ctx.alias),
+                EngineMsg::Session { env, alias } => (env, alias),
                 _ => panic!("only session contexts are sent"),
             })
             .collect()
