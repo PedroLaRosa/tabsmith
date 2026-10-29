@@ -644,3 +644,20 @@ fn should_call_a_spec_function_and_read_what_it_returned_by_its_kind() {
 
     assert!(matches!(result, Ok(SpecFunctionResult::Alias(Some(alias))) if alias == "co:function"));
 }
+
+#[test]
+fn should_give_a_started_call_its_outcome_as_a_spec_value() {
+    let (js, _events) = js();
+    let dir = TempDir::new("typed-start");
+    let ns = module(&js, &dir, "script.js", "var f=tokens=>({tokens,n:1.5});export{f as default};");
+    let call = SpecFunctionCall::Script {
+        function: fn_id(&ns["default"]).unwrap(),
+        tokens: vec!["git".into(), "log".into()],
+    };
+    let returned = json!({"tokens": ["git", "log"], "n": 1.5});
+    let task = js.start(call, None);
+
+    let outcomes = js.wait(&[task], Instant::now() + Duration::from_secs(5));
+
+    assert_eq!(outcomes, Ok(vec![Some(Ok(spec_value_from_json(&returned)))]));
+}

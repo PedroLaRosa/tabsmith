@@ -29,7 +29,7 @@ use crate::specs::domain::value_objects::task_outcome::TaskOutcome;
 use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
 use crate::specs::infrastructure::adapters::exec_input::{process_output_json, ExecInput};
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{
-    function_result, generator_context_json, spec_value_to_json, template_json,
+    function_result, generator_context_json, spec_value_from_json, spec_value_to_json, template_json,
 };
 use crate::specs::infrastructure::adapters::process_executor::exec;
 use crate::specs::infrastructure::adapters::quickjs_module_wrapper::{wrap_module, PRELUDE};
@@ -502,8 +502,10 @@ impl QuickJsSpecRuntime {
 }
 
 impl SpecRuntime for QuickJsSpecRuntime {
-    fn start(&self, _call: SpecFunctionCall, _context: Option<&GeneratorContext>) -> TaskId {
-        todo!()
+    fn start(&self, call: SpecFunctionCall, context: Option<&GeneratorContext>) -> TaskId {
+        let default = GeneratorContext::default();
+        let (function, args) = call_arguments(&call, context.unwrap_or(&default));
+        self.start_call(function, args, context)
     }
 
     fn start_exec(&self, request: ExecRequest, context: &GeneratorContext) -> TaskId {
@@ -516,10 +518,13 @@ impl SpecRuntime for QuickJsSpecRuntime {
 
     fn wait(
         &self,
-        _tasks: &[TaskId],
-        _deadline: Instant,
+        tasks: &[TaskId],
+        deadline: Instant,
     ) -> Result<Vec<Option<TaskOutcome>>, Interrupted> {
-        todo!()
+        match self.wait_json(tasks, deadline) {
+            Ok(results) => Ok(results.into_iter().map(|r| r.map(task_outcome)).collect()),
+            Err(_) => todo!(),
+        }
     }
 
     fn forget(&self, tasks: &[TaskId]) {
@@ -542,6 +547,11 @@ impl SpecRuntime for QuickJsSpecRuntime {
     fn apply_settings(&self, settings: &Settings) {
         QuickJsSpecRuntime::apply_settings(self, settings)
     }
+}
+
+/// A finished task's JSON result as its outcome.
+fn task_outcome(result: TaskResult) -> TaskOutcome {
+    result.map(|v| spec_value_from_json(&v))
 }
 
 /// The function a spec function call runs, and the JS arguments its kind passes.
