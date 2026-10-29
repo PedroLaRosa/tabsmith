@@ -5,14 +5,12 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::atomic_file::AtomicFile;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::os::executable_lookup::which;
-use crate::shared::infrastructure::os::process_info::{is_root, parent_exe};
+use crate::shared::infrastructure::os::process_info::is_root;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::application::integration_installer::IntegrationInstaller;
-use crate::shell_integration::application::ports::shell_environment::ShellEnvironment;
 use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
-use crate::shell_integration::domain::services::launch_policy;
 use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
@@ -109,32 +107,6 @@ pub struct UninstallArgs {
 /// Mark that existing terminals need a restart (state `doctor.prompt-restart-terminal`, printed by doctor).
 pub fn mark_restart() {
     StateRestartReminderRepository::new(data_directory_from_env()).save_pending();
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// Launch decision (SPEC §5.2)
-
-/// Launch decision (SPEC §5.2): (launch?, reason line).
-pub fn should_launch() -> (bool, String) {
-    let decision = launch_policy::decide(&OsShellEnvironment.launch_facts());
-    (decision.launches(), decision.reason().to_string())
-}
-
-pub fn should_launch_cmd() -> anyhow::Result<i32> {
-    let (launch, why) = should_launch();
-    println!("{why}");
-    Ok(if launch { 0 } else { 1 })
-}
-
-pub fn get_shell_cmd() -> anyhow::Result<i32> {
-    match parent_exe() {
-        Some(p) => {
-            print!("{p}");
-            let _ = std::io::stdout().flush();
-            Ok(0)
-        }
-        None => Ok(1),
-    }
 }
 
 pub fn pre_cmd(alias: Option<String>) -> anyhow::Result<i32> {

@@ -6,7 +6,9 @@ use crate::settings::infrastructure::cli::settings_command::{run_settings_comman
 use crate::settings::infrastructure::settings_module::build_settings_module;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::terminal_style::epaint;
+use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
 use crate::shell_integration::infrastructure::cli::init_command::{run_init_command, InitArgs};
+use crate::shell_integration::infrastructure::cli::should_launch_command::run_should_launch_command;
 use crate::shell_integration::infrastructure::shell_integration_module::{
     build_shell_integration_module, ShellIntegrationModule,
 };
@@ -131,8 +133,8 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         Some(Command::Debug(c)) => cli::debug(c),
         Some(Command::Internal(c)) => match c {
             InternalCmd::Pty { shell, cmd } => Ok(pty::run(shell, cmd)),
-            InternalCmd::ShouldLaunch => integrations::should_launch_cmd(),
-            InternalCmd::GetShell => integrations::get_shell_cmd(),
+            InternalCmd::ShouldLaunch => run_should_launch_command(&shell_integration_module()),
+            InternalCmd::GetShell => run_get_shell_command(),
             InternalCmd::PreCmd { alias } => integrations::pre_cmd(alias),
         },
     }
