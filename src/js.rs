@@ -18,6 +18,7 @@ use crate::specs::domain::value_objects::process_output::ProcessOutput;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::infrastructure::adapters::exec_input::{process_output_json, ExecInput};
+use crate::specs::infrastructure::adapters::native_ls::native_ls;
 use crate::types::EngineMsg;
 use rquickjs::context::EvalOptions;
 use rquickjs::{CatchResultExt, Context, Function, Object, Runtime};
@@ -1007,26 +1008,6 @@ fn clean(b: &[u8]) -> String {
         .replace("\x1b[?25h", "")
         .trim_matches('\n')
         .to_string()
-}
-
-/// Native answer to `ls -1ApL` in `dir` (SPEC §6.6.4, §9.3).
-pub fn native_ls(dir: &Path) -> ProcessOutput {
-    match std::fs::read_dir(dir) {
-        Ok(entries) => {
-            let names: Vec<String> = entries
-                .flatten()
-                .map(|e| {
-                    let mut name = e.file_name().to_string_lossy().into_owned();
-                    if std::fs::metadata(e.path()).is_ok_and(|m| m.is_dir()) {
-                        name.push('/'); // -p, following symlinks (-L)
-                    }
-                    name
-                })
-                .collect();
-            ProcessOutput::new(names.join("\n"), String::new(), 0)
-        }
-        Err(e) => ProcessOutput::new(String::new(), format!("ls: {}: {e}", dir.display()), 2),
-    }
 }
 
 #[cfg(test)]
