@@ -8,19 +8,17 @@ use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info::{is_root, parent_exe};
 use crate::shared::infrastructure::output_format::OutputFormat;
+use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
+use crate::shell_integration::application::integration_installer::IntegrationInstaller;
 use crate::shell_integration::application::ports::init_script_templates::InitScriptTemplates;
 use crate::shell_integration::application::ports::shell_environment::ShellEnvironment;
 use crate::shell_integration::domain::entities::integration::Integration;
-use crate::shell_integration::domain::repositories::backup_repository::BackupRepository;
-use crate::shell_integration::domain::repositories::dotfile_repository::DotfileRepository;
 use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
 use crate::shell_integration::domain::services::init_script_renderer;
-use crate::shell_integration::domain::services::integration_catalog;
 use crate::shell_integration::domain::services::launch_policy;
 use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
-use crate::shell_integration::domain::value_objects::dotfile::Dotfile;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
@@ -31,11 +29,14 @@ use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
     integration_paths_from, OsShellEnvironment,
 };
 use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
-use crate::types::{now_ms, now_secs, SessionCtx};
+use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
+use crate::types::{now_ms, SessionCtx};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use std::io::{IsTerminal, Write};
 use std::path::Path;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -273,119 +274,44 @@ fn prune_run_files(dir: &Path) {
 
 /// Integrations of `shell` (SPEC §5.5 table), asking `pwsh` for `$PROFILE` when the paths do not know it.
 pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>, ShellIntegrationError> {
-    integration_catalog::integrations(
-        ctx,
-        shell,
-        |p| FileDotfileRepository.exists(p),
-        || OsShellEnvironment.pwsh_profile(),
+    legacy_installer().integrations(ctx, shell)
+}
+
+/// The installer over the files on disk, the system clock and the running system's shell facts.
+fn legacy_installer() -> IntegrationInstaller {
+    IntegrationInstaller::new(
+        Rc::new(FileDotfileRepository),
+        Rc::new(FileBackupRepository),
+        Arc::new(SystemClock),
+        Rc::new(OsShellEnvironment),
     )
 }
 
 impl Integration {
     /// Write both `~/.tabsmith/shell/` script files of a dotfile integration.
     pub(crate) fn write_scripts(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        for when in [IntegrationPhase::Pre, IntegrationPhase::Post] {
-            let script = self.script(ctx, when);
-            FileDotfileRepository.write(script.path(), script.contents())?;
-        }
-        Ok(())
+        legacy_installer().write_scripts(ctx, self)
     }
 
     /// SPEC §5.5 `is_installed()`: the first failing reason.
     pub(crate) fn is_installed(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        if let Some(script) = self.whole_file_script(ctx) {
-            return script.check(&FileDotfileRepository.read(script.path())?);
-        }
-        let dotfile = Dotfile::new(FileDotfileRepository.read(self.path())?);
-        if dotfile.is_opted_out() {
-            return Ok(());
-        }
-        let lines = dotfile.sourced_lines();
-        for (when, at, actual) in [
-            (IntegrationPhase::Pre, "first", lines.first()),
-            (IntegrationPhase::Post, "last", lines.last()),
-        ] {
-            let src = self.source_line(ctx, when);
-            if actual.copied() != Some(src.as_str()) {
-                let msg = format!(
-                    "{} does not source {} integration",
-                    self.path().display(),
-                    when.name()
-                );
-                return Err(if lines.contains(&src.as_str()) {
-                    ShellIntegrationError::Improper(format!("{msg} {at}"))
-                } else {
-                    ShellIntegrationError::NotInstalled(msg)
-                });
-            }
-            let script = self.script(ctx, when);
-            script.check(&FileDotfileRepository.read(script.path())?)?;
-        }
-        Ok(())
+        legacy_installer().check(ctx, self)
     }
 
     /// SPEC §5.5 install (idempotent); an existing dotfile is first copied to `<data>/backups/<unix-secs>/`.
     pub(crate) fn install(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        if self.is_installed(ctx).is_ok() {
-            return Ok(());
-        }
-        if let Some(script) = self.whole_file_script(ctx) {
-            return FileDotfileRepository.write(script.path(), script.contents());
-        }
-        let contents = if FileDotfileRepository.exists(self.path()) {
-            let dir = ctx.data_root().join("backups").join(now_secs().to_string());
-            FileBackupRepository.back_up(self, &dir)?;
-            self.uninstall(ctx)?;
-            FileDotfileRepository.read(self.path())?
-        } else {
-            String::new()
-        };
-        self.write_scripts(ctx)?;
-        let dotfile = Dotfile::new(contents);
-        let new = dotfile.with_blocks(
-            &self.source_line(ctx, IntegrationPhase::Pre),
-            &self.source_line(ctx, IntegrationPhase::Post),
-        );
-        if new.text() != dotfile.text() {
-            FileDotfileRepository.write(self.path(), new.text())?;
-        }
-        Ok(())
+        legacy_installer().install(ctx, self)
     }
 
     /// Anything uninstall would remove is on disk: also true where `is_installed` fails (a moved binary, an edited
     /// script, lines appended after the post block).
     pub(crate) fn has_traces(&self, ctx: &IntegrationPaths) -> bool {
-        if self.whole_file_phase().is_some() {
-            return FileDotfileRepository.exists(self.path());
-        }
-        [IntegrationPhase::Pre, IntegrationPhase::Post]
-            .into_iter()
-            .any(|w| FileDotfileRepository.exists(self.script(ctx, w).path()))
-            || FileDotfileRepository.read(self.path()).is_ok_and(|t| {
-                Dotfile::new(t).has_own_line(
-                    &self.source_line(ctx, IntegrationPhase::Pre),
-                    &self.source_line(ctx, IntegrationPhase::Post),
-                )
-            })
+        legacy_installer().has_traces(ctx, self)
     }
 
     /// SPEC §5.5 uninstall: drop our exact lines, then delete the script files (missing is fine).
     pub(crate) fn uninstall(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        if self.whole_file_phase().is_some() {
-            return FileDotfileRepository.remove(self.path());
-        }
-        if FileDotfileRepository.exists(self.path()) {
-            let dotfile = Dotfile::new(FileDotfileRepository.read(self.path())?);
-            let kept = dotfile.without_blocks(
-                &self.source_line(ctx, IntegrationPhase::Pre),
-                &self.source_line(ctx, IntegrationPhase::Post),
-            );
-            if kept.text() != dotfile.text() {
-                FileDotfileRepository.write(self.path(), kept.text())?;
-            }
-        }
-        FileDotfileRepository.remove(self.script(ctx, IntegrationPhase::Pre).path())?;
-        FileDotfileRepository.remove(self.script(ctx, IntegrationPhase::Post).path())
+        legacy_installer().uninstall(ctx, self)
     }
 
     /// The exact bytes of the `~/.tabsmith/shell` script file of `phase`.
@@ -407,34 +333,16 @@ fn apply(
     pick: impl Fn(&Integration) -> bool,
     op: impl Fn(&Integration, &IntegrationPaths) -> Result<(), ShellIntegrationError>,
 ) -> Result<bool> {
-    let (mut ran, mut errs) = (false, Vec::new());
-    for &shell in shells {
-        match integrations(ctx, shell) {
-            Err(e) => errs.push(format!("{}: {e:#}", shell.name())),
-            Ok(list) => {
-                for i in list.iter().filter(|i| pick(i)) {
-                    ran = true;
-                    if let Err(e) = op(i, ctx) {
-                        errs.push(format!("{}: {e}", paint("1", &i.describe())));
-                    }
-                }
-            }
-        }
-    }
-    if !errs.is_empty() {
-        bail!("\n\n{}", errs.join("\n\n"));
-    }
-    Ok(ran)
+    legacy_installer()
+        .apply(ctx, shells, pick, |i| op(i, ctx))
+        .map_err(integration_failures_error)
 }
 
 /// Install every integration of `shells` that is not installed. Ok(true) if something was installed.
 pub fn install_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool> {
-    apply(
-        ctx,
-        shells,
-        |i| i.is_installed(ctx).is_err(),
-        Integration::install,
-    )
+    legacy_installer()
+        .install_missing(ctx, shells)
+        .map_err(integration_failures_error)
 }
 
 /// Uninstall every integration of `shells` with something on disk. Not only the installed ones: `is_installed`
