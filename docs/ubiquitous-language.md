@@ -65,23 +65,40 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `Arg` | VO | A positional or option argument. | `spec::Arg` |
 | `Generator` | VO | Template / script / postProcess / splitOn / custom / trigger / getQueryTerm / cache. | `spec::Generator` |
 | `SpecSuggestion` | VO | A suggestion declared by a spec (static, additional or generated). | `spec::Suggestion` |
-| `SuggestionKind` | VO | Subcommand, Option, Arg, File, Folder, Special, Shortcut, History, AutoExecute. | `types::ItemType` |
-| `SpecLocation` | VO | Global `{name}` or Local `{dir, name}`; the spec's identity. | `SpecLocation`, `loc_key` |
-| `SpecFunctionRef` | VO | Opaque handle to a function inside a loaded spec. | `FnId` / `{"$fn": n}` |
+| `SuggestionKind` | VO | Subcommand, Option, Arg, File, Folder, Special, Shortcut, History, AutoExecute. Fig `type` strings map to it in the Fig spec mapper: `mixin` → Special, unknown → Arg. | `types::ItemType` (+ `from_fig`, `fig_type`) |
+| `SpecLocation` | VO | Global `{name}` or Local `{dir, name}`. `cache_key()` (`global,,{name}` / `local,{dir},{name}`, trailing slash kept) names it in every cache; PathBuf equality never does. | `SpecLocation`, `loc_key` |
+| `SpecFunctionRef` | VO (alias of u32) | Index of a function in the runtime's function table, written `{"$fn": n}`. | `FnId` |
 | `TextOrFunction` | VO | A literal or a spec function. | `StrOrFn` |
 | `GeneratorTrigger` | VO | When a generator reruns: string, function, change, threshold, match. | `Trigger` |
 | `GeneratorCachePolicy` | VO | TTL, max age, cache by directory, cache key. | `CacheCfg` |
-| `GeneratorScript` | VO | Argv, legacy shell string, function, or typed `ExecRequest`. | `Script` (`Object(Value)` becomes typed) |
+| `GeneratorScript` | VO | Argv, legacy shell string, function, or an `executeCommand` object kept as a `SpecValue`. It becomes an `ExecRequest` only when the generator runs, so a malformed object still fails then, with `bad script input: …`. | `Script` (`Object(Value)` → `Object(SpecValue)`) |
+| `SpecValue` | VO | A JSON value written by spec code (a script object, a call argument, a task result), held exactly as read. Unsigned, negative and float numbers are kept apart; object keys are sorted. | `serde_json::Value` in the spec model and runtime |
 | `Repeatability` | VO | No / Times(n) / Unlimited. | `Repeat` |
 | `FilterStrategy` | VO | Default / Prefix / Fuzzy. | `Strategy` |
 | `ParserDirectives` | VO | flagsArePosixNoncompliant, optionsMustPrecedeArguments, optionArgSeparators. | `Directives` |
 | `SpecLoadDirective` | VO | Locations / Inline spec / Function. | `LoadSpec` |
-| `SpecIndex` | VO | Root spec names + diff-versioned set. | `SpecIndex` |
-| `SemanticVersion` | VO | Parsed CLI version, ordering. | `SemVer` tuple + `semver*` |
+| `SpecIndex` | VO | Root spec names in `index.json` order, then the user's own spec names, plus the diff-versioned set. | `SpecIndex` |
+| `SemanticVersion` | VO | Parsed CLI version, with node-semver precedence; an unparsable version compares as 0.0.0. | `SemVer` + `semver*` |
+| `SpecLocator` | Domain service | Where a command's spec lives (Global or Local, from the first token, isCommand or isScript; `bin/console` is `php/bin-console`). Which file a Global name loads from, over the roots the caller gives in order: root by root, `<name>.js`, else `<name>/index.js`; diff-versioned names only `<name>/index.js`; plain relative names only. | `parser::spec_location`, `specs::resolve_in` |
+| `SpecVersionSelector` | Domain service | Which diffs of a diff-versioned spec apply for a detected CLI version: every diff whose version is ≤ it, oldest first, or all of them when the version is unknown. | key selection of `apply_versions` |
+| `BundleRetentionPolicy` | Domain service | Which dirs under `~/.tabsmith/specs` are stale bundles to remove: tabsmith's own all-numeric version dirs other than the current one, unused for over 7 days, and `<version>.tmp-<pid>` dirs older than 10 minutes. | `specs::cleanup` rules |
+| `SpecBundle` | Port | The embedded Fig spec bundle under the data directory: install it (extract if missing, mark in use, remove stale versions). | `specs::ensure_extracted` |
 | `GeneratorContext` | VO | cwd, env, shell, search term, dangerous flag passed to generators. | `js::GenCtx` |
 | `ExecRequest` | VO | `executeCommand` input: command, args, cwd, env changes, timeout. | `js::ExecInput` |
 | `ProcessOutput` | VO | stdout, stderr, status. | `types::ExecOutput` |
-| `SpecFunctionCall` / `SpecFunctionResult` | Port types | Typed call into a spec function and its typed result (load spec, generate spec, alias, query term, trigger, post-process, custom, script). | `JsArg` + `serde_json::Value` |
+| `SpecFunctionCall` / `SpecFunctionResult` | VO | A typed call into a spec function, and its typed result, for ten kinds: query term, trigger, alias, load spec, generate-spec cache key, generate spec, script, custom, post-process, filter template suggestions. | `JsArg` + `serde_json::Value` |
+| `SpecFunctionKind` | VO | Which of the ten kinds a call is; it decides how a result is read. | |
+| `TaskId` / `TaskOutcome` | VO | Handle of a started spec function, process or sleep (one id space), and its raw result: a `SpecValue` or the error text. | `js::{TaskId, TaskResult}` |
+| `ScriptResolution` | VO | What a generator's script turned into: skip, invalid (serde text), or an `ExecRequest` + the cache-key source text. | inline in `engine::script_input` |
+| `CustomGeneratorResult` | VO | A custom generator's suggestions + whether they are templated (first item has a `context` key). | inline in `engine::custom_result` |
+| `TemplateSuggestions` | VO | What `filterTemplateSuggestions` receives: listed suggestions, or a templated custom result passed back unchanged. | `template_json` / raw custom value |
+| `SpecLookup` | VO | What finding a spec needs from the current request: the settings, the `SpecIndex` and the `GeneratorContext` the CLI version probe and a versioned spec's `default(version)` run with. It also says whether `autocomplete.disableForCommands` disables a location's name. | `ParseCtx` + `gen_ctx` handed to `Loader::load` |
+| `SpecError` | Domain error | Aborted (`aborted by a newer request`), Timeout (`timed out`), Invalid (text as is), BundleUnavailable (text as is). | `js::JsError` + the anyhow errors of `spec`/`specs` |
+| `SpecRepository` | Repository | Finds the Spec at a `SpecLocation`. It answers none when the spec is missing, disabled by `autocomplete.disableForCommands`, or not a spec. `forget_loaded_specs` makes later finds look again; an unchanged spec keeps its `Rc`. | `parser::Loader`, `Host::load` |
+| `SpecRuntime` | Port | Starts spec functions, processes and sleeps, waits for them (interrupted by a newer request), forgets them, and applies the script-timeout setting. | `js::Js` API, `parser::Host::call` |
+| `RuntimeEventSource` | Port | The engine inbox as the runtime sees it: runtime events in arrival order, other messages kept for the engine, and whether a newer request is waiting. | `Js.rx` + `Js.deferred` |
+| `RuntimeEvent` | Port type | A generator process finished: id + `ProcessOutput` or error text. | `EngineMsg::{ExecDone, Timer}` |
+| `Interrupted` | Port type | A wait stopped because a newer request is waiting; no task was dropped. | `JsError::Aborted` from `wait` |
 
 ## completion
 | Term | Kind | Meaning | Replaces |
@@ -172,7 +189,8 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | session | `TerminalSession` · `SessionContext` · `SessionId` · `CompletionSession` |
 | suggestion | `SpecSuggestion` (declared) · `SuggestionCandidate` (pipeline) · `Suggestion` (shown) |
 | completion | the module/feature · `CompletionResult` (one reply) |
-| host / pump | gone. `QuickJsSpecRuntime` replaces the js Host struct; `SpecRepository` + `SpecRuntime` replace the parser `Host` trait. The pumps become `pty_reader`, `ProgressGeneratorsUseCase` and runtime internals. |
-| cache | `GeneratorCache`, `GhostTextCache`, `ParsePrefixCache`, first-token cache (in `CompletionSession`), spec cache and module cache (inside adapters) |
+| host / pump | gone. `QuickJsSpecRuntime` replaces the js Host, which becomes its task registry; `SpecRepository` + `SpecRuntime` replace the parser `Host` trait. `EngineInbox` (engine.rs, then bootstrap) implements `RuntimeEventSource`. The pumps become `pty_reader`, `ProgressGeneratorsUseCase` and runtime internals. |
+| cache | `GeneratorCache`, `GhostTextCache`, `ParsePrefixCache`, first-token cache (in `CompletionSession`), spec cache and module cache (inside adapters), detected CLI version memo and in-flight version probes (inside `QuickJsSpecRepository`) |
 | profile | pwsh `$PROFILE` (the pwsh dotfile, carried by `IntegrationPaths`) · `LlmProfile` |
 | script | `IntegrationScript` (files tabsmith writes) · `InitScript` / `InitScriptTemplates` (what `init` prints) · `GeneratorScript` (spec) |
+| version | the bundle version (`assets/SPECS_VERSION`, `specs/<version>`) · the CLI version (`SemanticVersion`) · the diff version (a key of a diff-versioned spec's `versions`) |

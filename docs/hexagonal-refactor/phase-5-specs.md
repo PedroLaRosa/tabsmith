@@ -1,8 +1,10 @@
 # Phase 5 (specs): preparation
 
-Status: **prepared, not started; re-checked against `0a0a74e`, the end of Phase 4.** Phase 5 starts there, with the
-gate green: 761 passed, 0 failed, 1 ignored (`all_bundle_modules`), clippy 3 warnings (budget 3), golden identical,
-testlock MISSING 0 and DUPLICATE 0.
+Status: **done** at `d7079b9` (`1a466e2..d7079b9`, gate green: 851 passed, 1 ignored). The decisions it took and
+their deviations are in the plan's section 9 "Phase 5 notes"; where they differ from the briefs below, the notes win.
+It was prepared and re-checked against `0a0a74e`, the end of Phase 4, where the gate was green: 761 passed, 0 failed,
+1 ignored (`all_bundle_modules`), clippy 3 warnings (budget 3), golden identical, testlock MISSING 0 and
+DUPLICATE 0.
 The prep was researched on a frozen snapshot of `a3953cf` (the end of Phase 2) by five researchers: model, bundle,
 runtime, repository and consumers. A judge then chose the runtime/repository port design out of three candidates,
 and this file merges the reports and the verdict. The 17 step prompts (ids `5.1a` … `5.5`, see "Step briefs") are in

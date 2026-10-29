@@ -1,7 +1,7 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2, 3 and 4 are done on branch `refactor/hexagonal-architecture` (gate green at `ab7052b`).
-Phase 5 is in progress. Working notes, tools, the per-file source map and the Phase 3, 4 and 5 research are in
+Status: Phases 0, 1, 2, 3, 4 and 5 are done on branch `refactor/hexagonal-architecture` (gate green at `d7079b9`).
+Phase 6 is next. Working notes, tools, the per-file source map and the Phase 3, 4 and 5 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -285,35 +285,52 @@ infrastructure/cli/{init_command ← InitArgs/ShellArg, integrations_command ←
 
 ### specs
 ```
-domain/entities/subcommand.rs             ← spec::Subcommand (+ reindex)
+domain/entities/subcommand.rs             ← spec::Subcommand (+ reindex, merged_with_generated)
 domain/value_objects/{spec_option, arg, generator, spec_suggestion, suggestion_kind, spec_location,
                       spec_function_ref, text_or_function, generator_trigger, generator_cache_policy,
                       generator_script, repeatability, filter_strategy, parser_directives, spec_load_directive,
-                      spec_index, semantic_version, generator_context, exec_request, process_output}.rs
+                      spec_index, semantic_version, spec_value, spec_lookup, generator_context, exec_request,
+                      process_output, task_id, task_outcome, spec_function_call, spec_function_kind,
+                      spec_function_result, script_resolution, custom_generator_result, template_suggestions}.rs
 domain/services/{spec_locator ← parser::spec_location + specs::resolve_in name rules and lookup order
-                 (exists predicate injected; bin/console, dotslash rules),
+                 (is_file predicate injected; the bin/console rule, but not "dotslash": the single-token dotslash
+                 rule stays with the parser, then ParsePrefixCache),
                  spec_version_selector ← apply_versions key pick (every diff ≤ target, cumulative, semver order),
                  bundle_retention_policy ← specs cleanup staleness rules}.rs
-domain/repositories/spec_repository.rs    trait {find(&SpecLocation) -> Result<Rc<Subcommand>, SpecError>} + InMemory
-domain/spec_error.rs                      (Aborted, Timeout, NotFound, Invalid)
-application/install_spec_bundle_use_case.rs ← ensure_extracted orchestration
+domain/repositories/spec_repository.rs    trait {find(&SpecLocation, &SpecLookup) -> Result<Option<Rc<Subcommand>>,
+                                          SpecError>; forget_loaded_specs()} + #[cfg(test)] InMemorySpecRepository
+                                          (disableForCommands: SpecLookup::disables, called first by every find,
+                                          deviation 3)
+domain/spec_error.rs                      (Aborted, Timeout, Invalid, BundleUnavailable)
+application/install_spec_bundle_use_case.rs delegates to SpecBundle::install (the ensure_extracted branching stays in
+                                          embedded_spec_bundle, deviation 26)
 application/ports/spec_runtime.rs         typed task API: start(SpecFunctionCall, Option<&GeneratorContext>) -> TaskId,
                                           start_exec(ExecRequest, &GeneratorContext), start_sleep, wait(tasks, deadline)
-                                          -> Result<Vec<Option<TaskOutcome>>, Interrupted>, forget, call;
-                                          + #[cfg(test)] InMemorySpecRuntime (← parser/tests.rs Mock)
-application/ports/{spec_bundle.rs, runtime_event_source.rs}
-infrastructure/specs_module.rs
+                                          -> Result<Vec<Option<TaskOutcome>>, Interrupted>, forget, call,
+                                          apply_settings; + #[cfg(test)] InMemorySpecRuntime
+application/ports/{spec_bundle (+ #[cfg(test)] RecordingSpecBundle),
+                   runtime_event_source (+ #[cfg(test)] ChannelRuntimeEventSource),
+                   runtime_event, runtime_event_sink, runtime_event_poll, interrupted}.rs
+infrastructure/specs_module.rs            SpecsModule { install_spec_bundle } + build_specs_module
 infrastructure/adapters/
   fig_spec_mapper.rs        ← spec::{normalise, subcommand, option, arg, generator, …, suggestion_from_json,
                                load_spec_result, fn_id}, ItemType::from_fig, suggest::{fig_type, template_json},
-                               engine::{json_items, script_exec_input, script_string} (JSON halves); 8 spec tests
+                               engine::{truthy, script_exec_input, json_items, post_process_items} (JSON halves;
+                               script_string became SpecSuggestion::from_script_output), generator_context_json,
+                               SpecValue ↔ JSON, function_result (a JSON result read by kind); tests in
+                               fig_spec_mapper/tests.rs (the 8 spec tests among them)
   fig_version_diff.rs       ← parser::{apply_versions, merge_*, shallow_merge, make_array, names, truthy}
-  quickjs_spec_runtime.rs   ← js::Js + task registry; JSON ↔ typed results via fig_spec_mapper; one
-                               generatorContext JSON builder (dedupes engine::gen_context_json / GenCtx::context_json)
+  quickjs_spec_runtime.rs   ← js::Js + task registry; call_arguments (a typed call's JS arguments); JSON ↔ typed
+                               results via fig_spec_mapper. The production generatorContext JSON builder is
+                               fig_spec_mapper::generator_context_json; the test-only one stays in the runtime tests
+                               (deviations 4 and 25). Tests in quickjs_spec_runtime/tests.rs
   quickjs_module_wrapper.rs ← wrap_module, PRELUDE
-  quickjs_spec_repository.rs ← parser::Loader (spec cache, Rc identity by JSON, diff-versioned specs, CLI version probe)
-  process_executor.rs       ← js::{exec, build_command, key_eq, wait_output, git_bash, clean, LIVE, kill_live_children, job}
+  quickjs_spec_repository.rs ← parser::Loader (spec cache, Rc identity by JSON, diff-versioned specs, CLI version
+                               probe), spec_file, cli_version
+  process_executor.rs       ← js::{exec, build_command, key_eq, find_exe, wait_output, git_bash, clean, LIVE,
+                               kill_live_children, job}
   native_ls.rs              ← js::native_ls
+  exec_input.rs             ← js::ExecInput (the serde record, into ExecRequest) + the exec result JSON
   embedded_spec_bundle.rs   ← specs::{ARCHIVE, version, ensure_extracted, extract_to, touch, cleanup, unpack,
                                SpecIndex::load_from, resolve (fs part), dev_folder, user_dir}
 ```
@@ -341,8 +358,7 @@ domain/services/
   generator_trigger_policy.rs ← triggered, dir_changed, cache_key, is_path_template, script_timeout, debounce/budget
   path_template.rs          ← shell_expand, inserted_directory, help_items
   first_token_suggestions.rs ← first_token_items minus fs, is_root_spec, exe_name
-  completion_request_policy.rs ← compute's pure parts: mid-word guard, arg key, fuzzy strategy, prefix,
-                               autocomplete.disableForCommands rule (moved out of the loader)
+  completion_request_policy.rs ← compute's pure parts: mid-word guard, arg key, fuzzy strategy, prefix
 domain/repositories/recency_repository.rs trait + InMemory
 domain/completion_error.rs                ← ParseError (Aborted, NoSuggestions)
 domain/test_fixtures.rs (#[cfg(test)])    ← menu::tests::{comp, item, settings} builders (shared by dropdown/terminal tests)
@@ -590,7 +606,7 @@ Done at `ab7052b`: `shell_integration` registered in the architecture test, `int
 deleted, gate green (761 passed). terminal_session stays unregistered until Phase 9. See the Phase 4 notes in
 section 9.
 
-### Phase 5: specs (in progress: [research](hexagonal-refactor/phase-5-specs.md))
+### Phase 5: specs (done: [research](hexagonal-refactor/phase-5-specs.md))
 1. **Model.** Move the VOs and entities from `spec.rs` under glossary names. Build `FigSpecMapper` with the 8 spec
    tests, `from_fig` and `fig_type`. `GeneratorScript::Object(Value)` becomes a typed `ExecRequest`.
 2. **Bundle and location.**
@@ -614,6 +630,10 @@ section 9.
      `spec_identity_survives_dev_reload_and_cache_clear`.
 5. Delete `spec.rs`, `specs.rs` and `js.rs`.
 
+Done at `d7079b9`: `specs` registered in the architecture test, `spec.rs`, `specs.rs` and `js.rs` deleted, gate green
+(851 passed). The phase ran in 17 steps (`5.1a` … `5.5`); the typed `ExecRequest` of step 1 and the split of step 2
+became deviations. See the Phase 5 notes in section 9.
+
 ### Phase 6: completion
 1. Move the tokenizer and its VOs from `shell_parser.rs`, with its 16 tests.
 2. Build the pipeline VOs and services from `suggest.rs`, splitting its 23 tests across the services.
@@ -622,7 +642,7 @@ section 9.
 3. Move `ArgvParser` (pure) and `ParsePrefixCache`.
    - Build `CommandLineParser` over `SpecRepository` + `SpecRuntime`; `trait Host` is deleted.
    - Move `parser/tests.rs` to `command_line_parser/tests.rs`, using `InMemorySpecRepository` + `InMemorySpecRuntime`.
-   - Move the `disableForCommands` rule into `CompletionRequestPolicy`.
+   - `disableForCommands` stays in `SpecRepository::find` (`SpecLookup::disables`, deviation 3).
 4. Build the generator entities. `GeneratorRun` returns commands; the use case executes them through `SpecRuntime`.
    - Also build `GeneratorTriggerPolicy`, `SuggestionRecency` + `RecencyRepository` + `StateFileRecencyRepository`
      (with the recency tests) and `CompletionSession`.
@@ -710,9 +730,9 @@ section 9.
 1. Delete `types.rs`. Remove `#![allow(dead_code)]` and delete whatever the compiler then
    flags, including:
    - `logger::trace`;
-   - `EngineMsg::Timer`;
-   - the test-only `Parser::load_spec` (move its test to the repository);
    - `pub` items that are only used locally.
+
+   The test-only `Parser::load_spec` is `#[cfg(test)]` since Phase 5 (D7) and goes with the parser in Phase 6.
 2. Register all 10 modules in the architecture test, with no exceptions left.
 3. Update `docs/SPEC.md`: §4.1 (module table → the new tree), §4.3 (message and type names) and §10 (test locations).
    The README needs no change.
@@ -861,9 +881,10 @@ infrastructure) builds the dependencies for both `bootstrap::cli` and the legacy
 `bootstrap` depends on `bootstrap` and the module graph stays acyclic. The Phase 3 review added a fitness rule:
 a registered module's domain or application may not use a legacy flat module (`LEGACY_MODULES` in
 `architecture_tests.rs`, kept by hand; infrastructure still may, for the bridges). `specs` is not in that list
-because the legacy `specs.rs` shares the planned module's name, so Phase 5 must check by hand that the specs domain
-and application never reach the legacy `crate::specs::` items, and should drop `specs.rs` from the list's story
-once it is deleted. The rules still do not check the plan's `anyhow` rule (section 1, "Errors").
+because the legacy `specs.rs` shared the planned module's name, so Phase 5 checked by hand that the specs domain
+and application never reached the legacy `crate::specs::` items; once `specs.rs` was gone, the list's comment says
+`specs` is the registered module instead. The rules still do not check the plan's `anyhow` rule (section 1,
+"Errors").
 
 Phase 4 notes (decisions P1-P18 of [`phase-4-shell-integration.md`](hexagonal-refactor/phase-4-shell-integration.md),
 which cites the code behind each):
@@ -917,10 +938,11 @@ which cites the code behind each):
   crate an `extern crate .. as ..` line links. Its second round added rule 8 (`#[path]`, `include!`, `#[macro_export]`
   and `#[macro_use]`). The checker reads only the registered modules and `src/main.rs`, so a macro exported from
   bootstrap or a legacy file still passes, as do `#[cfg_attr(.., path = ..)]` and a space after `#[` or before
-  `!`. Rule 3 flags only `*_use_case` and `infrastructure` paths, so it cannot see the `IntegrationInstaller`
-  application service; legacy `doctor.rs` builds one (P14), so Phase 10 greps diagnostics for it by hand. The rules
-  still do not check the `anyhow` rule: at the end of Phase 4 a grep finds it in shell_integration only in
-  `infrastructure/cli` and test code.
+  `!`. Rule 3 flags only another module's use cases (a `*_use_case` file or a `*UseCase` type, on any path under it
+  since Phase 5) and `infrastructure` paths, so it cannot see the `IntegrationInstaller` application service;
+  legacy `doctor.rs` builds one (P14), so Phase 10 greps diagnostics for it by hand. The rules still do not check
+  the `anyhow` rule: at the end of Phase 4 a grep finds it in shell_integration only in `infrastructure/cli` and test
+  code.
 - **terminal_session** is not registered (Phase 9 finishes it); each step checked it locally. `_ pre-cmd` runs
   through `infrastructure/cli/pre_cmd_command.rs` and `ReportSessionContextUseCase` (save, then prune the contexts
   unchanged for a day). `types::SessionCtx` is gone: `EngineMsg::Session { env, alias }` already has its Phase 6
@@ -943,7 +965,8 @@ which cites the code behind each):
 - **Hand-offs** (details in the research's "Hand-off notes for later phases"):
   - Phase 5: switch `SpecBundleBridge` to `specs::InstallSpecBundleUseCase`. Its typed error prints only its Display
     under `{:#}`, so the bridge renders the whole chain with `display_chain` (never a third hand-written copy); check
-    `error: could not extract the completion specs: creating <dir>: <io>` byte for byte.
+    `error: could not extract the completion specs: creating <dir>: <io>` byte for byte. Done in Phase 5 (see its
+    notes).
   - Phase 6: `EngineMsg::Session { env, alias }` is renamed with the enum (bootstrap's `EngineMessage`), and
     `ApplySessionContextUseCase` takes over the engine's `session_env`/`session_alias`,
     `session_update_refreshes_first_token_items` and the five Phase 4 engine tests on the session context.
@@ -960,3 +983,172 @@ which cites the code behind each):
   - Phase 11: use or delete `DataDirectory::shell_dir()`/`backups_dir()` (with their two tests) and update the
     glossary's `DataDirectory` row. `LEGACY_MODULES` still lists `integrations` (harmless); `types::now_ms` is still
     used by the engine.
+
+Phase 5 notes (decisions P1-P18 and deviations 1-26 of [`phase-5-specs.md`](hexagonal-refactor/phase-5-specs.md),
+which cites the code behind each; the phase ran as 17 steps, `5.1a` … `5.5`, as planned in its open question 9):
+
+- **Order of the deletions**: `spec.rs` went in 5.1b, `specs.rs` became `specs/mod.rs` by `git mv` in 5.2b and
+  `js.rs` became `quickjs_spec_runtime.rs` by `git mv` in 5.3c, each as soon as its last importer had switched, not
+  in step 5 (deviation 17); no shim was needed. `EngineMsg::Timer` was deleted in 5.3d (deviation 6, P15), not in
+  Phase 11. The engine's JSON halves and `template_json` moved into the mapper in 5.1, touching Phase 6 files early
+  (deviation 22), and `SuggestionKind` dropped its serde derives with every user switched in 5.1, with no `types.rs`
+  alias (deviation 23). The runtime's and the mapper's tests live in the sibling files
+  `quickjs_spec_runtime/tests.rs` and `fig_spec_mapper/tests.rs` (plan section 1), with unchanged test paths
+  (`specs::infrastructure::adapters::quickjs_spec_runtime::tests::all_bundle_modules`, which CI runs by name).
+- **Model**:
+  - The spec model's fields are private behind accessors and plain `with_*` builders (deviation 24, open question 1):
+    Option/Vec accessors return references, `default` is read through `Arg::default_value()`, and
+    `Subcommand::merged_with_generated` owns the generateSpec merge.
+  - `GeneratorScript::Object(SpecValue)`, not a typed `ExecRequest` (deviation 5, D1): a script object becomes an
+    `ExecRequest` only when the generator runs, so a malformed one still fails then with `bad script input: …`.
+    `SpecValue` is an exact std-only tree (P5) with its own `Unsigned`/`Negative`/`Float` numbers (open questions 4
+    and 8: not `SettingNumber`, not the judge's canonical text, which re-parsed some floats differently).
+    `spec_value_to_json` calls `.expect` on `Number::from_f64`, so a `SpecValue::Float` is built only from parsed
+    JSON: a computed NaN or inf would panic on the engine thread.
+  - `SpecFunctionRef` is a type alias (deviation 18). The types completion's domain must name (`TaskId`,
+    `TaskOutcome`, `SpecValue`, `SpecFunctionCall`/`SpecFunctionKind`/`SpecFunctionResult`, `ScriptResolution`,
+    `CustomGeneratorResult`, `TemplateSuggestions`) live in `specs/domain`, because rule 1 forbids a domain file from
+    naming an `application` path; their glossary rows are VOs, not port types (deviation 7).
+  - `suggestion_from_json` is private in the mapper (`47b14a1`), a departure from P8's table: nothing outside the
+    mapper calls it, and `function_result` lives in the same file.
+- **Location, versions and bundle**:
+  - `SpecVersionSelector` is cumulative, every diff ≤ the target (deviation 19). `spec_location_table` and
+    `resolve_order` were not split into a domain part and an fs part (deviation 20, P9): `find_global_spec` takes an
+    injected `is_file`, and each test moved whole. `SpecLocator` keeps the `bin/console` rule but not "dotslash": the
+    single-token dotslash rule stays in `ParseCaches::parse`.
+  - There is no `LoadSpecIndexUseCase`, and `SpecBundle` has only `install` (deviation 21, open question 5).
+    `InstallSpecBundleUseCase` only delegates to it: the `ensure_extracted` branching (fast path, extract, touch +
+    cleanup, the `cfg(feature)` split) stays in `EmbeddedSpecBundle` (deviation 26, P10).
+  - `SpecError` is `Aborted`, `Timeout`, `Invalid(text)` and `BundleUnavailable(text)`, with no `NotFound`
+    (deviation 2, P6, open question 3). Its text is pre-rendered, it has no `source()`, and it derives `Clone` and
+    `PartialEq`; `BundleUnavailable` is rendered by `display_chain`. parser.rs's `From<SpecError> for ParseError` and
+    the engine's three former catch-alls have explicit arms (D8).
+- **Runtime**:
+  - The typed `SpecRuntime` port and the typed parser `Host::call` follow the judge (open question 2).
+    `QuickJsSpecRuntime` implements the port; `start_exec`, `start_sleep`, `forget` and `apply_settings` exist only in
+    the trait impl, so every caller imports the trait. The parser reads a decoded result with `let-else` on its
+    kind's variant (deviation 15), which one test pins for all ten kinds (P18).
+  - The legacy engine's generator state machine stays on the JSON API (`start_call`, `call_json`, `wait_json`;
+    deviation 8): the typed task half has no production caller until 6.4, which adds `read`, `read_exec_stdout` and
+    `resolve_script` (deviation 9). So the script and custom readings exist twice, in `Engine::script_input`/
+    `Engine::custom_result` (JSON) and in `fig_spec_mapper::function_result` (typed), until 6.4 removes the engine's.
+  - Both generatorContext builders stay (deviations 4 and 25, D1): the production one is
+    `fig_spec_mapper::generator_context_json`, beside the other JSON readers and writers, and the test-only one stays
+    in the runtime tests. Both `script_timeout`s stay (the engine's f64 floor, the runtime's i64 floor).
+  - The serde record in `exec_input.rs` keeps the identifier `ExecInput` (deviation 10). It has two parse entry
+    points whose error texts differ, `__ts_exec` (`from_str`) and `Engine::script_input` (`from_value`); neither is
+    routed through the other. `kill_live_children` stays a free function of `process_executor` (deviation 14); pty.rs
+    calls it by its full path.
+  - `EngineInbox` in engine.rs implements `RuntimeEventSource` until Phase 6.6 (P11). Its sink only enqueues: the
+    runtime calls it while it holds its task registry, so a sink must never re-enter the runtime.
+    `cli_version_detection_survives_an_aborted_parse` is built over `ChannelRuntimeEventSource` (open question 7),
+    and `wait_aborts_and_defers_on_complete` keeps the real inbox contract in the engine tests.
+  - The InMemory doubles have a minimal surface and no Phase 5 consumer (deviation 16): `InMemorySpecRuntime`
+    answers and records calls, its tasks never finish and its `apply_settings` does nothing;
+    `InMemorySpecRepository` keys specs as the parser tests' Mock does (`name`, `dir|name`), records every find,
+    honours `disableForCommands` and never caches.
+- **Repository**:
+  - `find(&SpecLocation, &SpecLookup) -> Result<Option<Rc<Subcommand>>, SpecError>` + `forget_loaded_specs()`, with
+    no `NotFound` (deviation 1): `Ok(None)` means "try the next location", and an `Err` stops the parse at once (the
+    `host.load(loc)?` loop in `ParseCaches::parse_prefix`).
+  - `disableForCommands` stays inside `find` (deviation 3, D1, open question 10). It is stated once in the domain as
+    `SpecLookup::disables`, which `QuickJsSpecRepository` calls first (after the name destructure, before dev mode
+    and the cache, so a disabled name is never cached) and `InMemorySpecRepository` too. Phase 6.3 must not move it
+    into `CompletionRequestPolicy`; section 4 and Phase 6 step 3 now say so.
+  - `QuickJsSpecRepository::find` holds one `borrow_mut` of its private `Loader` for the whole find and calls
+    `Loader::load`, moved verbatim, as P13's sketch has it, instead of inlining that body; `Loader::load`, `versioned`
+    and `cli_version` keep their `js` parameter. The repository owns its own `EmbeddedSpecBundle`, built in `spawn`
+    from the same `dependencies.data_directory` as `Engine::new`'s.
+  - The `Parser` takes `Rc<dyn SpecRepository>` and `Rc<dyn SpecRuntime>` in `Parser::new` (deviation 11), and
+    `Parser::load_spec` is `#[cfg(test)]` (D7) instead of being deleted in Phase 11. There are two 5 s `TIMEOUT`
+    consts, the parser's and the repository's, never merged with `LOAD_TIMEOUT` or `SYNC_CALL` (deviation 13, P14).
+  - Test homes (deviation 12, P16): `cli_version_detection_survives_an_aborted_parse` moved to
+    `quickjs_spec_repository.rs`; `spec_identity_survives_dev_reload_and_cache_clear` stays in `parser/tests.rs`
+    until 6.3 splits it (D6); `diff_merge` and `version_pick` are in `fig_version_diff.rs`. The engine tests build
+    their `Parser` with the helper `parser_over(&Rc<QuickJsSpecRuntime>)`, `report_session_context` takes
+    `&mut Rc<QuickJsSpecRuntime>`, and `Engine::with` takes the `Parser` after the settings.
+- **TDD**: new seams went RED → GREEN → commit → REFACTOR → commit; 5.3d, 5.3e, 5.3f and 5.4a committed each
+  test-only GREEN or REFACTOR on its own as `test(specs): …`. Tests that passed as soon as they were written (5.4a's
+  local and unknown finds, `a5f6072`) were added after the base implementation as contract-pinning tests.
+  `QuickJsSpecRepository` is a verbatim move, not test-first; its three characterization tests (`d5edb2c`) came
+  after it, passed with no production change, and each one failed under a temporary mutation of `Loader::load`.
+- **Fitness rules**:
+  - Run 1's review widened rule 3 (`aa16a20`, `1cfe712`): another module's use case is flagged by its `*_use_case`
+    file or its `*UseCase` type on any path under it, so a module root or a legacy shim that re-exports it under its
+    own name is caught. `36f6576` documents the adapter back door, and `1a03f9e` reads every imported short name
+    file-wide before any line is checked, so a `use` below the code that uses it no longer escapes (55 fitness
+    tests).
+  - The accepted rule 3 ceilings, read by hand: a use case re-exported under another name (a `type` alias, a wrapper
+    fn), an `as` rename, a `super::` path, and an adapter re-exported by a legacy file or a legacy module root. No
+    `pub(crate) use` shim is left at the end of the phase.
+  - `specs` is registered (`d7079b9`). `spec` and `js` stay in `LEGACY_MODULES`; `specs` cannot be listed there, and
+    rule 3 checks neither a legacy module reached from infrastructure nor section 2's edge set (specs → shared,
+    settings). So these greps ran by hand at the end and found nothing outside `#[cfg(test)]` code: a legacy module
+    under `src/specs` (every grouped `use crate::{` reviewed too), a module other than shared and settings, `anyhow`
+    (only tests and two doc comments of `embedded_spec_bundle.rs` name it), the old `crate::spec::`, `crate::js::`
+    and `crate::specs::{ensure_extracted, version, resolve, user_dir, testutil, SpecIndex}` paths, and `ItemType`
+    (only suggest.rs's test input string).
+- **Checks**: the local tag `phase5-start` (`1a466e2`) marks the phase start for `testlock.py`: 46 tests are CHANGED
+  against it, each one a restructuring in the research's "Test moves" table.
+  `should_report_a_build_without_embedded_specs_like_anyhow` compiles only under `--no-default-features`, which
+  neither the gate nor CI builds: `cargo check --locked --no-default-features --all-targets` ran from 5.2b on, and
+  at the end `cargo test --locked --no-default-features` ran the test too (1 passed). `integrations-diff.sh` and
+  `precmd-diff.sh` stayed empty, and the release `all_bundle_modules` run passed at the end of every runtime,
+  repository and closing step.
+- **Phase 4's Phase 5 hand-off, closed**: `SpecBundleBridge` runs specs' `InstallSpecBundleUseCase`, which
+  `build_specs_module` builds. The failure text is the whole chain: `EmbeddedSpecBundle` renders it once through
+  `shared::infrastructure::error_chain::display_chain` into `BundleUnavailable`'s pre-rendered text, which has no
+  `source()`, so `spec_bundle_failure(anyhow::Error::from(e))` prints it whole under `{:#}`; no hand-written renderer
+  was added. `should_keep_the_whole_chain_of_a_failed_extraction` (unchanged) and the `should_render_…_like_anyhow`
+  tests pin the text. The 5.2b sandbox run, repeated on the final commit with both binaries (`env -i`, a regular
+  file at `$SB/data/specs`), prints `error: could not extract the completion specs: creating $SB/data/specs: File
+  exists (os error 17)` from `setup --no-confirm` and `Failed to fix: creating $SB/data/specs: File exists (os error
+  17)` from `doctor`, byte for byte as the baseline binary does.
+- **History**: `f8e6055`'s subject reads `rtk make specs …` because the repo's RTK command hook rewrote a word
+  inside the `-m` string; later commits were written with `git commit -F`. Four subjects are over 72 characters:
+  `9ba2510`, `e1f1dd2` and `c2f0825` (73) and `843b6dc` (74). None was rewritten.
+- **Hand-offs** (details in the research's "Hand-off notes for later phases"):
+  - Phase 6:
+    - `CommandLineParser` is the `Parser` renamed, and `trait Host` is deleted: `host.load` becomes
+      `specs.find(loc, &SpecLookup)` (`None` means "try the next location"), and `host.call` becomes
+      `runtime.call(typed, Some(&generator), TIMEOUT)`. The parser tests' Mock becomes `InMemorySpecRepository` +
+      `InMemorySpecRuntime`; a test helper may wrap the JSON callbacks through `call_arguments`/`function_result`
+      (D2), so the test bodies stay the same. Completion may not import `fig_spec_mapper` (rule 3) and reads results
+      through the typed port only. `disableForCommands` stays in the repository.
+    - The engine's generator state machine leaves the JSON API. `GeneratorRun` returns
+      `StartCall(SpecFunctionCall, GeneratorContext)`, `StartExec(ExecRequest, GeneratorContext)`, `StartSleep(u64)`
+      or `Settle`, and the use case calls `read`, `read_exec_stdout` and `resolve_script`. A script's timeout is the
+      `let timeout = …` in `Engine::script_input` exactly: `script_timeout(settings)` (the f64 floor)
+      `.max(generator.script_timeout().unwrap_or(0)).max(request.timeout().unwrap_or(0))`, applied with
+      `ExecRequest::with_timeout` (new in 6.4) after `ScriptResolution::Ready` and before `start_exec`;
+      `cache_key_source` is still the text taken before any timeout is set. The engine's `script_input`/
+      `custom_result` readings, and its `exec_input::ExecInput` and `generator_context_json` imports, go with it.
+    - `GenCache` becomes `GeneratorCache<SpecValue>` and still stores raw pre-step values, which a step of another
+      kind may read (`Engine::fetch`, and the `self.cache.store` in `Engine::advance`). A malformed result must still
+      map to `[]`, never to a task error.
+    - `ApplyCompletionSettingsUseCase` runs the `EngineMsg::Settings` arm of `Engine::handle` in today's order, on
+      **every** Settings message: `apply_settings(&s)` (the runtime's i64 floor); replace the session's settings;
+      `forget_loaded_specs()`; reset the `ParsePrefixCache`, keeping `first`; reset the generator slots (slots, slot
+      arg, previous search term); clear the first-token cache.
+    - The f64 `script_timeout` moves to `GeneratorTriggerPolicy`. The single-token dotslash/`bin/console` rule moves
+      with `ParseCaches::parse` and never reuses `spec_location`.
+    - `EngineInbox` and its two tests (`wait_aborts_and_defers_on_complete`,
+      `should_deliver_a_runtime_event_read_by_the_engine_loop_to_the_runtime`) move unchanged to
+      `bootstrap/engine_server.rs` (`EngineMessage::Runtime(RuntimeEvent)`); everything is still built inside the
+      engine thread closure.
+    - The index build (`build_specs_module(&dependencies).install_spec_bundle.execute()`, then the adapter's
+      `load_index`, which ensures the bundle a second time) moves to `engine_server` with the same log line and
+      fallback, and the same `SharedDependencies` builds the repository's `EmbeddedSpecBundle`.
+    - `ApplySessionContextUseCase` takes over `session_update_refreshes_first_token_items` and the five Phase 4
+      engine tests on the session context, with their helpers `engine_with_wrapper_env`, `report_session_context`
+      and `parser_over`.
+    - Split `spec_identity_survives_dev_reload_and_cache_clear` (D6). `SpecIndex` exposes its completions in order,
+      and `SpecLocation::cache_key()` builds the prefix-cache key.
+  - Phases 8-9: `render::describe` goes to a dropdown domain service, with no new `terminal_session → specs` edge
+    (P3, open question 6). `GeneratorProcessReaper` is bridged to `process_executor::kill_live_children`.
+  - Phase 10: doctor still calls `build_specs_module` and `embedded_spec_bundle::version` directly. Diagnostics gets
+    the bundle version and the "installed" fact through `SystemFacts` or a port, and its `InstallSpecBundle` fix goes
+    through the `CheckFixer` bridge to `InstallSpecBundleUseCase`. Doctor's check path
+    (`ctx.data_root()/specs/<version>/index.json` in `doctor::setup_checks`, where `ctx` is Phase 4's
+    `IntegrationPaths`) and the fix's env-derived root stay as they are.
+  - Phase 11: `EngineMsg::Timer` is already gone, and `Parser::load_spec` goes with the parser in Phase 6.

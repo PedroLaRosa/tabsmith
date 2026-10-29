@@ -13,15 +13,16 @@ implementation session needs that the plan does not.
 | 2 settings | done | `52dcf85..c7b796e` |
 | 3 history | done | `a3953cf..f485ea7`, see [`phase-3-history.md`](phase-3-history.md) |
 | 4 shell_integration | done (also starts terminal_session's session context) | `6f38da1..ab7052b`, see [`phase-4-shell-integration.md`](phase-4-shell-integration.md) |
-| 5 specs | in progress, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5); runs 1-2 done, gate green at `e038e57` | from `1a466e2` (tag `phase5-start`), see [`phase-5-specs.md`](phase-5-specs.md) and [`handoff.md`](handoff.md) |
+| 5 specs | done, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5) | `1a466e2..d7079b9` (tag `phase5-start` at `1a466e2`), see [`phase-5-specs.md`](phase-5-specs.md) |
 | 6-11 | not started | |
 
-At `ab7052b`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 761 passed, 0 failed, 1 ignored (the
+At `d7079b9`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 851 passed, 0 failed, 1 ignored (the
 baseline was 283). clippy shows 3 warnings (baseline 3). The 131-command golden CLI capture is byte-identical to
-the baseline. The test lock has 0 baseline tests missing. 63 baseline tests are CHANGED, each one a reviewed
-restructuring (15 against the `phase4-start` tag, each in Phase 4's "Test moves" table). No test name is
-DUPLICATE (the settings copy in `delete_settings_use_case.rs` was renamed after Phase 4).
-`REGISTERED_MODULES` = `history`, `settings`, `shared`, `shell_integration` (terminal_session waits for Phase 9).
+the baseline. The test lock has 0 baseline tests missing. 104 baseline tests are CHANGED, each one a reviewed
+restructuring (46 against the `phase5-start` tag, each in Phase 5's "Test moves" table, which has 0 missing too).
+No test name is DUPLICATE, against either baseline.
+`REGISTERED_MODULES` = `history`, `settings`, `shared`, `shell_integration`, `specs` (terminal_session waits for
+Phase 9).
 
 ## Files here
 
@@ -34,7 +35,8 @@ DUPLICATE (the settings copy in `delete_settings_use_case.rs` was renamed after 
   - one skeptic per finding, who tries to refute it;
   - a fixer, then another review round, up to 3 rounds.
 - [`phase-5-specs.md`](phase-5-specs.md) and [`phase-5-specs.args.json`](phase-5-specs.args.json): Phase 5
-  research (decisions P1-P18), the 17 step briefs (`5.1a` … `5.5`) and their review notes, re-checked at `0a0a74e`.
+  research (decisions P1-P18, deviations 1-26), the 17 step briefs (`5.1a` … `5.5`) and their review notes,
+  re-checked at `0a0a74e`; it was run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5).
 - [`phase-4-shell-integration.md`](phase-4-shell-integration.md) and
   [`phase-4-shell-integration.args.json`](phase-4-shell-integration.args.json): Phase 4 research (decisions P1-P18,
   traps T1-T57), step briefs and launch arguments; it is run in three chunks (steps 1-8, 9-12b, 13-18).
