@@ -1,15 +1,12 @@
-//! Generators (triggers, cache, template listing) and first-token items (SPEC §6.6, §6.9). The rest of the
-//! suggestion pipeline lives in `completion::domain::services`.
-//! OWNER: engine agent (internal API; only `engine.rs` uses it). Everything here is pure (no JS); the engine
-//! resolves function triggers / `getQueryTerm`s and runs generators.
+//! Generator triggers and the generator result cache (SPEC §6.6.1, §6.6.5), until 6.4a moves them into
+//! `completion` and deletes this file. The rest of the suggestion pipeline lives in `completion`.
+//! OWNER: engine agent (internal API; only `engine.rs` uses it). Everything here is pure (no JS, no I/O); the
+//! engine resolves function triggers / `getQueryTerm`s and runs generators.
 use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
 use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
-use crate::completion::domain::value_objects::suggestion_candidate::SuggestionCandidate;
 use crate::completion::domain::value_objects::suggestion_query::after_sep;
-use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------------------------------------
 // Generators: triggers and cache (SPEC §6.6.1, §6.6.5)
@@ -124,88 +121,9 @@ impl GenCache {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------------
-// First token (SPEC §6.9)
-
-/// Root spec names: no `/`, or a scoped npm name `@scope/name`.
-fn is_root_spec(n: &str) -> bool {
-    match n.matches('/').count() {
-        0 => true,
-        1 => n.starts_with('@'),
-        _ => false,
-    }
-}
-
-#[cfg(unix)]
-fn exe_name(name: String, meta: &std::fs::Metadata, _pathext: Option<&str>) -> Option<String> {
-    use std::os::unix::fs::PermissionsExt;
-    (meta.permissions().mode() & 0o111 != 0).then_some(name)
-}
-
-#[cfg(not(unix))]
-fn exe_name(name: String, _meta: &std::fs::Metadata, pathext: Option<&str>) -> Option<String> {
-    let exts = pathext.unwrap_or(".COM;.EXE;.BAT;.CMD");
-    let (stem, ext) = name.rsplit_once('.')?;
-    exts.split(';')
-        .any(|e| e.trim_start_matches('.').eq_ignore_ascii_case(ext))
-        .then(|| stem.to_string())
-}
-
-fn executables(dir: &Path, pathext: Option<&str>) -> Vec<String> {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = rd
-        .flatten()
-        .filter_map(|e| {
-            let meta = std::fs::metadata(e.path()).ok().filter(|m| m.is_file())?;
-            exe_name(e.file_name().to_string_lossy().into_owned(), &meta, pathext)
-        })
-        .collect();
-    out.sort();
-    out
-}
-
-/// Spec names (priority 40) ∪ aliases (shortcut, priority 100) ∪ PATH executables (priority 40), deduped by name.
-pub fn first_token_items(
-    specs: &[String],
-    aliases: &HashMap<String, String>,
-    path: Option<&str>,
-    pathext: Option<&str>,
-) -> Vec<SuggestionCandidate> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    let mut push = |name: &str, kind: SuggestionKind, priority: f64, description: Option<&String>| {
-        if !name.is_empty() && seen.insert(name.to_string()) {
-            let mut s = SuggestionCandidate::new(name, kind);
-            s.priority = priority;
-            s.description = description.cloned();
-            out.push(s);
-        }
-    };
-    for n in specs.iter().filter(|n| is_root_spec(n)) {
-        push(n, SuggestionKind::Subcommand, 40.0, None);
-    }
-    let mut al: Vec<_> = aliases.iter().collect();
-    al.sort();
-    for (k, v) in al {
-        push(k, SuggestionKind::Shortcut, 100.0, Some(v));
-    }
-    for dir in path
-        .map(|p| std::env::split_paths(p).collect::<Vec<_>>())
-        .unwrap_or_default()
-    {
-        for exe in executables(&dir, pathext) {
-            push(&exe, SuggestionKind::Subcommand, 40.0, None);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use serde_json::json;
 
     #[test]
@@ -279,36 +197,5 @@ mod tests {
             "/w,git branch"
         );
         assert_eq!(cache_key(&swr, "/w", "git branch".into()), ",git branch");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn first_token_sources() {
-        use std::os::unix::fs::PermissionsExt;
-        let temp_dir = TempDir::new("path");
-        let d = temp_dir.path().to_path_buf();
-        for (f, mode) in [("mytool", 0o755), ("notexec", 0o644), ("git", 0o755)] {
-            std::fs::write(d.join(f), "").unwrap();
-            std::fs::set_permissions(d.join(f), std::fs::Permissions::from_mode(mode)).unwrap();
-        }
-        let specs = vec!["git".to_string(), "aws/s3".into(), "@scope/cli".into()];
-        let aliases: HashMap<String, String> =
-            [("gst".to_string(), "git status".to_string())].into();
-        let items = first_token_items(&specs, &aliases, d.to_str(), None);
-        let got: Vec<(&str, SuggestionKind, f64)> = items
-            .iter()
-            .map(|s| (s.first(), s.kind, s.priority))
-            .collect();
-        assert_eq!(
-            got,
-            [
-                ("git", SuggestionKind::Subcommand, 40.0),
-                ("@scope/cli", SuggestionKind::Subcommand, 40.0),
-                ("gst", SuggestionKind::Shortcut, 100.0),
-                ("mytool", SuggestionKind::Subcommand, 40.0)
-            ]
-        );
-        assert_eq!(items[2].description.as_deref(), Some("git status"));
-        std::fs::remove_dir_all(&d).unwrap();
     }
 }

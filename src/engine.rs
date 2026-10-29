@@ -14,8 +14,10 @@ use crate::completion::application::command_line_parser::CommandLineParser;
 use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::application::parse_context::ParseContext;
 use crate::completion::application::ports::directory_lister::DirectoryLister;
+use crate::completion::application::ports::executable_catalog::ExecutableCatalog;
 use crate::completion::domain::entities::parse_prefix_cache::ParsePrefixCache;
 use crate::completion::infrastructure::adapters::fs_directory_lister::FsDirectoryLister;
+use crate::completion::infrastructure::adapters::path_executable_catalog::PathExecutableCatalog;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
     AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
@@ -28,6 +30,7 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
+use crate::completion::domain::services::first_token_suggestions;
 use crate::completion::domain::services::history_suggestions;
 use crate::completion::domain::services::path_template;
 use crate::completion::domain::services::suggestion_assembler;
@@ -1114,11 +1117,11 @@ impl Engine {
                 return items.clone();
             }
         }
-        let items = suggest::first_token_items(
+        let executables = PathExecutableCatalog.executables(path.as_deref(), pathext.as_deref());
+        let items = first_token_suggestions::first_token_items(
             self.index.completions(),
             aliases,
-            path.as_deref(),
-            pathext.as_deref(),
+            &executables,
         );
         self.first_token_cache = Some((Instant::now(), items.clone()));
         items
