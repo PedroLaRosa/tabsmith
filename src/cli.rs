@@ -1,6 +1,7 @@
 //! Small user-facing commands: theme, inline, diagnostic, debug (SPEC §2.4–2.5, §2.10).
 //! OWNER: cli agent.
 use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
+use crate::pty::CompletionEngineStarter;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::services::settings_catalog::{
@@ -509,10 +510,10 @@ fn to_toml(sections: &[Section]) -> String {
 // ---------------------------------------------------------------------------------------------------------------
 // debug (SPEC §2.10)
 
-pub fn debug(cmd: DebugCmd) -> Result<i32> {
+pub fn debug(cmd: DebugCmd, start: CompletionEngineStarter) -> Result<i32> {
     match cmd {
         DebugCmd::KeyTester => key_tester(),
-        DebugCmd::Shell { shell } => debug_shell(shell.map(Into::into)),
+        DebugCmd::Shell { shell } => debug_shell(shell.map(Into::into), start),
         DebugCmd::Logs => debug_logs(),
     }
 }
@@ -558,7 +559,7 @@ fn key_tester() -> Result<i32> {
 }
 
 /// `_ pty` with only the post integration loaded.
-fn debug_shell(shell: Option<Shell>) -> Result<i32> {
+fn debug_shell(shell: Option<Shell>, start: CompletionEngineStarter) -> Result<i32> {
     let env_shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty());
     let shell = match shell {
         Some(s) => s,
@@ -584,7 +585,7 @@ fn debug_shell(shell: Option<Shell>) -> Result<i32> {
     // The wrapper passes the current env to the child.
     std::env::set_var("TABSMITH_DEBUG_SHELL", "1");
     let _ = writeln!(std::io::stdout(), "Starting tabsmith debug shell\n");
-    let code = crate::pty::run(Some(exe), cmd);
+    let code = crate::pty::run(Some(exe), cmd, start);
     let _ = std::fs::remove_dir_all(&dir);
     // The terminal may be gone (window closed): no panic, the shell's code still counts.
     let _ = writeln!(std::io::stdout(), "\nEnding tabsmith debug shell\n");
@@ -830,10 +831,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn debug_shell_survives_closed_terminal() {
+        use crate::bootstrap::channel_completion_engine::start_completion_engine;
         use portable_pty::{native_pty_system, CommandBuilder, PtySize};
         const NAME: &str = "cli::tests::debug_shell_survives_closed_terminal";
         if let Some(marker) = std::env::var_os("TABSMITH_TEST_DEBUG_SHELL") {
-            let code = debug_shell(Some(Shell::Bash));
+            let code = debug_shell(Some(Shell::Bash), start_completion_engine);
             std::fs::write(marker, format!("{code:?}")).unwrap();
             return;
         }

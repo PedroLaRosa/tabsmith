@@ -2,6 +2,7 @@
 //! commands that only need the root (`version`, `completion`) plus the error printer.
 
 use crate::bootstrap::bridges::SpecBundleBridge;
+use crate::bootstrap::channel_completion_engine::start_completion_engine;
 use crate::settings::infrastructure::cli::settings_command::{run_settings_command, SettingsArgs};
 use crate::settings::infrastructure::settings_module::build_settings_module;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
@@ -136,9 +137,9 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         }
         Some(Command::Diagnostic(a)) => cli::diagnostic(a),
         Some(Command::Completion(a)) => completion(a),
-        Some(Command::Debug(c)) => cli::debug(c),
+        Some(Command::Debug(c)) => cli::debug(c, start_completion_engine),
         Some(Command::Internal(c)) => match c {
-            InternalCmd::Pty { shell, cmd } => Ok(pty::run(shell, cmd)),
+            InternalCmd::Pty { shell, cmd } => Ok(pty::run(shell, cmd, start_completion_engine)),
             InternalCmd::ShouldLaunch => run_should_launch_command(&shell_integration_module()),
             InternalCmd::GetShell => run_get_shell_command(),
             InternalCmd::PreCmd { alias } => {

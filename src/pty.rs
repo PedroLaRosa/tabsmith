@@ -17,12 +17,13 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
+use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::types::{
-    EngineMsg, Model, Msg,
+    Model, Msg,
 };
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
@@ -33,6 +34,7 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use std::io::{IsTerminal, Read, Write};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -55,8 +57,11 @@ const PTY_CREDITS: usize = 4;
 /// After the child exits, wait this long for the rest of its output (PTY EOF) before leaving.
 const EXIT_GRACE: Duration = Duration::from_millis(200);
 
+/// Starts the completion engine, its replies going to the session's inbox; called once, inside `Session::start`.
+pub(crate) type CompletionEngineStarter = fn(Sender<Msg>, Settings) -> Rc<dyn CompletionEngine>;
+
 /// Run the wrapper; returns the exit code to exit with. Never leaves the user without a shell (fallback, SPEC §4.4).
-pub fn run(shell: Option<String>, cmd: Vec<String>) -> i32 {
+pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStarter) -> i32 {
     // Panics are logged, never printed over the user's screen; the session then falls back to a plain shell.
     std::panic::set_hook(Box::new(|info| logger::error(&format!("panic: {info}"))));
     let shell = shell
@@ -72,7 +77,7 @@ pub fn run(shell: Option<String>, cmd: Vec<String>) -> i32 {
     let argv = argv(shell.as_deref(), &cmd, login);
     let mut modes = None;
     let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        Session::start(&argv, &mut modes).map(Session::run)
+        Session::start(&argv, &mut modes, start).map(Session::run)
     }));
     let err = match res {
         Ok(Ok(code)) => return code,
@@ -338,7 +343,7 @@ fn write_stdout(b: &[u8]) {
 
 struct Session {
     rx: Receiver<Msg>,
-    engine: Sender<EngineMsg>,
+    engine: Rc<dyn CompletionEngine>,
     writer: Sender<Vec<u8>>,
     /// Returns PTY read credits to the reader thread (see `pump`).
     credits: SyncSender<()>,
@@ -402,7 +407,7 @@ struct Session {
 
 impl Session {
     /// SPEC §4.4 steps 1–9. `modes` receives the saved terminal modes as soon as they change.
-    fn start(argv: &[String], modes: &mut Option<sys::Modes>) -> Result<Session> {
+    fn start(argv: &[String], modes: &mut Option<sys::Modes>, start: CompletionEngineStarter) -> Result<Session> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             bail!("stdin/stdout is not a terminal");
         }
@@ -462,7 +467,7 @@ impl Session {
         let (menu, keymap) = (Menu::new(), Keymap::from_settings(&settings));
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;
-        let engine = crate::engine::spawn(tx.clone(), settings.clone());
+        let engine = start(tx.clone(), settings.clone());
 
         let pair = portable_pty::native_pty_system().openpty(PtySize {
             rows,
@@ -790,11 +795,10 @@ impl Session {
                 return;
             }
             Event::NewCmd(Some(_)) | Event::CommandEnded => {
-                let msg = match ev {
-                    Event::NewCmd(Some(h)) => EngineMsg::CommandFinished(h),
-                    _ => EngineMsg::CommandEnded, // NoHistory: the end-of-command reset, nothing recorded
-                };
-                let _ = self.engine.send(msg);
+                match ev {
+                    Event::NewCmd(Some(h)) => self.engine.command_finished(h),
+                    _ => self.engine.command_ended(), // NoHistory: the end-of-command reset, nothing recorded
+                }
                 self.menu.error_reset();
                 self.sent = None;
                 self.poll_files();
@@ -872,7 +876,7 @@ impl Session {
             shell: self.shell(),
             history_mode: self.menu.history_mode(),
         };
-        let _ = self.engine.send(EngineMsg::Complete(req));
+        self.engine.complete(req);
     }
 
     fn on_completion(&mut self, c: CompletionResult) {
@@ -1137,7 +1141,7 @@ impl Session {
                     Effect::Bell => self.emit(b"\x07"),
                     Effect::Rerequest => rerequest = true,
                     Effect::ToggleFuzzy => {
-                        let _ = self.engine.send(EngineMsg::ToggleFuzzy);
+                        self.engine.toggle_fuzzy_search();
                         rerequest = true;
                     }
                 }
@@ -1183,7 +1187,7 @@ impl Session {
         let now = Instant::now();
         self.lock = Some((now + INSERT_LOCK, now + LOCK_CAP, expected, before));
         if let Some((cmd, name)) = record {
-            let _ = self.engine.send(EngineMsg::RecordInsert { cmd, name });
+            self.engine.record_insertion(cmd, name);
         }
     }
 
@@ -1241,13 +1245,7 @@ impl Session {
             self.llm_at = None;
             if let Some((buffer, _)) = self.sent.clone() {
                 self.llm_req = self.req;
-                let msg = EngineMsg::Llm {
-                    req: self.req,
-                    buffer,
-                    cwd: self.cwd(),
-                    shell: self.shell(),
-                };
-                let _ = self.engine.send(msg);
+                self.engine.request_llm_ghost_text(self.req, buffer, self.cwd(), self.shell());
             }
         }
         if due(self.spinner_at) {
@@ -1285,10 +1283,8 @@ impl Session {
                 .as_ref()
                 .and_then(|id| self.session_contexts.find(id))
             {
-                let _ = self.engine.send(EngineMsg::Session {
-                    env: ctx.env().clone(),
-                    alias: ctx.alias().map(str::to_owned),
-                });
+                self.engine
+                    .apply_session_context(ctx.env().clone(), ctx.alias().map(str::to_owned));
             }
         }
         let m = self.settings_repository.last_modified();
@@ -1300,7 +1296,7 @@ impl Session {
         self.keymap = Keymap::from_settings(&self.settings);
         self.renderer
             .set_theme(Theme::from_settings(&self.settings, self.terminal_bg));
-        let _ = self.engine.send(EngineMsg::Settings(self.settings.clone()));
+        self.engine.apply_settings(self.settings.clone());
         true
     }
 
@@ -1309,7 +1305,7 @@ impl Session {
         let mut out = self.renderer.take_clear();
         out.extend_from_slice(b"\x1b[0m\x1b[?25h");
         self.emit(&out);
-        let _ = self.engine.send(EngineMsg::Shutdown);
+        self.engine.shut_down();
         crate::specs::infrastructure::adapters::process_executor::kill_live_children(); // Windows has no atexit hook for running generators
         self.modes.restore();
         if let Some(id) = &self.session_id {
@@ -1798,6 +1794,7 @@ mod tests {
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
+    use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
     use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
     use alacritty_terminal::event::VoidListener;
@@ -1820,7 +1817,7 @@ mod tests {
         tracker.defer = false;
         let s = Session {
             rx: mpsc::channel().1,
-            engine: mpsc::channel().0,
+            engine: Rc::new(RecordingCompletionEngine::new(mpsc::channel().0)),
             writer,
             credits: mpsc::sync_channel(PTY_CREDITS).0,
             master: None,
@@ -2251,7 +2248,7 @@ mod tests {
         // it builds, not the transient prompt (p10k, oh-my-posh) redrawn without markers in front of it.
         let (mut s, _) = session("{}");
         let (tx, rx) = mpsc::channel();
-        s.engine = tx;
+        s.engine = Rc::new(RecordingCompletionEngine::new(tx));
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         s.tracker.submitted = Some("stale".into());
@@ -2267,7 +2264,7 @@ mod tests {
         let done: Vec<_> = rx
             .try_iter()
             .filter_map(|m| {
-                if let EngineMsg::CommandFinished(h) = m {
+                if let CompletionEngineCall::CommandFinished(h) = m {
                     Some(h.command().to_string())
                 } else {
                     None
@@ -2304,16 +2301,16 @@ mod tests {
         // r3-nohistory-skips-command-finish: the engine's end-of-command reset runs; nothing is recorded.
         let (mut s, _) = session("{}");
         let (tx, rx) = mpsc::channel();
-        s.engine = tx;
+        s.engine = Rc::new(RecordingCompletionEngine::new(tx));
         prompt(&mut s, " git branch -D fe");
         s.on_output(b"\r\n\x1b]697;NoHistory\x07\x1b]697;PreExec\x07Deleted branch\r\n");
         prompt(&mut s, "");
         let msgs: Vec<_> = rx
             .try_iter()
-            .filter(|m| !matches!(m, EngineMsg::Complete(_)))
+            .filter(|m| !matches!(m, CompletionEngineCall::Complete(_)))
             .collect();
         assert!(
-            matches!(&msgs[..], [EngineMsg::CommandEnded]),
+            matches!(&msgs[..], [CompletionEngineCall::CommandEnded]),
             "{}",
             msgs.len()
         );
@@ -2381,10 +2378,10 @@ mod tests {
     use std::collections::HashMap;
 
     /// A session reading its context from `<temp>/run/abc.json`, and what it sends the engine.
-    fn session_reading_context_in(temp_dir: &TempDir) -> (Session, Receiver<EngineMsg>) {
+    fn session_reading_context_in(temp_dir: &TempDir) -> (Session, Receiver<CompletionEngineCall>) {
         let (mut s, _) = session("{}");
         let (engine, sent_to_engine) = mpsc::channel();
-        s.engine = engine;
+        s.engine = Rc::new(RecordingCompletionEngine::new(engine));
         s.session_id = SessionId::new("abc".to_string()).ok();
         s.session_contexts = Box::new(FileSessionContextRepository::new(DataDirectory::new(
             Some(temp_dir.path().to_path_buf()),
@@ -2405,11 +2402,11 @@ mod tests {
             .unwrap();
     }
 
-    fn contexts_sent(sent_to_engine: &Receiver<EngineMsg>) -> Vec<(HashMap<String, String>, Option<String>)> {
+    fn contexts_sent(sent_to_engine: &Receiver<CompletionEngineCall>) -> Vec<(HashMap<String, String>, Option<String>)> {
         sent_to_engine
             .try_iter()
             .map(|m| match m {
-                EngineMsg::Session { env, alias } => (env, alias),
+                CompletionEngineCall::ApplySessionContext { env, alias } => (env, alias),
                 _ => panic!("only session contexts are sent"),
             })
             .collect()
