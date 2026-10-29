@@ -5,4 +5,7 @@ pub(crate) enum CompletionNotice {
     GenerateSpecFailed(String),
     /// A generator run failed (also a superseded or background one): the failure text, logged at debug.
     GeneratorFailed(String),
+    /// The command under the cursor has nothing to suggest (no spec, a spec that cannot parse it): the parser's text,
+    /// logged at debug.
+    NoSuggestions(String),
 }

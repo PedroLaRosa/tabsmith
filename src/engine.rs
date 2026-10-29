@@ -224,6 +224,7 @@ fn log_completion_notice(notice: CompletionNotice) {
     match notice {
         CompletionNotice::GenerateSpecFailed(line) => logger::warn(&line),
         CompletionNotice::GeneratorFailed(e) => logger::debug(&format!("engine: generator failed: {e}")),
+        CompletionNotice::NoSuggestions(e) => logger::debug(&format!("engine: no suggestions: {e}")),
     }
 }
 
