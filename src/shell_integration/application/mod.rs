@@ -1,3 +1,4 @@
+pub(crate) mod decide_launch_use_case;
 pub(crate) mod get_integration_status_use_case;
 pub(crate) mod install_integrations_use_case;
 pub(crate) mod integration_failure;
