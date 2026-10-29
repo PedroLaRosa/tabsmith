@@ -51,6 +51,13 @@ pub(crate) fn effective_debounce(debounce: Option<u64>) -> Option<u64> {
     debounce.map(|ms| if ms > 0 { ms } else { 200 })
 }
 
+/// A run's whole deadline in ms: its debounce, twice the larger of the floor and the generator's own script timeout,
+/// and a second.
+/// ponytail: plain `+`/`*`, so a huge `scriptTimeout` overflows as it always did (GEN-GT9).
+pub(crate) fn run_budget(debounce: Option<u64>, floor: u64, generator_timeout: Option<u64>) -> u64 {
+    debounce.unwrap_or(0) + 2 * floor.max(generator_timeout.unwrap_or(0)) + 1000
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +113,14 @@ mod tests {
         let effective = debounces.map(effective_debounce);
 
         assert_eq!(effective, [Some(200), Some(350), None]);
+    }
+
+    #[test]
+    fn should_budget_a_run_for_its_debounce_twice_its_script_timeout_and_a_second() {
+        let runs = [(Some(200), 5000, Some(7000)), (None, 5000, None), (None, 5000, Some(10))];
+
+        let budgets = runs.map(|(debounce, floor, timeout)| run_budget(debounce, floor, timeout));
+
+        assert_eq!(budgets, [15200, 11000, 11000]);
     }
 }
