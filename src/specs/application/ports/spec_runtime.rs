@@ -73,6 +73,7 @@ pub(crate) struct InMemorySpecRuntime {
     calls: RefCell<Vec<SpecFunctionCall>>,
     completions: HashMap<SpecFunctionRef, TaskOutcome>,
     exec_completion: Option<TaskOutcome>,
+    sleeps_finish: bool,
     /// The tasks it knows: `None` while one runs, the outcome a finished one gives.
     tasks: RefCell<HashMap<TaskId, Option<TaskOutcome>>>,
     next_task: Cell<TaskId>,
@@ -101,6 +102,12 @@ impl InMemorySpecRuntime {
         self
     }
 
+    /// Every sleep started finishes with null.
+    pub(crate) fn finishing_sleeps(mut self) -> Self {
+        self.sleeps_finish = true;
+        self
+    }
+
     /// The calls received so far, in order.
     pub(crate) fn calls(&self) -> Vec<SpecFunctionCall> {
         self.calls.borrow().clone()
@@ -125,7 +132,7 @@ impl SpecRuntime for InMemorySpecRuntime {
     }
 
     fn start_sleep(&self, _ms: u64) -> TaskId {
-        self.start_task(None)
+        self.start_task(self.sleeps_finish.then_some(Ok(SpecValue::Null)))
     }
 
     fn wait(
@@ -322,5 +329,15 @@ mod tests {
         let outcomes = runtime.wait(&tasks, Instant::now());
 
         assert_eq!(outcomes, Ok(vec![Some(Ok(output.clone())), Some(Ok(output))]));
+    }
+
+    #[test]
+    fn should_finish_a_sleep_with_null() {
+        let runtime = InMemorySpecRuntime::default().finishing_sleeps();
+        let debounce = runtime.start_sleep(100);
+
+        let outcomes = runtime.wait(&[debounce], Instant::now());
+
+        assert_eq!(outcomes, Ok(vec![Some(Ok(SpecValue::Null))]));
     }
 }
