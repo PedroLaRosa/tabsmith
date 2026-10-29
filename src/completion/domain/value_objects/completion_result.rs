@@ -160,7 +160,6 @@ impl CompletionResult {
         &self.triggered_generators
     }
 
-    #[cfg(test)]
     pub(crate) fn suggestions(&self) -> &[Suggestion] {
         &self.items
     }

@@ -10,66 +10,36 @@ use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::application::ports::clock::Clock;
-use crate::completion::domain::completion_error::CompletionError;
-use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
 use crate::completion::application::apply_completion_settings_use_case::ApplyCompletionSettingsUseCase;
 use crate::completion::application::apply_session_context_use_case::ApplySessionContextUseCase;
 use crate::completion::application::command_line_parser::CommandLineParser;
+use crate::completion::application::complete_command_line_use_case::CompleteCommandLineUseCase;
 use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::application::generator_runner::GeneratorRunner;
-use crate::completion::application::parse_context::ParseContext;
 use crate::completion::application::record_suggestion_insertion_use_case::RecordSuggestionInsertionUseCase;
 use crate::completion::application::reset_generators_use_case::ResetGeneratorsUseCase;
 use crate::completion::application::toggle_fuzzy_search_use_case::ToggleFuzzySearchUseCase;
-use crate::completion::application::ports::executable_catalog::ExecutableCatalog;
 use crate::completion::domain::entities::completion_session::CompletionSession;
 use crate::completion::domain::repositories::recency_repository::RecencyRepository;
 use crate::completion::infrastructure::adapters::fs_directory_lister::FsDirectoryLister;
 use crate::completion::infrastructure::adapters::path_executable_catalog::PathExecutableCatalog;
 use crate::completion::infrastructure::adapters::state_file_recency_repository::StateFileRecencyRepository;
-use crate::settings::domain::services::settings_catalog::{
-    AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
-    AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
-    AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE, AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS,
-    AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
-    AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS, AUTOCOMPLETE_SORT_METHOD,
-    BETA_HISTORY_MODE, INLINE_ENABLED, INLINE_HISTORY_COUNT,
-};
+use crate::settings::domain::services::settings_catalog::{INLINE_ENABLED, INLINE_HISTORY_COUNT};
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::application::completion_request::CompletionRequest;
-use crate::completion::domain::services::command_line_tokenizer;
-use crate::completion::domain::services::first_token_suggestions;
-use crate::completion::domain::services::generator_trigger_policy::{is_path_template, SYNC_CALL};
-use crate::completion::domain::services::history_suggestions;
-use crate::completion::domain::services::suggestion_assembler;
-use crate::completion::domain::services::suggestion_finalizer;
-use crate::completion::domain::services::suggestion_ranker;
-use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
+use crate::completion::domain::services::completion_result_builder::build_completion_result;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
-use crate::completion::domain::value_objects::completion_result::{CompletionResult, CompletionResultParts};
-use crate::completion::domain::value_objects::generator_key::argument_key;
-use crate::completion::domain::value_objects::suggestion::Suggestion;
+use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
 use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
-use crate::specs::domain::spec_error::SpecError;
-use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
-use crate::specs::domain::value_objects::generator_context::GeneratorContext;
-use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
-use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
-use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
 use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::completion::domain::value_objects::filter_options::FilterOptions;
-use crate::completion::domain::value_objects::insertion_context::InsertionContext;
-use crate::completion::domain::value_objects::served_request::{ServedRequest, ServedRequestParts};
-use crate::completion::domain::value_objects::suggestion_candidate::SuggestionCandidate;
-use crate::completion::domain::value_objects::suggestion_query::SuggestionQuery;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::history::domain::repositories::history_repository::HistoryRepository;
@@ -79,12 +49,12 @@ use crate::types::{
     EngineMsg, Msg,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
 /// Returns the engine's inbox. The thread exits on `EngineMsg::Shutdown` or when all senders are dropped.
@@ -200,20 +170,6 @@ impl RuntimeEventSource for EngineInbox {
     }
 }
 
-fn env_var(env: &HashMap<String, String>, key: &str) -> Option<String> {
-    env.get(key)
-        .or_else(|| {
-            if cfg!(windows) {
-                env.iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
-                    .map(|(_, v)| v)
-            } else {
-                None
-            }
-        })
-        .cloned()
-}
-
 /// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
 fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
     inline::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
@@ -230,8 +186,6 @@ fn log_completion_notice(notice: CompletionNotice) {
 
 struct Engine {
     tx: Sender<Msg>,
-    command_line_parser: Rc<CommandLineParser>,
-    index: SpecIndex,
     history: Rc<dyn HistoryRepository>,
     record_command: RecordCommandUseCase,
     recency_repository: Rc<dyn RecencyRepository>,
@@ -239,6 +193,7 @@ struct Engine {
     generators: Rc<GeneratorRunner>,
     apply_completion_settings: ApplyCompletionSettingsUseCase,
     record_suggestion_insertion: RecordSuggestionInsertionUseCase,
+    complete_command_line: CompleteCommandLineUseCase,
     session: CompletionSession,
 }
 
@@ -290,11 +245,18 @@ impl Engine {
         let command_line_parser = Rc::new(command_line_parser);
         let apply_completion_settings = ApplyCompletionSettingsUseCase::new(runtime.clone(), command_line_parser.clone());
         let record_suggestion_insertion = RecordSuggestionInsertionUseCase::new(recency_repository.clone(), clock.clone());
-        let generators = Rc::new(GeneratorRunner::new(runtime, Rc::new(FsDirectoryLister), clock));
+        let generators = Rc::new(GeneratorRunner::new(runtime.clone(), Rc::new(FsDirectoryLister), clock.clone()));
+        let complete_command_line = CompleteCommandLineUseCase::new(
+            command_line_parser,
+            runtime,
+            generators.clone(),
+            Rc::new(PathExecutableCatalog),
+            history.clone(),
+            clock,
+            index,
+        );
         Engine {
             tx,
-            command_line_parser,
-            index,
             history,
             record_command,
             recency_repository,
@@ -302,6 +264,7 @@ impl Engine {
             generators,
             apply_completion_settings,
             record_suggestion_insertion,
+            complete_command_line,
             session: CompletionSession::new(settings, std::env::vars().collect(), recency),
         }
     }
@@ -326,8 +289,10 @@ impl Engine {
                 }
             }
             if let Some(req) = pending.take() {
-                if let Some(c) = self.compute(&req, js) {
-                    let _ = self.tx.send(Msg::Completion(Box::new(c)));
+                if let Some(result) =
+                    self.complete_command_line.execute(&mut self.session, &req, &mut |n| log_completion_notice(n))
+                {
+                    self.send_reply(result);
                 }
                 continue;
             }
@@ -369,163 +334,6 @@ impl Engine {
     }
 
     // -----------------------------------------------------------------------------------------------------
-    // Requests
-
-    /// Phase-Parse reply for `req`; `None` when a newer request aborted it (it is kept in the engine inbox).
-    fn compute(&mut self, req: &CompletionRequest, js: &QuickJsSpecRuntime) -> Option<CompletionResult> {
-        let cursor = req.cursor.min(req.buffer.len());
-        // SPEC §6.1.5 mid-word guard
-        if !req.buffer.is_char_boundary(cursor)
-            || req.buffer[cursor..]
-                .chars()
-                .next()
-                .is_some_and(|c| !c.is_whitespace())
-        {
-            return Some(self.error(req, cursor, false));
-        }
-        let before = &req.buffer[..cursor];
-        let aliases = self.session.alias_map(req.shell);
-        let Some(cmd) = command_line_tokenizer::current_command(before, req.shell, &aliases) else {
-            return Some(self.error(req, cursor, true));
-        };
-        let (cache, settings, env) = self.session.parse_inputs();
-        let pctx = ParseContext {
-            cwd: &req.cwd,
-            settings,
-            env,
-            shell: req.shell,
-            index: &self.index,
-        };
-        let pr = match self.command_line_parser.parse(
-            cache,
-            &cmd,
-            &pctx,
-            &mut |notice| log_completion_notice(notice),
-        ) {
-            Ok(pr) => pr,
-            Err(CompletionError::Aborted) => return None,
-            Err(CompletionError::NoSuggestions(e)) => {
-                logger::debug(&format!("engine: no suggestions: {e}"));
-                return Some(self.error(req, cursor, true));
-            }
-        };
-        let arg = pr.current_arg().clone();
-        let arg_key = argument_key(arg.as_ref(), pr.completion());
-        self.session.enter_argument(arg_key);
-        let strategy = arg
-            .as_ref()
-            .map_or(pr.completion().filter_strategy(), |a| a.filter_strategy());
-        let fuzzy = match strategy {
-            FilterStrategy::Prefix => false,
-            FilterStrategy::Fuzzy => true,
-            FilterStrategy::Default => self.session.user_fuzzy(),
-        };
-        let env = self.session.env();
-        let ctx = GeneratorContext::new(
-            req.cwd.to_string_lossy().into_owned(),
-            env.clone(),
-            req.shell.name().into(),
-            pr.search_term().to_string(),
-            arg.as_ref().is_some_and(|a| a.is_dangerous()),
-        );
-        let (path, pathext) = (env_var(env, "PATH"), env_var(env, "PATHEXT"));
-        let queries = self.queries(&pr, req.shell, js)?;
-        let tokens = pr
-            .tokens()
-            .get(pr.command_index()..)
-            .unwrap_or_default()
-            .to_vec();
-        let triggered = self.generators.trigger(&mut self.session, &pr, &ctx, &tokens, &mut |n| log_completion_notice(n))?;
-        let first = if pr.first_token()
-            && self.session.settings().bool(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION)
-        {
-            self.first_token_items(&aliases, path, pathext)
-        } else {
-            Vec::new()
-        };
-        let prefix = before
-            .strip_suffix(pr.raw_last_token())
-            .unwrap_or(before)
-            .to_string();
-        self.session.serve(ServedRequest::new(ServedRequestParts {
-            request_id: req.id,
-            buffer: req.buffer.clone(),
-            shell: req.shell,
-            history_mode: req.history_mode,
-            cursor,
-            parsed: pr,
-            command_text: cmd.original_text().to_string(),
-            argument_key: arg_key,
-            fuzzy,
-            queries,
-            triggered_generators: triggered,
-            first_token_candidates: first,
-            history_prefix: prefix,
-        }));
-        Some(self.reply(CompletionPhase::Parse))
-    }
-
-    /// Error reply (menu error-reset). Generator state is reset on errors too.
-    fn error(&mut self, req: &CompletionRequest, cursor: usize, ghost: bool) -> CompletionResult {
-        self.session.reset_generator_slots();
-        self.session.forget_served_request();
-        let mut c = CompletionResult::error(req.id, req.buffer.clone(), cursor);
-        if ghost {
-            c = c.with_ghost(self.ghost(&req.buffer, cursor, None));
-        }
-        c
-    }
-
-    /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
-    fn queries(&self, pr: &ParsedCommandLine, shell: Shell, js: &dyn SpecRuntime) -> Option<Vec<SuggestionQuery>> {
-        let Some(arg) = pr.current_arg() else {
-            return Some(Vec::new());
-        };
-        let mut out = Vec::with_capacity(arg.generators().len());
-        for g in arg.generators() {
-            out.push(if is_path_template(g) {
-                SuggestionQuery::Path {
-                    backslash: shell == Shell::Pwsh,
-                }
-            } else {
-                match g.get_query_term() {
-                    None => SuggestionQuery::Term,
-                    Some(TextOrFunction::Str(s)) => SuggestionQuery::Str(s.clone()),
-                    Some(TextOrFunction::Fn(f)) => match js.call(
-                        SpecFunctionCall::QueryTerm {
-                            function: *f,
-                            search_term: pr.search_term().to_string(),
-                        },
-                        None,
-                        SYNC_CALL,
-                    ) {
-                        Ok(SpecFunctionResult::QueryTerm(Some(s))) => SuggestionQuery::Value(s),
-                        Err(SpecError::Aborted) => return None,
-                        Ok(
-                            SpecFunctionResult::QueryTerm(None)
-                            | SpecFunctionResult::Trigger(_)
-                            | SpecFunctionResult::Alias(_)
-                            | SpecFunctionResult::LoadSpec(_)
-                            | SpecFunctionResult::GenerateSpecCacheKey(_)
-                            | SpecFunctionResult::GenerateSpec(_)
-                            | SpecFunctionResult::Script(_)
-                            | SpecFunctionResult::Custom(_)
-                            | SpecFunctionResult::PostProcess(_)
-                            | SpecFunctionResult::FilterTemplateSuggestions(_),
-                        )
-                        | Err(
-                            SpecError::Timeout
-                            | SpecError::Invalid(_)
-                            | SpecError::BundleUnavailable(_),
-                        ) => SuggestionQuery::Value(pr.search_term().to_string()), // error → search term
-                    },
-                }
-            });
-        }
-        Some(out)
-    }
-
-    // -----------------------------------------------------------------------------------------------------
     // Generator runs (SPEC §6.6.2–6.6.5)
 
     /// Wait (one slice) on every running generator task; reply again when a current slot changed.
@@ -533,111 +341,29 @@ impl Engine {
         if self.generators.progress(&mut self.session, &mut |n| log_completion_notice(n)) == Some(true)
             && self.session.served().is_some()
         {
-            let _ = self
-                .tx
-                .send(Msg::Completion(Box::new(self.reply(CompletionPhase::Generators))));
+            self.send_reply(build_completion_result(&self.session, CompletionPhase::Generators, &self.history.recent()));
         }
     }
 
     // -----------------------------------------------------------------------------------------------------
     // Replies
 
-    fn first_token_items(
-        &mut self,
-        aliases: &HashMap<String, String>,
-        path: Option<String>,
-        pathext: Option<String>,
-    ) -> Vec<SuggestionCandidate> {
-        self.session.first_token_suggestions(&Instant::now, || {
-            let executables = PathExecutableCatalog.executables(path.as_deref(), pathext.as_deref());
-            first_token_suggestions::first_token_items(
-                self.index.completions(),
-                aliases,
-                &executables,
-            )
-        })
+    /// The one place a completion result is sent: with the local ghost text for its buffer (Q15).
+    fn send_reply(&self, result: CompletionResult) {
+        let ghost = self.local_ghost_text(&result);
+        let _ = self.tx.send(Msg::Completion(Box::new(result.with_ghost(ghost))));
     }
 
-    /// Rank the current request's suggestions (SPEC §6.7.5) into a reply.
-    fn reply(&self, phase: CompletionPhase) -> CompletionResult {
-        let served = self.session.served().expect("reply without a current request");
-        let (pr, s) = (served.parsed(), self.session.settings());
-        let mut list = if pr.first_token() {
-            served.first_token_candidates().clone()
-        } else {
-            let views = self.session.slot_views(served.queries());
-            suggestion_assembler::assemble(pr, &views)
-        };
-        let mode = s.string(BETA_HISTORY_MODE).unwrap_or_default();
-        if served.history_mode() || mode == "show" || mode == "history_only" {
-            let hist = history_suggestions::history_rows(served.history_prefix(), &self.history.recent());
-            list = history_suggestions::mix_history(list, hist, mode == "show" && !served.history_mode());
-        }
-        let fo = FilterOptions::default()
-            .with_fuzzy(served.fuzzy())
-            .with_auto_exec_hidden(
-                s.bool(AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION) || s.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
-            )
-            .with_exec_after_space(s.bool(AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE))
-            .with_run_dangerous(s.bool(AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS))
-            .with_suggest_current_token(
-                pr.current_arg()
-                    .as_ref()
-                    .and_then(|a| a.suggest_current_token())
-                    .unwrap_or_else(|| s.bool(AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN)),
-            );
-        let cmd = pr.tokens().get(pr.command_index()).map_or("", String::as_str); // D21
-        let use_recency = s.string(AUTOCOMPLETE_SORT_METHOD) != Some("alphabetical");
-        let map = Some(self.session.recency()).filter(|_| use_recency).and_then(|r| r.of_command(cmd));
-        let ranked = suggestion_ranker::rank(list, pr.search_term(), map, &fo);
-        let ic = InsertionContext::new(pr.search_term(), pr.raw_last_token(), served.shell())
-            .with_fuzzy(served.fuzzy())
-            .with_prefer_verbose(s.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS))
-            .with_insert_space(s.bool(AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY));
-        let items: Vec<Suggestion> = ranked
-            .into_iter()
-            .map(|(x, p)| suggestion_finalizer::to_item(x, p, &ic))
-            .collect();
-        let ghost = self.ghost(served.buffer(), served.cursor(), Some(&items));
-        CompletionResult::new(CompletionResultParts {
-            req: served.request_id(),
-            phase,
-            error: false,
-            buffer: served.buffer().to_string(),
-            cursor: served.cursor(),
-            tokens: pr.tokens().clone(),
-            command_text: served.command_text().to_string(),
-            command_index: pr.command_index(),
-            arg_key: served.argument_key(),
-            current_arg: pr.current_arg().as_ref().map(|a| {
-                ArgumentHint::new(
-                    a.name().clone().unwrap_or_default(),
-                    a.description().clone().unwrap_or_default(),
-                )
-            }),
-            search_term: pr.search_term().to_string(),
-            triggered_generators: if phase == CompletionPhase::Parse {
-                served.triggered_generators().clone()
-            } else {
-                Vec::new()
-            },
-            items,
-            loading: self.session.any_slot_loading(),
-            ghost,
-            fuzzy: served.fuzzy(),
-        })
-    }
-
-    /// Local inline ghost (SPEC §6.11). Also computed for parse-error replies (commands without a spec).
-    fn ghost(&self, buffer: &str, cursor: usize, items: Option<&[Suggestion]>) -> Option<String> {
+    /// Local inline ghost (SPEC §6.11) of a reply; error replies (commands without a spec) get one too.
+    fn local_ghost_text(&self, result: &CompletionResult) -> Option<String> {
         if !self.session.settings().bool(INLINE_ENABLED)
-            || buffer.is_empty()
-            || cursor != buffer.len()
+            || result.buffer().is_empty()
+            || result.cursor() != result.buffer().len()
         {
             return None;
         }
-        let history = || inline::history_ghost(&self.history.recent(), buffer);
-        let specs = || items.and_then(inline::spec_ghost);
+        let history = || inline::history_ghost(&self.history.recent(), result.buffer());
+        let specs = || inline::spec_ghost(result.suggestions());
         match inline::source(self.session.settings()) {
             Ok(Source::Specs) => specs(),
             Ok(Source::History) | Ok(Source::Profile(_)) => history(),
@@ -693,7 +419,11 @@ mod tests {
     use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
     use crate::specs::domain::value_objects::process_output::ProcessOutput;
     use crate::specs::domain::value_objects::exec_request::ExecRequest;
+    use crate::specs::domain::spec_error::SpecError;
+    use crate::specs::domain::value_objects::generator_context::GeneratorContext;
     use serde_json::{json, Value};
+    use std::collections::HashMap;
+    use std::time::Instant;
 
     #[test]
     fn llm_history_honours_history_count() {
