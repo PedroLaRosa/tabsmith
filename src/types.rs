@@ -1,4 +1,5 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
+use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
@@ -8,19 +9,6 @@ use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-/// Bytes-level description of an insertion (SPEC §6.8, §7.3). Counts are in chars.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Insertion {
-    /// Chars to delete before the cursor (sent as 0x7f each).
-    pub delete: usize,
-    /// Text to type (no trailing "\n"; `{cursor}` already removed).
-    pub text: String,
-    /// Chars to move the cursor left after typing (`ESC [ D` each).
-    pub cursor_back: usize,
-    /// Send "\r" afterwards.
-    pub execute: bool,
-}
 
 /// Identity of a generator (hash of arg identity + generator index).
 pub type GenKey = u64;

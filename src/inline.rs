@@ -506,7 +506,7 @@ fn expand(arg: &str, env: &HashMap<String, String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Insertion;
+    use crate::completion::domain::value_objects::insertion::Insertion;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;

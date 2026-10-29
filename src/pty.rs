@@ -17,8 +17,9 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
+use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::types::{
-    Completion, EngineMsg, Insertion, Model, Msg, Phase, Request,
+    Completion, EngineMsg, Model, Msg, Phase, Request,
 };
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;

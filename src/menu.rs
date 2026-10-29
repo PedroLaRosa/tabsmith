@@ -7,7 +7,8 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_SCROLL_WRAP_AROUND,
 };
 use crate::settings::domain::value_objects::settings::Settings;
-use crate::types::{ArgInfo, Completion, GenKey, Insertion, Item, Phase};
+use crate::completion::domain::value_objects::insertion::Insertion;
+use crate::types::{ArgInfo, Completion, GenKey, Item, Phase};
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
 
