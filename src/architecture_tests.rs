@@ -331,10 +331,13 @@ fn is_a_legacy_module(path: &[&str]) -> bool {
 // ponytail: macro names only. std is allowed, so output through a `std::io` handle (`writeln!(std::io::stderr(),
 // ..)`, `stdout().write_all(..)`) passes; flag `io::stdout`/`io::stderr` paths if domain or application writes one.
 fn writes_output(code: &str) -> bool {
-    code.split_inclusive(|c: char| !is_path_char(c)).any(|piece| {
-        let name = piece.strip_suffix('!').map(|path| path.rsplit("::").next().unwrap_or(path));
-        matches!(name, Some("print" | "println" | "eprint" | "eprintln" | "dbg"))
-    })
+    macro_names(code).any(|name| matches!(name, "print" | "println" | "eprint" | "eprintln" | "dbg"))
+}
+
+/// The name of every macro `code` calls, without its path (`std::println!` is `println`).
+fn macro_names(code: &str) -> impl Iterator<Item = &str> {
+    let calls = code.split_inclusive(|c: char| !is_path_char(c)).filter_map(|piece| piece.strip_suffix('!'));
+    calls.map(|path| path.rsplit("::").next().unwrap_or(path))
 }
 
 /// Nothing depends on bootstrap (plan section 2). Rules 1-2 already report it from domain and application files.
@@ -384,11 +387,7 @@ fn only_declares_children(code: &str) -> bool {
 
 /// `#[path = ..]` and `include!` compile a file the rules never read into the module.
 fn splices_in_unread_code(code: &str) -> bool {
-    code.contains("#[path")
-        || code.split_inclusive(|c: char| !is_path_char(c)).any(|piece| {
-            let name = piece.strip_suffix('!').map(|path| path.rsplit("::").next().unwrap_or(path));
-            name == Some("include")
-        })
+    code.contains("#[path") || macro_names(code).any(|name| name == "include")
 }
 
 /// The lines of `main_rs` every module would see as `crate::<name>`, a path rules 1-3 cannot read as the shared
