@@ -238,6 +238,101 @@ fn cli_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DISABLE_FOR_COMMANDS;
+    use crate::settings::domain::value_objects::setting_value::SettingValue;
+    use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use crate::specs::domain::value_objects::spec_index::SpecIndex;
+
+    const MK: &str = r#"var s={name:"mk",args:{name:"t"}};export{s as default};"#;
+
+    /// A repository over a fresh runtime, with the bundle this process's env names.
+    fn repository() -> QuickJsSpecRepository {
+        use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
+        let runtime =
+            QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default())
+                .unwrap();
+        QuickJsSpecRepository::new(
+            Rc::new(runtime),
+            EmbeddedSpecBundle::new(data_directory_from_env()),
+        )
+    }
+
+    /// Writes `source` as the local spec `mk` of `dir`.
+    fn write_mk(dir: &TempDir, source: &str) {
+        let build = dir.path().join(".fig").join("autocomplete").join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("mk.js"), source).unwrap();
+    }
+
+    /// Finds the local spec `mk` of `dir` under `settings`, with an empty spec index and generator context.
+    fn find_mk(
+        repository: &QuickJsSpecRepository,
+        dir: &TempDir,
+        settings: &Settings,
+    ) -> Result<Option<Rc<Subcommand>>, SpecError> {
+        let (index, generator_context) = (SpecIndex::default(), GeneratorContext::default());
+        let location = SpecLocation::Local {
+            dir: dir.path().to_path_buf(),
+            name: "mk".into(),
+        };
+        repository.find(
+            &location,
+            &SpecLookup::new(settings, &index, &generator_context),
+        )
+    }
+
+    fn disabling_mk() -> Settings {
+        let disabled = SettingValue::List(vec![SettingValue::Text("mk".into())]);
+        Settings::default().with(AUTOCOMPLETE_DISABLE_FOR_COMMANDS, disabled)
+    }
+
+    /// Disabled first (nothing cached), then loaded and cached, then disabled again (checked before the cache).
+    #[test]
+    fn should_find_nothing_for_a_disabled_command_and_cache_nothing() {
+        let dir = TempDir::new("repo-disabled");
+        write_mk(&dir, MK);
+        let repository = repository();
+        let (enabled, disabled) = (Settings::default(), disabling_mk());
+
+        let found = [&disabled, &enabled, &disabled]
+            .map(|settings| find_mk(&repository, &dir, settings).unwrap().is_some());
+
+        assert_eq!(found, [false, true, false]);
+    }
+
+    #[test]
+    fn should_keep_a_missing_spec_missing_until_loaded_specs_are_forgotten() {
+        let dir = TempDir::new("repo-missing");
+        let repository = repository();
+        let settings = Settings::default();
+        let before = find_mk(&repository, &dir, &settings).unwrap();
+        write_mk(&dir, MK);
+        let cached = find_mk(&repository, &dir, &settings).unwrap();
+
+        repository.forget_loaded_specs();
+        let after = find_mk(&repository, &dir, &settings).unwrap();
+
+        assert_eq!(
+            [before.is_some(), cached.is_some(), after.is_some()],
+            [false, false, true]
+        );
+    }
+
+    #[test]
+    fn should_not_cache_a_spec_that_failed_to_load() {
+        let dir = TempDir::new("repo-failed");
+        write_mk(&dir, r#"throw new Error("boom");var s={name:"mk"};export{s as default};"#);
+        let repository = repository();
+        let settings = Settings::default();
+        let failed = find_mk(&repository, &dir, &settings);
+        write_mk(&dir, MK);
+
+        let found = find_mk(&repository, &dir, &settings);
+
+        assert!(matches!(failed, Err(SpecError::Invalid(_))));
+        assert!(matches!(found, Ok(Some(_))));
+    }
 
     #[test]
     fn cli_version_detection_survives_an_aborted_parse() {
