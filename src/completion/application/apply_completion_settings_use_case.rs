@@ -4,7 +4,9 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use std::rc::Rc;
 
-/// The settings were saved: the spec runtime and the session take them.
+/// The settings were saved: the spec runtime and the session take them, the loaded specs are forgotten (their
+/// identities stay, so the argument key survives) and the generator results and first-token suggestions are dropped.
+/// The fuzzy toggle, the served request, running generators, the generator cache and the aliases stay.
 pub(crate) struct ApplyCompletionSettingsUseCase {
     runtime: Rc<dyn SpecRuntime>,
     parser: Rc<CommandLineParser>,
@@ -52,6 +54,10 @@ mod tests {
         ApplyCompletionSettingsUseCase::new(runtime.clone(), Rc::new(parser))
     }
 
+    fn use_case_over_fresh_doubles() -> ApplyCompletionSettingsUseCase {
+        use_case_over(&Rc::new(InMemorySpecRuntime::default()), &Rc::new(InMemorySpecRepository::default()))
+    }
+
     #[test]
     fn should_hand_the_new_settings_to_the_spec_runtime() {
         let runtime = Rc::new(InMemorySpecRuntime::default());
@@ -77,9 +83,10 @@ mod tests {
 
     #[test]
     fn should_drop_first_token_items_and_generator_results_when_settings_change() {
-        let use_case = use_case_over(&Rc::new(InMemorySpecRuntime::default()), &Rc::new(InMemorySpecRepository::default()));
+        let use_case = use_case_over_fresh_doubles();
         let mut session = session();
-        session.first_token_suggestions(&Instant::now, || vec![SuggestionCandidate::new("git", SuggestionKind::Special)]);
+        let git = SuggestionCandidate::new("git", SuggestionKind::Special);
+        session.first_token_suggestions(&Instant::now, || vec![git]);
         let argument = arg(false);
         session.assign_generator_slots(argument.clone(), vec![GeneratorKey::for_arg(&argument, 0)]);
         session.remember_search_term("src".into());
@@ -104,7 +111,7 @@ mod tests {
 
     #[test]
     fn should_keep_the_fuzzy_toggle_and_the_served_request_when_settings_change() {
-        let use_case = use_case_over(&Rc::new(InMemorySpecRuntime::default()), &Rc::new(InMemorySpecRepository::default()));
+        let use_case = use_case_over_fresh_doubles();
         let mut session = session();
         session.enter_argument(1);
         session.toggle_fuzzy_search();
