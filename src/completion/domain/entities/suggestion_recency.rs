@@ -17,8 +17,8 @@ impl SuggestionRecency {
         self.times.clone()
     }
 
-    /// Records that `name` was inserted for `command` at `at_ms`; `true` when the recency changed. The
-    /// auto-execute row (`↪`) is never recorded.
+    /// Records that `name` was inserted for `command` at `at_ms` and answers `true`: the recency is due a save. A
+    /// name holding `↪` (the auto-execute row) is not recorded: `false`, nothing changes.
     pub(crate) fn record(&mut self, command: String, name: String, at_ms: u64) -> bool {
         if name.contains('↪') {
             return false;
