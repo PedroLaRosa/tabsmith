@@ -1,6 +1,7 @@
 pub(crate) mod alias_table;
 pub(crate) mod annotation_kind;
 pub(crate) mod argument_hint;
+pub(crate) mod cache_lookup;
 pub(crate) mod command_line;
 pub(crate) mod completion_phase;
 pub(crate) mod completion_result;

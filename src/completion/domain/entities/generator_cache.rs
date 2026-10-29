@@ -1,41 +1,29 @@
-//! Generator triggers and the generator result cache (SPEC §6.6.1, §6.6.5), until 6.4a moves them into
-//! `completion` and deletes this file. The rest of the suggestion pipeline lives in `completion`.
-//! OWNER: engine agent (internal API; only `engine.rs` uses it). Everything here is pure (no JS, no I/O); the
-//! engine resolves function triggers / `getQueryTerm`s and runs generators.
+use crate::completion::domain::value_objects::cache_lookup::CacheLookup;
 use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
-use serde_json::Value;
+use crate::specs::domain::value_objects::task_id::TaskId;
 use std::collections::HashMap;
 
-// ---------------------------------------------------------------------------------------------------------
-// Generators: triggers and cache (SPEC §6.6.1, §6.6.5)
-
-/// Cache decision for a generator run.
-#[derive(Debug, PartialEq)]
-pub enum Lookup {
-    /// Within TTL.
-    Fresh(Value),
-    /// Past TTL, stale-while-revalidate: serve it; start a background refresh when `refresh`.
-    Stale { value: Value, refresh: bool },
-    /// Nothing usable: fetch (blocking for the slot).
-    Miss,
-    /// Nothing usable, but an identical fetch is in flight: share its task.
-    Shared(u64),
-}
-
-struct CacheEntry {
-    value: Option<Value>,
+struct CacheEntry<V> {
+    value: Option<V>,
     at: u64,
-    inflight: Option<u64>,
+    inflight: Option<TaskId>,
 }
 
 /// Generator result cache with ish semantics (D10): failures are never stored. Clock passed in (unix ms).
-#[derive(Default)]
-pub struct GenCache {
-    map: HashMap<String, CacheEntry>,
+pub(crate) struct GeneratorCache<V> {
+    map: HashMap<String, CacheEntry<V>>,
 }
 
-impl GenCache {
-    pub fn lookup(&self, key: &str, cfg: &GeneratorCachePolicy, now: u64) -> Lookup {
+impl<V> Default for GeneratorCache<V> {
+    fn default() -> Self {
+        GeneratorCache {
+            map: HashMap::new(),
+        }
+    }
+}
+
+impl<V: Clone> GeneratorCache<V> {
+    pub(crate) fn lookup(&self, key: &str, cfg: &GeneratorCachePolicy, now: u64) -> CacheLookup<V> {
         match self.map.get(key) {
             Some(CacheEntry {
                 value: Some(v),
@@ -43,11 +31,11 @@ impl GenCache {
                 inflight,
             }) => {
                 if now.saturating_sub(*at) <= cfg.ttl_ms() {
-                    Lookup::Fresh(v.clone())
+                    CacheLookup::Fresh(v.clone())
                 } else if cfg.max_age() {
-                    inflight.map_or(Lookup::Miss, Lookup::Shared)
+                    inflight.map_or(CacheLookup::Miss, CacheLookup::Shared)
                 } else {
-                    Lookup::Stale {
+                    CacheLookup::Stale {
                         value: v.clone(),
                         refresh: inflight.is_none(),
                     }
@@ -55,13 +43,13 @@ impl GenCache {
             }
             Some(CacheEntry {
                 inflight: Some(t), ..
-            }) => Lookup::Shared(*t),
-            _ => Lookup::Miss,
+            }) => CacheLookup::Shared(*t),
+            _ => CacheLookup::Miss,
         }
     }
 
     /// A fetch for `key` started as `task`.
-    pub fn start(&mut self, key: &str, task: u64) {
+    pub(crate) fn start(&mut self, key: &str, task: TaskId) {
         self.map
             .entry(key.to_string())
             .or_insert(CacheEntry {
@@ -72,7 +60,7 @@ impl GenCache {
             .inflight = Some(task);
     }
 
-    pub fn store(&mut self, key: &str, value: Value, now: u64) {
+    pub(crate) fn store(&mut self, key: &str, value: V, now: u64) {
         self.map.insert(
             key.to_string(),
             CacheEntry {
@@ -84,7 +72,7 @@ impl GenCache {
     }
 
     /// The fetch failed: keep any older value, forget the in-flight marker.
-    pub fn fail(&mut self, key: &str) {
+    pub(crate) fn fail(&mut self, key: &str) {
         if let Some(e) = self.map.get_mut(key) {
             e.inflight = None;
             if e.value.is_none() {
@@ -98,43 +86,45 @@ impl GenCache {
 mod tests {
     use super::*;
     use crate::completion::domain::services::generator_trigger_policy::cache_key;
+    use crate::completion::domain::value_objects::cache_lookup::CacheLookup;
+    use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
     use serde_json::json;
 
     #[test]
     fn cache_ttl_swr_max_age() {
-        let mut c = GenCache::default();
+        let mut c = GeneratorCache::default();
         let swr = GeneratorCachePolicy::default().with_ttl_ms(1000);
         let max_age = GeneratorCachePolicy::default()
             .with_ttl_ms(1000)
             .with_max_age(true);
-        assert_eq!(c.lookup("k", &swr, 0), Lookup::Miss);
+        assert_eq!(c.lookup("k", &swr, 0), CacheLookup::Miss);
         c.start("k", 7);
-        assert_eq!(c.lookup("k", &swr, 0), Lookup::Shared(7));
+        assert_eq!(c.lookup("k", &swr, 0), CacheLookup::Shared(7));
         c.fail("k"); // failures are not cached
-        assert_eq!(c.lookup("k", &swr, 0), Lookup::Miss);
+        assert_eq!(c.lookup("k", &swr, 0), CacheLookup::Miss);
         c.store("k", json!(1), 100);
-        assert_eq!(c.lookup("k", &swr, 1100), Lookup::Fresh(json!(1)));
+        assert_eq!(c.lookup("k", &swr, 1100), CacheLookup::Fresh(json!(1)));
         assert_eq!(
             c.lookup("k", &swr, 1101),
-            Lookup::Stale {
+            CacheLookup::Stale {
                 value: json!(1),
                 refresh: true
             }
         );
-        assert_eq!(c.lookup("k", &max_age, 1101), Lookup::Miss);
+        assert_eq!(c.lookup("k", &max_age, 1101), CacheLookup::Miss);
         c.start("k", 9);
         assert_eq!(
             c.lookup("k", &swr, 1101),
-            Lookup::Stale {
+            CacheLookup::Stale {
                 value: json!(1),
                 refresh: false
             }
         );
-        assert_eq!(c.lookup("k", &max_age, 1101), Lookup::Shared(9));
+        assert_eq!(c.lookup("k", &max_age, 1101), CacheLookup::Shared(9));
         c.fail("k"); // a failed refresh keeps the old value
         assert_eq!(
             c.lookup("k", &swr, 1101),
-            Lookup::Stale {
+            CacheLookup::Stale {
                 value: json!(1),
                 refresh: true
             }

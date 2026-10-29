@@ -20,7 +20,6 @@ mod settings;
 mod shared;
 mod shell_integration;
 mod specs;
-mod suggest;
 mod terminal_session;
 mod tracker;
 mod types;

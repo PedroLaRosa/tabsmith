@@ -72,7 +72,8 @@ use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBu
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime, TaskResult};
 use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::suggest::{GenCache, Lookup};
+use crate::completion::domain::entities::generator_cache::GeneratorCache;
+use crate::completion::domain::value_objects::cache_lookup::CacheLookup;
 use crate::completion::domain::value_objects::filter_options::FilterOptions;
 use crate::completion::domain::value_objects::generator_slot_view::GeneratorSlotView;
 use crate::completion::domain::value_objects::insertion_context::InsertionContext;
@@ -362,7 +363,7 @@ struct Engine {
     prev_search: String,
     next_gen: u64,
     runs: Vec<Run>,
-    cache: GenCache,
+    cache: GeneratorCache<Value>,
     cur: Option<Current>,
     first_token_cache: Option<(Instant, Vec<SuggestionCandidate>)>,
 }
@@ -430,7 +431,7 @@ impl Engine {
             prev_search: String::new(),
             next_gen: 0,
             runs: Vec::new(),
-            cache: GenCache::default(),
+            cache: GeneratorCache::default(),
             cur: None,
             first_token_cache: None,
         }
@@ -912,8 +913,8 @@ impl Engine {
             return Err(Outcome::Pending);
         };
         match self.cache.lookup(&key, cfg, now_ms()) {
-            Lookup::Fresh(v) => Ok(v),
-            Lookup::Stale { value, refresh } => {
+            CacheLookup::Fresh(v) => Ok(v),
+            CacheLookup::Stale { value, refresh } => {
                 if refresh {
                     let mut bg = run.clone();
                     bg.background = true;
@@ -925,12 +926,12 @@ impl Engine {
                 }
                 Ok(value)
             }
-            Lookup::Shared(t) => {
+            CacheLookup::Shared(t) => {
                 run.task = t;
                 run.step = step;
                 Err(Outcome::Pending)
             }
-            Lookup::Miss => {
+            CacheLookup::Miss => {
                 run.task = start(js);
                 run.step = step;
                 self.cache.start(&key, run.task);
