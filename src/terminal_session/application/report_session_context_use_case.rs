@@ -6,6 +6,11 @@ use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Delete run files untouched for a day. A shell that exits right after a prompt leaves one behind: its background
+/// `_ pre-cmd` writes the file again after the wrapper removed it. A live session rewrites its file at every prompt.
+const SESSION_CONTEXT_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
 
 /// A shell reported its env and alias text at a prompt (`_ pre-cmd`, SPEC §2.11): it becomes its session's latest
 /// context, stamped with the report time.
@@ -32,7 +37,10 @@ impl ReportSessionContextUseCase {
         alias: Option<String>,
     ) -> Result<(), TerminalSessionError> {
         let context = SessionContext::new(id, env, alias, self.clock.now_ms());
-        self.session_contexts.save(&context)
+        self.session_contexts.save(&context)?;
+        self.session_contexts
+            .prune_older_than(SESSION_CONTEXT_MAX_AGE);
+        Ok(())
     }
 }
 
@@ -41,9 +49,14 @@ mod tests {
     use super::*;
     use crate::shared::application::ports::clock::FixedClock;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
+    use std::time::SystemTime;
 
     fn session_id(id: &str) -> SessionId {
         SessionId::new(id.to_string()).unwrap()
+    }
+
+    fn empty_context(id: &str) -> SessionContext {
+        SessionContext::new(session_id(id), HashMap::new(), None, 0)
     }
 
     #[test]
@@ -67,6 +80,31 @@ mod tests {
         assert_eq!(
             (saved.env(), saved.alias(), saved.reported_at_ms()),
             (&env, Some("ll='ls -l'"), 1_700_000_123_456)
+        );
+    }
+
+    /// A minute either side of a day, so the test pins the day and not the time it takes to run.
+    #[test]
+    fn should_prune_the_contexts_left_unchanged_for_more_than_a_day_once_saved() {
+        let session_contexts = Rc::new(InMemorySessionContextRepository::default());
+        let day = Duration::from_secs(24 * 3600);
+        let minute = Duration::from_secs(60);
+        let now = SystemTime::now();
+        session_contexts.save_modified_at(&empty_context("stale"), now - day - minute);
+        session_contexts.save_modified_at(&empty_context("recent"), now - day + minute);
+        let use_case = ReportSessionContextUseCase::new(
+            session_contexts.clone(),
+            Arc::new(FixedClock::new(0)),
+        );
+
+        use_case
+            .execute(session_id("abc123"), HashMap::new(), None)
+            .unwrap();
+
+        assert_eq!(
+            ["stale", "recent", "abc123"]
+                .map(|id| session_contexts.find(&session_id(id)).is_some()),
+            [false, true, true]
         );
     }
 }
