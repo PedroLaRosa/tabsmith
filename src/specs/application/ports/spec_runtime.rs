@@ -19,7 +19,7 @@ use serde_json::Value;
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
 #[cfg(test)]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Runs spec functions, processes and sleeps as tasks, and waits for them.
 pub(crate) trait SpecRuntime {
@@ -71,7 +71,9 @@ type Answer = Box<dyn Fn(&SpecFunctionCall) -> Result<SpecFunctionResult, SpecEr
 pub(crate) struct InMemorySpecRuntime {
     answers: HashMap<SpecFunctionRef, Answer>,
     calls: RefCell<Vec<SpecFunctionCall>>,
-    running: RefCell<HashSet<TaskId>>,
+    completions: HashMap<SpecFunctionRef, TaskOutcome>,
+    /// The tasks it knows: `None` while one runs, the outcome a finished one gives.
+    tasks: RefCell<HashMap<TaskId, Option<TaskOutcome>>>,
     next_task: Cell<TaskId>,
 }
 
@@ -86,31 +88,37 @@ impl InMemorySpecRuntime {
         self
     }
 
+    /// Every task started for `function` finishes with `outcome`.
+    pub(crate) fn completing(mut self, function: SpecFunctionRef, outcome: TaskOutcome) -> Self {
+        self.completions.insert(function, outcome);
+        self
+    }
+
     /// The calls received so far, in order.
     pub(crate) fn calls(&self) -> Vec<SpecFunctionCall> {
         self.calls.borrow().clone()
     }
 
-    fn start_task(&self) -> TaskId {
+    fn start_task(&self, outcome: Option<TaskOutcome>) -> TaskId {
         let task = self.next_task.get();
         self.next_task.set(task + 1);
-        self.running.borrow_mut().insert(task);
+        self.tasks.borrow_mut().insert(task, outcome);
         task
     }
 }
 
 #[cfg(test)]
 impl SpecRuntime for InMemorySpecRuntime {
-    fn start(&self, _call: SpecFunctionCall, _context: Option<&GeneratorContext>) -> TaskId {
-        self.start_task()
+    fn start(&self, call: SpecFunctionCall, _context: Option<&GeneratorContext>) -> TaskId {
+        self.start_task(self.completions.get(&call.function()).cloned())
     }
 
     fn start_exec(&self, _request: ExecRequest, _context: &GeneratorContext) -> TaskId {
-        self.start_task()
+        self.start_task(None)
     }
 
     fn start_sleep(&self, _ms: u64) -> TaskId {
-        self.start_task()
+        self.start_task(None)
     }
 
     fn wait(
@@ -118,21 +126,19 @@ impl SpecRuntime for InMemorySpecRuntime {
         tasks: &[TaskId],
         _deadline: Instant,
     ) -> Result<Vec<Option<TaskOutcome>>, Interrupted> {
-        let running = self.running.borrow();
-        let outcome = |t: &TaskId| {
-            if running.contains(t) {
-                None
-            } else {
-                Some(Err(format!("unknown task {t}")))
-            }
+        let mut known = self.tasks.borrow_mut();
+        let outcome = |t: &TaskId| match known.get(t) {
+            Some(None) => None,
+            Some(Some(_)) => known.remove(t).flatten(),
+            None => Some(Err(format!("unknown task {t}"))),
         };
         Ok(tasks.iter().map(outcome).collect())
     }
 
     fn forget(&self, tasks: &[TaskId]) {
-        let mut running = self.running.borrow_mut();
+        let mut known = self.tasks.borrow_mut();
         for t in tasks {
-            running.remove(t);
+            known.remove(t);
         }
     }
 
@@ -271,5 +277,28 @@ mod tests {
         let read = runtime.read(&lines, SpecFunctionKind::PostProcess, &dangerous);
 
         assert!(matches!(read, SpecFunctionResult::PostProcess(read_rows) if read_rows == rows));
+    }
+
+    #[test]
+    fn should_finish_a_started_call_with_its_scripted_outcome_once() {
+        let branches = SpecValue::List(vec![SpecValue::Text("main".into())]);
+        let runtime = InMemorySpecRuntime::default().completing(0, Ok(branches.clone()));
+        let script = SpecFunctionCall::Script {
+            function: 0,
+            tokens: vec!["git".into()],
+        };
+        let tasks = [runtime.start(script.clone(), None), runtime.start(script, None)];
+
+        let first = runtime.wait(&tasks, Instant::now());
+        let second = runtime.wait(&tasks, Instant::now());
+
+        let unknown = |t: TaskId| Some(Err(format!("unknown task {t}")));
+        assert_eq!(
+            (first, second),
+            (
+                Ok(vec![Some(Ok(branches.clone())), Some(Ok(branches))]),
+                Ok(vec![unknown(tasks[0]), unknown(tasks[1])])
+            )
+        );
     }
 }
