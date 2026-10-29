@@ -40,3 +40,35 @@ pub(crate) fn first_token_items(
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_offer_spec_names_then_aliases_then_executables_each_name_once() {
+        let specs = vec!["git".to_string(), "aws/s3".into(), "@scope/cli".into()];
+        let aliases: HashMap<String, String> = [("gst".to_string(), "git status".to_string())].into();
+        let executables = vec!["mytool".to_string(), "git".into(), "mytool".into()];
+
+        let items = first_token_items(&specs, &aliases, &executables);
+
+        let rows: Vec<(&str, SuggestionKind, f64)> = items
+            .iter()
+            .map(|s| (s.first(), s.kind, s.priority))
+            .collect();
+        let shortcut_description = items[2].description.as_deref();
+        assert_eq!(
+            (rows, shortcut_description),
+            (
+                vec![
+                    ("git", SuggestionKind::Subcommand, 40.0),
+                    ("@scope/cli", SuggestionKind::Subcommand, 40.0),
+                    ("gst", SuggestionKind::Shortcut, 100.0),
+                    ("mytool", SuggestionKind::Subcommand, 40.0)
+                ],
+                Some("git status")
+            )
+        );
+    }
+}
