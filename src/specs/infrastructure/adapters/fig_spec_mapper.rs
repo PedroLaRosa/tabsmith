@@ -494,7 +494,9 @@ pub(crate) fn function_result(
         SpecFunctionKind::GenerateSpecCacheKey => {
             SpecFunctionResult::GenerateSpecCacheKey(v.as_str().map(String::from))
         }
-        SpecFunctionKind::GenerateSpec => SpecFunctionResult::GenerateSpec(Err(String::new())),
+        SpecFunctionKind::GenerateSpec => SpecFunctionResult::GenerateSpec(
+            normalise(v).map(Box::new).map_err(|e| e.to_string()),
+        ),
         SpecFunctionKind::Script => SpecFunctionResult::Script(ScriptResolution::Skip),
         SpecFunctionKind::Custom => {
             SpecFunctionResult::Custom(CustomGeneratorResult::new(false, Vec::new()))

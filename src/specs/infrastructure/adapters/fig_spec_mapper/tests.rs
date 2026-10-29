@@ -493,3 +493,22 @@ fn should_read_a_generate_spec_cache_key_only_from_a_string() {
     assert!(matches!(text, SpecFunctionResult::GenerateSpecCacheKey(Some(key)) if key == " v1 "));
     assert!(matches!(number, SpecFunctionResult::GenerateSpecCacheKey(None)));
 }
+
+#[test]
+fn should_read_a_generated_spec_or_why_it_is_not_one() {
+    let context = GeneratorContext::default();
+
+    let (object, number) = (
+        function_result(SpecFunctionKind::GenerateSpec, &json!({"name": "npm"}), &context),
+        function_result(SpecFunctionKind::GenerateSpec, &json!(5), &context),
+    );
+
+    assert!(matches!(
+        object,
+        SpecFunctionResult::GenerateSpec(Ok(spec)) if spec.names() == &vec!["npm".to_string()]
+    ));
+    assert!(matches!(
+        number,
+        SpecFunctionResult::GenerateSpec(Err(e)) if e == "spec is not an object"
+    ));
+}
