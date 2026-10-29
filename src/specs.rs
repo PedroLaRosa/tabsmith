@@ -6,12 +6,13 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DEV_COMPLETIONS_FOLDER,
 };
 use crate::settings::domain::value_objects::settings::Settings;
+use crate::specs::domain::services::bundle_retention_policy::is_stale;
 use crate::specs::domain::services::spec_locator::find_global_spec;
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use anyhow::Context;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 /// The solid `tar | zstd -19` of `@withfig/autocomplete/build` (SPEC D11).
 #[cfg(feature = "embed-specs")]
@@ -24,10 +25,6 @@ pub fn version() -> &'static str {
 
 /// Touched in `<ver>/` by every engine start, so other binaries' cleanup sees the version is in use.
 const LAST_USED: &str = ".last-used";
-/// A version dir unused this long is removed (sessions of an older binary may still read theirs).
-const VERSION_STALE: Duration = Duration::from_secs(7 * 86400);
-/// A `.tmp-<pid>` dir untouched this long is an extraction that died (one takes seconds).
-const TMP_STALE: Duration = Duration::from_secs(600);
 
 /// `~/.tabsmith/specs/<ver>/`, extracting the embedded archive first if `index.json` is missing (atomic rename).
 /// Marks the version used and removes stale versions/temp dirs. Without `embed-specs` the dir must already exist.
@@ -78,9 +75,9 @@ fn touch(dir: &Path) {
         std::fs::File::create(dir.join(LAST_USED)).and_then(|f| f.set_modified(SystemTime::now()));
 }
 
-/// Remove other version dirs unused for [`VERSION_STALE`] (age of `.last-used`, else of the dir; a version a
-/// running session uses was touched at its start) and `<ver>.tmp-` dirs older than [`TMP_STALE`]. Only those:
-/// `user/` or any other dir there belongs to the user.
+/// Remove the dirs of `root` that [`is_stale`] picks: other versions unused for a week and dead `<ver>.tmp-` dirs.
+/// The age is that of `.last-used`, else of the dir (a version a running session uses was touched at its start);
+/// a future mtime is age 0, and a dir whose mtime cannot be read is kept.
 /// ponytail: a session running longer than a week without a restart may lose its version to a newer binary.
 fn cleanup(root: &Path, ver: &str) {
     for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
@@ -88,22 +85,12 @@ fn cleanup(root: &Path, ver: &str) {
             entry.file_name().to_string_lossy().into_owned(),
             entry.path(),
         );
-        let (stem, max) = match name.split_once(".tmp-") {
-            Some((stem, _)) => (stem, TMP_STALE),
-            None => (name.as_str(), VERSION_STALE),
-        };
-        // ponytail: npm versions are `1.2.3`; a pre-release suffix would make its dirs look like the user's (kept)
-        let ours = stem
-            .split('.')
-            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
         let age = std::fs::metadata(p.join(LAST_USED))
             .or_else(|_| std::fs::metadata(&p))
-            .and_then(|m| m.modified());
-        if ours
-            && name != ver
-            && p.is_dir()
-            && age.is_ok_and(|t| t.elapsed().unwrap_or_default() > max)
-        {
+            .and_then(|m| m.modified())
+            .ok()
+            .map(|t| t.elapsed().unwrap_or_default());
+        if is_stale(&name, ver, age) && p.is_dir() {
             let _ = std::fs::remove_dir_all(&p);
         }
     }
@@ -232,6 +219,7 @@ mod tests {
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use super::*;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
+    use std::time::Duration;
 
     fn tar_zst(files: &[(&str, &str)]) -> Vec<u8> {
         let mut b = tar::Builder::new(Vec::new());
