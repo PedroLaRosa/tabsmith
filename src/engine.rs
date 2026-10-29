@@ -3,7 +3,7 @@
 //! OWNER: engine agent.
 //!
 //! Per request: mid-word guard → `command_line_tokenizer::current_command` → `CommandLineParser::parse` → generator triggers →
-//! reply (phase `Parse`). Triggered generators run as small state machines over `QuickJsSpecRuntime` tasks;
+//! reply (phase `Parse`). Triggered generators run as small state machines over `SpecRuntime` tasks;
 //! whenever one finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
 use crate::shared::infrastructure::logger;
@@ -278,7 +278,7 @@ enum Step {
     Filter,
 }
 
-/// One generator run waiting on a `QuickJsSpecRuntime` task.
+/// One generator run waiting on a `SpecRuntime` task.
 #[derive(Clone)]
 struct Run {
     slot: usize,
@@ -755,7 +755,7 @@ impl Engine {
             Vec::new()
         };
         let floor = script_timeout(&self.settings);
-        let mut triggered = Vec::new();
+        let mut triggered_keys = Vec::new();
         for (i, fire) in fire.into_iter().enumerate() {
             if !fire {
                 continue;
@@ -764,7 +764,7 @@ impl Engine {
             let slot = &mut self.slots[i];
             slot.gen_id = self.next_gen;
             slot.loading = true;
-            triggered.push(slot.key);
+            triggered_keys.push(slot.key);
             let debounce = effective_debounce(arg.debounce());
             // ponytail: one deadline for the whole run (custom generators may exec several times)
             let budget = run_budget(debounce, floor, gens[i].script_timeout());
@@ -791,7 +791,7 @@ impl Engine {
             };
             self.settle(run, outcome);
         }
-        Some(triggered)
+        Some(triggered_keys)
     }
 
     // -----------------------------------------------------------------------------------------------------
