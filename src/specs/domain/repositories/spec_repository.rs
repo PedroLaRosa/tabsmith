@@ -23,7 +23,8 @@ pub(crate) trait SpecRepository {
     fn forget_loaded_specs(&self);
 }
 
-/// Specs by location (`name` for a Global, `dir|name` for a Local), for tests; records every find, never caches.
+/// Specs by location (`name` for a Global, `dir|name` for a Local), for tests; records every find, never caches,
+/// never fails, and answers `None` for a disabled command like every repository.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct InMemorySpecRepository {
@@ -54,9 +55,12 @@ impl SpecRepository for InMemorySpecRepository {
     fn find(
         &self,
         location: &SpecLocation,
-        _lookup: &SpecLookup<'_>,
+        lookup: &SpecLookup<'_>,
     ) -> Result<Option<Rc<Subcommand>>, SpecError> {
         self.finds.borrow_mut().push(location.clone());
+        if lookup.disables(location) {
+            return Ok(None);
+        }
         let key = match location {
             SpecLocation::Global { name } => name.clone(),
             SpecLocation::Local { dir, name } => format!("{}|{name}", dir.display()),
@@ -70,6 +74,8 @@ impl SpecRepository for InMemorySpecRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DISABLE_FOR_COMMANDS;
+    use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::settings::domain::value_objects::settings::Settings;
     use crate::specs::domain::value_objects::generator_context::GeneratorContext;
     use crate::specs::domain::value_objects::spec_index::SpecIndex;
@@ -146,5 +152,20 @@ mod tests {
             repository.finds(),
             [global("git"), local, global("cargo"), global("git")]
         );
+    }
+
+    #[test]
+    fn should_answer_none_for_a_disabled_command() {
+        let repository = InMemorySpecRepository::with(&[("git", &spec("git"))]);
+        let disabled = SettingValue::List(vec![SettingValue::Text("git".into())]);
+        let settings = Settings::default().with(AUTOCOMPLETE_DISABLE_FOR_COMMANDS, disabled);
+        let (index, generator_context) = (SpecIndex::default(), GeneratorContext::default());
+
+        let found = repository
+            .find(&global("git"), &SpecLookup::new(&settings, &index, &generator_context))
+            .unwrap();
+
+        assert!(found.is_none());
+        assert_eq!(repository.finds(), [global("git")]);
     }
 }
