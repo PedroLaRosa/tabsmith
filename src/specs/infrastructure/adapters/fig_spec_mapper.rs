@@ -4,6 +4,7 @@ use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::custom_generator_result::CustomGeneratorResult;
+use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
 use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
@@ -23,6 +24,7 @@ use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::spec_value::SpecValue;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
+use crate::specs::infrastructure::adapters::exec_input::ExecInput;
 use serde_json::{json, Number, Value};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -481,7 +483,7 @@ pub(crate) fn spec_value_to_json(v: &SpecValue) -> Value {
 pub(crate) fn function_result(
     kind: SpecFunctionKind,
     v: &Value,
-    _context: &GeneratorContext,
+    context: &GeneratorContext,
 ) -> SpecFunctionResult {
     match kind {
         SpecFunctionKind::QueryTerm => SpecFunctionResult::QueryTerm(match v {
@@ -497,7 +499,7 @@ pub(crate) fn function_result(
         SpecFunctionKind::GenerateSpec => SpecFunctionResult::GenerateSpec(
             normalise(v).map(Box::new).map_err(|e| e.to_string()),
         ),
-        SpecFunctionKind::Script => SpecFunctionResult::Script(ScriptResolution::Skip),
+        SpecFunctionKind::Script => SpecFunctionResult::Script(script_resolution(v, context.cwd())),
         SpecFunctionKind::Custom => {
             SpecFunctionResult::Custom(CustomGeneratorResult::new(false, Vec::new()))
         }
@@ -505,6 +507,25 @@ pub(crate) fn function_result(
         SpecFunctionKind::FilterTemplateSuggestions => {
             SpecFunctionResult::FilterTemplateSuggestions(Vec::new())
         }
+    }
+}
+
+/// A script value read as the engine's script_input reads it (SPEC §6.6.3), up to the timeout: the request asks
+/// for the script's own timeout (0 when it has none), and the caller still raises it to the settings' and the
+/// generator's. The cache key is built from the input before its timeout is set.
+fn script_resolution(v: &Value, cwd: &str) -> ScriptResolution {
+    let Some(mut input) = script_exec_input(v.clone(), cwd) else {
+        return ScriptResolution::Skip;
+    };
+    let cache_key_source = input.to_string();
+    let requested = input["timeout"].as_u64();
+    input["timeout"] = json!(requested.unwrap_or(0));
+    match serde_json::from_value::<ExecInput>(input) {
+        Ok(exec) => ScriptResolution::Ready {
+            request: ExecRequest::from(exec),
+            cache_key_source,
+        },
+        Err(e) => ScriptResolution::Invalid(e.to_string()),
     }
 }
 

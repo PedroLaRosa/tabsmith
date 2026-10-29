@@ -1,7 +1,9 @@
 use super::*;
+use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::spec_function_kind::SpecFunctionKind;
 use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use serde_json::json;
+use std::collections::HashMap;
 
 fn fixture(name: &str) -> Subcommand {
     let path = format!(
@@ -511,4 +513,35 @@ fn should_read_a_generated_spec_or_why_it_is_not_one() {
         number,
         SpecFunctionResult::GenerateSpec(Err(e)) if e == "spec is not an object"
     ));
+}
+
+/// A script read in `cwd`, as the variant the Script kind always gives.
+fn script(v: Value, cwd: &str) -> ScriptResolution {
+    let context = GeneratorContext::new(cwd.into(), HashMap::new(), String::new(), String::new(), false);
+    match function_result(SpecFunctionKind::Script, &v, &context) {
+        SpecFunctionResult::Script(resolution) => resolution,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn should_read_a_script_as_the_process_to_run_keyed_by_its_input_before_the_timeout() {
+    let v = json!(["ls", "-1"]);
+    let key_source = script_exec_input(v.clone(), "/repo").unwrap().to_string();
+
+    let resolution = script(v, "/repo");
+
+    assert_eq!(
+        resolution,
+        ScriptResolution::Ready {
+            request: ExecRequest::new(
+                "ls".into(),
+                vec!["-1".into()],
+                Some("/repo".into()),
+                HashMap::new(),
+                Some(0),
+            ),
+            cache_key_source: key_source,
+        }
+    );
 }
