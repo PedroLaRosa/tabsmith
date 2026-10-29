@@ -15,15 +15,14 @@ use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::application::parse_context::ParseContext;
 use crate::completion::application::ports::directory_lister::DirectoryLister;
 use crate::completion::application::ports::executable_catalog::ExecutableCatalog;
-use crate::completion::domain::entities::parse_prefix_cache::ParsePrefixCache;
-use crate::completion::domain::entities::suggestion_recency::SuggestionRecency;
+use crate::completion::domain::entities::completion_session::CompletionSession;
 use crate::completion::domain::repositories::recency_repository::RecencyRepository;
 use crate::completion::infrastructure::adapters::fs_directory_lister::FsDirectoryLister;
 use crate::completion::infrastructure::adapters::path_executable_catalog::PathExecutableCatalog;
 use crate::completion::infrastructure::adapters::state_file_recency_repository::StateFileRecencyRepository;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
-    AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
+    AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
     AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE, AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS,
     AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
     AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS, AUTOCOMPLETE_SORT_METHOD,
@@ -42,7 +41,6 @@ use crate::completion::domain::services::path_template;
 use crate::completion::domain::services::suggestion_assembler;
 use crate::completion::domain::services::suggestion_finalizer;
 use crate::completion::domain::services::suggestion_ranker;
-use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::{CompletionResult, CompletionResultParts};
@@ -55,7 +53,6 @@ use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
 use crate::specs::application::ports::interrupted::Interrupted;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::spec_error::SpecError;
-use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::custom_generator_result::CustomGeneratorResult;
 use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
 use crate::specs::domain::value_objects::generator::Generator;
@@ -77,15 +74,13 @@ use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBu
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
 use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::completion::domain::entities::generator_cache::GeneratorCache;
 use crate::completion::domain::entities::generator_run::GeneratorRun;
-use crate::completion::domain::entities::generator_slot::GeneratorSlot;
 use crate::completion::domain::value_objects::cache_lookup::CacheLookup;
 use crate::completion::domain::value_objects::filter_options::FilterOptions;
 use crate::completion::domain::value_objects::generator_outcome::GeneratorOutcome;
-use crate::completion::domain::value_objects::generator_slot_view::GeneratorSlotView;
 use crate::completion::domain::value_objects::generator_step::GeneratorStep;
 use crate::completion::domain::value_objects::insertion_context::InsertionContext;
+use crate::completion::domain::value_objects::served_request::{ServedRequest, ServedRequestParts};
 use crate::completion::domain::value_objects::suggestion_candidate::SuggestionCandidate;
 use crate::completion::domain::value_objects::suggestion_query::SuggestionQuery;
 use crate::shared::domain::value_objects::shell::Shell;
@@ -106,7 +101,6 @@ use std::time::{Duration, Instant};
 
 /// Pump slice while generators run: deferred messages and finished runs are handled at least this often.
 const SLICE: Duration = Duration::from_millis(50);
-const FIRST_TOKEN_TTL: Duration = Duration::from_secs(10);
 
 /// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
 /// Returns the engine's inbox. The thread exits on `EngineMsg::Shutdown` or when all senders are dropped.
@@ -263,46 +257,15 @@ fn suggestion_rows(result: SpecFunctionResult) -> Vec<SpecSuggestion> {
     }
 }
 
-/// The latest served request (for phase-Generators replies).
-struct Current {
-    req: CompletionRequest,
-    cursor: usize,
-    pr: ParsedCommandLine,
-    cmd_text: String,
-    arg_key: u64,
-    fuzzy: bool,
-    queries: Vec<SuggestionQuery>,
-    triggered: Vec<GeneratorKey>,
-    first: Vec<SuggestionCandidate>,
-    /// Buffer up to the start of the last token (history rows).
-    prefix: String,
-}
-
 struct Engine {
     tx: Sender<Msg>,
-    settings: Settings,
     command_line_parser: CommandLineParser,
-    parse_prefix_cache: ParsePrefixCache,
     index: SpecIndex,
     history: Rc<dyn HistoryRepository>,
     record_command: RecordCommandUseCase,
-    session_env: HashMap<String, String>,
-    session_alias: Option<String>,
-    wrapper_env: HashMap<String, String>,
-    aliases: Option<(Shell, HashMap<String, String>)>,
-    recency: SuggestionRecency,
     recency_repository: Rc<dyn RecencyRepository>,
     ghost_cache: Arc<Mutex<GhostCache>>,
-    user_fuzzy: bool,
-    last_arg_key: u64,
-    slot_arg: Option<Rc<Arg>>,
-    slots: Vec<GeneratorSlot>,
-    prev_search: String,
-    next_gen: u64,
-    runs: Vec<GeneratorRun>,
-    cache: GeneratorCache<SpecValue>,
-    cur: Option<Current>,
-    first_token_cache: Option<(Instant, Vec<SuggestionCandidate>)>,
+    session: CompletionSession,
 }
 
 impl Engine {
@@ -348,36 +311,20 @@ impl Engine {
         let recency = recency_repository.load();
         Engine {
             tx,
-            user_fuzzy: settings.bool(AUTOCOMPLETE_FUZZY_SEARCH),
-            settings,
             command_line_parser,
-            parse_prefix_cache: ParsePrefixCache::default(),
             index,
             history,
             record_command,
-            session_env: HashMap::new(),
-            session_alias: None,
-            wrapper_env: std::env::vars().collect(),
-            aliases: None,
-            recency,
             recency_repository,
             ghost_cache: Arc::new(Mutex::new(GhostCache::default())),
-            last_arg_key: 0,
-            slot_arg: None,
-            slots: Vec::new(),
-            prev_search: String::new(),
-            next_gen: 0,
-            runs: Vec::new(),
-            cache: GeneratorCache::default(),
-            cur: None,
-            first_token_cache: None,
+            session: CompletionSession::new(settings, std::env::vars().collect(), recency),
         }
     }
 
     fn run(mut self, js: &QuickJsSpecRuntime, inbox: &EngineInbox) {
         let mut pending: Option<CompletionRequest> = None;
         'outer: loop {
-            if pending.is_none() && self.runs.is_empty() {
+            if pending.is_none() && !self.session.has_running_generators() {
                 match inbox.next_msg(js) {
                     Some(m) => {
                         if !self.handle(m, &mut pending, js) {
@@ -399,7 +346,7 @@ impl Engine {
                 }
                 continue;
             }
-            if !self.runs.is_empty() {
+            if self.session.has_running_generators() {
                 self.pump(js);
             }
         }
@@ -417,8 +364,8 @@ impl Engine {
                 if let Ok(mut c) = self.ghost_cache.lock() {
                     c.clear();
                 }
-                self.reset_slots(); // generator results without `cache` live until the command ends
-                self.cur = None;
+                self.session.reset_generator_slots(); // generator results without `cache` live until the command ends
+                self.session.forget_served_request();
             }
             EngineMsg::RecordInsert { cmd, name } => self.record(cmd, name),
             EngineMsg::Llm {
@@ -429,50 +376,29 @@ impl Engine {
             } => self.llm(req, buffer, cwd, shell),
             EngineMsg::Settings(s) => {
                 js.apply_settings(&s);
-                self.settings = s;
-                self.command_line_parser.clear_caches(&mut self.parse_prefix_cache);
-                self.reset_slots();
-                self.first_token_cache = None;
+                self.session.replace_settings(s);
+                self.command_line_parser.clear_caches(self.session.parse_prefix_cache());
+                self.session.reset_generator_slots();
+                self.session.forget_first_token_suggestions();
             }
-            EngineMsg::Session { env, alias } => {
-                self.session_env = env;
-                self.session_alias = alias;
-                self.aliases = None;
-                self.first_token_cache = None; // aliases / PATH from this prompt
-            }
-            EngineMsg::ToggleFuzzy => self.user_fuzzy = !self.user_fuzzy,
+            EngineMsg::Session { env, alias } => self.session.apply_session_context(env, alias),
+            EngineMsg::ToggleFuzzy => self.session.toggle_fuzzy_search(),
             EngineMsg::Runtime(_) => {} // handed to the js host by the inbox
             EngineMsg::Shutdown => return false,
         }
         true
     }
 
-    fn reset_slots(&mut self) {
-        self.slots.clear();
-        self.slot_arg = None;
-        self.prev_search.clear();
-    }
-
+    /// The session's env, for the session-context tests that read it through the engine (Q19).
+    #[cfg(test)]
     fn env(&self) -> &HashMap<String, String> {
-        if self.session_env.is_empty() {
-            &self.wrapper_env
-        } else {
-            &self.session_env
-        }
+        self.session.env()
     }
 
+    /// The session's aliases, for the session-context tests that read them through the engine (Q19).
+    #[cfg(test)]
     fn alias_map(&mut self, shell: Shell) -> HashMap<String, String> {
-        if !matches!(&self.aliases, Some((s, _)) if *s == shell) {
-            let map = match self.session_alias.as_deref() {
-                Some(text) if !text.is_empty() => parse_aliases(text, shell),
-                _ => HashMap::new(),
-            };
-            self.aliases = Some((shell, map));
-        }
-        self.aliases
-            .as_ref()
-            .map(|(_, m)| m.clone())
-            .unwrap_or_default()
+        self.session.alias_map(shell)
     }
 
     // -----------------------------------------------------------------------------------------------------
@@ -491,24 +417,20 @@ impl Engine {
             return Some(self.error(req, cursor, false));
         }
         let before = &req.buffer[..cursor];
-        let aliases = self.alias_map(req.shell);
+        let aliases = self.session.alias_map(req.shell);
         let Some(cmd) = command_line_tokenizer::current_command(before, req.shell, &aliases) else {
             return Some(self.error(req, cursor, true));
         };
-        let env = if self.session_env.is_empty() {
-            &self.wrapper_env
-        } else {
-            &self.session_env
-        };
+        let (cache, settings, env) = self.session.parse_inputs();
         let pctx = ParseContext {
             cwd: &req.cwd,
-            settings: &self.settings,
+            settings,
             env,
             shell: req.shell,
             index: &self.index,
         };
         let pr = match self.command_line_parser.parse(
-            &mut self.parse_prefix_cache,
+            cache,
             &cmd,
             &pctx,
             &mut |notice| log_completion_notice(notice),
@@ -522,18 +444,16 @@ impl Engine {
         };
         let arg = pr.current_arg().clone();
         let arg_key = argument_key(arg.as_ref(), pr.completion());
-        if arg_key != self.last_arg_key {
-            self.user_fuzzy = self.settings.bool(AUTOCOMPLETE_FUZZY_SEARCH);
-            self.last_arg_key = arg_key;
-        }
+        self.session.enter_argument(arg_key);
         let strategy = arg
             .as_ref()
             .map_or(pr.completion().filter_strategy(), |a| a.filter_strategy());
         let fuzzy = match strategy {
             FilterStrategy::Prefix => false,
             FilterStrategy::Fuzzy => true,
-            FilterStrategy::Default => self.user_fuzzy,
+            FilterStrategy::Default => self.session.user_fuzzy(),
         };
+        let env = self.session.env();
         let ctx = GeneratorContext::new(
             req.cwd.to_string_lossy().into_owned(),
             env.clone(),
@@ -550,7 +470,7 @@ impl Engine {
             .to_vec();
         let triggered = self.update_slots(&pr, &ctx, &tokens, js)?;
         let first = if pr.first_token()
-            && self.settings.bool(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION)
+            && self.session.settings().bool(AUTOCOMPLETE_FIRST_TOKEN_COMPLETION)
         {
             self.first_token_items(&aliases, path, pathext)
         } else {
@@ -560,28 +480,31 @@ impl Engine {
             .strip_suffix(pr.raw_last_token())
             .unwrap_or(before)
             .to_string();
-        self.cur = Some(Current {
-            req: req.clone(),
+        self.session.serve(ServedRequest::new(ServedRequestParts {
+            request_id: req.id,
+            buffer: req.buffer.clone(),
+            shell: req.shell,
+            history_mode: req.history_mode,
             cursor,
-            pr,
-            cmd_text: cmd.original_text().to_string(),
-            arg_key,
+            parsed: pr,
+            command_text: cmd.original_text().to_string(),
+            argument_key: arg_key,
             fuzzy,
             queries,
-            triggered,
-            first,
-            prefix,
-        });
+            triggered_generators: triggered,
+            first_token_candidates: first,
+            history_prefix: prefix,
+        }));
         Some(self.reply(CompletionPhase::Parse))
     }
 
     /// Error reply (menu error-reset). Generator state is reset on errors too.
     fn error(&mut self, req: &CompletionRequest, cursor: usize, ghost: bool) -> CompletionResult {
-        self.reset_slots();
-        self.cur = None;
+        self.session.reset_generator_slots();
+        self.session.forget_served_request();
         let mut c = CompletionResult::error(req.id, req.buffer.clone(), cursor);
         if ghost {
-            c = c.with_ghost(self.ghost(req, cursor, None));
+            c = c.with_ghost(self.ghost(&req.buffer, cursor, None));
         }
         c
     }
@@ -644,15 +567,15 @@ impl Engine {
         js: &dyn SpecRuntime,
     ) -> Option<Vec<GeneratorKey>> {
         let arg = pr.current_arg().clone();
-        let same = match (&arg, &self.slot_arg) {
+        let same = match (&arg, self.session.slot_argument()) {
             (Some(a), Some(b)) => Rc::ptr_eq(a, b),
             _ => false,
         };
-        let (new, old) = (pr.search_term(), self.prev_search.as_str());
+        let (new, old) = (pr.search_term(), self.session.previous_search_term());
         let gens: &[Generator] = arg.as_deref().map_or(&[], |a| a.generators());
         let mut fire = Vec::with_capacity(gens.len());
         for (i, g) in gens.iter().enumerate() {
-            fire.push(if !same || i >= self.slots.len() {
+            fire.push(if !same || i >= self.session.slot_count() {
                 true
             } else if is_path_template(g) {
                 dir_changed(new, old, ctx.shell() == Shell::Pwsh.name())
@@ -691,40 +614,37 @@ impl Engine {
                 }
             });
         }
-        self.prev_search = pr.search_term().to_string();
+        self.session.remember_search_term(pr.search_term().to_string());
         let Some(arg) = arg.as_ref() else {
-            self.slots.clear();
-            self.slot_arg = None;
+            self.session.clear_generator_slots();
             return Some(Vec::new());
         };
         if !same {
             // ponytail: results are not carried over to a different arg (they could be kept while loading)
-            self.slots = (0..gens.len())
-                .map(|i| GeneratorSlot::new(GeneratorKey::for_arg(arg, i)))
+            let keys = (0..gens.len())
+                .map(|i| GeneratorKey::for_arg(arg, i))
                 .collect();
-            self.slot_arg = Some(arg.clone());
+            self.session.assign_generator_slots(arg.clone(), keys);
         }
         let help = if gens.iter().any(|g| g.template().iter().any(|t| t == "help")) {
             path_template::help_items(pr)
         } else {
             Vec::new()
         };
-        let floor = script_timeout(&self.settings);
+        let floor = script_timeout(self.session.settings());
         let mut triggered_keys = Vec::new();
         for (i, fire) in fire.into_iter().enumerate() {
             if !fire {
                 continue;
             }
-            self.next_gen += 1;
-            let slot = &mut self.slots[i];
-            slot.fire(self.next_gen);
-            triggered_keys.push(slot.key());
+            let (generation, key) = self.session.fire_slot(i);
+            triggered_keys.push(key);
             let debounce = effective_debounce(arg.debounce());
             // ponytail: one deadline for the whole run (custom generators may exec several times)
             let budget = run_budget(debounce, floor, gens[i].script_timeout());
             let mut run = GeneratorRun::new(
                 i,
-                self.next_gen,
+                generation,
                 arg.clone(),
                 ctx.clone(),
                 tokens.to_vec(),
@@ -746,31 +666,12 @@ impl Engine {
     // -----------------------------------------------------------------------------------------------------
     // Generator runs (SPEC §6.6.2–6.6.5)
 
-    fn is_current(&self, run: &GeneratorRun) -> bool {
-        self.slots
-            .get(run.slot())
-            .is_some_and(|s| s.generation() == run.generation())
-    }
-
-    /// Record an outcome; returns whether a current slot changed.
+    /// Record an outcome; returns whether a current slot changed. Every failure is logged first.
     fn settle(&mut self, run: GeneratorRun, outcome: GeneratorOutcome) -> bool {
-        let items = match outcome {
-            GeneratorOutcome::Pending => {
-                self.runs.push(run);
-                return false;
-            }
-            GeneratorOutcome::Done(items) => items,
-            GeneratorOutcome::Fail(e) => {
-                logger::debug(&format!("engine: generator failed: {e}"));
-                if run.is_background() {
-                    return false;
-                }
-                Vec::new() // any error → [] (never cached)
-            }
-        };
-        self.slots
-            .get_mut(run.slot())
-            .is_some_and(|s| s.finish(run.generation(), items))
+        if let GeneratorOutcome::Fail(e) = &outcome {
+            logger::debug(&format!("engine: generator failed: {e}"));
+        }
+        self.session.settle(run, outcome)
     }
 
     /// First step after the (optional) debounce: template, script or custom.
@@ -866,15 +767,15 @@ impl Engine {
             run.wait_on(start(js), step);
             return Err(GeneratorOutcome::Pending);
         };
-        match self.cache.lookup(&key, cfg, now_ms()) {
+        match self.session.generator_cache_mut().lookup(&key, cfg, now_ms()) {
             CacheLookup::Fresh(v) => Ok(v),
             CacheLookup::Stale { value, refresh } => {
                 if refresh {
                     let mut bg = run.background_copy();
                     bg.wait_on(start(js), step);
-                    self.cache.start(&key, bg.task());
+                    self.session.generator_cache_mut().start(&key, bg.task());
                     bg.store_result_as(key);
-                    self.runs.push(bg);
+                    self.session.push_run(bg);
                 }
                 Ok(value)
             }
@@ -884,7 +785,7 @@ impl Engine {
             }
             CacheLookup::Miss => {
                 run.wait_on(start(js), step);
-                self.cache.start(&key, run.task());
+                self.session.generator_cache_mut().start(&key, run.task());
                 run.store_result_as(key);
                 Err(GeneratorOutcome::Pending)
             }
@@ -912,7 +813,7 @@ impl Engine {
             | SpecFunctionResult::PostProcess(_)
             | SpecFunctionResult::FilterTemplateSuggestions(_) => return GeneratorOutcome::Done(Vec::new()), // falsy → []
         };
-        let timeout = script_timeout(&self.settings)
+        let timeout = script_timeout(self.session.settings())
             .max(g.script_timeout().unwrap_or(0))
             .max(request.timeout().unwrap_or(0));
         let request = request.with_timeout(Some(timeout));
@@ -994,15 +895,15 @@ impl Engine {
             Ok(v) => v,
             Err(e) => {
                 if let Some(k) = run.take_store() {
-                    self.cache.fail(&k);
+                    self.session.generator_cache_mut().fail(&k);
                 }
                 return GeneratorOutcome::Fail(e);
             }
         };
         if let Some(k) = run.take_store() {
-            self.cache.store(&k, v.clone(), now_ms());
+            self.session.generator_cache_mut().store(&k, v.clone(), now_ms());
         }
-        if !self.is_current(run) {
+        if !self.session.is_current(run) {
             return GeneratorOutcome::Done(Vec::new()); // superseded (e.g. after a debounce): abandon
         }
         let arg = run.arg().clone();
@@ -1027,11 +928,12 @@ impl Engine {
 
     /// Wait (one slice) on every running generator task; reply again when a current slot changed.
     fn pump(&mut self, js: &dyn SpecRuntime) {
-        let mut tasks: Vec<TaskId> = self.runs.iter().map(|r| r.task()).collect();
+        let mut tasks: Vec<TaskId> = self.session.runs().iter().map(|r| r.task()).collect();
         tasks.sort_unstable();
         tasks.dedup();
         let deadline = self
-            .runs
+            .session
+            .runs()
             .iter()
             .map(|r| r.deadline())
             .min()
@@ -1041,7 +943,7 @@ impl Engine {
             Err(Interrupted) => return, // a newer request is queued
         };
         let mut changed = false;
-        let mut runs = std::mem::take(&mut self.runs);
+        let mut runs = self.session.take_runs();
         for (task, res) in tasks.iter().zip(results) {
             let Some(res) = res else { continue };
             let (mine, rest): (Vec<GeneratorRun>, Vec<GeneratorRun>) =
@@ -1059,17 +961,17 @@ impl Engine {
         let now = Instant::now();
         let (expired, alive): (Vec<GeneratorRun>, Vec<GeneratorRun>) =
             runs.into_iter().partition(|r| now >= r.deadline());
-        self.runs.extend(alive);
+        self.session.keep_runs(alive);
         for mut run in expired {
             if let Some(k) = run.take_store() {
-                self.cache.fail(&k);
+                self.session.generator_cache_mut().fail(&k);
             }
-            if !self.runs.iter().any(|r| r.task() == run.task()) {
+            if !self.session.has_run_on(run.task()) {
                 js.forget(&[run.task()]);
             }
             changed |= self.settle(run, GeneratorOutcome::Fail("timed out".into()));
         }
-        if changed && self.cur.is_some() {
+        if changed && self.session.served().is_some() {
             let _ = self
                 .tx
                 .send(Msg::Completion(Box::new(self.reply(CompletionPhase::Generators))));
@@ -1085,43 +987,33 @@ impl Engine {
         path: Option<String>,
         pathext: Option<String>,
     ) -> Vec<SuggestionCandidate> {
-        if let Some((at, items)) = &self.first_token_cache {
-            if at.elapsed() < FIRST_TOKEN_TTL {
-                return items.clone();
-            }
-        }
-        let executables = PathExecutableCatalog.executables(path.as_deref(), pathext.as_deref());
-        let items = first_token_suggestions::first_token_items(
-            self.index.completions(),
-            aliases,
-            &executables,
-        );
-        self.first_token_cache = Some((Instant::now(), items.clone()));
-        items
+        self.session.first_token_suggestions(&Instant::now, || {
+            let executables = PathExecutableCatalog.executables(path.as_deref(), pathext.as_deref());
+            first_token_suggestions::first_token_items(
+                self.index.completions(),
+                aliases,
+                &executables,
+            )
+        })
     }
 
     /// Rank the current request's suggestions (SPEC §6.7.5) into a reply.
     fn reply(&self, phase: CompletionPhase) -> CompletionResult {
-        let cur = self.cur.as_ref().expect("reply without a current request");
-        let (pr, s) = (&cur.pr, &self.settings);
+        let served = self.session.served().expect("reply without a current request");
+        let (pr, s) = (served.parsed(), self.session.settings());
         let mut list = if pr.first_token() {
-            cur.first.clone()
+            served.first_token_candidates().clone()
         } else {
-            let views: Vec<GeneratorSlotView> = self
-                .slots
-                .iter()
-                .zip(&cur.queries)
-                .map(|(sl, q)| GeneratorSlotView::new(sl.key(), q.clone(), sl.is_loading(), sl.result()))
-                .collect();
+            let views = self.session.slot_views(served.queries());
             suggestion_assembler::assemble(pr, &views)
         };
         let mode = s.string(BETA_HISTORY_MODE).unwrap_or_default();
-        if cur.req.history_mode || mode == "show" || mode == "history_only" {
-            let hist = history_suggestions::history_rows(&cur.prefix, &self.history.recent());
-            list = history_suggestions::mix_history(list, hist, mode == "show" && !cur.req.history_mode);
+        if served.history_mode() || mode == "show" || mode == "history_only" {
+            let hist = history_suggestions::history_rows(served.history_prefix(), &self.history.recent());
+            list = history_suggestions::mix_history(list, hist, mode == "show" && !served.history_mode());
         }
         let fo = FilterOptions::default()
-            .with_fuzzy(cur.fuzzy)
+            .with_fuzzy(served.fuzzy())
             .with_auto_exec_hidden(
                 s.bool(AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION) || s.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
             )
@@ -1135,27 +1027,27 @@ impl Engine {
             );
         let cmd = pr.tokens().get(pr.command_index()).map_or("", String::as_str); // D21
         let use_recency = s.string(AUTOCOMPLETE_SORT_METHOD) != Some("alphabetical");
-        let map = Some(&self.recency).filter(|_| use_recency).and_then(|r| r.of_command(cmd));
+        let map = Some(self.session.recency()).filter(|_| use_recency).and_then(|r| r.of_command(cmd));
         let ranked = suggestion_ranker::rank(list, pr.search_term(), map, &fo);
-        let ic = InsertionContext::new(pr.search_term(), pr.raw_last_token(), cur.req.shell)
-            .with_fuzzy(cur.fuzzy)
+        let ic = InsertionContext::new(pr.search_term(), pr.raw_last_token(), served.shell())
+            .with_fuzzy(served.fuzzy())
             .with_prefer_verbose(s.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS))
             .with_insert_space(s.bool(AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY));
         let items: Vec<Suggestion> = ranked
             .into_iter()
             .map(|(x, p)| suggestion_finalizer::to_item(x, p, &ic))
             .collect();
-        let ghost = self.ghost(&cur.req, cur.cursor, Some(&items));
+        let ghost = self.ghost(served.buffer(), served.cursor(), Some(&items));
         CompletionResult::new(CompletionResultParts {
-            req: cur.req.id,
+            req: served.request_id(),
             phase,
             error: false,
-            buffer: cur.req.buffer.clone(),
-            cursor: cur.cursor,
+            buffer: served.buffer().to_string(),
+            cursor: served.cursor(),
             tokens: pr.tokens().clone(),
-            command_text: cur.cmd_text.clone(),
+            command_text: served.command_text().to_string(),
             command_index: pr.command_index(),
-            arg_key: cur.arg_key,
+            arg_key: served.argument_key(),
             current_arg: pr.current_arg().as_ref().map(|a| {
                 ArgumentHint::new(
                     a.name().clone().unwrap_or_default(),
@@ -1164,28 +1056,28 @@ impl Engine {
             }),
             search_term: pr.search_term().to_string(),
             triggered_generators: if phase == CompletionPhase::Parse {
-                cur.triggered.clone()
+                served.triggered_generators().clone()
             } else {
                 Vec::new()
             },
             items,
-            loading: self.slots.iter().any(|s| s.is_loading()),
+            loading: self.session.any_slot_loading(),
             ghost,
-            fuzzy: cur.fuzzy,
+            fuzzy: served.fuzzy(),
         })
     }
 
     /// Local inline ghost (SPEC §6.11). Also computed for parse-error replies (commands without a spec).
-    fn ghost(&self, req: &CompletionRequest, cursor: usize, items: Option<&[Suggestion]>) -> Option<String> {
-        if !self.settings.bool(INLINE_ENABLED)
-            || req.buffer.is_empty()
-            || cursor != req.buffer.len()
+    fn ghost(&self, buffer: &str, cursor: usize, items: Option<&[Suggestion]>) -> Option<String> {
+        if !self.session.settings().bool(INLINE_ENABLED)
+            || buffer.is_empty()
+            || cursor != buffer.len()
         {
             return None;
         }
-        let history = || inline::history_ghost(&self.history.recent(), &req.buffer);
+        let history = || inline::history_ghost(&self.history.recent(), buffer);
         let specs = || items.and_then(inline::spec_ghost);
-        match inline::source(&self.settings) {
+        match inline::source(self.session.settings()) {
             Ok(Source::Specs) => specs(),
             Ok(Source::History) | Ok(Source::Profile(_)) => history(),
             _ => history().or_else(specs),
@@ -1196,14 +1088,14 @@ impl Engine {
     // Recency (SPEC §6.7.5) and LLM ghost text (SPEC §8.4)
 
     fn record(&mut self, cmd: String, name: String) {
-        if self.recency.record(cmd, name, now_ms()) {
-            self.recency_repository.save(&self.recency);
+        if self.session.record_insertion(cmd, name, now_ms()) {
+            self.recency_repository.save(self.session.recency());
         }
     }
 
     fn llm(&mut self, req: u64, buffer: String, cwd: PathBuf, shell: Shell) {
         let tx = self.tx.clone();
-        let Ok(Source::Profile(profile)) = inline::source(&self.settings) else {
+        let Ok(Source::Profile(profile)) = inline::source(self.session.settings()) else {
             let _ = tx.send(Msg::Ghost { req, text: None });
             return;
         };
@@ -1214,8 +1106,8 @@ impl Engine {
             });
             return;
         }
-        let history = llm_history(&self.settings, &self.history.recent());
-        let env = self.env().clone();
+        let history = llm_history(self.session.settings(), &self.history.recent());
+        let env = self.session.env().clone();
         let cache = self.ghost_cache.clone();
         let spawned = std::thread::Builder::new()
             .name("llm".into())
@@ -1235,6 +1127,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::completion::domain::entities::suggestion_recency::SuggestionRecency;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::history::domain::repositories::history_repository::InMemoryHistoryRepository;
     use crate::history::infrastructure::adapters::jsonl_history_repository::JsonlHistoryRepository;
@@ -1326,7 +1219,7 @@ mod tests {
             ))),
             None,
         );
-        e.wrapper_env = wrapper_env();
+        e.session = CompletionSession::new(Settings::default(), wrapper_env(), SuggestionRecency::default());
         (e, js)
     }
 

@@ -13,6 +13,7 @@ pub(crate) mod generator_step;
 pub(crate) mod insertion;
 pub(crate) mod insertion_context;
 pub(crate) mod parsed_command_line;
+pub(crate) mod served_request;
 pub(crate) mod suggestion;
 pub(crate) mod suggestion_candidate;
 pub(crate) mod suggestion_query;

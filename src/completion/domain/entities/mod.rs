@@ -1,3 +1,4 @@
+pub(crate) mod completion_session;
 pub(crate) mod generator_cache;
 pub(crate) mod generator_run;
 pub(crate) mod generator_slot;
