@@ -10,7 +10,8 @@ use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::completion::domain::completion_error::CompletionError;
 use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
-use crate::parser::{ParseCtx, Parser};
+use crate::completion::application::parse_context::ParseContext;
+use crate::parser::Parser;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
     AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
@@ -542,7 +543,7 @@ impl Engine {
         } else {
             &self.session_env
         };
-        let pctx = ParseCtx {
+        let pctx = ParseContext {
             cwd: &req.cwd,
             settings: &self.settings,
             env,

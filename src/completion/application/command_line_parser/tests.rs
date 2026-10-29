@@ -9,10 +9,12 @@ use crate::specs::domain::repositories::spec_repository::InMemorySpecRepository;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
+use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{function_result, normalise};
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{call_arguments, JsArg};
 use serde_json::{json, Value};
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 const S: u8 = 1;
 const O: u8 = 2;
@@ -151,7 +153,7 @@ fn parse_reporting(
     if dev {
         settings = settings.with(AUTOCOMPLETE_DEVELOPER_MODE, SettingValue::Bool(true));
     }
-    let ctx = ParseCtx {
+    let ctx = ParseContext {
         cwd,
         settings: &settings,
         env: &HashMap::new(),
