@@ -764,6 +764,22 @@ mod tests {
     }
 
     #[test]
+    fn should_keep_the_lists_and_bools_of_a_script_object_exactly() {
+        let script = json!({"command": "git", "args": ["branch", "-a", [1, null]], "on": true, "off": false});
+        let spec = json!({"name": "x", "args": {"generators": [{"script": script}]}});
+
+        let s = normalise(&spec).unwrap();
+
+        let generators = s.args()[0].generators();
+        let Some(GeneratorScript::Object(object)) = generators[0].script() else {
+            panic!("not an object script: {:?}", generators[0].script());
+        };
+        let back = spec_value_to_json(object);
+        assert_eq!(back, script);
+        assert_eq!(back.to_string(), script.to_string());
+    }
+
+    #[test]
     fn legacy_string_script_runs_through_sh_c() {
         // win-legacy-script-cmd: same `sh -c` form as `executeShellCommand(string)` on every platform
         assert_eq!(
