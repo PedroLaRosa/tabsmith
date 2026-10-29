@@ -61,13 +61,14 @@ use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::generator_script::GeneratorScript;
 use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
+use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
+use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::infrastructure::adapters::exec_input::ExecInput;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{
     self, generator_context_json, json_items, post_process_items, script_exec_input, spec_value_to_json,
-    truthy,
 };
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
@@ -624,15 +625,28 @@ impl Engine {
                 match g.get_query_term() {
                     None => SuggestionQuery::Term,
                     Some(TextOrFunction::Str(s)) => SuggestionQuery::Str(s.clone()),
-                    Some(TextOrFunction::Fn(f)) => match js.call_json(
-                        *f,
-                        vec![JsArg::Json(json!(pr.search_term()))],
+                    Some(TextOrFunction::Fn(f)) => match js.call(
+                        SpecFunctionCall::QueryTerm {
+                            function: *f,
+                            search_term: pr.search_term().to_string(),
+                        },
                         None,
                         SYNC_CALL,
                     ) {
-                        Ok(Value::String(s)) => SuggestionQuery::Value(s),
+                        Ok(SpecFunctionResult::QueryTerm(Some(s))) => SuggestionQuery::Value(s),
                         Err(SpecError::Aborted) => return None,
-                        Ok(_)
+                        Ok(
+                            SpecFunctionResult::QueryTerm(None)
+                            | SpecFunctionResult::Trigger(_)
+                            | SpecFunctionResult::Alias(_)
+                            | SpecFunctionResult::LoadSpec(_)
+                            | SpecFunctionResult::GenerateSpecCacheKey(_)
+                            | SpecFunctionResult::GenerateSpec(_)
+                            | SpecFunctionResult::Script(_)
+                            | SpecFunctionResult::Custom(_)
+                            | SpecFunctionResult::PostProcess(_)
+                            | SpecFunctionResult::FilterTemplateSuggestions(_),
+                        )
                         | Err(
                             SpecError::Timeout
                             | SpecError::Invalid(_)
@@ -669,15 +683,29 @@ impl Engine {
             } else {
                 match g.trigger() {
                     None => arg.as_ref().is_some_and(|a| a.debounce().is_some()),
-                    Some(GeneratorTrigger::Fn(f)) => match js.call_json(
-                        *f,
-                        vec![JsArg::Json(json!(new)), JsArg::Json(json!(old))],
+                    Some(GeneratorTrigger::Fn(f)) => match js.call(
+                        SpecFunctionCall::Trigger {
+                            function: *f,
+                            new_token: new.to_string(),
+                            old_token: old.to_string(),
+                        },
                         None,
                         SYNC_CALL,
                     ) {
-                        Ok(v) => truthy(&v),
+                        Ok(SpecFunctionResult::Trigger(fired)) => fired,
                         Err(SpecError::Aborted) => return None,
-                        Err(
+                        Ok(
+                            SpecFunctionResult::QueryTerm(_)
+                            | SpecFunctionResult::Alias(_)
+                            | SpecFunctionResult::LoadSpec(_)
+                            | SpecFunctionResult::GenerateSpecCacheKey(_)
+                            | SpecFunctionResult::GenerateSpec(_)
+                            | SpecFunctionResult::Script(_)
+                            | SpecFunctionResult::Custom(_)
+                            | SpecFunctionResult::PostProcess(_)
+                            | SpecFunctionResult::FilterTemplateSuggestions(_),
+                        )
+                        | Err(
                             SpecError::Timeout
                             | SpecError::Invalid(_)
                             | SpecError::BundleUnavailable(_),
