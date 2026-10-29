@@ -77,11 +77,7 @@ impl CompletionSession {
 
     /// The env of the shell's latest prompt; an empty one means the shell reported none: the wrapper's env.
     pub(crate) fn env(&self) -> &HashMap<String, String> {
-        if self.session_env.is_empty() {
-            &self.wrapper_env
-        } else {
-            &self.session_env
-        }
+        reported_env(&self.session_env, &self.wrapper_env)
     }
 
     /// The aliases the shell reported, parsed once per shell.
@@ -124,11 +120,7 @@ impl CompletionSession {
 
     /// The parse's cache, settings and env, lent together.
     pub(crate) fn parse_inputs(&mut self) -> (&mut ParsePrefixCache, &Settings, &HashMap<String, String>) {
-        let env = if self.session_env.is_empty() {
-            &self.wrapper_env
-        } else {
-            &self.session_env
-        };
+        let env = reported_env(&self.session_env, &self.wrapper_env);
         (&mut self.parse_prefix_cache, &self.settings, env)
     }
 
@@ -286,6 +278,19 @@ impl CompletionSession {
 
     pub(crate) fn generator_cache_mut(&mut self) -> &mut GeneratorCache<SpecValue> {
         &mut self.cache
+    }
+}
+
+/// GEN-GT38: an empty session env means the shell reported none, so the wrapper's env stands in. A free function
+/// over the two fields so `parse_inputs` can lend it beside the mutably borrowed parse cache.
+fn reported_env<'a>(
+    session_env: &'a HashMap<String, String>,
+    wrapper_env: &'a HashMap<String, String>,
+) -> &'a HashMap<String, String> {
+    if session_env.is_empty() {
+        wrapper_env
+    } else {
+        session_env
     }
 }
 
