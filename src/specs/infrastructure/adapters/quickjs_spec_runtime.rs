@@ -508,6 +508,9 @@ pub(crate) fn call_arguments(
         SpecFunctionCall::Alias { token, .. } | SpecFunctionCall::LoadSpec { token, .. } => {
             vec![JsArg::Json(json!(token)), JsArg::Exec]
         }
+        SpecFunctionCall::GenerateSpecCacheKey { tokens, .. } => {
+            vec![JsArg::Json(json!({ "tokens": tokens }))]
+        }
         _ => Vec::new(),
     };
     (call.function(), arguments)

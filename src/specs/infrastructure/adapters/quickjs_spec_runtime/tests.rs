@@ -500,3 +500,19 @@ fn should_pass_a_load_spec_function_the_token_and_the_exec_function() {
 
     assert_eq!(arguments, (6, vec![JsArg::Json(token.into()), JsArg::Exec]));
 }
+
+#[test]
+fn should_pass_a_cache_key_function_the_tokens_in_an_object_and_no_exec_function() {
+    let tokens = vec!["npm".to_string(), "run".to_string()];
+    let call = SpecFunctionCall::GenerateSpecCacheKey {
+        function: 7,
+        tokens: tokens.clone(),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(
+        arguments,
+        (7, vec![JsArg::Json(json!({ "tokens": tokens }))])
+    );
+}
