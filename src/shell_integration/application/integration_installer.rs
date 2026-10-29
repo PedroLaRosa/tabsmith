@@ -909,4 +909,14 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn should_report_nothing_installed_when_every_integration_already_is() {
+        let bed = test_bed();
+        bed.installer.install_missing(&paths(), &[Shell::Zsh, Shell::Fish]).unwrap();
+
+        let installed = bed.installer.install_missing(&paths(), &[Shell::Zsh, Shell::Fish]);
+
+        assert!(matches!(installed, Ok(false)), "{installed:?}");
+    }
 }
