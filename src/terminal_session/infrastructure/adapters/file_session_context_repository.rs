@@ -50,8 +50,10 @@ impl SessionContextRepository for FileSessionContextRepository {
         Some(record.into_context(id.clone()))
     }
 
-    fn last_modified(&self, _id: &SessionId) -> Option<SystemTime> {
-        None
+    /// Follows a symlinked run file, as the pty's `mtime` did; `None` when the file or its path is unknown.
+    fn last_modified(&self, id: &SessionId) -> Option<SystemTime> {
+        let path = self.file(id).ok()?;
+        std::fs::metadata(path).ok()?.modified().ok()
     }
 
     fn remove(&self, _id: &SessionId) {}
@@ -144,6 +146,23 @@ mod tests {
                 found.reported_at_ms()
             ),
             ("abc123", true, None, 0)
+        );
+    }
+
+    /// The pty reloads the context when this time changes; a session that never reported has none.
+    #[test]
+    fn should_give_the_modification_time_of_the_run_file_once_the_session_reported() {
+        let temp_dir = TempDir::new("session-mtime");
+        let repository = repository_in(&temp_dir);
+        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+        let before = repository.last_modified(&session_id("abc123"));
+
+        repository.save(&context).unwrap();
+
+        let path = temp_dir.path().join("run/abc123.json");
+        assert_eq!(
+            (before, repository.last_modified(&session_id("abc123"))),
+            (None, std::fs::metadata(path).unwrap().modified().ok())
         );
     }
 }
