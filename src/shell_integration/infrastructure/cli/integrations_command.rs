@@ -14,15 +14,20 @@ pub(crate) fn integration_failures_error(failures: Vec<IntegrationFailure>) -> a
 fn failures_text(failures: &[IntegrationFailure], styled: bool) -> String {
     let parts: Vec<String> = failures
         .iter()
-        .map(|failure| match failure {
-            IntegrationFailure::Listing { shell, reason } => format!("{shell}: {reason}"),
-            IntegrationFailure::Operation {
-                description,
-                reason,
-            } => format!("{}: {reason}", sgr(description, "1", styled)),
-        })
+        .map(|failure| failure_line(failure, styled))
         .collect();
     format!("\n\n{}", parts.join("\n\n"))
+}
+
+/// The shell it could not list, or the failed integration's description in bold when `styled`, then the reason.
+fn failure_line(failure: &IntegrationFailure, styled: bool) -> String {
+    match failure {
+        IntegrationFailure::Listing { shell, reason } => format!("{shell}: {reason}"),
+        IntegrationFailure::Operation {
+            description,
+            reason,
+        } => format!("{}: {reason}", sgr(description, "1", styled)),
+    }
 }
 
 /// What `integrations status` prints in `format`, one `println!` each (SPEC §2.6): the plain rows and failures, or
@@ -66,13 +71,7 @@ fn plain_status_lines(report: &IntegrationStatusReport, styled: bool) -> Vec<Str
         };
         format!("{mark} {}", row.description)
     });
-    let failures = report.failures.iter().map(|failure| match failure {
-        IntegrationFailure::Listing { shell, reason } => format!("{shell}: {reason}"),
-        IntegrationFailure::Operation {
-            description,
-            reason,
-        } => format!("{description}: {reason}"),
-    });
+    let failures = report.failures.iter().map(|failure| failure_line(failure, styled));
     rows.chain(failures).collect()
 }
 
