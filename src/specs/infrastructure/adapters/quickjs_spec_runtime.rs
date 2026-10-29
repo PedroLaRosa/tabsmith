@@ -23,6 +23,7 @@ use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::infrastructure::adapters::exec_input::{process_output_json, ExecInput};
+use crate::specs::infrastructure::adapters::fig_spec_mapper::generator_context_json;
 use crate::specs::infrastructure::adapters::process_executor::exec;
 use crate::specs::infrastructure::adapters::quickjs_module_wrapper::{wrap_module, PRELUDE};
 use rquickjs::context::EvalOptions;
@@ -496,7 +497,7 @@ impl QuickJsSpecRuntime {
 /// The function a spec function call runs, and the JS arguments its kind passes.
 pub(crate) fn call_arguments(
     call: &SpecFunctionCall,
-    _context: &GeneratorContext,
+    context: &GeneratorContext,
 ) -> (SpecFunctionRef, Vec<JsArg>) {
     let arguments = match call {
         SpecFunctionCall::QueryTerm { search_term, .. } => vec![JsArg::Json(json!(search_term))],
@@ -515,6 +516,11 @@ pub(crate) fn call_arguments(
             vec![JsArg::Json(json!(tokens)), JsArg::Exec]
         }
         SpecFunctionCall::Script { tokens, .. } => vec![JsArg::Json(json!(tokens))],
+        SpecFunctionCall::Custom { tokens, .. } => vec![
+            JsArg::Json(json!(tokens)),
+            JsArg::Exec,
+            JsArg::Json(generator_context_json(context)),
+        ],
         _ => Vec::new(),
     };
     (call.function(), arguments)

@@ -1,6 +1,6 @@
 use super::*;
 use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
-use crate::specs::infrastructure::adapters::fig_spec_mapper::fn_id;
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{fn_id, generator_context_json};
 #[cfg(unix)]
 use crate::specs::infrastructure::adapters::process_executor::fake_bin;
 use crate::shared::infrastructure::testing::temp_dir::TempDir;
@@ -541,4 +541,34 @@ fn should_pass_a_script_function_the_tokens() {
     let arguments = call_arguments(&call, &GeneratorContext::default());
 
     assert_eq!(arguments, (9, vec![JsArg::Json(json!(tokens))]));
+}
+
+#[test]
+fn should_pass_a_custom_generator_the_tokens_the_exec_function_and_the_generator_context() {
+    let tokens = vec!["git".to_string(), "checkout".to_string()];
+    let context = GeneratorContext::new(
+        "/repo".into(),
+        [("HOME".to_string(), "/home/me".to_string())].into(),
+        "zsh".into(),
+        "ma".into(),
+        true,
+    );
+    let call = SpecFunctionCall::Custom {
+        function: 10,
+        tokens: tokens.clone(),
+    };
+
+    let arguments = call_arguments(&call, &context);
+
+    assert_eq!(
+        arguments,
+        (
+            10,
+            vec![
+                JsArg::Json(json!(tokens)),
+                JsArg::Exec,
+                JsArg::Json(generator_context_json(&context)),
+            ]
+        )
+    );
 }
