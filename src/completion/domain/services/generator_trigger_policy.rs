@@ -46,6 +46,11 @@ pub(crate) fn script_timeout(settings: &Settings) -> u64 {
     settings.f64(AUTOCOMPLETE_SCRIPT_TIMEOUT).max(0.0) as u64
 }
 
+/// How long a fired generator waits before it runs: a `debounce` of 0 waits 200 ms, none runs at once.
+pub(crate) fn effective_debounce(debounce: Option<u64>) -> Option<u64> {
+    debounce.map(|ms| if ms > 0 { ms } else { 200 })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +97,14 @@ mod tests {
         let floors = (script_timeout(&fractional), script_timeout(&negative));
 
         assert_eq!(floors, (7500, 0));
+    }
+
+    #[test]
+    fn should_debounce_a_zero_debounce_for_200_ms() {
+        let debounces = [Some(0), Some(350), None];
+
+        let effective = debounces.map(effective_debounce);
+
+        assert_eq!(effective, [Some(200), Some(350), None]);
     }
 }
