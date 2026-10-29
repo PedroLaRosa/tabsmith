@@ -712,35 +712,6 @@ fn version_pick() {
 }
 
 #[test]
-fn semver_helpers() {
-    assert_eq!(semver_clean("1.2.3\n").as_deref(), Some("1.2.3"));
-    assert_eq!(semver_clean(" =v1.2.3 ").as_deref(), Some("1.2.3"));
-    assert_eq!(
-        semver_clean("1.2.3-beta.1+build.5").as_deref(),
-        Some("1.2.3-beta.1")
-    );
-    for bad in [
-        "heroku/8.1.0 darwin-x64",
-        "1.2",
-        "01.2.3",
-        "1.2.3.4",
-        "",
-        "git version 2.39.0",
-    ] {
-        assert_eq!(semver_clean(bad), None, "{bad:?}");
-    }
-    assert_eq!(semver_cmp("1.10.0", "1.9.0"), Ordering::Greater);
-    assert_eq!(semver_cmp("1.0.0-alpha", "1.0.0"), Ordering::Less);
-    assert_eq!(
-        semver_cmp("1.0.0-alpha.1", "1.0.0-alpha.beta"),
-        Ordering::Less
-    );
-    assert_eq!(semver_cmp("1.0.0-2", "1.0.0-10"), Ordering::Less);
-    assert_eq!(semver_cmp("1.0.0-alpha", "1.0.0-alpha.1"), Ordering::Less);
-    assert_eq!(semver_cmp("2.53.0", "2.53.0"), Ordering::Equal);
-}
-
-#[test]
 fn cached_nested_state_keeps_this_commands_prefix() {
     let wrapper =
         |n: &str| spec(json!({"name": n, "args": {"name": "command", "isCommand": true}}));

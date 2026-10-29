@@ -10,6 +10,9 @@ use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
 use crate::specs::domain::value_objects::repeatability::Repeatability;
+use crate::specs::domain::value_objects::semantic_version::{
+    semver_clean, semver_cmp, SemanticVersion,
+};
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
 use crate::specs::domain::services::spec_locator::spec_location;
@@ -366,7 +369,7 @@ fn apply_versions(mut base: Value, diffs: &Map<String, Value>, target: Option<&s
     let mut keys: Vec<&String> = diffs.keys().collect();
     keys.sort_by(|a, b| semver_cmp(a, b));
     // ponytail: an unparsable target applies everything (JS semver would throw).
-    let target = target.filter(|t| semver(t).is_some());
+    let target = target.filter(|t| SemanticVersion::parse(t).is_some());
     for k in keys {
         if target.is_none_or(|t| semver_cmp(k, t) != Ordering::Greater) {
             base = merge_subcommand(&base, &diffs[k]);
@@ -477,58 +480,6 @@ fn truthy(v: Option<&Value>) -> bool {
         Some(Value::String(s)) => !s.is_empty(),
         Some(_) => true,
     }
-}
-
-type SemVer = (u64, u64, u64, Vec<String>);
-
-/// `MAJOR.MINOR.PATCH[-pre][+build]`, optional leading `v`/`=` (node-semver, non-loose).
-fn semver(s: &str) -> Option<SemVer> {
-    let s = s.trim().trim_start_matches(['=', 'v']);
-    let s = s.split_once('+').map_or(s, |(v, _)| v);
-    let (main, pre) = s.split_once('-').map_or((s, None), |(m, p)| (m, Some(p)));
-    let num = |x: &str| {
-        (!x.is_empty()
-            && x.bytes().all(|c| c.is_ascii_digit())
-            && (x == "0" || !x.starts_with('0')))
-        .then(|| x.parse().ok())
-        .flatten()
-    };
-    let mut it = main.split('.');
-    let v = (num(it.next()?)?, num(it.next()?)?, num(it.next()?)?);
-    let pre: Vec<String> = pre.map_or(Vec::new(), |p| p.split('.').map(String::from).collect());
-    let ident_ok =
-        |i: &String| !i.is_empty() && i.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-');
-    (it.next().is_none() && pre.iter().all(ident_ok)).then_some((v.0, v.1, v.2, pre))
-}
-
-/// `semver.clean`: the normalised version, or None.
-fn semver_clean(s: &str) -> Option<String> {
-    let (a, b, c, pre) = semver(s)?;
-    Some(if pre.is_empty() {
-        format!("{a}.{b}.{c}")
-    } else {
-        format!("{a}.{b}.{c}-{}", pre.join("."))
-    })
-}
-
-/// `semver.compare`; unparsable versions sort as 0.0.0.
-fn semver_cmp(a: &str, b: &str) -> Ordering {
-    let zero = || (0, 0, 0, Vec::new());
-    let (a, b) = (
-        semver(a).unwrap_or_else(zero),
-        semver(b).unwrap_or_else(zero),
-    );
-    (a.0, a.1, a.2)
-        .cmp(&(b.0, b.1, b.2))
-        .then_with(|| match (a.3.is_empty(), b.3.is_empty()) {
-            (true, true) => Ordering::Equal,
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-            (false, false) => {
-                let ident = |x: &String| x.parse::<u64>().map_or(Err(x.clone()), Ok); // numeric < alphanumeric
-                a.3.iter().map(ident).cmp(b.3.iter().map(ident))
-            }
-        })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
