@@ -1,6 +1,7 @@
 use crate::completion::domain::value_objects::filter_options::FilterOptions;
 use crate::completion::domain::value_objects::insertion_context::InsertionContext;
-use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLineParts;
+use crate::completion::domain::value_objects::parsed_command_line::{ParsedCommandLine, ParsedCommandLineParts};
+use crate::completion::domain::value_objects::served_request::{ServedRequest, ServedRequestParts};
 use crate::completion::domain::value_objects::suggestion_candidate::SuggestionCandidate;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::specs::domain::entities::subcommand::Subcommand;
@@ -31,6 +32,25 @@ pub(crate) fn pr_for(comp: Subcommand, search: &str) -> ParsedCommandLineParts {
         first_token: false,
         spec_name: "cmd".into(),
     }
+}
+
+/// A request served for `cmd ` (a spec without arguments, cursor at the end), for a session to hold.
+pub(crate) fn served_request() -> ServedRequest {
+    ServedRequest::new(ServedRequestParts {
+        request_id: 1,
+        buffer: "cmd ".into(),
+        shell: Shell::Bash,
+        history_mode: false,
+        cursor: 4,
+        parsed: ParsedCommandLine::new(pr_for(Subcommand::default(), "")),
+        command_text: "cmd ".into(),
+        argument_key: 0,
+        fuzzy: false,
+        queries: Vec::new(),
+        triggered_generators: Vec::new(),
+        first_token_candidates: Vec::new(),
+        history_prefix: "cmd ".into(),
+    })
 }
 
 pub(crate) fn opts() -> FilterOptions {
