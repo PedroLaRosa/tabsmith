@@ -17,11 +17,12 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
+use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::types::{
-    EngineMsg, Model, Msg, Request,
+    EngineMsg, Model, Msg,
 };
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
@@ -863,7 +864,7 @@ impl Session {
             self.echo_pending = None; // nothing stale left for held keys to act on
             return;
         }
-        let req = Request {
+        let req = CompletionRequest {
             id: self.req,
             buffer,
             cursor,

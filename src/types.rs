@@ -1,4 +1,5 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
+use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
@@ -8,18 +9,6 @@ use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-/// Wrapper → engine completion request.
-#[derive(Clone, Debug)]
-pub struct Request {
-    pub id: u64,
-    pub buffer: String,
-    /// Byte offset into `buffer`.
-    pub cursor: usize,
-    pub cwd: PathBuf,
-    pub shell: Shell,
-    pub history_mode: bool,
-}
 
 /// Messages to the wrapper's main loop.
 pub enum Msg {
@@ -35,7 +24,7 @@ pub enum Msg {
 
 /// Messages to the engine thread.
 pub enum EngineMsg {
-    Complete(Request),
+    Complete(CompletionRequest),
     CommandFinished(HistoryEntry),
     /// A command finished but must not be recorded (NoHistory).
     CommandEnded,

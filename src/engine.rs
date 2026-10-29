@@ -19,6 +19,7 @@ use crate::settings::domain::services::settings_catalog::{
 };
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
+use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
@@ -59,7 +60,7 @@ use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
-    now_ms, EngineMsg, Msg, Request,
+    now_ms, EngineMsg, Msg,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -308,7 +309,7 @@ enum Outcome {
 
 /// The latest served request (for phase-Generators replies).
 struct Current {
-    req: Request,
+    req: CompletionRequest,
     cursor: usize,
     pr: ParseResult,
     cmd_text: String,
@@ -412,7 +413,7 @@ impl Engine {
     }
 
     fn run(mut self, js: &QuickJsSpecRuntime, inbox: &EngineInbox) {
-        let mut pending: Option<Request> = None;
+        let mut pending: Option<CompletionRequest> = None;
         'outer: loop {
             if pending.is_none() && self.runs.is_empty() {
                 match inbox.next_msg(js) {
@@ -446,7 +447,7 @@ impl Engine {
     }
 
     /// Handle one message; `false` = shut down.
-    fn handle(&mut self, m: EngineMsg, pending: &mut Option<Request>, js: &QuickJsSpecRuntime) -> bool {
+    fn handle(&mut self, m: EngineMsg, pending: &mut Option<CompletionRequest>, js: &QuickJsSpecRuntime) -> bool {
         match m {
             EngineMsg::Complete(r) => *pending = Some(r),
             EngineMsg::CommandFinished(_) | EngineMsg::CommandEnded => {
@@ -518,7 +519,7 @@ impl Engine {
     // Requests
 
     /// Phase-Parse reply for `req`; `None` when a newer request aborted it (it is kept in the engine inbox).
-    fn compute(&mut self, req: &Request, js: &QuickJsSpecRuntime) -> Option<CompletionResult> {
+    fn compute(&mut self, req: &CompletionRequest, js: &QuickJsSpecRuntime) -> Option<CompletionResult> {
         let cursor = req.cursor.min(req.buffer.len());
         // SPEC §6.1.5 mid-word guard
         if !req.buffer.is_char_boundary(cursor)
@@ -610,7 +611,7 @@ impl Engine {
     }
 
     /// Error reply (menu error-reset). Generator state is reset on errors too.
-    fn error(&mut self, req: &Request, cursor: usize, ghost: bool) -> CompletionResult {
+    fn error(&mut self, req: &CompletionRequest, cursor: usize, ghost: bool) -> CompletionResult {
         self.reset_slots();
         self.cur = None;
         let mut c = CompletionResult::error(req.id, req.buffer.clone(), cursor);
@@ -1175,7 +1176,7 @@ impl Engine {
     }
 
     /// Local inline ghost (SPEC §6.11). Also computed for parse-error replies (commands without a spec).
-    fn ghost(&self, req: &Request, cursor: usize, items: Option<&[Suggestion]>) -> Option<String> {
+    fn ghost(&self, req: &CompletionRequest, cursor: usize, items: Option<&[Suggestion]>) -> Option<String> {
         if !self.settings.bool(INLINE_ENABLED)
             || req.buffer.is_empty()
             || cursor != req.buffer.len()
@@ -1491,7 +1492,7 @@ mod tests {
     #[test]
     fn wait_aborts_and_defers_on_complete() {
         let (js, inbox, tx) = runtime_with_inbox();
-        let req = |id| Request {
+        let req = |id| CompletionRequest {
             id,
             buffer: "git ".into(),
             cursor: 4,
@@ -1636,7 +1637,7 @@ mod tests {
     }
 
     fn complete_at(id: u64, cwd: &Path, buffer: &str, cursor: usize) -> EngineMsg {
-        EngineMsg::Complete(Request {
+        EngineMsg::Complete(CompletionRequest {
             id,
             buffer: buffer.into(),
             cursor,
