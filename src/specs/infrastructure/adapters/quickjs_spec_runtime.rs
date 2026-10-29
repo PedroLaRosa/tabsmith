@@ -521,6 +521,9 @@ pub(crate) fn call_arguments(
             JsArg::Exec,
             JsArg::Json(generator_context_json(context)),
         ],
+        SpecFunctionCall::PostProcess { stdout, tokens, .. } => {
+            vec![JsArg::Json(json!(stdout)), JsArg::Json(json!(tokens))]
+        }
         _ => Vec::new(),
     };
     (call.function(), arguments)

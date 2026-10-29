@@ -572,3 +572,20 @@ fn should_pass_a_custom_generator_the_tokens_the_exec_function_and_the_generator
         )
     );
 }
+
+#[test]
+fn should_pass_post_process_the_stdout_and_the_tokens() {
+    let (stdout, tokens) = ("main\ndev", vec!["git".to_string(), "checkout".to_string()]);
+    let call = SpecFunctionCall::PostProcess {
+        function: 11,
+        stdout: stdout.into(),
+        tokens: tokens.clone(),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(
+        arguments,
+        (11, vec![JsArg::Json(json!(stdout)), JsArg::Json(json!(tokens))])
+    );
+}
