@@ -7,6 +7,7 @@ pub(crate) mod completion_request;
 pub(crate) mod generator_runner;
 pub(crate) mod parse_context;
 pub(crate) mod ports;
+pub(crate) mod progress_generators_use_case;
 pub(crate) mod record_suggestion_insertion_use_case;
 pub(crate) mod reset_generators_use_case;
 #[cfg(test)]
