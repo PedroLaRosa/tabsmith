@@ -13,12 +13,10 @@ use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::application::integration_installer::IntegrationInstaller;
 use crate::shell_integration::application::ports::init_script_templates::InitScriptTemplates;
 use crate::shell_integration::application::ports::shell_environment::ShellEnvironment;
-use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
 use crate::shell_integration::domain::services::init_script_renderer;
 use crate::shell_integration::domain::services::launch_policy;
 use crate::shell_integration::domain::services::manual_install_instructions;
-use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
@@ -272,11 +270,6 @@ fn prune_run_files(dir: &Path) {
 // ---------------------------------------------------------------------------------------------------------------
 // Dotfile integrations (SPEC §5.5)
 
-/// Integrations of `shell` (SPEC §5.5 table), asking `pwsh` for `$PROFILE` when the paths do not know it.
-pub fn integrations(ctx: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>, ShellIntegrationError> {
-    legacy_installer().integrations(ctx, shell)
-}
-
 /// The installer over the files on disk, the system clock and the running system's shell facts.
 fn legacy_installer() -> IntegrationInstaller {
     IntegrationInstaller::new(
@@ -287,55 +280,9 @@ fn legacy_installer() -> IntegrationInstaller {
     )
 }
 
-impl Integration {
-    /// Write both `~/.tabsmith/shell/` script files of a dotfile integration.
-    pub(crate) fn write_scripts(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        legacy_installer().write_scripts(ctx, self)
-    }
-
-    /// SPEC §5.5 `is_installed()`: the first failing reason.
-    pub(crate) fn is_installed(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        legacy_installer().check(ctx, self)
-    }
-
-    /// SPEC §5.5 install (idempotent); an existing dotfile is first copied to `<data>/backups/<unix-secs>/`.
-    pub(crate) fn install(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        legacy_installer().install(ctx, self)
-    }
-
-    /// Anything uninstall would remove is on disk: also true where `is_installed` fails (a moved binary, an edited
-    /// script, lines appended after the post block).
-    pub(crate) fn has_traces(&self, ctx: &IntegrationPaths) -> bool {
-        legacy_installer().has_traces(ctx, self)
-    }
-
-    /// SPEC §5.5 uninstall: drop our exact lines, then delete the script files (missing is fine).
-    pub(crate) fn uninstall(&self, ctx: &IntegrationPaths) -> Result<(), ShellIntegrationError> {
-        legacy_installer().uninstall(ctx, self)
-    }
-
-    /// The exact bytes of the `~/.tabsmith/shell` script file of `phase`.
-    pub(crate) fn script_contents(&self, paths: &IntegrationPaths, phase: IntegrationPhase) -> String {
-        self.script(paths, phase).contents().to_string()
-    }
-}
-
 /// `[bash, zsh, fish]`, plus pwsh when it is on PATH (SPEC §2.6).
 fn default_shells() -> Vec<Shell> {
     IntegrationTarget::All.shells(|| which("pwsh").is_some())
-}
-
-/// Run `op` on every integration of `shells` that `pick` selects. Ok(true) if `op` ran at least once; errors
-/// are collected as `"<describe bold>: <message>"` and returned as one (SPEC §2.6).
-fn apply(
-    ctx: &IntegrationPaths,
-    shells: &[Shell],
-    pick: impl Fn(&Integration) -> bool,
-    op: impl Fn(&Integration, &IntegrationPaths) -> Result<(), ShellIntegrationError>,
-) -> Result<bool> {
-    legacy_installer()
-        .apply(ctx, shells, pick, |i| op(i, ctx))
-        .map_err(integration_failures_error)
 }
 
 /// Install every integration of `shells` that is not installed. Ok(true) if something was installed.
@@ -348,7 +295,10 @@ pub fn install_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool
 /// Uninstall every integration of `shells` with something on disk. Not only the installed ones: `is_installed`
 /// fails exactly when uninstall is needed (a moved binary, lines appended after the post block). Ok(true) if any.
 fn uninstall_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool> {
-    apply(ctx, shells, |i| i.has_traces(ctx), Integration::uninstall)
+    let installer = legacy_installer();
+    installer
+        .apply(ctx, shells, |i| installer.has_traces(ctx, i), |i| installer.uninstall(ctx, i))
+        .map_err(integration_failures_error)
 }
 
 fn target_shells(t: &IntegrationTargetArg) -> Vec<Shell> {
@@ -401,10 +351,11 @@ pub fn integrations_cmd(cmd: IntegrationsCmd) -> anyhow::Result<i32> {
 
 /// `integrations status` (SPEC §2.6); honours the SHELL argument.
 fn status(ctx: &IntegrationPaths, shells: &[Shell], format: OutputFormat) -> Result<i32> {
+    let installer = legacy_installer();
     let (mut rows, mut errs) = (Vec::new(), Vec::new());
     for &shell in shells {
-        match integrations(ctx, shell) {
-            Ok(list) => rows.extend(list.into_iter().map(|i| (i.is_installed(ctx).is_ok(), i))),
+        match installer.integrations(ctx, shell) {
+            Ok(list) => rows.extend(list.into_iter().map(|i| (installer.check(ctx, &i).is_ok(), i))),
             Err(e) => errs.push((shell, format!("{e:#}"))),
         }
     }
@@ -513,12 +464,15 @@ pub fn setup(args: SetupArgs) -> anyhow::Result<i32> {
     if manual {
         print!("{}", manual_text(&ctx, &shells));
         // Script files only: the user declined (or we failed) to edit the dotfiles themselves.
-        let r = apply(
-            &ctx,
-            &shells,
-            |i| i.whole_file_phase().is_none(),
-            Integration::write_scripts,
-        );
+        let installer = legacy_installer();
+        let r = installer
+            .apply(
+                &ctx,
+                &shells,
+                |i| i.whole_file_phase().is_none(),
+                |i| installer.write_scripts(&ctx, i),
+            )
+            .map_err(integration_failures_error);
         if let Err(e) = r {
             println!("Could not install required files:");
             println!("{e:#}");
@@ -550,8 +504,10 @@ pub fn uninstall(args: UninstallArgs) -> anyhow::Result<i32> {
 
 /// Remove every integration of `shells` (and the data root on `purge`), carrying on past errors (SPEC §2.9): 1 if any.
 fn uninstall_all(ctx: &IntegrationPaths, shells: &[Shell], purge: bool) -> i32 {
-    let mut failed = apply(ctx, shells, |_| true, Integration::uninstall)
-        .map_err(|e| eprintln!("{e:#}"))
+    let installer = legacy_installer();
+    let mut failed = installer
+        .apply(ctx, shells, |_| true, |i| installer.uninstall(ctx, i))
+        .map_err(|failures| eprintln!("{:#}", integration_failures_error(failures)))
         .is_err();
     if purge {
         match std::fs::remove_dir_all(ctx.data_root()) {
@@ -581,8 +537,12 @@ fn uninstall_all(ctx: &IntegrationPaths, shells: &[Shell], purge: bool) -> i32 {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use crate::shell_integration::domain::entities::integration::Integration;
+    use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
     use crate::shell_integration::domain::value_objects::dotfile::{POST_MARKER, PRE_MARKER};
-    use crate::shell_integration::infrastructure::testing::integration_fixtures::{ctx, syntax_ok};
+    use crate::shell_integration::infrastructure::testing::integration_fixtures::{
+        ctx, install_dotfiles, integrations, manual_text, syntax_ok, uninstall_dotfiles, IntegrationOnDisk,
+    };
 
     #[test]
     fn integrations_dotfile_install_uninstall() {

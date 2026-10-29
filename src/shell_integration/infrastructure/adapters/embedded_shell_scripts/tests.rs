@@ -2,8 +2,6 @@
 //! scripts run in real shells (each skipped when its shell is not installed).
 use super::EmbeddedShellScripts;
 use crate::integrations::init_output;
-#[cfg(unix)]
-use crate::integrations::integrations;
 use crate::shared::domain::services::shell_quoting::quote;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::os::executable_lookup::which;
@@ -13,7 +11,7 @@ use crate::shell_integration::domain::value_objects::integration_phase::Integrat
 #[cfg(unix)]
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::PWSH_PROFILE_CMD;
 #[cfg(unix)]
-use crate::shell_integration::infrastructure::testing::integration_fixtures::ctx;
+use crate::shell_integration::infrastructure::testing::integration_fixtures::{ctx, integrations, IntegrationOnDisk};
 use crate::shell_integration::infrastructure::testing::integration_fixtures::syntax_ok;
 use std::path::{Path, PathBuf};
 use std::process::Command;
