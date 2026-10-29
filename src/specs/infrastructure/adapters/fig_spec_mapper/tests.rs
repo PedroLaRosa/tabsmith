@@ -631,3 +631,15 @@ fn should_read_post_process_items_with_the_context_danger() {
         SpecFunctionResult::PostProcess(items) if items == post_process_items(&v, true)
     ));
 }
+
+#[test]
+fn should_read_filtered_template_suggestions_as_suggestion_objects() {
+    let v = json!([{"name": "src/", "type": "folder"}, "main.rs", 0]);
+
+    let result = function_result(SpecFunctionKind::FilterTemplateSuggestions, &v, &GeneratorContext::default());
+
+    assert!(matches!(
+        result,
+        SpecFunctionResult::FilterTemplateSuggestions(items) if items == json_items(&v)
+    ));
+}

@@ -507,7 +507,7 @@ pub(crate) fn function_result(
             SpecFunctionResult::PostProcess(post_process_items(v, context.is_dangerous()))
         }
         SpecFunctionKind::FilterTemplateSuggestions => {
-            SpecFunctionResult::FilterTemplateSuggestions(Vec::new())
+            SpecFunctionResult::FilterTemplateSuggestions(json_items(v))
         }
     }
 }
