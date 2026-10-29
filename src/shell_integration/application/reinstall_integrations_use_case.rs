@@ -35,9 +35,11 @@ impl ReinstallIntegrationsUseCase {
             |i| self.installer.has_traces(paths, i),
             |i| self.installer.uninstall(paths, i),
         )?;
-        let installed = self.installer.install_missing(paths, shells);
-        self.restart_reminder.save_pending();
-        installed
+        let installed = self.installer.install_missing(paths, shells)?;
+        if installed {
+            self.restart_reminder.save_pending();
+        }
+        Ok(installed)
     }
 }
 
@@ -47,9 +49,11 @@ mod tests {
     use crate::shared::application::ports::clock::FixedClock;
     use crate::shell_integration::application::ports::shell_environment::RecordingShellEnvironment;
     use crate::shell_integration::domain::repositories::backup_repository::InMemoryBackupRepository;
-    use crate::shell_integration::domain::repositories::dotfile_repository::InMemoryDotfileRepository;
+    use crate::shell_integration::domain::repositories::dotfile_repository::{
+        DotfileRepository, InMemoryDotfileRepository,
+    };
     use crate::shell_integration::domain::repositories::restart_reminder_repository::InMemoryRestartReminderRepository;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     /// The installer over `dotfiles`, in-memory backups, a fixed clock and `environment`.
@@ -124,6 +128,27 @@ mod tests {
             "{reinstalled:?} {:?} {:?}",
             dotfiles.writes(),
             environment.asked()
+        );
+    }
+
+    /// Both zsh dotfiles opt out: nothing to take out, nothing to install again, so no reminder (T38).
+    #[test]
+    fn should_save_no_restart_reminder_when_nothing_was_installed_again() {
+        let dotfiles = Rc::new(InMemoryDotfileRepository::default());
+        for dotfile in ["/home/u/.zshrc", "/home/u/.zprofile"] {
+            dotfiles.write(Path::new(dotfile), "# tabsmith ignore\n").unwrap();
+        }
+        let restart_reminder = Rc::new(InMemoryRestartReminderRepository::default());
+        let use_case = ReinstallIntegrationsUseCase::new(
+            installer(dotfiles, Rc::new(RecordingShellEnvironment::default())),
+            restart_reminder.clone(),
+        );
+
+        let reinstalled = use_case.execute(&paths(), &[Shell::Zsh]);
+
+        assert!(
+            matches!(reinstalled, Ok(false)) && !restart_reminder.is_pending(),
+            "{reinstalled:?}"
         );
     }
 }
