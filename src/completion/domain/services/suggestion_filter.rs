@@ -157,7 +157,7 @@ mod tests {
     use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::completion::domain::value_objects::suggestion_query::SuggestionQuery;
     use crate::shared::domain::value_objects::shell::Shell;
-    use crate::suggest::to_item;
+    use crate::completion::domain::services::suggestion_finalizer::to_item;
 
     #[test]
     fn prefix_ladder() {

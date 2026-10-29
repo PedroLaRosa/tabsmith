@@ -3,4 +3,5 @@ pub(crate) mod command_line_tokenizer;
 pub(crate) mod fuzzy_matcher;
 pub(crate) mod insertion_composer;
 pub(crate) mod suggestion_filter;
+pub(crate) mod suggestion_finalizer;
 pub(crate) mod suggestion_ranker;

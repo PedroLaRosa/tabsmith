@@ -26,6 +26,7 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
+use crate::completion::domain::services::suggestion_finalizer;
 use crate::completion::domain::services::suggestion_ranker;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
@@ -1175,7 +1176,7 @@ impl Engine {
         };
         let items: Vec<Suggestion> = ranked
             .into_iter()
-            .map(|(x, p)| suggest::to_item(x, p, &ic))
+            .map(|(x, p)| suggestion_finalizer::to_item(x, p, &ic))
             .collect();
         let ghost = self.ghost(&cur.req, cur.cursor, Some(&items));
         CompletionResult::new(CompletionResultParts {
