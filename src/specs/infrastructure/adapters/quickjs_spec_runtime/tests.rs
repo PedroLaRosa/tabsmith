@@ -1,6 +1,9 @@
 use super::*;
 use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
-use crate::specs::infrastructure::adapters::fig_spec_mapper::{fn_id, generator_context_json};
+use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
+use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{fn_id, generator_context_json, template_json};
 #[cfg(unix)]
 use crate::specs::infrastructure::adapters::process_executor::fake_bin;
 use crate::shared::infrastructure::testing::temp_dir::TempDir;
@@ -588,4 +591,26 @@ fn should_pass_post_process_the_stdout_and_the_tokens() {
         arguments,
         (11, vec![JsArg::Json(json!(stdout)), JsArg::Json(json!(tokens))])
     );
+}
+
+#[test]
+fn should_pass_filter_template_suggestions_the_listed_suggestions_as_fig_suggestions() {
+    let listed = vec![
+        SpecSuggestion::default()
+            .with_names(vec!["src/".into()])
+            .with_kind(Some(SuggestionKind::Folder))
+            .with_template_type(Some("folders".into())),
+        SpecSuggestion::default()
+            .with_names(vec!["main.rs".into()])
+            .with_insert_value(Some("main.rs".into()))
+            .with_is_dangerous(true),
+    ];
+    let call = SpecFunctionCall::FilterTemplateSuggestions {
+        function: 12,
+        suggestions: TemplateSuggestions::Listed(listed.clone()),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(arguments, (12, vec![JsArg::Json(template_json(&listed))]));
 }
