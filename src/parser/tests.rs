@@ -2,7 +2,11 @@
 use super::*;
 use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::completion::domain::services::command_line_tokenizer::substitute_token;
 use crate::completion::domain::value_objects::token::Token;
+use crate::specs::application::ports::spec_runtime::InMemorySpecRuntime;
+use crate::specs::domain::repositories::spec_repository::InMemorySpecRepository;
+use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
@@ -67,13 +71,44 @@ fn ptr(a: &Option<Rc<Arg>>) -> Option<*const Arg> {
     a.as_ref().map(Rc::as_ptr)
 }
 
-type Callback = Box<dyn Fn(&[JsArg]) -> Result<Value, CompletionError>>;
+type JsFunction = dyn Fn(&[JsArg]) -> Result<Value, CompletionError>;
+type Callback = Box<JsFunction>;
 
-/// Specs by location (`name` for globals, `dir|name` for locals), JS functions by id; records every load.
+/// JS functions by id, as JSON callbacks; each one answers every runtime made from them.
+#[derive(Default)]
+struct Functions(HashMap<SpecFunctionRef, Rc<JsFunction>>);
+
+impl Functions {
+    fn insert(&mut self, function: SpecFunctionRef, callback: Callback) {
+        self.0.insert(function, Rc::from(callback));
+    }
+
+    /// A runtime answering each function through its callback: the typed call goes in as the adapter's JS
+    /// arguments, the JSON comes back as the adapter's typed result; an unknown id fails with "unknown fn".
+    fn runtime(&self) -> InMemorySpecRuntime {
+        self.0
+            .iter()
+            .fold(InMemorySpecRuntime::default(), |runtime, (function, callback)| {
+                let callback = callback.clone();
+                runtime.answering(*function, move |call| {
+                    let context = GeneratorContext::default();
+                    let (_, args) = call_arguments(call, &context);
+                    let value = callback(&args).map_err(|error| match error {
+                        CompletionError::Aborted => SpecError::Aborted,
+                        CompletionError::NoSuggestions(text) => SpecError::Invalid(text),
+                    })?;
+                    Ok(function_result(call.kind(), &value, &context))
+                })
+            })
+    }
+}
+
+/// The parser's specs and spec functions, served through `InMemorySpecRepository` and `InMemorySpecRuntime`:
+/// specs by location (`name` for globals, `dir|name` for locals), JS functions by id; records every load.
 #[derive(Default)]
 struct Mock {
     specs: HashMap<String, Rc<Subcommand>>,
-    fns: HashMap<SpecFunctionRef, Callback>,
+    fns: Functions,
     loads: Vec<SpecLocation>,
 }
 
@@ -87,29 +122,31 @@ impl Mock {
             ..Default::default()
         }
     }
+
+    fn repository(&self) -> InMemorySpecRepository {
+        let specs: Vec<(&str, &Rc<Subcommand>)> =
+            self.specs.iter().map(|(name, spec)| (name.as_str(), spec)).collect();
+        InMemorySpecRepository::with(&specs)
+    }
 }
 
 impl Host for Mock {
     fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, CompletionError> {
-        self.loads.push(loc.clone());
-        let key = match loc {
-            SpecLocation::Global { name } => name.clone(),
-            SpecLocation::Local { dir, name } => format!("{}|{name}", dir.display()),
-        };
-        Ok(self.specs.get(&key).cloned())
+        let repository = self.repository();
+        let found = repository.find(
+            loc,
+            &SpecLookup::new(&Settings::default(), &SpecIndex::default(), &GeneratorContext::default()),
+        );
+        self.loads.extend(repository.finds());
+        found.map_err(CompletionError::from)
     }
 
     fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, CompletionError> {
-        let context = GeneratorContext::default();
-        let (f, args) = call_arguments(&call, &context);
-        let v = (self.fns.get(&f).ok_or_else(|| no("unknown fn"))?)(&args)?;
-        Ok(function_result(call.kind(), &v, &context))
+        Ok(self.fns.runtime().call(call, None, Duration::from_secs(5))?)
     }
 
     fn substitute(&mut self, c: &CommandLine, index: usize, value: &str) -> Option<CommandLine> {
-        let mut words: Vec<String> = c.tokens().iter().map(|t| t.text().to_string()).collect();
-        words.splice(index..=index, value.split(' ').map(String::from));
-        Some(cmd(&words.join(" ")))
+        substitute_token(c, index, value, Shell::Bash)
     }
 }
 
