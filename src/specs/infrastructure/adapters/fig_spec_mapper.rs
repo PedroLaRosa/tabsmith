@@ -354,6 +354,65 @@ pub(crate) fn template_json(items: &[SpecSuggestion]) -> Value {
     )
 }
 
+/// JS truthiness of a callback result.
+pub(crate) fn truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0 && !f.is_nan()),
+        Value::String(s) => !s.is_empty(),
+        _ => true,
+    }
+}
+
+/// Script value → exec input JSON (SPEC §6.6.3); `None` for falsy values. A legacy string runs as `sh -c`, the
+/// same form as `executeShellCommand(string)`, so the js host picks sh / Git Bash / `cmd /C` on Windows.
+pub(crate) fn script_exec_input(v: Value, cwd: &str) -> Option<Value> {
+    let cwd = json!(cwd);
+    Some(match v {
+        Value::Array(a) if !a.is_empty() => json!({"command": a[0], "args": a[1..], "cwd": cwd}),
+        Value::String(s) if !s.is_empty() => {
+            json!({"command": "sh", "args": ["-c", s], "cwd": cwd})
+        } // none in 2.692.3
+        Value::Object(o) => {
+            let mut m = serde_json::Map::new();
+            m.insert("cwd".into(), cwd);
+            m.extend(o);
+            Value::Object(m)
+        }
+        _ => return None,
+    })
+}
+
+/// Suggestion objects (custom / filterTemplateSuggestions results).
+pub(crate) fn json_items(v: &Value) -> Vec<SpecSuggestion> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(suggestion_from_json)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `postProcess` result: drop falsy items and objects without a name; strings become arg rows.
+pub(crate) fn post_process_items(v: &Value, is_dangerous: bool) -> Vec<SpecSuggestion> {
+    let Some(a) = v.as_array() else {
+        return Vec::new();
+    };
+    a.iter()
+        .filter_map(|x| match x {
+            Value::String(s) if !s.is_empty() => {
+                Some(SpecSuggestion::from_script_output(s, is_dangerous))
+            }
+            Value::Object(o) if o.get("name").is_some_and(truthy) => {
+                suggestion_from_json(x)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// A spec JSON value as a `SpecValue`, integers and floats kept apart.
 pub(crate) fn spec_value_from_json(v: &Value) -> SpecValue {
     match v {
@@ -693,5 +752,51 @@ mod tests {
         assert_eq!(back, script);
         assert_eq!(back.to_string(), script.to_string());
         assert_eq!(generators[1].script, Some(GeneratorScript::Fn(7)));
+    }
+
+    #[test]
+    fn legacy_string_script_runs_through_sh_c() {
+        // win-legacy-script-cmd: same `sh -c` form as `executeShellCommand(string)` on every platform
+        assert_eq!(
+            script_exec_input(json!("git log --format=\"%h %s\""), "/w"),
+            Some(
+                json!({"command": "sh", "args": ["-c", "git log --format=\"%h %s\""], "cwd": "/w"})
+            )
+        );
+        assert_eq!(
+            script_exec_input(json!(["git", "branch"]), "/w"),
+            Some(json!({"command": "git", "args": ["branch"], "cwd": "/w"}))
+        );
+        assert_eq!(
+            script_exec_input(json!({"command": "ls", "cwd": "/x"}), "/w"),
+            Some(json!({"command": "ls", "cwd": "/x"}))
+        );
+        assert_eq!(script_exec_input(json!(""), "/w"), None);
+        assert_eq!(script_exec_input(json!([]), "/w"), None);
+    }
+
+    #[test]
+    fn js_truthiness() {
+        assert!(
+            !truthy(&json!(null))
+                && !truthy(&json!(false))
+                && !truthy(&json!(0))
+                && !truthy(&json!(""))
+        );
+        assert!(
+            truthy(&json!(1)) && truthy(&json!("x")) && truthy(&json!([])) && truthy(&json!({}))
+        );
+    }
+
+    #[test]
+    fn post_process_filtering() {
+        // strings become arg rows carrying isDangerous; falsy entries and nameless objects are dropped
+        let items =
+            post_process_items(&json!(["a", "", null, 0, {"description": "no name"}]), true);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].names, ["a"]);
+        assert_eq!(items[0].insert_value.as_deref(), Some("a"));
+        assert!(items[0].is_dangerous);
+        assert!(post_process_items(&json!(null), false).is_empty());
     }
 }

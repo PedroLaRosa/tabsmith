@@ -16,3 +16,16 @@ pub(crate) struct SpecSuggestion {
     pub(crate) template_type: Option<String>,
     pub(crate) icon: Option<String>,
 }
+
+impl SpecSuggestion {
+    /// Script-generator string → `{type:"arg", name, insertValue, isDangerous}`.
+    pub(crate) fn from_script_output(text: &str, is_dangerous: bool) -> SpecSuggestion {
+        SpecSuggestion {
+            names: vec![text.to_string()],
+            insert_value: Some(text.to_string()),
+            kind: Some(SuggestionKind::Arg),
+            is_dangerous,
+            ..Default::default()
+        }
+    }
+}

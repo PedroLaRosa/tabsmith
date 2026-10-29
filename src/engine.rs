@@ -28,7 +28,9 @@ use crate::specs::domain::value_objects::generator_script::GeneratorScript;
 use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
-use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, spec_value_to_json};
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{
+    self, json_items, post_process_items, script_exec_input, spec_value_to_json, truthy,
+};
 use crate::specs::SpecIndex;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
 use crate::shared::domain::value_objects::shell::Shell;
@@ -39,7 +41,6 @@ use crate::history::infrastructure::history_module::{build_history_module, Histo
 use crate::types::{
     now_ms, ArgInfo, Completion, EngineMsg, GenKey, Item, Msg, Phase, Request,
 };
-use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -135,17 +136,6 @@ fn is_path_template(g: &Generator) -> bool {
         .any(|t| t == "filepaths" || t == "folders")
 }
 
-/// JS truthiness of a callback result.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0 && !f.is_nan()),
-        Value::String(s) => !s.is_empty(),
-        _ => true,
-    }
-}
-
 fn env_var(env: &HashMap<String, String>, key: &str) -> Option<String> {
     env.get(key)
         .or_else(|| {
@@ -168,63 +158,6 @@ fn script_timeout(settings: &Settings) -> u64 {
 /// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
 fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
     inline::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
-}
-
-/// Script value → exec input JSON (SPEC §6.6.3); `None` for falsy values. A legacy string runs as `sh -c`, the
-/// same form as `executeShellCommand(string)`, so the js host picks sh / Git Bash / `cmd /C` on Windows.
-fn script_exec_input(v: Value, cwd: &str) -> Option<Value> {
-    let cwd = json!(cwd);
-    Some(match v {
-        Value::Array(a) if !a.is_empty() => json!({"command": a[0], "args": a[1..], "cwd": cwd}),
-        Value::String(s) if !s.is_empty() => {
-            json!({"command": "sh", "args": ["-c", s], "cwd": cwd})
-        } // none in 2.692.3
-        Value::Object(o) => {
-            let mut m = serde_json::Map::new();
-            m.insert("cwd".into(), cwd);
-            m.extend(o);
-            Value::Object(m)
-        }
-        _ => return None,
-    })
-}
-
-/// Script-generator string → `{type:"arg", name, insertValue, isDangerous}`.
-fn script_string(s: &str, is_dangerous: bool) -> SpecSuggestion {
-    SpecSuggestion {
-        names: vec![s.to_string()],
-        insert_value: Some(s.to_string()),
-        kind: Some(SuggestionKind::Arg),
-        is_dangerous,
-        ..Default::default()
-    }
-}
-
-/// Suggestion objects (custom / filterTemplateSuggestions results).
-fn json_items(v: &Value) -> Vec<SpecSuggestion> {
-    v.as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(fig_spec_mapper::suggestion_from_json)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// `postProcess` result: drop falsy items and objects without a name; strings become arg rows.
-fn post_process_items(v: &Value, is_dangerous: bool) -> Vec<SpecSuggestion> {
-    let Some(a) = v.as_array() else {
-        return Vec::new();
-    };
-    a.iter()
-        .filter_map(|x| match x {
-            Value::String(s) if !s.is_empty() => Some(script_string(s, is_dangerous)),
-            Value::Object(o) if o.get("name").is_some_and(truthy) => {
-                fig_spec_mapper::suggestion_from_json(x)
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 /// `generatorContext` for custom generators (SPEC §6.5).
@@ -908,7 +841,7 @@ impl Engine {
             }
             return Outcome::Done(
                 t.split(sep.as_str())
-                    .map(|s| script_string(s, run.ctx.is_dangerous))
+                    .map(|s| SpecSuggestion::from_script_output(s, run.ctx.is_dangerous))
                     .collect(),
             );
         }
@@ -1300,52 +1233,6 @@ mod tests {
         assert_eq!(got, ["echo 98", "echo 99"]);
         assert!(llm_history(&with(json!(0)), &entries).is_empty());
         assert_eq!(llm_history(&Settings::default(), &entries).len(), 49);
-    }
-
-    #[test]
-    fn legacy_string_script_runs_through_sh_c() {
-        // win-legacy-script-cmd: same `sh -c` form as `executeShellCommand(string)` on every platform
-        assert_eq!(
-            script_exec_input(json!("git log --format=\"%h %s\""), "/w"),
-            Some(
-                json!({"command": "sh", "args": ["-c", "git log --format=\"%h %s\""], "cwd": "/w"})
-            )
-        );
-        assert_eq!(
-            script_exec_input(json!(["git", "branch"]), "/w"),
-            Some(json!({"command": "git", "args": ["branch"], "cwd": "/w"}))
-        );
-        assert_eq!(
-            script_exec_input(json!({"command": "ls", "cwd": "/x"}), "/w"),
-            Some(json!({"command": "ls", "cwd": "/x"}))
-        );
-        assert_eq!(script_exec_input(json!(""), "/w"), None);
-        assert_eq!(script_exec_input(json!([]), "/w"), None);
-    }
-
-    #[test]
-    fn js_truthiness() {
-        assert!(
-            !truthy(&json!(null))
-                && !truthy(&json!(false))
-                && !truthy(&json!(0))
-                && !truthy(&json!(""))
-        );
-        assert!(
-            truthy(&json!(1)) && truthy(&json!("x")) && truthy(&json!([])) && truthy(&json!({}))
-        );
-    }
-
-    #[test]
-    fn post_process_filtering() {
-        // strings become arg rows carrying isDangerous; falsy entries and nameless objects are dropped
-        let items =
-            post_process_items(&json!(["a", "", null, 0, {"description": "no name"}]), true);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].names, ["a"]);
-        assert_eq!(items[0].insert_value.as_deref(), Some("a"));
-        assert!(items[0].is_dangerous);
-        assert!(post_process_items(&json!(null), false).is_empty());
     }
 
     #[test]
