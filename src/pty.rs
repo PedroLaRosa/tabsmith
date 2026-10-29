@@ -19,8 +19,9 @@ use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
+use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::types::{
-    Completion, EngineMsg, Model, Msg, Request,
+    EngineMsg, Model, Msg, Request,
 };
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
@@ -873,7 +874,7 @@ impl Session {
         let _ = self.engine.send(EngineMsg::Complete(req));
     }
 
-    fn on_completion(&mut self, c: Completion) {
+    fn on_completion(&mut self, c: CompletionResult) {
         if c.req != self.req {
             return; // only the latest request is served
         }
@@ -1999,11 +2000,11 @@ mod tests {
             r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
         );
         prompt(&mut s, "zzzcmd foo");
-        s.on_completion(Completion::error(s.req, "zzzcmd foo".into(), 10));
+        s.on_completion(CompletionResult::error(s.req, "zzzcmd foo".into(), 10));
         assert!(s.llm_at.is_some());
         // Mid-word cursor: still none.
         s.llm_at = None;
-        s.on_completion(Completion::error(s.req, "zzzcmd foo".into(), 3));
+        s.on_completion(CompletionResult::error(s.req, "zzzcmd foo".into(), 3));
         assert!(s.llm_at.is_none());
     }
 

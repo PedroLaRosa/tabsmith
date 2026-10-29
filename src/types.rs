@@ -1,8 +1,5 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
-use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
-use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
-use crate::completion::domain::value_objects::generator_key::GeneratorKey;
-use crate::completion::domain::value_objects::suggestion::Suggestion;
+use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
@@ -11,57 +8,6 @@ use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-/// Engine → wrapper reply (SPEC §4.3).
-#[derive(Clone, Debug)]
-pub struct Completion {
-    pub req: u64,
-    pub phase: CompletionPhase,
-    pub error: bool,
-    /// The buffer/cursor the reply was computed from (for insertion reconciliation, SPEC §7.3).
-    pub buffer: String,
-    pub cursor: usize,
-    /// Token texts of the current command (after alias expansion).
-    pub tokens: Vec<String>,
-    pub command_text: String,
-    pub command_index: usize,
-    /// Identity of (current arg, current subcommand) — changes when a new argument starts.
-    pub arg_key: u64,
-    pub current_arg: Option<ArgumentHint>,
-    pub search_term: String,
-    pub triggered_generators: Vec<GeneratorKey>,
-    pub items: Vec<Suggestion>,
-    /// Some generator is still running.
-    pub loading: bool,
-    /// Local inline ghost text for this buffer (SPEC §6.11).
-    pub ghost: Option<String>,
-    /// Effective fuzzy mode for this reply.
-    pub fuzzy: bool,
-}
-
-impl Completion {
-    /// Error reply: no suggestions, menu error-reset.
-    pub fn error(req: u64, buffer: String, cursor: usize) -> Completion {
-        Completion {
-            req,
-            phase: CompletionPhase::Parse,
-            error: true,
-            buffer,
-            cursor,
-            tokens: Vec::new(),
-            command_text: String::new(),
-            command_index: 0,
-            arg_key: 0,
-            current_arg: None,
-            search_term: String::new(),
-            triggered_generators: Vec::new(),
-            items: Vec::new(),
-            loading: false,
-            ghost: None,
-            fuzzy: false,
-        }
-    }
-}
 
 /// Wrapper → engine completion request.
 #[derive(Clone, Debug)]
@@ -83,7 +29,7 @@ pub enum Msg {
     Resize(u16, u16),
     ChildExit(i32),
     Term,
-    Completion(Box<Completion>),
+    Completion(Box<CompletionResult>),
     Ghost { req: u64, text: Option<String> },
 }
 

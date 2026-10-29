@@ -23,6 +23,7 @@ use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
+use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::completion::domain::value_objects::generator_key::{argument_key, GeneratorKey};
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
@@ -58,7 +59,7 @@ use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
-    now_ms, Completion, EngineMsg, Msg, Request,
+    now_ms, EngineMsg, Msg, Request,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -517,7 +518,7 @@ impl Engine {
     // Requests
 
     /// Phase-Parse reply for `req`; `None` when a newer request aborted it (it is kept in the engine inbox).
-    fn compute(&mut self, req: &Request, js: &QuickJsSpecRuntime) -> Option<Completion> {
+    fn compute(&mut self, req: &Request, js: &QuickJsSpecRuntime) -> Option<CompletionResult> {
         let cursor = req.cursor.min(req.buffer.len());
         // SPEC §6.1.5 mid-word guard
         if !req.buffer.is_char_boundary(cursor)
@@ -609,10 +610,10 @@ impl Engine {
     }
 
     /// Error reply (menu error-reset). Generator state is reset on errors too.
-    fn error(&mut self, req: &Request, cursor: usize, ghost: bool) -> Completion {
+    fn error(&mut self, req: &Request, cursor: usize, ghost: bool) -> CompletionResult {
         self.reset_slots();
         self.cur = None;
-        let mut c = Completion::error(req.id, req.buffer.clone(), cursor);
+        let mut c = CompletionResult::error(req.id, req.buffer.clone(), cursor);
         if ghost {
             c.ghost = self.ghost(req, cursor, None);
         }
@@ -1087,7 +1088,7 @@ impl Engine {
     }
 
     /// Rank the current request's suggestions (SPEC §6.7.5) into a reply.
-    fn reply(&self, phase: CompletionPhase) -> Completion {
+    fn reply(&self, phase: CompletionPhase) -> CompletionResult {
         let cur = self.cur.as_ref().expect("reply without a current request");
         let (pr, s) = (&cur.pr, &self.settings);
         let mut list = if pr.first_token {
@@ -1146,7 +1147,7 @@ impl Engine {
             .map(|(x, p)| suggest::to_item(x, p, &ic))
             .collect();
         let ghost = self.ghost(&cur.req, cur.cursor, Some(&items));
-        Completion {
+        CompletionResult {
             req: cur.req.id,
             phase,
             error: false,
@@ -1618,7 +1619,7 @@ mod tests {
         ghost: Option<String>,
     }
 
-    fn observe(c: &Completion) -> Reply {
+    fn observe(c: &CompletionResult) -> Reply {
         Reply {
             request: c.req,
             generators: c.phase == CompletionPhase::Generators,

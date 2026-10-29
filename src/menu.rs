@@ -9,10 +9,10 @@ use crate::settings::domain::services::settings_catalog::{
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
+use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
-use crate::types::Completion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
 
@@ -57,7 +57,7 @@ pub struct Menu {
     history_mode: bool,
     popout: bool,
     /// Latest reply; its `items` are moved into `self.items`.
-    last: Option<Completion>,
+    last: Option<CompletionResult>,
     loading_since: Option<Instant>,
 }
 
@@ -106,7 +106,7 @@ impl Menu {
     }
 
     /// Phase-Parse / phase-Generators reply for the latest request (SPEC §7.1). An error reply resets.
-    pub fn on_completion(&mut self, mut c: Completion, settings: &Settings) {
+    pub fn on_completion(&mut self, mut c: CompletionResult, settings: &Settings) {
         if c.error {
             return self.error_reset();
         }
@@ -298,7 +298,7 @@ impl Menu {
 
     /// Latest completion applied (tokens, current arg, buffer it was computed from). Its `items` are empty:
     /// the list lives in `items()`.
-    pub fn last(&self) -> Option<&Completion> {
+    pub fn last(&self) -> Option<&CompletionResult> {
         self.last.as_ref()
     }
 
@@ -506,9 +506,9 @@ pub(crate) mod tests {
     }
 
     /// A Parse reply for `buffer` (tokens split on spaces, a trailing space adds an empty token).
-    pub fn comp(buffer: &str, arg_key: u64, items: Vec<Suggestion>) -> Completion {
+    pub fn comp(buffer: &str, arg_key: u64, items: Vec<Suggestion>) -> CompletionResult {
         let tokens: Vec<String> = buffer.split(' ').map(String::from).collect();
-        Completion {
+        CompletionResult {
             req: 1,
             phase: CompletionPhase::Parse,
             error: false,
@@ -700,7 +700,7 @@ pub(crate) mod tests {
     #[test]
     fn large_change_counts_skipped_requests() {
         let s = Settings::default();
-        let at = |req, buffer: &str, arg, items| Completion {
+        let at = |req, buffer: &str, arg, items| CompletionResult {
             req,
             ..comp(buffer, arg, items)
         };
@@ -727,7 +727,7 @@ pub(crate) mod tests {
         let mut m = typed(&s);
         m.handle(Action::ToggleHistoryMode, &s);
         m.handle(Action::ToggleDescription, &s);
-        m.on_completion(Completion::error(9, "git c".into(), 5), &s);
+        m.on_completion(CompletionResult::error(9, "git c".into(), 5), &s);
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
         assert!(!m.has_items() && !m.history_mode() && m.last().is_none());
         assert!(m.popout(&s));
