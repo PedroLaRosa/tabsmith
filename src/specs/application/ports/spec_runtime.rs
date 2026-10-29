@@ -74,6 +74,7 @@ pub(crate) struct InMemorySpecRuntime {
     completions: HashMap<SpecFunctionRef, TaskOutcome>,
     exec_completion: Option<TaskOutcome>,
     sleeps_finish: bool,
+    interrupts: bool,
     /// The tasks it knows: `None` while one runs, the outcome a finished one gives.
     tasks: RefCell<HashMap<TaskId, Option<TaskOutcome>>>,
     next_task: Cell<TaskId>,
@@ -105,6 +106,12 @@ impl InMemorySpecRuntime {
     /// Every sleep started finishes with null.
     pub(crate) fn finishing_sleeps(mut self) -> Self {
         self.sleeps_finish = true;
+        self
+    }
+
+    /// Every wait is interrupted, as when a newer request is waiting; no task is dropped.
+    pub(crate) fn interrupting(mut self) -> Self {
+        self.interrupts = true;
         self
     }
 
@@ -140,6 +147,9 @@ impl SpecRuntime for InMemorySpecRuntime {
         tasks: &[TaskId],
         _deadline: Instant,
     ) -> Result<Vec<Option<TaskOutcome>>, Interrupted> {
+        if self.interrupts {
+            return Err(Interrupted);
+        }
         let mut known = self.tasks.borrow_mut();
         let outcome = |t: &TaskId| match known.get(t) {
             Some(None) => None,
@@ -339,5 +349,16 @@ mod tests {
         let outcomes = runtime.wait(&[debounce], Instant::now());
 
         assert_eq!(outcomes, Ok(vec![Some(Ok(SpecValue::Null))]));
+    }
+
+    #[test]
+    fn should_interrupt_every_wait_when_asked_to() {
+        let runtime = InMemorySpecRuntime::default().finishing_sleeps().interrupting();
+        let debounce = runtime.start_sleep(100);
+
+        let first = runtime.wait(&[debounce], Instant::now());
+        let second = runtime.wait(&[debounce], Instant::now());
+
+        assert_eq!((first, second), (Err(Interrupted), Err(Interrupted)));
     }
 }
