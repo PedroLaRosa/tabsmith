@@ -474,3 +474,16 @@ fn should_pass_a_trigger_the_new_and_the_old_token() {
         (4, vec![JsArg::Json(json!(new)), JsArg::Json(json!(old))])
     );
 }
+
+#[test]
+fn should_pass_an_alias_function_the_token_and_the_exec_function() {
+    let token = "co";
+    let call = SpecFunctionCall::Alias {
+        function: 5,
+        token: token.into(),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(arguments, (5, vec![JsArg::Json(token.into()), JsArg::Exec]));
+}

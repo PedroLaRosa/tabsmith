@@ -505,6 +505,7 @@ pub(crate) fn call_arguments(
             old_token,
             ..
         } => vec![JsArg::Json(json!(new_token)), JsArg::Json(json!(old_token))],
+        SpecFunctionCall::Alias { token, .. } => vec![JsArg::Json(json!(token)), JsArg::Exec],
         _ => Vec::new(),
     };
     (call.function(), arguments)
