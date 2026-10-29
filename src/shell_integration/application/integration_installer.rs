@@ -47,7 +47,7 @@ impl IntegrationInstaller {
         integration_catalog::integrations(
             paths,
             shell,
-            |p| self.dotfiles.exists(p),
+            |path| self.dotfiles.exists(path),
             || self.environment.pwsh_profile(),
         )
     }
@@ -66,24 +66,24 @@ impl IntegrationInstaller {
             return Ok(());
         }
         let lines = dotfile.sourced_lines();
-        for (when, at, actual) in [
+        for (phase, position, actual) in [
             (IntegrationPhase::Pre, "first", lines.first()),
             (IntegrationPhase::Post, "last", lines.last()),
         ] {
-            let src = integration.source_line(paths, when);
-            if actual.copied() != Some(src.as_str()) {
-                let msg = format!(
+            let source_line = integration.source_line(paths, phase);
+            if actual.copied() != Some(source_line.as_str()) {
+                let message = format!(
                     "{} does not source {} integration",
                     integration.path().display(),
-                    when.name()
+                    phase.name()
                 );
-                return Err(if lines.contains(&src.as_str()) {
-                    ShellIntegrationError::Improper(format!("{msg} {at}"))
+                return Err(if lines.contains(&source_line.as_str()) {
+                    ShellIntegrationError::Improper(format!("{message} {position}"))
                 } else {
-                    ShellIntegrationError::NotInstalled(msg)
+                    ShellIntegrationError::NotInstalled(message)
                 });
             }
-            let script = integration.script(paths, when);
+            let script = integration.script(paths, phase);
             script.check(&self.dotfiles.read(script.path())?)?;
         }
         Ok(())
@@ -95,8 +95,8 @@ impl IntegrationInstaller {
         paths: &IntegrationPaths,
         integration: &Integration,
     ) -> Result<(), ShellIntegrationError> {
-        for when in [IntegrationPhase::Pre, IntegrationPhase::Post] {
-            let script = integration.script(paths, when);
+        for phase in [IntegrationPhase::Pre, IntegrationPhase::Post] {
+            let script = integration.script(paths, phase);
             self.dotfiles.write(script.path(), script.contents())?;
         }
         Ok(())
@@ -138,8 +138,8 @@ impl IntegrationInstaller {
             return self.dotfiles.write(script.path(), script.contents());
         }
         let contents = if self.dotfiles.exists(integration.path()) {
-            let dir = paths.data_root().join("backups").join(self.clock.now_secs().to_string());
-            self.backups.back_up(integration, &dir)?;
+            let backup_dir = paths.data_root().join("backups").join(self.clock.now_secs().to_string());
+            self.backups.back_up(integration, &backup_dir)?;
             self.uninstall(paths, integration)?;
             self.dotfiles.read(integration.path())?
         } else {
@@ -147,12 +147,12 @@ impl IntegrationInstaller {
         };
         self.write_scripts(paths, integration)?;
         let dotfile = Dotfile::new(contents);
-        let new = dotfile.with_blocks(
+        let installed = dotfile.with_blocks(
             &integration.source_line(paths, IntegrationPhase::Pre),
             &integration.source_line(paths, IntegrationPhase::Post),
         );
-        if new.text() != dotfile.text() {
-            self.dotfiles.write(integration.path(), new.text())?;
+        if installed.text() != dotfile.text() {
+            self.dotfiles.write(integration.path(), installed.text())?;
         }
         Ok(())
     }
@@ -165,9 +165,9 @@ impl IntegrationInstaller {
         }
         [IntegrationPhase::Pre, IntegrationPhase::Post]
             .into_iter()
-            .any(|w| self.dotfiles.exists(integration.script(paths, w).path()))
-            || self.dotfiles.read(integration.path()).is_ok_and(|t| {
-                Dotfile::new(t).has_own_line(
+            .any(|phase| self.dotfiles.exists(integration.script(paths, phase).path()))
+            || self.dotfiles.read(integration.path()).is_ok_and(|text| {
+                Dotfile::new(text).has_own_line(
                     &integration.source_line(paths, IntegrationPhase::Pre),
                     &integration.source_line(paths, IntegrationPhase::Post),
                 )
@@ -188,11 +188,11 @@ impl IntegrationInstaller {
             match self.integrations(paths, shell) {
                 Err(e) => failures.push(IntegrationFailure::listing(shell, &e)),
                 Ok(list) => {
-                    for i in list.iter().filter(|i| pick(i)) {
+                    for integration in list.iter().filter(|integration| pick(integration)) {
                         ran = true;
-                        if let Err(e) = op(i) {
+                        if let Err(e) = op(integration) {
                             failures.push(IntegrationFailure::Operation {
-                                description: i.describe(),
+                                description: integration.describe(),
                                 reason: e.to_string(),
                             });
                         }
@@ -215,8 +215,8 @@ impl IntegrationInstaller {
         self.apply(
             paths,
             shells,
-            |i| self.check(paths, i).is_err(),
-            |i| self.install(paths, i),
+            |integration| self.check(paths, integration).is_err(),
+            |integration| self.install(paths, integration),
         )
     }
 
@@ -230,8 +230,8 @@ impl IntegrationInstaller {
         self.apply(
             paths,
             shells,
-            |i| self.has_traces(paths, i),
-            |i| self.uninstall(paths, i),
+            |integration| self.has_traces(paths, integration),
+            |integration| self.uninstall(paths, integration),
         )
     }
 }
