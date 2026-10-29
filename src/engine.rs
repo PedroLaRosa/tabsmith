@@ -58,7 +58,12 @@ use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBu
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime, TaskResult};
 use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
+use crate::suggest::{self, GenCache, Lookup};
+use crate::completion::domain::value_objects::filter_options::FilterOptions;
+use crate::completion::domain::value_objects::generator_slot_view::GeneratorSlotView;
+use crate::completion::domain::value_objects::insertion_context::InsertionContext;
+use crate::completion::domain::value_objects::suggestion_candidate::SuggestionCandidate;
+use crate::completion::domain::value_objects::suggestion_query::SuggestionQuery;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::history::domain::repositories::history_repository::HistoryRepository;
@@ -327,9 +332,9 @@ struct Current {
     cmd_text: String,
     arg_key: u64,
     fuzzy: bool,
-    queries: Vec<Query>,
+    queries: Vec<SuggestionQuery>,
     triggered: Vec<GeneratorKey>,
-    first: Vec<Sugg>,
+    first: Vec<SuggestionCandidate>,
     /// Buffer up to the start of the last token (history rows).
     prefix: String,
 }
@@ -359,7 +364,7 @@ struct Engine {
     runs: Vec<Run>,
     cache: GenCache,
     cur: Option<Current>,
-    first_token_cache: Option<(Instant, Vec<Sugg>)>,
+    first_token_cache: Option<(Instant, Vec<SuggestionCandidate>)>,
 }
 
 impl Engine {
@@ -646,34 +651,34 @@ impl Engine {
     }
 
     /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
-    fn queries(&self, pr: &ParsedCommandLine, shell: Shell, js: &QuickJsSpecRuntime) -> Option<Vec<Query>> {
+    fn queries(&self, pr: &ParsedCommandLine, shell: Shell, js: &QuickJsSpecRuntime) -> Option<Vec<SuggestionQuery>> {
         let Some(arg) = pr.current_arg() else {
             return Some(Vec::new());
         };
         let mut out = Vec::with_capacity(arg.generators().len());
         for g in arg.generators() {
             out.push(if is_path_template(g) {
-                Query::Path {
+                SuggestionQuery::Path {
                     backslash: shell == Shell::Pwsh,
                 }
             } else {
                 match g.get_query_term() {
-                    None => Query::Term,
-                    Some(TextOrFunction::Str(s)) => Query::Str(s.clone()),
+                    None => SuggestionQuery::Term,
+                    Some(TextOrFunction::Str(s)) => SuggestionQuery::Str(s.clone()),
                     Some(TextOrFunction::Fn(f)) => match js.call_json(
                         *f,
                         vec![JsArg::Json(json!(pr.search_term()))],
                         None,
                         SYNC_CALL,
                     ) {
-                        Ok(Value::String(s)) => Query::Value(s),
+                        Ok(Value::String(s)) => SuggestionQuery::Value(s),
                         Err(SpecError::Aborted) => return None,
                         Ok(_)
                         | Err(
                             SpecError::Timeout
                             | SpecError::Invalid(_)
                             | SpecError::BundleUnavailable(_),
-                        ) => Query::Value(pr.search_term().to_string()), // error → search term
+                        ) => SuggestionQuery::Value(pr.search_term().to_string()), // error → search term
                     },
                 }
             });
@@ -1096,7 +1101,7 @@ impl Engine {
         aliases: &HashMap<String, String>,
         path: Option<String>,
         pathext: Option<String>,
-    ) -> Vec<Sugg> {
+    ) -> Vec<SuggestionCandidate> {
         if let Some((at, items)) = &self.first_token_cache {
             if at.elapsed() < FIRST_TOKEN_TTL {
                 return items.clone();
@@ -1119,11 +1124,11 @@ impl Engine {
         let mut list = if pr.first_token() {
             cur.first.clone()
         } else {
-            let views: Vec<GenView> = self
+            let views: Vec<GeneratorSlotView> = self
                 .slots
                 .iter()
                 .zip(&cur.queries)
-                .map(|(sl, q)| GenView {
+                .map(|(sl, q)| GeneratorSlotView {
                     key: sl.key,
                     query: q.clone(),
                     loading: sl.loading,
@@ -1137,7 +1142,7 @@ impl Engine {
             let hist = suggest::history_rows(&cur.prefix, &self.history.recent());
             list = suggest::mix_history(list, hist, mode == "show" && !cur.req.history_mode);
         }
-        let fo = FilterOpts {
+        let fo = FilterOptions {
             fuzzy: cur.fuzzy,
             auto_exec_hidden: s.bool(AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION)
                 || s.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
@@ -1159,7 +1164,7 @@ impl Engine {
                 .and_then(|r| r.get(cmd));
             suggest::rank(list, pr.search_term(), map, &fo)
         };
-        let ic = InsCtx {
+        let ic = InsertionContext {
             search_term: pr.search_term(),
             raw: pr.raw_last_token(),
             shell: cur.req.shell,
