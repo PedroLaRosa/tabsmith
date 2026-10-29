@@ -26,6 +26,7 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
+use crate::completion::domain::services::suggestion_assembler;
 use crate::completion::domain::services::suggestion_finalizer;
 use crate::completion::domain::services::suggestion_ranker;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
@@ -1137,7 +1138,7 @@ impl Engine {
                     items: &sl.result,
                 })
                 .collect();
-            suggest::assemble(pr, &views)
+            suggestion_assembler::assemble(pr, &views)
         };
         let mode = s.string(BETA_HISTORY_MODE).unwrap_or_default();
         if cur.req.history_mode || mode == "show" || mode == "history_only" {
