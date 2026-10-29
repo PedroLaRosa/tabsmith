@@ -30,6 +30,7 @@ impl ReportSessionContextUseCase {
         }
     }
 
+    /// Prunes only once the save succeeded: a failed save prunes nothing.
     pub(crate) fn execute(
         &self,
         id: SessionId,

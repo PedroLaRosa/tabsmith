@@ -99,9 +99,8 @@ impl From<&SessionContext> for SessionContextRecord {
     }
 }
 
-/// Delete the regular files of `dir` untouched for longer than `max_age`. A shell that exits right after a prompt
-/// leaves one behind: its background `_ pre-cmd` writes the file again after the wrapper removed it. A live session
-/// rewrites its file at every prompt.
+/// Delete the regular files of `dir` untouched for longer than `max_age` (why they are pruned: see
+/// `ReportSessionContextUseCase`).
 fn prune_files_older_than(dir: &Path, max_age: Duration) {
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let stale = e.metadata().is_ok_and(|m| {
