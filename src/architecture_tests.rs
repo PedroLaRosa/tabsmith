@@ -57,7 +57,7 @@ impl Rule {
             }
             Rule::ModuleBoundary => "uses another module's use case or infrastructure, or bootstrap",
             Rule::SharedKernel => "shared uses a crate module other than shared",
-            Rule::ModuleDeclarations => "a mod.rs imports or re-exports; it only declares its children",
+            Rule::ModuleDeclarations => "a mod.rs imports, re-exports or holds an item; it only declares its children",
         }
     }
 }
@@ -93,8 +93,8 @@ const MISPLACED_FILE: &str =
 
 /// The files of `module` that the layer rules, which read the layer from the folder name, would never check. The
 /// plan's layout keeps a module in `src/<module>/`, with only `mod.rs` outside a layer folder.
-// ponytail: that `mod.rs` gets rules 3-4 and 6 only, since it is meant to hold just the layer declarations; rule 6
-// flags a `use` in any mod.rs, so flag other items (a fn, a struct) there too if code ever lands in one.
+// ponytail: that `mod.rs` gets rules 3-4 and 6 only, which is enough because rule 6 lets any mod.rs hold only
+// attributes and child declarations.
 fn misplaced_files(src: &Path, module: &str) -> Vec<String> {
     let root_file = src.join(format!("{module}.rs"));
     let module_files = rust_files(&src.join(module));
@@ -174,7 +174,7 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
                     && (crosses_module_boundary(module, &resolved) || reaches_the_composition_root(layer, &resolved)),
             ),
             (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(&paths)),
-            (Rule::ModuleDeclarations, path.ends_with("/mod.rs") && imports_or_re_exports(code)),
+            (Rule::ModuleDeclarations, path.ends_with("/mod.rs") && !only_declares_children(code)),
         ];
         let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
         found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
@@ -364,7 +364,21 @@ fn leaves_the_shared_kernel(paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| matches!(path.as_slice(), ["crate", module, ..] if *module != "shared"))
 }
 
-/// A `use` item (`use`, `pub(crate) use`, a glob): a mod.rs that re-exports hides the file a path names from rule 3.
+/// Blank, attributes, or a child declaration after them (`mod x;`, `pub(crate) mod x;`): a mod.rs that re-exports,
+/// aliases (`type X = ..;`) or wraps (`fn`) an item gives it a path without the file rule 3 reads.
+// ponytail: one-line attributes only; a multi-line `#[cfg(..)]` reads as an item, so join its lines if one lands here.
+fn only_declares_children(code: &str) -> bool {
+    let code = code.trim();
+    let item = match code.strip_prefix('#') {
+        Some(_) => code.rsplit_once(']').map_or("", |(_, item)| item.trim_start()),
+        None => code,
+    };
+    let declaration = item.strip_prefix("pub(crate) ").unwrap_or(item);
+    let child = declaration.strip_prefix("mod ").and_then(|rest| rest.strip_suffix(';'));
+    item.is_empty() || child.is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+}
+
+/// A `use` item (`use`, `pub(crate) use`, a glob).
 fn imports_or_re_exports(code: &str) -> bool {
     code.split(|c: char| !is_path_char(c)).any(|word| word == "use")
 }
@@ -991,6 +1005,29 @@ mod tests {
                 Violation { line: 2, rule: Rule::ModuleDeclarations },
                 Violation { line: 3, rule: Rule::ModuleDeclarations },
                 Violation { line: 4, rule: Rule::ModuleDeclarations },
+            ]
+        );
+    }
+
+    /// A type alias or a wrapper fn names a use case by another path, as a re-export does.
+    #[test]
+    fn should_flag_a_mod_rs_that_holds_an_item_other_than_a_child_declaration() {
+        let source = "//! The settings application layer.\n\
+                      #[cfg(test)]\n\
+                      pub(crate) mod testing;\n\
+                      mod set_setting_use_case;\n\
+                      pub(crate) type SetSetting = set_setting_use_case::SetSettingUseCase;\n\
+                      pub(crate) fn set_setting() {}\n\
+                      #[cfg(test)] pub(crate) use set_setting_use_case::SetSettingUseCase;\n";
+
+        let found = violations_in("settings/application/mod.rs", source);
+
+        assert_eq!(
+            found,
+            vec![
+                Violation { line: 5, rule: Rule::ModuleDeclarations },
+                Violation { line: 6, rule: Rule::ModuleDeclarations },
+                Violation { line: 7, rule: Rule::ModuleDeclarations },
             ]
         );
     }
