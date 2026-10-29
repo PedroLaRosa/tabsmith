@@ -26,6 +26,7 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
+use crate::completion::domain::services::history_suggestions;
 use crate::completion::domain::services::suggestion_assembler;
 use crate::completion::domain::services::suggestion_finalizer;
 use crate::completion::domain::services::suggestion_ranker;
@@ -1142,8 +1143,8 @@ impl Engine {
         };
         let mode = s.string(BETA_HISTORY_MODE).unwrap_or_default();
         if cur.req.history_mode || mode == "show" || mode == "history_only" {
-            let hist = suggest::history_rows(&cur.prefix, &self.history.recent());
-            list = suggest::mix_history(list, hist, mode == "show" && !cur.req.history_mode);
+            let hist = history_suggestions::history_rows(&cur.prefix, &self.history.recent());
+            list = history_suggestions::mix_history(list, hist, mode == "show" && !cur.req.history_mode);
         }
         let fo = FilterOptions {
             fuzzy: cur.fuzzy,
