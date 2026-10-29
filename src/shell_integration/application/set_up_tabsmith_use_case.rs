@@ -37,6 +37,7 @@ impl SetUpTabsmithUseCase {
         mut report: impl FnMut(SetupProgress),
     ) -> Result<bool, ShellIntegrationError> {
         if let Ok(installed) = self.installer.install_missing(paths, shells) {
+            self.restart_reminder.save_pending();
             report(SetupProgress::Installed(installed));
         }
         Ok(false)
@@ -122,5 +123,17 @@ mod tests {
             matches!(manual, Ok(false)) && events == [SetupProgress::Installed(true)],
             "{manual:?} {events:?}"
         );
+    }
+
+    #[test]
+    fn should_save_the_restart_reminder_before_reporting_something_installed() {
+        let bed = test_bed();
+        let mut pending_when_reported = Vec::new();
+
+        let _ = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| {
+            pending_when_reported.push((event, bed.restart_reminder.is_pending()))
+        });
+
+        assert_eq!(pending_when_reported, [(SetupProgress::Installed(true), true)]);
     }
 }
