@@ -28,23 +28,46 @@ impl UninstallTabsmithUseCase {
         purge: bool,
         mut report: impl FnMut(UninstallProgress),
     ) -> bool {
-        let mut failed = false;
-        if let Err(failures) = self.installer.apply(
+        let integrations_failed = self.uninstall_integrations(paths, shells, &mut report);
+        let purge_failed = purge && self.purge_data_root(paths, &mut report);
+        integrations_failed || purge_failed
+    }
+
+    /// true if not every integration could be taken out.
+    fn uninstall_integrations(
+        &self,
+        paths: &IntegrationPaths,
+        shells: &[Shell],
+        report: &mut impl FnMut(UninstallProgress),
+    ) -> bool {
+        let uninstalled = self.installer.apply(
             paths,
             shells,
             |_| true,
             |i| self.installer.uninstall(paths, i),
-        ) {
-            report(UninstallProgress::IntegrationsFailed(failures));
-            failed = true;
-        }
-        if purge {
-            if let Err(error) = self.purger.purge(paths.data_root()) {
-                report(UninstallProgress::PurgeFailed(error.to_string()));
-                failed = true;
+        );
+        match uninstalled {
+            Ok(_) => false,
+            Err(failures) => {
+                report(UninstallProgress::IntegrationsFailed(failures));
+                true
             }
         }
-        failed
+    }
+
+    /// true if the data root could not be deleted.
+    fn purge_data_root(
+        &self,
+        paths: &IntegrationPaths,
+        report: &mut impl FnMut(UninstallProgress),
+    ) -> bool {
+        match self.purger.purge(paths.data_root()) {
+            Ok(()) => false,
+            Err(error) => {
+                report(UninstallProgress::PurgeFailed(error.to_string()));
+                true
+            }
+        }
     }
 }
 
