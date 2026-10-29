@@ -7,7 +7,7 @@ use crate::terminal_session::domain::terminal_session_error::TerminalSessionErro
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// `run/<session id>.json` in the data directory. The path is resolved on every call, so a missing home only fails
@@ -63,7 +63,13 @@ impl SessionContextRepository for FileSessionContextRepository {
         }
     }
 
-    fn prune_older_than(&self, _max_age: Duration) {}
+    /// Every regular file of `run/` (a stray temp file too) by its own mtime, measured with
+    /// `SystemTime::elapsed`; symlinks and directories stay, every error is ignored.
+    fn prune_older_than(&self, max_age: Duration) {
+        if let Ok(dir) = self.data_directory.run_dir() {
+            prune_files_older_than(&dir, max_age);
+        }
+    }
 }
 
 /// `~/.tabsmith/run/<sid>.json`, written by `tabsmith _ pre-cmd` (SPEC §2.11, D17).
@@ -89,6 +95,22 @@ impl From<&SessionContext> for SessionContextRecord {
             env: context.env().clone(),
             alias: context.alias().map(str::to_owned),
             ts: context.reported_at_ms(),
+        }
+    }
+}
+
+/// Delete the regular files of `dir` untouched for longer than `max_age`. A shell that exits right after a prompt
+/// leaves one behind: its background `_ pre-cmd` writes the file again after the wrapper removed it. A live session
+/// rewrites its file at every prompt.
+fn prune_files_older_than(dir: &Path, max_age: Duration) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let stale = e.metadata().is_ok_and(|m| {
+            m.is_file()
+                && m.modified()
+                    .is_ok_and(|t| t.elapsed().unwrap_or_default() > max_age)
+        });
+        if stale {
+            let _ = std::fs::remove_file(e.path());
         }
     }
 }
@@ -181,5 +203,33 @@ mod tests {
         repository.remove(&session_id("abc123"));
 
         assert!(!temp_dir.path().join("run/abc123.json").exists());
+    }
+
+    fn set_modified(path: &Path, modified: SystemTime) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+
+    /// A clock set back leaves a file modified in the future: it is not stale.
+    #[test]
+    fn should_keep_a_run_file_modified_in_the_future_when_pruning() {
+        let temp_dir = TempDir::new("session-prune-future");
+        let repository = repository_in(&temp_dir);
+        let run = temp_dir.path().join("run");
+        let (stale, future) = (run.join("stale.json"), run.join("future.json"));
+        let two_days = Duration::from_secs(2 * 24 * 3600);
+        std::fs::create_dir(&run).unwrap();
+        std::fs::write(&stale, "{}").unwrap();
+        std::fs::write(&future, "{}").unwrap();
+        set_modified(&stale, SystemTime::now() - two_days);
+        set_modified(&future, SystemTime::now() + two_days);
+
+        repository.prune_older_than(Duration::from_secs(24 * 3600));
+
+        assert_eq!((stale.exists(), future.exists()), (false, true));
     }
 }
