@@ -218,6 +218,7 @@ mod tests {
     use crate::shell_integration::domain::repositories::backup_repository::InMemoryBackupRepository;
     use crate::shell_integration::domain::repositories::dotfile_repository::InMemoryDotfileRepository;
     use crate::shell_integration::domain::value_objects::dotfile::{POST_MARKER, PRE_MARKER};
+    use std::cell::RefCell;
     use std::path::{Path, PathBuf};
 
     /// The installer over in-memory dotfiles and backups, a clock fixed at 1_700_000_123_999 ms and a recording
@@ -790,5 +791,87 @@ mod tests {
         let ran = bed.installer.apply(&paths(), &[Shell::Zsh], |i| i.file_name() == ".zprofile", |_| Ok(()));
 
         assert!(matches!(ran, Ok(true)), "{ran:?}");
+    }
+
+    #[test]
+    fn should_report_that_nothing_ran_when_no_integration_is_picked() {
+        let bed = test_bed();
+        let ran_on = RefCell::new(Vec::new());
+
+        let ran = bed.installer.apply(&paths(), &[Shell::Bash, Shell::Zsh], |_| false, |i| {
+            ran_on.borrow_mut().push(i.path().to_path_buf());
+            Ok(())
+        });
+
+        assert!(matches!(ran, Ok(false)) && ran_on.borrow().is_empty(), "{ran:?} {ran_on:?}");
+    }
+
+    /// Each failure of a failed run as (kind, shell or description, reason).
+    fn failures_of(ran: Result<bool, Vec<IntegrationFailure>>) -> Vec<(&'static str, String, String)> {
+        ran.unwrap_err()
+            .into_iter()
+            .map(|failure| match failure {
+                IntegrationFailure::Listing { shell, reason } => ("listing", shell, reason),
+                IntegrationFailure::Operation { description, reason } => ("operation", description, reason),
+            })
+            .collect()
+    }
+
+    fn failure(kind: &'static str, subject: &str, reason: &str) -> (&'static str, String, String) {
+        (kind, subject.to_string(), reason.to_string())
+    }
+
+    #[test]
+    fn should_run_the_operation_on_every_picked_integration_past_its_failures_and_report_each() {
+        let bed = test_bed();
+        let ran_on = RefCell::new(Vec::new());
+
+        let ran = bed.installer.apply(&paths(), &[Shell::Zsh], |_| true, |i| {
+            ran_on.borrow_mut().push(i.path().to_path_buf());
+            Err(ShellIntegrationError::PermissionDenied(i.path().to_path_buf()))
+        });
+
+        assert_eq!(
+            (ran_on.into_inner(), failures_of(ran)),
+            (
+                vec![PathBuf::from("/home/u/.zshrc"), PathBuf::from("/home/u/.zprofile")],
+                vec![
+                    failure("operation", "zsh pre post into .zshrc", "Permission denied: /home/u/.zshrc"),
+                    failure("operation", "zsh pre post into .zprofile", "Permission denied: /home/u/.zprofile"),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn should_report_a_shell_it_cannot_list_at_its_place_among_the_failures() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+        );
+
+        let ran = bed.installer.apply(&paths(), &[Shell::Pwsh, Shell::Zsh], |_| true, |i| match i.file_name().as_str() {
+            ".zprofile" => Err(ShellIntegrationError::NotInstalled("gone".into())),
+            _ => Ok(()),
+        });
+
+        assert_eq!(
+            failures_of(ran),
+            [
+                failure("listing", "pwsh", "pwsh printed an empty $PROFILE"),
+                failure("operation", "zsh pre post into .zprofile", "Integration not installed: gone"),
+            ]
+        );
+    }
+
+    /// The operation ran and succeeded on zsh, but a shell could not be listed: the run fails.
+    #[test]
+    fn should_fail_the_run_on_any_failure_even_when_the_operation_ran() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+        );
+
+        let ran = bed.installer.apply(&paths(), &[Shell::Zsh, Shell::Pwsh], |_| true, |_| Ok(()));
+
+        assert_eq!(failures_of(ran), [failure("listing", "pwsh", "pwsh printed an empty $PROFILE")]);
     }
 }
