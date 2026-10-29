@@ -28,19 +28,14 @@ mod suggest;
 mod tracker;
 mod types;
 
-use bootstrap::cli::Cli;
-use clap::Parser;
-use shared::infrastructure::data_directory_from_env::data_directory_from_env;
-use shared::infrastructure::logger;
-
 fn main() {
-    let cli = Cli::parse();
+    let cli: bootstrap::cli::Cli = clap::Parser::parse();
     let is_pty = cli.runs_pty();
-    logger::init(
+    shared::infrastructure::logger::init(
         if is_pty { "pty" } else { "cli" },
         cli.verbose(),
         !is_pty,
-        &data_directory_from_env(),
+        &shared::infrastructure::data_directory_from_env::data_directory_from_env(),
     );
 
     let result = bootstrap::cli::run(cli);
@@ -48,7 +43,7 @@ fn main() {
     match result {
         Ok(code) => std::process::exit(code),
         Err(err) => {
-            logger::error(&format!("{err:#}"));
+            shared::infrastructure::logger::error(&format!("{err:#}"));
             bootstrap::cli::print_error(&err);
             std::process::exit(1);
         }

@@ -414,6 +414,20 @@ mod tests {
         assert!(report.is_empty(), "architecture rules broken:\n{}", report.join("\n"));
     }
 
+    /// Every module sees the crate root's private `use` items as `crate::<name>`: `crate::logger` would reach the
+    /// shared infrastructure and `crate::Cli` the composition root by paths rules 1-3 cannot read as either.
+    #[test]
+    fn should_keep_use_items_out_of_the_crate_root() {
+        let main_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs");
+        let source = fs::read_to_string(main_rs).expect("read src/main.rs");
+
+        let imports: Vec<&str> =
+            source.lines().filter(|line| imports_or_re_exports(without_line_comment(line))).collect();
+
+        let message = "src/main.rs imports, so every module can use these by the back door";
+        assert!(imports.is_empty(), "{message}:\n{}", imports.join("\n"));
+    }
+
     #[test]
     fn should_flag_a_domain_file_that_uses_another_layer() {
         let source = "use super::setting_key::SettingKey;\n\

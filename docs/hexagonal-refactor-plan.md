@@ -133,7 +133,10 @@ pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) 
    its `domain/`, `application/` and `infrastructure/` folders (rules 1-2 read the layer from the folder name, so a file
    beside the layers or in a misspelled or extra folder would escape them);
 6. a `use` item (import, re-export or glob) in a registered module's `mod.rs`, which only declares its children: a
-   re-export would let another module import a use case by a path that rule 3 cannot read as one.
+   re-export would let another module import a use case by a path that rule 3 cannot read as one;
+7. a `use` item in `src/main.rs`: every module sees the crate root's private imports as `crate::<name>`
+   (`crate::logger`, `crate::Cli`), a path that rules 1-3 cannot read as the shared infrastructure or bootstrap, so
+   `main` names what it calls by full path.
 
 It starts with the module list empty, and each phase adds the module it finishes.
 
