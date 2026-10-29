@@ -37,34 +37,57 @@ impl SetUpTabsmithUseCase {
         automatic: bool,
         mut report: impl FnMut(SetupProgress),
     ) -> Result<bool, ShellIntegrationError> {
-        let mut manual = !automatic;
-        if automatic {
-            match self.installer.install_missing(paths, shells) {
-                Ok(installed) => {
-                    if installed {
-                        self.restart_reminder.save_pending();
-                    }
-                    report(SetupProgress::Installed(installed));
-                }
-                Err(failures) => {
-                    report(SetupProgress::AutomaticInstallFailed(failures));
-                    manual = true;
-                }
-            }
-        }
+        let installed_automatically =
+            automatic && self.install_automatically(paths, shells, &mut report);
+        let manual = !installed_automatically;
         if manual {
-            report(SetupProgress::ManualInstructions(manual_install_instructions::text(paths, shells)));
-            if let Err(failures) = self.installer.apply(
-                paths,
-                shells,
-                |i| i.whole_file_phase().is_none(),
-                |i| self.installer.write_scripts(paths, i),
-            ) {
-                report(SetupProgress::ScriptFilesFailed(failures));
-            }
+            self.give_manual_instructions(paths, shells, &mut report);
         }
         self.spec_bundle.install()?;
         Ok(manual)
+    }
+
+    /// true if nothing failed; the restart reminder is saved, before the report, only when something was installed.
+    fn install_automatically(
+        &self,
+        paths: &IntegrationPaths,
+        shells: &[Shell],
+        report: &mut impl FnMut(SetupProgress),
+    ) -> bool {
+        match self.installer.install_missing(paths, shells) {
+            Ok(installed) => {
+                if installed {
+                    self.restart_reminder.save_pending();
+                }
+                report(SetupProgress::Installed(installed));
+                true
+            }
+            Err(failures) => {
+                report(SetupProgress::AutomaticInstallFailed(failures));
+                false
+            }
+        }
+    }
+
+    /// The lines to add by hand, then the script files they source: those of the dotfile integrations only, since
+    /// fish's integrations are whole `conf.d` files.
+    fn give_manual_instructions(
+        &self,
+        paths: &IntegrationPaths,
+        shells: &[Shell],
+        report: &mut impl FnMut(SetupProgress),
+    ) {
+        report(SetupProgress::ManualInstructions(
+            manual_install_instructions::text(paths, shells),
+        ));
+        if let Err(failures) = self.installer.apply(
+            paths,
+            shells,
+            |i| i.whole_file_phase().is_none(),
+            |i| self.installer.write_scripts(paths, i),
+        ) {
+            report(SetupProgress::ScriptFilesFailed(failures));
+        }
     }
 }
 
@@ -155,20 +178,29 @@ mod tests {
         let bed = test_bed();
         let mut pending_when_reported = Vec::new();
 
-        let _ = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| {
-            pending_when_reported.push((event, bed.restart_reminder.is_pending()))
-        });
+        let _ = bed
+            .use_case
+            .execute(&paths(), &[Shell::Zsh], true, |event| {
+                pending_when_reported.push((event, bed.restart_reminder.is_pending()))
+            });
 
-        assert_eq!(pending_when_reported, [(SetupProgress::Installed(true), true)]);
+        assert_eq!(
+            pending_when_reported,
+            [(SetupProgress::Installed(true), true)]
+        );
     }
 
     #[test]
     fn should_save_no_restart_reminder_when_everything_already_was_installed() {
         let bed = test_bed();
-        bed.installer.install_missing(&paths(), &[Shell::Zsh]).unwrap();
+        bed.installer
+            .install_missing(&paths(), &[Shell::Zsh])
+            .unwrap();
         let mut events = Vec::new();
 
-        let _ = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
+        let _ = bed
+            .use_case
+            .execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
 
         assert_eq!(
             (events, bed.restart_reminder.is_pending()),
@@ -181,15 +213,18 @@ mod tests {
         let bed = test_bed();
         let mut events = Vec::new();
 
-        let manual = bed.use_case.execute(&paths(), &[Shell::Bash, Shell::Zsh], false, |event| events.push(event));
+        let manual = bed
+            .use_case
+            .execute(&paths(), &[Shell::Bash, Shell::Zsh], false, |event| {
+                events.push(event)
+            });
 
         assert!(
             matches!(manual, Ok(true))
                 && events
-                    == [SetupProgress::ManualInstructions(manual_install_instructions::text(
-                        &paths(),
-                        &[Shell::Bash, Shell::Zsh]
-                    ))],
+                    == [SetupProgress::ManualInstructions(
+                        manual_install_instructions::text(&paths(), &[Shell::Bash, Shell::Zsh])
+                    )],
             "{manual:?} {events:?}"
         );
     }
@@ -201,9 +236,11 @@ mod tests {
         let bed = test_bed();
         let mut writes_when_reported = Vec::new();
 
-        let _ = bed.use_case.execute(&paths(), &[Shell::Zsh, Shell::Fish], false, |_| {
-            writes_when_reported.push(bed.dotfiles.writes().len())
-        });
+        let _ = bed
+            .use_case
+            .execute(&paths(), &[Shell::Zsh, Shell::Fish], false, |_| {
+                writes_when_reported.push(bed.dotfiles.writes().len())
+            });
 
         assert_eq!(
             (writes_when_reported, bed.dotfiles.writes()),
@@ -222,18 +259,24 @@ mod tests {
     #[test]
     fn should_report_the_script_files_that_could_not_be_written() {
         let bed = test_bed_with(
-            RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+            RecordingShellEnvironment::default()
+                .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
             RecordingSpecBundleInstaller::default(),
         );
         let mut events = Vec::new();
 
-        let manual = bed.use_case.execute(&paths(), &[Shell::Pwsh], false, |event| events.push(event));
+        let manual = bed
+            .use_case
+            .execute(&paths(), &[Shell::Pwsh], false, |event| events.push(event));
 
         assert!(
             matches!(manual, Ok(true))
                 && events
                     == [
-                        SetupProgress::ManualInstructions(manual_install_instructions::text(&paths(), &[Shell::Pwsh])),
+                        SetupProgress::ManualInstructions(manual_install_instructions::text(
+                            &paths(),
+                            &[Shell::Pwsh]
+                        )),
                         SetupProgress::ScriptFilesFailed(vec![IntegrationFailure::Listing {
                             shell: "pwsh".into(),
                             reason: "pwsh printed an empty $PROFILE".into(),
@@ -246,7 +289,8 @@ mod tests {
     #[test]
     fn should_fall_back_to_the_manual_instructions_when_the_automatic_install_failed() {
         let bed = test_bed_with(
-            RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+            RecordingShellEnvironment::default()
+                .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
             RecordingSpecBundleInstaller::default(),
         );
         let unlisted = || IntegrationFailure::Listing {
@@ -255,14 +299,19 @@ mod tests {
         };
         let mut events = Vec::new();
 
-        let manual = bed.use_case.execute(&paths(), &[Shell::Pwsh], true, |event| events.push(event));
+        let manual = bed
+            .use_case
+            .execute(&paths(), &[Shell::Pwsh], true, |event| events.push(event));
 
         assert!(
             matches!(manual, Ok(true))
                 && events
                     == [
                         SetupProgress::AutomaticInstallFailed(vec![unlisted()]),
-                        SetupProgress::ManualInstructions(manual_install_instructions::text(&paths(), &[Shell::Pwsh])),
+                        SetupProgress::ManualInstructions(manual_install_instructions::text(
+                            &paths(),
+                            &[Shell::Pwsh]
+                        )),
                         SetupProgress::ScriptFilesFailed(vec![unlisted()]),
                     ]
                 && !bed.restart_reminder.is_pending(),
@@ -271,19 +320,26 @@ mod tests {
     }
 
     /// How often the spec bundle was installed when each event was reported, then after setup.
-    fn spec_bundle_installs(environment: RecordingShellEnvironment, automatic: bool) -> (Vec<usize>, usize) {
+    fn spec_bundle_installs(
+        environment: RecordingShellEnvironment,
+        automatic: bool,
+    ) -> (Vec<usize>, usize) {
         let bed = test_bed_with(environment, RecordingSpecBundleInstaller::default());
         let mut installs_when_reported = Vec::new();
-        let _ = bed.use_case.execute(&paths(), &[Shell::Zsh, Shell::Pwsh], automatic, |_| {
-            installs_when_reported.push(bed.spec_bundle.times_asked())
-        });
+        let _ = bed
+            .use_case
+            .execute(&paths(), &[Shell::Zsh, Shell::Pwsh], automatic, |_| {
+                installs_when_reported.push(bed.spec_bundle.times_asked())
+            });
         (installs_when_reported, bed.spec_bundle.times_asked())
     }
 
     #[test]
     fn should_install_the_spec_bundle_once_after_every_event_whichever_way_setup_went() {
-        let unlistable_pwsh =
-            || RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into()));
+        let unlistable_pwsh = || {
+            RecordingShellEnvironment::default()
+                .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into()))
+        };
 
         let installs = [
             spec_bundle_installs(RecordingShellEnvironment::default(), true),
@@ -302,7 +358,9 @@ mod tests {
         );
         let mut events = Vec::new();
 
-        let manual = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
+        let manual = bed
+            .use_case
+            .execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
 
         assert!(
             matches!(&manual, Err(ShellIntegrationError::SpecBundle(m)) if m == "creating /home/u/.tabsmith/specs: disk full")
