@@ -19,6 +19,7 @@ pub(crate) mod spec_function_result;
 pub(crate) mod spec_index;
 pub(crate) mod spec_load_directive;
 pub(crate) mod spec_location;
+pub(crate) mod spec_lookup;
 pub(crate) mod spec_option;
 pub(crate) mod spec_suggestion;
 pub(crate) mod spec_value;
