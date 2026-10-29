@@ -23,7 +23,7 @@ use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
     AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE, AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS,
     AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
-    AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS, AUTOCOMPLETE_SCRIPT_TIMEOUT, AUTOCOMPLETE_SORT_METHOD,
+    AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS, AUTOCOMPLETE_SORT_METHOD,
     BETA_HISTORY_MODE, INLINE_ENABLED, INLINE_HISTORY_COUNT,
 };
 use crate::settings::domain::value_objects::settings::Settings;
@@ -31,6 +31,9 @@ use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::services::first_token_suggestions;
+use crate::completion::domain::services::generator_trigger_policy::{
+    cache_key, dir_changed, is_path_template, script_timeout, triggered, SYNC_CALL,
+};
 use crate::completion::domain::services::history_suggestions;
 use crate::completion::domain::services::path_template;
 use crate::completion::domain::services::suggestion_assembler;
@@ -68,7 +71,7 @@ use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBu
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime, TaskResult};
 use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::suggest::{self, GenCache, Lookup};
+use crate::suggest::{GenCache, Lookup};
 use crate::completion::domain::value_objects::filter_options::FilterOptions;
 use crate::completion::domain::value_objects::generator_slot_view::GeneratorSlotView;
 use crate::completion::domain::value_objects::insertion_context::InsertionContext;
@@ -94,8 +97,6 @@ use std::time::{Duration, Instant};
 
 /// Pump slice while generators run: deferred messages and finished runs are handled at least this often.
 const SLICE: Duration = Duration::from_millis(50);
-/// Timeout for synchronous spec callbacks (function triggers, `getQueryTerm`).
-const SYNC_CALL: Duration = Duration::from_secs(1);
 const FIRST_TOKEN_TTL: Duration = Duration::from_secs(10);
 const RECENCY_KEY: &str = "autocomplete.recency";
 
@@ -252,13 +253,6 @@ pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
     Ok(store.save()?)
 }
 
-/// `filepaths` / `folders` templates behave like the bundled `filepaths()` helper (trigger, query term).
-fn is_path_template(g: &Generator) -> bool {
-    g.template()
-        .iter()
-        .any(|t| t == "filepaths" || t == "folders")
-}
-
 fn env_var(env: &HashMap<String, String>, key: &str) -> Option<String> {
     env.get(key)
         .or_else(|| {
@@ -271,11 +265,6 @@ fn env_var(env: &HashMap<String, String>, key: &str) -> Option<String> {
             }
         })
         .cloned()
-}
-
-/// `autocomplete.scriptTimeout` (5000 ms; Windows 20000).
-fn script_timeout(settings: &Settings) -> u64 {
-    settings.f64(AUTOCOMPLETE_SCRIPT_TIMEOUT).max(0.0) as u64
 }
 
 /// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
@@ -716,7 +705,7 @@ impl Engine {
             fire.push(if !same || i >= self.slots.len() {
                 true
             } else if is_path_template(g) {
-                suggest::dir_changed(new, old, ctx.shell() == Shell::Pwsh.name())
+                dir_changed(new, old, ctx.shell() == Shell::Pwsh.name())
             } else {
                 match g.trigger() {
                     None => arg.as_ref().is_some_and(|a| a.debounce().is_some()),
@@ -734,7 +723,7 @@ impl Engine {
                             | SpecError::BundleUnavailable(_),
                         ) => true, // a throwing trigger counts as a trigger
                     },
-                    Some(t) => suggest::triggered(t, new, old).unwrap_or(true),
+                    Some(t) => triggered(t, new, old).unwrap_or(true),
                 }
             });
         }
@@ -887,7 +876,7 @@ impl Engine {
             return Outcome::Done(Vec::new());
         };
         let key = g.cache().as_ref().map(|c| {
-            suggest::cache_key(
+            cache_key(
                 c,
                 run.ctx.cwd(),
                 c.cache_key().clone().unwrap_or_else(|| run.tokens.join(" ")),
@@ -968,7 +957,7 @@ impl Engine {
         let key = g
             .cache()
             .as_ref()
-            .map(|c| suggest::cache_key(c, run.ctx.cwd(), c.cache_key().clone().unwrap_or(key_src)));
+            .map(|c| cache_key(c, run.ctx.cwd(), c.cache_key().clone().unwrap_or(key_src)));
         let ctx = run.ctx.clone();
         match self.fetch(run, g, key, Step::Exec, js, move |js| {
             js.start_exec(ExecRequest::from(exec), &ctx)

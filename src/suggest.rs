@@ -3,38 +3,11 @@
 //! OWNER: engine agent (internal API; only `engine.rs` uses it). Everything here is pure (no JS, no I/O); the
 //! engine resolves function triggers / `getQueryTerm`s and runs generators.
 use crate::specs::domain::value_objects::generator_cache_policy::GeneratorCachePolicy;
-use crate::specs::domain::value_objects::generator_trigger::GeneratorTrigger;
-use crate::completion::domain::value_objects::suggestion_query::after_sep;
 use serde_json::Value;
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------------------------------------
 // Generators: triggers and cache (SPEC §6.6.1, §6.6.5)
-
-/// Non-function trigger decision (`new` = current search term, `old` = previous); `None` for `GeneratorTrigger::Fn`.
-pub fn triggered(t: &GeneratorTrigger, new: &str, old: &str) -> Option<bool> {
-    let last = |s: &str, p: &str| s.rfind(p).map(|i| s[..i].chars().count()); // JS lastIndexOf (char units)
-    Some(match t {
-        GeneratorTrigger::Str(p) => last(new, p) != last(old, p),
-        GeneratorTrigger::Change => new != old,
-        GeneratorTrigger::Threshold(n) => new.chars().count() > *n && old.chars().count() <= *n,
-        GeneratorTrigger::Match(list) => {
-            list.iter().position(|x| x == new) != list.iter().position(|x| x == old)
-        }
-        GeneratorTrigger::Fn(_) => return None,
-    })
-}
-
-/// Bundled `filepaths()` trigger: the directory part (up to the last separator, see [`after_sep`]) changed.
-pub fn dir_changed(new: &str, old: &str, backslash: bool) -> bool {
-    let dir = |s: &str| s[..after_sep(s, backslash)].to_string();
-    dir(new) != dir(old)
-}
-
-/// `[cacheByDirectory ? cwd : "", key].join(",")`.
-pub fn cache_key(cfg: &GeneratorCachePolicy, cwd: &str, key: String) -> String {
-    format!("{},{key}", if cfg.cache_by_directory() { cwd } else { "" })
-}
 
 /// Cache decision for a generator run.
 #[derive(Debug, PartialEq)]
@@ -124,33 +97,8 @@ impl GenCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::completion::domain::services::generator_trigger_policy::cache_key;
     use serde_json::json;
-
-    #[test]
-    fn triggers() {
-        let s = GeneratorTrigger::Str("/".into());
-        assert_eq!(triggered(&s, "src/", "src"), Some(true));
-        assert_eq!(triggered(&s, "src/a", "src/"), Some(false));
-        assert_eq!(triggered(&GeneratorTrigger::Change, "a", "a"), Some(false));
-        assert_eq!(triggered(&GeneratorTrigger::Change, "ab", "a"), Some(true));
-        assert_eq!(triggered(&GeneratorTrigger::Threshold(2), "abc", "ab"), Some(true));
-        assert_eq!(triggered(&GeneratorTrigger::Threshold(2), "ab", "abc"), Some(false));
-        assert_eq!(
-            triggered(&GeneratorTrigger::Threshold(2), "abcd", "abc"),
-            Some(false)
-        );
-        let m = GeneratorTrigger::Match(vec!["x".into(), "y".into()]);
-        assert_eq!(triggered(&m, "y", "x"), Some(true));
-        assert_eq!(triggered(&m, "z", "w"), Some(false));
-        assert_eq!(triggered(&GeneratorTrigger::Fn(1), "a", "b"), None);
-        assert!(dir_changed("src/a", "lib/a", false));
-        assert!(!dir_changed("src/ab", "src/a", false));
-        assert!(dir_changed("src/", "src", false));
-        // windows-backslash-paths: `\` separates in pwsh only (POSIX: it is the escape char)
-        assert!(dir_changed("src\\", "src", true));
-        assert!(!dir_changed("src\\ab", "src\\a", true));
-        assert!(!dir_changed("my\\ ", "my", false));
-    }
 
     #[test]
     fn cache_ttl_swr_max_age() {
