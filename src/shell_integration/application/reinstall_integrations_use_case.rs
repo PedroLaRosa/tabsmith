@@ -105,6 +105,20 @@ mod tests {
         );
     }
 
+    /// Each half lists the shells again, so pwsh is asked for `$PROFILE` once per half, never cached (T26).
+    #[test]
+    fn should_ask_pwsh_for_its_profile_once_for_each_half() {
+        let environment = Rc::new(RecordingShellEnvironment::default());
+        let use_case = ReinstallIntegrationsUseCase::new(
+            installer(Rc::new(InMemoryDotfileRepository::default()), environment.clone()),
+            Rc::new(InMemoryRestartReminderRepository::default()),
+        );
+
+        use_case.execute(&paths(), &[Shell::Pwsh]).unwrap();
+
+        assert_eq!(environment.asked(), ["pwsh_profile", "pwsh_profile"]);
+    }
+
     /// pwsh cannot be listed, so the uninstall half fails: nothing is installed and no reminder is saved (T30).
     #[test]
     fn should_stop_before_installing_when_the_uninstall_half_fails() {
