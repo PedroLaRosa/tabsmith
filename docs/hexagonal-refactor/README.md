@@ -13,7 +13,7 @@ implementation session needs that the plan does not.
 | 2 settings | done | `52dcf85..c7b796e` |
 | 3 history | done | `a3953cf..f485ea7`, see [`phase-3-history.md`](phase-3-history.md) |
 | 4 shell_integration | done (also starts terminal_session's session context) | `6f38da1..ab7052b`, see [`phase-4-shell-integration.md`](phase-4-shell-integration.md) |
-| 5 specs | in progress, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5) | from `0a0a74e`, see [`phase-5-specs.md`](phase-5-specs.md) |
+| 5 specs | in progress, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5); runs 1-2 done, gate green at `e038e57` | from `1a466e2` (tag `phase5-start`), see [`phase-5-specs.md`](phase-5-specs.md) and [`handoff.md`](handoff.md) |
 | 6-11 | not started | |
 
 At `ab7052b`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 761 passed, 0 failed, 1 ignored (the
