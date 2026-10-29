@@ -152,20 +152,20 @@ fn escape_in_quote(s: &str, q: char, shell: Shell) -> String {
 
 /// Precomputed full insertion for a row (SPEC §6.8, D22/D25).
 pub(crate) fn insertion(s: &SuggestionCandidate, c: &InsertionContext) -> Insertion {
-    let q = s.query().of(c.search_term);
-    let raw: Vec<char> = c.raw.chars().collect();
-    let (logical, open) = unquote(&raw, c.shell);
+    let q = s.query().of(c.search_term());
+    let raw: Vec<char> = c.raw().chars().collect();
+    let (logical, open) = unquote(&raw, c.shell());
     // special (`help` template) rows replace the typed prefix like any other row
     let delete = if s.kind() == SuggestionKind::AutoExecute {
         0
-    } else if q == c.search_term {
+    } else if q == c.search_term() {
         raw.len()
     } else if let SuggestionQuery::Str(g) = s.query() {
-        c.raw[c.raw.rfind(g.as_str()).map_or(0, |i| i + g.len())..]
+        c.raw()[c.raw().rfind(g.as_str()).map_or(0, |i| i + g.len())..]
             .chars()
             .count()
     } else if let SuggestionQuery::Path { backslash } = *s.query() {
-        c.raw[after_sep(c.raw, backslash)..].chars().count()
+        c.raw()[after_sep(c.raw(), backslash)..].chars().count()
     } else {
         // function getQueryTerm: delete the raw chars that spell q's logical chars (quotes/escapes included);
         // otherwise an approximation (escaped whitespace), never past the token
@@ -194,10 +194,10 @@ pub(crate) fn insertion(s: &SuggestionCandidate, c: &InsertionContext) -> Insert
     );
     let mut text = match s.insert_value() {
         Some(v) if !path => v.clone(),
-        _ => match name_match(s, &q, c.fuzzy, c.prefer_verbose).filter(|m| !m.is_empty()) {
+        _ => match name_match(s, &q, c.fuzzy(), c.prefer_verbose()).filter(|m| !m.is_empty()) {
             None => String::new(),
             Some(m) => {
-                let name = match (inside, c.shell) {
+                let name = match (inside, c.shell()) {
                     // a file closes the quote; a folder leaves it open for the next segment
                     (Some(qc), sh) => {
                         let mut t = escape_in_quote(&m, qc, sh);
@@ -220,7 +220,7 @@ pub(crate) fn insertion(s: &SuggestionCandidate, c: &InsertionContext) -> Insert
         text.truncate(n);
         text.push('\n');
     }
-    if !text.ends_with('\n') && s.should_add_space() && c.insert_space {
+    if !text.ends_with('\n') && s.should_add_space() && c.insert_space() {
         text.push(' ');
     }
     let mut delete = delete;
@@ -293,10 +293,7 @@ mod tests {
             })
         );
         // auto-space off
-        let c = InsertionContext {
-            insert_space: false,
-            ..ctx("ch", "ch", Shell::Zsh)
-        };
+        let c = ctx("ch", "ch", Shell::Zsh).with_insert_space(false);
         assert_eq!(insertion(&checkout, &c).text(), "eckout");
         // escaped space in the raw token
         let dir = SuggestionCandidate::new("my dir/", SuggestionKind::Folder)
@@ -368,10 +365,7 @@ mod tests {
         // preferVerboseSuggestions
         let o = SuggestionCandidate::new("", SuggestionKind::Option).with_names(vec!["-m".into(), "--message".into()]);
         assert_eq!(insertion(&o, &ctx("", "", Shell::Bash)).text(), "-m");
-        let c = InsertionContext {
-            prefer_verbose: true,
-            ..ctx("", "", Shell::Bash)
-        };
+        let c = ctx("", "", Shell::Bash).with_prefer_verbose(true);
         assert_eq!(insertion(&o, &c).text(), "--message");
         let i = insertion(&o, &ctx("--m", "--m", Shell::Bash));
         assert_eq!((i.delete(), i.text()), (0, "essage"));

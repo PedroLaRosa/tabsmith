@@ -34,13 +34,7 @@ pub(crate) fn pr_for(comp: Subcommand, search: &str) -> ParsedCommandLineParts {
 }
 
 pub(crate) fn opts() -> FilterOptions {
-    FilterOptions {
-        fuzzy: false,
-        auto_exec_hidden: false,
-        exec_after_space: false,
-        run_dangerous: false,
-        suggest_current_token: false,
-    }
+    FilterOptions::default()
 }
 
 pub(crate) fn sub(names: &[&str]) -> Rc<Subcommand> {
@@ -72,12 +66,5 @@ pub(crate) fn names(v: &[(SuggestionCandidate, bool)]) -> Vec<String> {
 }
 
 pub(crate) fn ctx<'a>(search: &'a str, raw: &'a str, shell: Shell) -> InsertionContext<'a> {
-    InsertionContext {
-        search_term: search,
-        raw,
-        shell,
-        fuzzy: false,
-        prefer_verbose: false,
-        insert_space: true,
-    }
+    InsertionContext::new(search, raw, shell).with_insert_space(true)
 }

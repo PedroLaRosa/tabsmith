@@ -64,7 +64,7 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
             .filter(|s| !s.hidden())
             .map(|s| (s, false))
             .collect();
-        if o.exec_after_space && !out.is_empty() && !o.auto_exec_hidden {
+        if o.exec_after_space() && !out.is_empty() && !o.auto_exec_hidden() {
             out.insert(0, (auto_exec("↪", "Immediately execute", None), false));
         }
         return out;
@@ -82,9 +82,9 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
                 || s.insert_value().is_none()
                 || s.names().first() == s.insert_value().as_ref();
             if !added
-                && !o.auto_exec_hidden
+                && !o.auto_exec_hidden()
                 && plain
-                && (!s.is_dangerous() || o.run_dangerous)
+                && (!s.is_dangerous() || o.run_dangerous())
                 && s.args().first().is_none_or(|a| a.is_optional())
             {
                 let mut x = s
@@ -102,12 +102,12 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
             }
             if folder { &mut b } else { &mut a }.push((s.clone(), true));
         } else if !s.hidden() {
-            if let Some((score, p)) = partial(s.names(), &q, o.fuzzy) {
+            if let Some((score, p)) = partial(s.names(), &q, o.fuzzy()) {
                 c.push((s.clone(), score, p));
             }
         }
         if let Some(d) = s.display_name() {
-            if let Some((score, p)) = partial(std::slice::from_ref(d), &q, o.fuzzy) {
+            if let Some((score, p)) = partial(std::slice::from_ref(d), &q, o.fuzzy()) {
                 c.push((s, score, p)); // possible duplicate, removed by dedupe (≤ 50)
             }
         }
@@ -124,7 +124,7 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
         .chain(b)
         .chain(c.into_iter().map(|(s, _, p)| (s, p)))
         .collect();
-    if !out.is_empty() && !added && !o.auto_exec_hidden {
+    if !out.is_empty() && !added && !o.auto_exec_hidden() {
         let folders = search_term.ends_with('/')
             && out
                 .iter()
@@ -138,7 +138,7 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
                     false,
                 ),
             );
-        } else if o.suggest_current_token {
+        } else if o.suggest_current_token() {
             out.insert(
                 0,
                 (
@@ -188,18 +188,12 @@ mod tests {
             ["!foo", "foo", "foo/", "foobar"]
         );
         // hidden setting
-        let o = FilterOptions {
-            auto_exec_hidden: true,
-            ..opts()
-        };
+        let o = opts().with_auto_exec_hidden(true);
         assert_eq!(names(&filter(list, "foo", &o)), ["foo", "foo/", "foobar"]);
         // dangerous / mandatory arg → no auto-execute row; dangerous allowed by setting
         let d = SuggestionCandidate::new("rm", SuggestionKind::Subcommand).with_is_dangerous(true);
         assert_eq!(names(&filter(vec![d.clone()], "rm", &opts())), ["rm"]);
-        let o = FilterOptions {
-            run_dangerous: true,
-            ..opts()
-        };
+        let o = opts().with_run_dangerous(true);
         assert_eq!(names(&filter(vec![d], "rm", &o)), ["!rm", "rm"]);
         let m = SuggestionCandidate::new("commit", SuggestionKind::Subcommand).with_args(vec![arg(false)]);
         assert_eq!(
@@ -264,20 +258,14 @@ mod tests {
         assert_eq!(out[0].0.original_kind(), Some(SuggestionKind::Folder));
         let out = filter(vec![row("lib/")], "src/", &opts());
         assert_eq!(names(&out), ["!↪", "lib/"]);
-        let o = FilterOptions {
-            suggest_current_token: true,
-            ..opts()
-        };
+        let o = opts().with_suggest_current_token(true);
         let out = filter(vec![SuggestionCandidate::new("main", SuggestionKind::Arg)], "ma", &o);
         assert_eq!(names(&out), ["!ma", "main"]);
         assert_eq!(
             out[0].0.description().as_deref(),
             Some("Enter the current argument")
         );
-        let o = FilterOptions {
-            exec_after_space: true,
-            ..opts()
-        };
+        let o = opts().with_exec_after_space(true);
         assert_eq!(
             names(&filter(vec![SuggestionCandidate::new("a", SuggestionKind::Arg)], "", &o)),
             ["!↪", "a"]

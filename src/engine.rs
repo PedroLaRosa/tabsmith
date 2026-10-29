@@ -1138,12 +1138,7 @@ impl Engine {
                 .slots
                 .iter()
                 .zip(&cur.queries)
-                .map(|(sl, q)| GeneratorSlotView {
-                    key: sl.key,
-                    query: q.clone(),
-                    loading: sl.loading,
-                    items: &sl.result,
-                })
+                .map(|(sl, q)| GeneratorSlotView::new(sl.key, q.clone(), sl.loading, &sl.result))
                 .collect();
             suggestion_assembler::assemble(pr, &views)
         };
@@ -1152,18 +1147,19 @@ impl Engine {
             let hist = history_suggestions::history_rows(&cur.prefix, &self.history.recent());
             list = history_suggestions::mix_history(list, hist, mode == "show" && !cur.req.history_mode);
         }
-        let fo = FilterOptions {
-            fuzzy: cur.fuzzy,
-            auto_exec_hidden: s.bool(AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION)
-                || s.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
-            exec_after_space: s.bool(AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE),
-            run_dangerous: s.bool(AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS),
-            suggest_current_token: pr
-                .current_arg()
-                .as_ref()
-                .and_then(|a| a.suggest_current_token())
-                .unwrap_or_else(|| s.bool(AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN)),
-        };
+        let fo = FilterOptions::default()
+            .with_fuzzy(cur.fuzzy)
+            .with_auto_exec_hidden(
+                s.bool(AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION) || s.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
+            )
+            .with_exec_after_space(s.bool(AUTOCOMPLETE_IMMEDIATELY_EXECUTE_AFTER_SPACE))
+            .with_run_dangerous(s.bool(AUTOCOMPLETE_IMMEDIATELY_RUN_DANGEROUS_COMMANDS))
+            .with_suggest_current_token(
+                pr.current_arg()
+                    .as_ref()
+                    .and_then(|a| a.suggest_current_token())
+                    .unwrap_or_else(|| s.bool(AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN)),
+            );
         let cmd = pr.tokens().get(pr.command_index()).map_or("", String::as_str); // D21
         let use_recency = s.string(AUTOCOMPLETE_SORT_METHOD) != Some("alphabetical");
         let ranked = {
@@ -1174,14 +1170,10 @@ impl Engine {
                 .and_then(|r| r.get(cmd));
             suggestion_ranker::rank(list, pr.search_term(), map, &fo)
         };
-        let ic = InsertionContext {
-            search_term: pr.search_term(),
-            raw: pr.raw_last_token(),
-            shell: cur.req.shell,
-            fuzzy: cur.fuzzy,
-            prefer_verbose: s.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS),
-            insert_space: s.bool(AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY),
-        };
+        let ic = InsertionContext::new(pr.search_term(), pr.raw_last_token(), cur.req.shell)
+            .with_fuzzy(cur.fuzzy)
+            .with_prefer_verbose(s.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS))
+            .with_insert_space(s.bool(AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY));
         let items: Vec<Suggestion> = ranked
             .into_iter()
             .map(|(x, p)| suggestion_finalizer::to_item(x, p, &ic))

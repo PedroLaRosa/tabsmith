@@ -61,10 +61,10 @@ fn highlight(s: &SuggestionCandidate, q: &str, fuzzy: bool) -> Vec<usize> {
 
 /// Final dropdown row with its insertion precomputed.
 pub(crate) fn to_item(s: SuggestionCandidate, prefix_match: bool, c: &InsertionContext) -> Suggestion {
-    let query = s.query().of(c.search_term);
+    let query = s.query().of(c.search_term());
     Suggestion::new(SuggestionParts {
         insert: insertion(&s, c),
-        highlight: highlight(&s, &query, c.fuzzy),
+        highlight: highlight(&s, &query, c.fuzzy()),
         args_hint: args_hint(s.args()),
         query,
         names: s.names().clone(),
@@ -109,10 +109,7 @@ mod tests {
         let it = to_item(
             s,
             false,
-            &InsertionContext {
-                fuzzy: true,
-                ..ctx("fs", "fs", Shell::Bash)
-            },
+            &ctx("fs", "fs", Shell::Bash).with_fuzzy(true),
         );
         assert_eq!(it.highlight(), [0, 6]);
     }

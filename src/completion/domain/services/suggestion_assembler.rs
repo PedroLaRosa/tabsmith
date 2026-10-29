@@ -97,11 +97,11 @@ pub(crate) fn assemble(pr: &ParsedCommandLine, gens: &[GeneratorSlotView]) -> Ve
             );
             for g in gens {
                 // SPEC §6.6.1: stale results of a loading generator only without getQueryTerm
-                if !g.loading || g.query == SuggestionQuery::Term {
+                if !g.is_loading() || *g.query() == SuggestionQuery::Term {
                     out.extend(
-                        g.items
+                        g.items()
                             .iter()
-                            .map(|s| SuggestionCandidate::from_suggestion(s, false, Some(g.key), g.query.clone())),
+                            .map(|s| SuggestionCandidate::from_suggestion(s, false, Some(g.key()), g.query().clone())),
                     );
                 }
             }
