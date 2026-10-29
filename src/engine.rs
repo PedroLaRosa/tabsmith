@@ -12,10 +12,15 @@ use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::application::ports::clock::Clock;
 use crate::completion::domain::completion_error::CompletionError;
 use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
+use crate::completion::application::apply_completion_settings_use_case::ApplyCompletionSettingsUseCase;
+use crate::completion::application::apply_session_context_use_case::ApplySessionContextUseCase;
 use crate::completion::application::command_line_parser::CommandLineParser;
 use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::application::generator_runner::GeneratorRunner;
 use crate::completion::application::parse_context::ParseContext;
+use crate::completion::application::record_suggestion_insertion_use_case::RecordSuggestionInsertionUseCase;
+use crate::completion::application::reset_generators_use_case::ResetGeneratorsUseCase;
+use crate::completion::application::toggle_fuzzy_search_use_case::ToggleFuzzySearchUseCase;
 use crate::completion::application::ports::executable_catalog::ExecutableCatalog;
 use crate::completion::domain::entities::completion_session::CompletionSession;
 use crate::completion::domain::repositories::recency_repository::RecencyRepository;
@@ -71,7 +76,7 @@ use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
-    now_ms, EngineMsg, Msg,
+    EngineMsg, Msg,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -224,13 +229,15 @@ fn log_completion_notice(notice: CompletionNotice) {
 
 struct Engine {
     tx: Sender<Msg>,
-    command_line_parser: CommandLineParser,
+    command_line_parser: Rc<CommandLineParser>,
     index: SpecIndex,
     history: Rc<dyn HistoryRepository>,
     record_command: RecordCommandUseCase,
     recency_repository: Rc<dyn RecencyRepository>,
     ghost_cache: Arc<Mutex<GhostCache>>,
     generators: Rc<GeneratorRunner>,
+    apply_completion_settings: ApplyCompletionSettingsUseCase,
+    record_suggestion_insertion: RecordSuggestionInsertionUseCase,
     session: CompletionSession,
 }
 
@@ -279,6 +286,9 @@ impl Engine {
         let recency_repository: Rc<dyn RecencyRepository> = Rc::new(StateFileRecencyRepository::new(state_path));
         let recency = recency_repository.load();
         let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
+        let command_line_parser = Rc::new(command_line_parser);
+        let apply_completion_settings = ApplyCompletionSettingsUseCase::new(runtime.clone(), command_line_parser.clone());
+        let record_suggestion_insertion = RecordSuggestionInsertionUseCase::new(recency_repository.clone(), clock.clone());
         let generators = Rc::new(GeneratorRunner::new(runtime, Rc::new(FsDirectoryLister), clock));
         Engine {
             tx,
@@ -289,6 +299,8 @@ impl Engine {
             recency_repository,
             ghost_cache: Arc::new(Mutex::new(GhostCache::default())),
             generators,
+            apply_completion_settings,
+            record_suggestion_insertion,
             session: CompletionSession::new(settings, std::env::vars().collect(), recency),
         }
     }
@@ -299,7 +311,7 @@ impl Engine {
             if pending.is_none() && !self.session.has_running_generators() {
                 match inbox.next_msg(js) {
                     Some(m) => {
-                        if !self.handle(m, &mut pending, js) {
+                        if !self.handle(m, &mut pending) {
                             break;
                         }
                     }
@@ -308,7 +320,7 @@ impl Engine {
             }
             // only the latest request is served: drain everything queued first
             while let Some(m) = inbox.try_next_msg(js) {
-                if !self.handle(m, &mut pending, js) {
+                if !self.handle(m, &mut pending) {
                     break 'outer;
                 }
             }
@@ -326,7 +338,7 @@ impl Engine {
     }
 
     /// Handle one message; `false` = shut down.
-    fn handle(&mut self, m: EngineMsg, pending: &mut Option<CompletionRequest>, js: &QuickJsSpecRuntime) -> bool {
+    fn handle(&mut self, m: EngineMsg, pending: &mut Option<CompletionRequest>) -> bool {
         match m {
             EngineMsg::Complete(r) => *pending = Some(r),
             EngineMsg::CommandFinished(_) | EngineMsg::CommandEnded => {
@@ -336,25 +348,19 @@ impl Engine {
                 if let Ok(mut c) = self.ghost_cache.lock() {
                     c.clear();
                 }
-                self.session.reset_generator_slots(); // generator results without `cache` live until the command ends
-                self.session.forget_served_request();
+                // generator results without `cache` live until the command ends
+                ResetGeneratorsUseCase.execute(&mut self.session);
             }
-            EngineMsg::RecordInsert { cmd, name } => self.record(cmd, name),
+            EngineMsg::RecordInsert { cmd, name } => self.record_suggestion_insertion.execute(&mut self.session, cmd, name),
             EngineMsg::Llm {
                 req,
                 buffer,
                 cwd,
                 shell,
             } => self.llm(req, buffer, cwd, shell),
-            EngineMsg::Settings(s) => {
-                js.apply_settings(&s);
-                self.session.replace_settings(s);
-                self.command_line_parser.clear_caches(self.session.parse_prefix_cache());
-                self.session.reset_generator_slots();
-                self.session.forget_first_token_suggestions();
-            }
-            EngineMsg::Session { env, alias } => self.session.apply_session_context(env, alias),
-            EngineMsg::ToggleFuzzy => self.session.toggle_fuzzy_search(),
+            EngineMsg::Settings(s) => self.apply_completion_settings.execute(&mut self.session, s),
+            EngineMsg::Session { env, alias } => ApplySessionContextUseCase.execute(&mut self.session, env, alias),
+            EngineMsg::ToggleFuzzy => ToggleFuzzySearchUseCase.execute(&mut self.session),
             EngineMsg::Runtime(_) => {} // handed to the js host by the inbox
             EngineMsg::Shutdown => return false,
         }
@@ -639,13 +645,7 @@ impl Engine {
     }
 
     // -----------------------------------------------------------------------------------------------------
-    // Recency (SPEC §6.7.5) and LLM ghost text (SPEC §8.4)
-
-    fn record(&mut self, cmd: String, name: String) {
-        if self.session.record_insertion(cmd, name, now_ms()) {
-            self.recency_repository.save(self.session.recency());
-        }
-    }
+    // LLM ghost text (SPEC §8.4)
 
     fn llm(&mut self, req: u64, buffer: String, cwd: PathBuf, shell: Shell) {
         let tx = self.tx.clone();
@@ -721,12 +721,27 @@ mod tests {
     }
 
     #[test]
-    fn session_update_refreshes_first_token_items() {
+    fn session_update_refreshes_first_token_items_keeps_the_engine_running() {
         // first-token-cache-ignores-session-update: `alias zzal=…` at this prompt shows `zzal` at the next one
         let dir = TempDir::new("engine-session");
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut e = engine_over(&dir);
+        assert!(e.handle(session_context(&[], None), &mut None));
+        assert!(e.handle(session_context(&[("PATH", "/session/bin")], None), &mut None));
+        assert!(e.handle(session_context(&[], Some("alias ll='ls -l'")), &mut None));
+        assert!(e.handle(session_context(&[], Some("")), &mut None));
+    }
+
+    /// A parser over `js` and a spec repository that reads the env this process was started with.
+    fn parser_over(js: &Rc<QuickJsSpecRuntime>) -> CommandLineParser {
+        let bundle = EmbeddedSpecBundle::new(data_directory_from_env());
+        CommandLineParser::new(Rc::new(QuickJsSpecRepository::new(js.clone(), bundle)), js.clone())
+    }
+
+    /// An engine over a real runtime and a JSONL history in `dir`, whose replies go nowhere.
+    fn engine_over(dir: &TempDir) -> Engine {
+        let (tx, _) = std::sync::mpsc::channel();
         let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
-        let mut e = Engine::with(
+        Engine::with(
             tx,
             Settings::default(),
             parser_over(&js),
@@ -736,27 +751,17 @@ mod tests {
                 dir.path().join("h.jsonl"),
             ))),
             None,
-        );
-        assert!(e.first_token_items(&HashMap::new(), None, None).is_empty());
-        assert!(e.handle(
-            EngineMsg::Session { env: HashMap::new(), alias: None },
-            &mut None,
-            &js
-        ));
-        let aliases = HashMap::from([("zzal".to_string(), "git status".to_string())]);
-        assert_eq!(
-            e.first_token_items(&aliases, None, None)
-                .iter()
-                .map(|s| s.names()[0].as_str())
-                .collect::<Vec<_>>(),
-            ["zzal"]
-        );
+        )
     }
 
-    /// A parser over `js` and a spec repository that reads the env this process was started with.
-    fn parser_over(js: &Rc<QuickJsSpecRuntime>) -> CommandLineParser {
-        let bundle = EmbeddedSpecBundle::new(data_directory_from_env());
-        CommandLineParser::new(Rc::new(QuickJsSpecRepository::new(js.clone(), bundle)), js.clone())
+    /// The message a shell's session context arrives as: its env and its alias text.
+    fn session_context(env: &[(&str, &str)], alias: Option<&str>) -> EngineMsg {
+        let env = env
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let alias = alias.map(str::to_owned);
+        EngineMsg::Session { env, alias }
     }
 
     /// A runtime over a real engine inbox, and a sender into that inbox.
