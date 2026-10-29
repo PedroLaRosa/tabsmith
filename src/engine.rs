@@ -16,8 +16,11 @@ use crate::completion::application::parse_context::ParseContext;
 use crate::completion::application::ports::directory_lister::DirectoryLister;
 use crate::completion::application::ports::executable_catalog::ExecutableCatalog;
 use crate::completion::domain::entities::parse_prefix_cache::ParsePrefixCache;
+use crate::completion::domain::entities::suggestion_recency::SuggestionRecency;
+use crate::completion::domain::repositories::recency_repository::RecencyRepository;
 use crate::completion::infrastructure::adapters::fs_directory_lister::FsDirectoryLister;
 use crate::completion::infrastructure::adapters::path_executable_catalog::PathExecutableCatalog;
+use crate::completion::infrastructure::adapters::state_file_recency_repository::StateFileRecencyRepository;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
     AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
@@ -27,7 +30,6 @@ use crate::settings::domain::services::settings_catalog::{
     BETA_HISTORY_MODE, INLINE_ENABLED, INLINE_HISTORY_COUNT,
 };
 use crate::settings::domain::value_objects::settings::Settings;
-use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::services::first_token_suggestions;
@@ -90,9 +92,8 @@ use crate::types::{
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -100,10 +101,6 @@ use std::time::{Duration, Instant};
 /// Pump slice while generators run: deferred messages and finished runs are handled at least this often.
 const SLICE: Duration = Duration::from_millis(50);
 const FIRST_TOKEN_TTL: Duration = Duration::from_secs(10);
-const RECENCY_KEY: &str = "autocomplete.recency";
-
-/// `recency[cmd][name] = unix ms of the last insertion` (SPEC §3.2 `state.json`).
-pub type Recency = HashMap<String, HashMap<String, u64>>;
 
 /// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
 /// Returns the engine's inbox. The thread exits on `EngineMsg::Shutdown` or when all senders are dropped.
@@ -219,42 +216,6 @@ impl RuntimeEventSource for EngineInbox {
     }
 }
 
-/// Load `autocomplete.recency` from a state file (missing/corrupt → empty).
-pub fn load_recency(path: &Path) -> Recency {
-    JsonDocumentStore::load(path)
-        .ok()
-        .and_then(|s| s.map.get(RECENCY_KEY).cloned())
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
-}
-
-/// Read-modify-write `autocomplete.recency` into a state file (other keys kept). Merged with what is on disk
-/// (newest timestamp wins), so concurrent sessions keep each other's entries. Skipped when the data root is gone
-/// (`uninstall --purge` while this session runs): JsonDocumentStore::save would recreate it.
-pub fn save_recency(path: &Path, rec: &Recency) -> anyhow::Result<()> {
-    if !path.parent().is_some_and(Path::is_dir) {
-        return Ok(());
-    }
-    let mut store = JsonDocumentStore::load(path)?;
-    let mut merged: Recency = store
-        .map
-        .get(RECENCY_KEY)
-        .cloned()
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default();
-    for (cmd, names) in rec {
-        let m = merged.entry(cmd.clone()).or_default();
-        for (name, &ts) in names {
-            let e = m.entry(name.clone()).or_insert(0);
-            *e = (*e).max(ts);
-        }
-    }
-    store
-        .map
-        .insert(RECENCY_KEY.into(), serde_json::to_value(merged)?);
-    Ok(store.save()?)
-}
-
 fn env_var(env: &HashMap<String, String>, key: &str) -> Option<String> {
     env.get(key)
         .or_else(|| {
@@ -352,9 +313,8 @@ struct Engine {
     session_alias: Option<String>,
     wrapper_env: HashMap<String, String>,
     aliases: Option<(Shell, HashMap<String, String>)>,
-    recency: Arc<Mutex<Recency>>,
-    saving: Arc<AtomicBool>,
-    state_path: Option<PathBuf>,
+    recency: SuggestionRecency,
+    recency_repository: Rc<dyn RecencyRepository>,
     ghost_cache: Arc<Mutex<GhostCache>>,
     user_fuzzy: bool,
     last_arg_key: u64,
@@ -407,7 +367,8 @@ impl Engine {
             history,
             record_command,
         } = history_module;
-        let recency = state_path.as_deref().map(load_recency).unwrap_or_default();
+        let recency_repository: Rc<dyn RecencyRepository> = Rc::new(StateFileRecencyRepository::new(state_path));
+        let recency = recency_repository.load();
         Engine {
             tx,
             user_fuzzy: settings.bool(AUTOCOMPLETE_FUZZY_SEARCH),
@@ -421,9 +382,8 @@ impl Engine {
             session_alias: None,
             wrapper_env: std::env::vars().collect(),
             aliases: None,
-            recency: Arc::new(Mutex::new(recency)),
-            saving: Arc::new(AtomicBool::new(false)),
-            state_path,
+            recency,
+            recency_repository,
             ghost_cache: Arc::new(Mutex::new(GhostCache::default())),
             last_arg_key: 0,
             slot_arg: None,
@@ -466,9 +426,7 @@ impl Engine {
                 self.pump(js);
             }
         }
-        if self.saving.load(SeqCst) {
-            self.save_recency_now();
-        }
+        self.recency_repository.flush();
     }
 
     /// Handle one message; `false` = shut down.
@@ -1152,14 +1110,8 @@ impl Engine {
             );
         let cmd = pr.tokens().get(pr.command_index()).map_or("", String::as_str); // D21
         let use_recency = s.string(AUTOCOMPLETE_SORT_METHOD) != Some("alphabetical");
-        let ranked = {
-            let rec = self.recency.lock().ok();
-            let map = rec
-                .as_ref()
-                .filter(|_| use_recency)
-                .and_then(|r| r.get(cmd));
-            suggestion_ranker::rank(list, pr.search_term(), map, &fo)
-        };
+        let map = Some(&self.recency).filter(|_| use_recency).and_then(|r| r.of_command(cmd));
+        let ranked = suggestion_ranker::rank(list, pr.search_term(), map, &fo);
         let ic = InsertionContext::new(pr.search_term(), pr.raw_last_token(), cur.req.shell)
             .with_fuzzy(cur.fuzzy)
             .with_prefer_verbose(s.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS))
@@ -1219,42 +1171,8 @@ impl Engine {
     // Recency (SPEC §6.7.5) and LLM ghost text (SPEC §8.4)
 
     fn record(&mut self, cmd: String, name: String) {
-        if name.contains('↪') {
-            return;
-        }
-        if let Ok(mut r) = self.recency.lock() {
-            r.entry(cmd).or_default().insert(name, now_ms());
-        }
-        let Some(path) = self.state_path.clone() else {
-            return;
-        };
-        if self.saving.swap(true, SeqCst) {
-            return; // a save is already scheduled; it writes the latest map
-        }
-        let (rec, saving) = (self.recency.clone(), self.saving.clone());
-        // ponytail: throttled to one write per second (first insert + 1 s), not a trailing debounce
-        let spawned = std::thread::Builder::new()
-            .name("recency".into())
-            .spawn(move || {
-                std::thread::sleep(Duration::from_secs(1));
-                saving.store(false, SeqCst);
-                let snapshot = rec.lock().map(|r| r.clone()).unwrap_or_default();
-                if let Err(e) = save_recency(&path, &snapshot) {
-                    logger::warn(&format!("engine: saving recency: {e:#}"));
-                }
-            });
-        if spawned.is_err() {
-            self.saving.store(false, SeqCst);
-            self.save_recency_now();
-        }
-    }
-
-    fn save_recency_now(&self) {
-        let (Some(path), Ok(rec)) = (&self.state_path, self.recency.lock()) else {
-            return;
-        };
-        if let Err(e) = save_recency(path, &rec) {
-            logger::warn(&format!("engine: saving recency: {e:#}"));
+        if self.recency.record(cmd, name, now_ms()) {
+            self.recency_repository.save(&self.recency);
         }
     }
 
@@ -1297,55 +1215,11 @@ mod tests {
     use crate::history::infrastructure::adapters::jsonl_history_repository::JsonlHistoryRepository;
     use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use std::path::Path;
     use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
     use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
     use crate::specs::domain::value_objects::process_output::ProcessOutput;
-
-    #[test]
-    fn recency_round_trip_keeps_other_keys() {
-        let temp_dir = TempDir::new("engine");
-        let dir = temp_dir.path().to_path_buf();
-        let path = dir.join("state.json");
-        std::fs::write(&path, r#"{"doctor.prompt-restart-terminal": true}"#).unwrap();
-        assert!(load_recency(&path).is_empty());
-        let rec: Recency = [(
-            "git".to_string(),
-            [("checkout".to_string(), 1_700_000_000_000u64)].into(),
-        )]
-        .into();
-        save_recency(&path, &rec).unwrap();
-        assert_eq!(load_recency(&path), rec);
-        let store = JsonDocumentStore::load(&path).unwrap();
-        assert_eq!(
-            store.map.get("doctor.prompt-restart-terminal"),
-            Some(&json!(true))
-        );
-        assert!(load_recency(&dir.join("missing.json")).is_empty());
-        std::fs::remove_dir_all(&dir).unwrap();
-        // R4-3: a purged data root is not recreated by a running session.
-        save_recency(&path, &rec).unwrap();
-        assert!(!dir.exists());
-    }
-
-    #[test]
-    fn recency_save_merges_other_sessions() {
-        // recency-cross-session-overwrite: two sessions loaded the same file; neither drops the other's entry
-        let dir = TempDir::new("recency");
-        let path = dir.path().join("state.json");
-        std::fs::write(&path, "{}").unwrap();
-        let one = |cmd: &str, name: &str, ts: u64| -> Recency {
-            [(cmd.to_string(), [(name.to_string(), ts)].into())].into()
-        };
-        save_recency(&path, &one("git", "checkout", 5)).unwrap();
-        save_recency(&path, &one("git", "status", 2)).unwrap();
-        save_recency(&path, &one("git", "checkout", 3)).unwrap(); // older than disk: newest wins
-        let got = load_recency(&path);
-        assert_eq!(
-            got["git"],
-            [("checkout".to_string(), 5u64), ("status".to_string(), 2)].into()
-        );
-    }
 
     #[test]
     fn llm_history_honours_history_count() {
