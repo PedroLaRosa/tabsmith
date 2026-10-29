@@ -14,19 +14,13 @@ impl UninstallIntegrationsUseCase {
         UninstallIntegrationsUseCase { installer }
     }
 
-    /// Uninstalls every integration with something on disk, not only the installed ones: a moved binary or lines
-    /// appended after the post block fail the check exactly when an uninstall is needed. Ok(true) if any.
+    /// Uninstalls every integration with something on disk, not only the installed ones. Ok(true) if any.
     pub(crate) fn execute(
         &self,
         paths: &IntegrationPaths,
         shells: &[Shell],
     ) -> Result<bool, Vec<IntegrationFailure>> {
-        self.installer.apply(
-            paths,
-            shells,
-            |i| self.installer.has_traces(paths, i),
-            |i| self.installer.uninstall(paths, i),
-        )
+        self.installer.uninstall_traced(paths, shells)
     }
 }
 

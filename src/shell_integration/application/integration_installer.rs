@@ -222,6 +222,21 @@ impl IntegrationInstaller {
             |i| self.install(paths, i),
         )
     }
+
+    /// Uninstall every integration of `shells` with something on disk, not only the installed ones: a moved binary
+    /// or lines appended after the post block fail the check exactly when an uninstall is needed. Ok(true) if any.
+    pub(crate) fn uninstall_traced(
+        &self,
+        paths: &IntegrationPaths,
+        shells: &[Shell],
+    ) -> Result<bool, Vec<IntegrationFailure>> {
+        self.apply(
+            paths,
+            shells,
+            |i| self.has_traces(paths, i),
+            |i| self.uninstall(paths, i),
+        )
+    }
 }
 
 #[cfg(test)]

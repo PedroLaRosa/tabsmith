@@ -29,12 +29,7 @@ impl ReinstallIntegrationsUseCase {
         paths: &IntegrationPaths,
         shells: &[Shell],
     ) -> Result<bool, Vec<IntegrationFailure>> {
-        self.installer.apply(
-            paths,
-            shells,
-            |i| self.installer.has_traces(paths, i),
-            |i| self.installer.uninstall(paths, i),
-        )?;
+        self.installer.uninstall_traced(paths, shells)?;
         let installed = self.installer.install_missing(paths, shells)?;
         if installed {
             self.restart_reminder.save_pending();
