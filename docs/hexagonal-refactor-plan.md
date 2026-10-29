@@ -1,7 +1,7 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
 Status: Phases 0, 1, 2, 3 and 4 are done on branch `refactor/hexagonal-architecture` (gate green at `ab7052b`).
-Phase 5 is next. Working notes, tools, the per-file source map and the Phase 3 and 4 research are in
+Phase 5 is in progress. Working notes, tools, the per-file source map and the Phase 3, 4 and 5 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -587,7 +587,7 @@ Done at `ab7052b`: `shell_integration` registered in the architecture test, `int
 deleted, gate green (761 passed). terminal_session stays unregistered until Phase 9. See the Phase 4 notes in
 section 9.
 
-### Phase 5: specs
+### Phase 5: specs (in progress: [research](hexagonal-refactor/phase-5-specs.md))
 1. **Model.** Move the VOs and entities from `spec.rs` under glossary names. Build `FigSpecMapper` with the 8 spec
    tests, `from_fig` and `fig_type`. `GeneratorScript::Object(Value)` becomes a typed `ExecRequest`.
 2. **Bundle and location.**
