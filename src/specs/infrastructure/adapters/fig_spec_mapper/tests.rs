@@ -618,3 +618,16 @@ fn should_find_no_suggestions_and_no_template_in_an_exec_result_read_as_custom()
     assert!(!result.templated());
     assert!(result.suggestions().is_empty());
 }
+
+#[test]
+fn should_read_post_process_items_with_the_context_danger() {
+    let v = json!(["main", "", {"name": "dev"}, {"description": "no name"}, 0]);
+    let dangerous = GeneratorContext::new(String::new(), HashMap::new(), String::new(), String::new(), true);
+
+    let result = function_result(SpecFunctionKind::PostProcess, &v, &dangerous);
+
+    assert!(matches!(
+        result,
+        SpecFunctionResult::PostProcess(items) if items == post_process_items(&v, true)
+    ));
+}

@@ -503,7 +503,9 @@ pub(crate) fn function_result(
         SpecFunctionKind::Custom => {
             SpecFunctionResult::Custom(CustomGeneratorResult::new(templated(v), json_items(v)))
         }
-        SpecFunctionKind::PostProcess => SpecFunctionResult::PostProcess(Vec::new()),
+        SpecFunctionKind::PostProcess => {
+            SpecFunctionResult::PostProcess(post_process_items(v, context.is_dangerous()))
+        }
         SpecFunctionKind::FilterTemplateSuggestions => {
             SpecFunctionResult::FilterTemplateSuggestions(Vec::new())
         }
