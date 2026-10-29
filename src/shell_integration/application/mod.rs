@@ -6,4 +6,5 @@ pub(crate) mod integration_status;
 pub(crate) mod integration_status_report;
 pub(crate) mod ports;
 pub(crate) mod reinstall_integrations_use_case;
+pub(crate) mod render_init_script_use_case;
 pub(crate) mod uninstall_integrations_use_case;
