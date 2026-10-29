@@ -5,7 +5,7 @@ use crate::terminal_session::domain::entities::session_context::SessionContext;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::terminal_session_error::TerminalSessionError;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -41,8 +41,13 @@ impl SessionContextRepository for FileSessionContextRepository {
             .map_err(storage_error)
     }
 
-    fn find(&self, _id: &SessionId) -> Option<SessionContext> {
-        None
+    /// `None` for a file that is missing, unreadable, not UTF-8 or not a record (`"env": null` too), as
+    /// `SessionCtx::load` was.
+    fn find(&self, id: &SessionId) -> Option<SessionContext> {
+        let path = self.file(id).ok()?;
+        let record: SessionContextRecord =
+            serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        Some(record.into_context(id.clone()))
     }
 
     fn last_modified(&self, _id: &SessionId) -> Option<SystemTime> {
@@ -55,7 +60,7 @@ impl SessionContextRepository for FileSessionContextRepository {
 }
 
 /// `~/.tabsmith/run/<sid>.json`, written by `tabsmith _ pre-cmd` (SPEC §2.11, D17).
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SessionContextRecord {
     #[serde(default)]
     env: HashMap<String, String>,
@@ -63,6 +68,12 @@ struct SessionContextRecord {
     alias: Option<String>,
     #[serde(default)]
     ts: u64,
+}
+
+impl SessionContextRecord {
+    fn into_context(self, id: SessionId) -> SessionContext {
+        SessionContext::new(id, self.env, self.alias, self.ts)
+    }
 }
 
 impl From<&SessionContext> for SessionContextRecord {
@@ -112,6 +123,27 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(temp_dir.path().join("run/abc123.json")).unwrap(),
             r#"{"env":{"A":"1"},"alias":"ll='ls -l'","ts":7}"#
+        );
+    }
+
+    /// Every field has its own default, so a partial file still reads.
+    #[test]
+    fn should_find_an_empty_record_as_no_env_no_alias_reported_at_zero() {
+        let temp_dir = TempDir::new("session-empty");
+        let repository = repository_in(&temp_dir);
+        std::fs::create_dir(temp_dir.path().join("run")).unwrap();
+        std::fs::write(temp_dir.path().join("run/abc123.json"), "{}").unwrap();
+
+        let found = repository.find(&session_id("abc123")).unwrap();
+
+        assert_eq!(
+            (
+                found.id().as_str(),
+                found.env().is_empty(),
+                found.alias(),
+                found.reported_at_ms()
+            ),
+            ("abc123", true, None, 0)
         );
     }
 }
