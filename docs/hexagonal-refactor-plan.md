@@ -127,7 +127,10 @@ pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) 
    `std`/`core`/`alloc`/`unicode_width`, or `println!`/`eprintln!`/`logger::`;
 2. a file in `*/application/` that uses `::infrastructure`, `crate::bootstrap`, a legacy flat module, or external crates
    (same allow-list);
-3. a module other than `bootstrap` that references another module's `application::*_use_case` or `::infrastructure`;
+3. a module other than `bootstrap` that references another module's use case (a `*_use_case` file or `*UseCase` type
+   segment anywhere under it, so a module root or legacy shim re-exporting it under its own name is caught too) or its
+   `::infrastructure`; a use case re-exported under another name, an `as` rename, a `super::` path and an adapter
+   re-exported by a legacy file or a legacy module root still pass;
 4. `shared/` that references a feature module;
 5. a registered module with a `src/<module>.rs`, or a file in `src/<module>/` other than `mod.rs` and the files inside
    its `domain/`, `application/` and `infrastructure/` folders (rules 1-2 read the layer from the folder name, so a file
