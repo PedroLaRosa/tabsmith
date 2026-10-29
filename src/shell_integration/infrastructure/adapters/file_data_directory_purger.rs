@@ -6,7 +6,10 @@ pub(crate) struct FileDataDirectoryPurger;
 
 impl DataDirectoryPurger for FileDataDirectoryPurger {
     fn purge(&self, directory: &Path) -> std::io::Result<()> {
-        std::fs::remove_dir_all(directory)
+        match std::fs::remove_dir_all(directory) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            removed => removed,
+        }
     }
 }
 
@@ -25,5 +28,14 @@ mod tests {
         let purged = FileDataDirectoryPurger.purge(&data_root);
 
         assert!(purged.is_ok() && !data_root.exists(), "{purged:?}");
+    }
+
+    #[test]
+    fn should_accept_a_directory_that_is_not_there() {
+        let dir = TempDir::new("purge-missing");
+
+        let purged = FileDataDirectoryPurger.purge(&dir.path().join(".tabsmith"));
+
+        assert!(purged.is_ok(), "{purged:?}");
     }
 }
