@@ -88,16 +88,34 @@ mod tests {
         SpecLocation::Global { name: name.into() }
     }
 
+    fn local(dir: &str, name: &str) -> SpecLocation {
+        SpecLocation::Local {
+            dir: dir.into(),
+            name: name.into(),
+        }
+    }
+
+    /// One find under `settings`, with an empty spec index and generator context.
+    fn find_with(
+        repository: &InMemorySpecRepository,
+        location: &SpecLocation,
+        settings: &Settings,
+    ) -> Option<Rc<Subcommand>> {
+        let (index, generator_context) = (SpecIndex::default(), GeneratorContext::default());
+        repository
+            .find(
+                location,
+                &SpecLookup::new(settings, &index, &generator_context),
+            )
+            .unwrap()
+    }
+
     #[test]
     fn should_return_the_stored_spec_unchanged() {
         let git = spec("git");
         let repository = InMemorySpecRepository::with(&[("git", &git)]);
-        let (settings, index, generator_context) =
-            (Settings::default(), SpecIndex::default(), GeneratorContext::default());
 
-        let found = repository
-            .find(&global("git"), &SpecLookup::new(&settings, &index, &generator_context))
-            .unwrap();
+        let found = find_with(&repository, &global("git"), &Settings::default());
 
         assert!(found.is_some_and(|found| Rc::ptr_eq(&found, &git)));
     }
@@ -105,17 +123,10 @@ mod tests {
     #[test]
     fn should_find_a_local_spec_by_dir_and_name() {
         let (here, elsewhere) = (spec("here"), spec("elsewhere"));
-        let repository = InMemorySpecRepository::with(&[("/cwd/|run", &here), ("/other/|run", &elsewhere)]);
-        let (settings, index, generator_context) =
-            (Settings::default(), SpecIndex::default(), GeneratorContext::default());
-        let location = SpecLocation::Local {
-            dir: "/cwd/".into(),
-            name: "run".into(),
-        };
+        let repository =
+            InMemorySpecRepository::with(&[("/cwd/|run", &here), ("/other/|run", &elsewhere)]);
 
-        let found = repository
-            .find(&location, &SpecLookup::new(&settings, &index, &generator_context))
-            .unwrap();
+        let found = find_with(&repository, &local("/cwd/", "run"), &Settings::default());
 
         assert!(found.is_some_and(|found| Rc::ptr_eq(&found, &here)));
     }
@@ -123,12 +134,8 @@ mod tests {
     #[test]
     fn should_answer_none_for_an_unknown_location() {
         let repository = InMemorySpecRepository::with(&[("git", &spec("git"))]);
-        let (settings, index, generator_context) =
-            (Settings::default(), SpecIndex::default(), GeneratorContext::default());
 
-        let found = repository
-            .find(&global("cargo"), &SpecLookup::new(&settings, &index, &generator_context))
-            .unwrap();
+        let found = find_with(&repository, &global("cargo"), &Settings::default());
 
         assert!(found.is_none());
     }
@@ -136,22 +143,18 @@ mod tests {
     #[test]
     fn should_record_every_find_in_order() {
         let repository = InMemorySpecRepository::with(&[("git", &spec("git"))]);
-        let (settings, index, generator_context) =
-            (Settings::default(), SpecIndex::default(), GeneratorContext::default());
-        let lookup = SpecLookup::new(&settings, &index, &generator_context);
-        let local = SpecLocation::Local {
-            dir: "/cwd/".into(),
-            name: "run".into(),
-        };
+        let locations = [
+            global("git"),
+            local("/cwd/", "run"),
+            global("cargo"),
+            global("git"),
+        ];
 
-        for location in [global("git"), local.clone(), global("cargo"), global("git")] {
-            repository.find(&location, &lookup).unwrap();
+        for location in &locations {
+            find_with(&repository, location, &Settings::default());
         }
 
-        assert_eq!(
-            repository.finds(),
-            [global("git"), local, global("cargo"), global("git")]
-        );
+        assert_eq!(repository.finds(), locations);
     }
 
     #[test]
@@ -159,11 +162,8 @@ mod tests {
         let repository = InMemorySpecRepository::with(&[("git", &spec("git"))]);
         let disabled = SettingValue::List(vec![SettingValue::Text("git".into())]);
         let settings = Settings::default().with(AUTOCOMPLETE_DISABLE_FOR_COMMANDS, disabled);
-        let (index, generator_context) = (SpecIndex::default(), GeneratorContext::default());
 
-        let found = repository
-            .find(&global("git"), &SpecLookup::new(&settings, &index, &generator_context))
-            .unwrap();
+        let found = find_with(&repository, &global("git"), &settings);
 
         assert!(found.is_none());
         assert_eq!(repository.finds(), [global("git")]);

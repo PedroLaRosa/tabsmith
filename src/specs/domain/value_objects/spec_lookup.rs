@@ -65,7 +65,9 @@ mod tests {
             dir: "/repo/".into(),
             name: "make".into(),
         };
-        let unlisted = SpecLocation::Global { name: "cargo".into() };
+        let unlisted = SpecLocation::Global {
+            name: "cargo".into(),
+        };
 
         let answers = [&listed_global, &listed_local, &unlisted].map(|l| lookup.disables(l));
 
