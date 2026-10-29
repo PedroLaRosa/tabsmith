@@ -4,7 +4,7 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::system_clock::SystemClock;
-use crate::specs::domain::value_objects::process_output::ProcessOutput;
+use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -177,15 +177,8 @@ pub enum EngineMsg {
         alias: Option<String>,
     },
     ToggleFuzzy,
-    /// Internal (js host): a spawned process finished.
-    ExecDone {
-        id: u64,
-        out: Result<ProcessOutput, String>,
-    },
-    /// Internal (js host): a `setTimeout`/debounce timer fired.
-    Timer {
-        id: u64,
-    },
+    /// Internal (js host): an event for the spec runtime, e.g. a spawned process finished.
+    Runtime(RuntimeEvent),
     Shutdown,
 }
 

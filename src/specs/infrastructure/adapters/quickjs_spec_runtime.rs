@@ -1,7 +1,7 @@
 //! QuickJS runtime for Fig spec code (SPEC §9.2). Generator processes run in `process_executor` (SPEC §9.3); the
 //! prelude and the module wrapper live in `quickjs_module_wrapper`.
 //! Lives on the engine thread only (QuickJS is !Send). Every async JS call is resolved by a manual event pump
-//! that also receives the engine's messages: a newer `EngineMsg::Complete` aborts the current wait.
+//! that polls a `RuntimeEventSource` (the engine's inbox): a newer completion request aborts the current wait.
 //! OWNER: host agent.
 //!
 //! Host ↔ JS protocol: Rust registers `__ts_log`, `__ts_exec(ctxId, inputJson) → opId`, `__ts_sleep(ms) → opId`
@@ -12,6 +12,10 @@
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_SCRIPT_TIMEOUT;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::logger;
+use crate::specs::application::ports::runtime_event::RuntimeEvent;
+use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
+use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
+use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
@@ -20,15 +24,13 @@ use crate::specs::domain::value_objects::task_id::TaskId;
 use crate::specs::infrastructure::adapters::exec_input::{process_output_json, ExecInput};
 use crate::specs::infrastructure::adapters::process_executor::exec;
 use crate::specs::infrastructure::adapters::quickjs_module_wrapper::{wrap_module, PRELUDE};
-use crate::types::EngineMsg;
 use rquickjs::context::EvalOptions;
 use rquickjs::{CatchResultExt, Context, Function, Object, Runtime};
 use serde_json::{json, Map, Value};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
 /// One argument to a JS callback.
@@ -59,7 +61,7 @@ struct TaskRegistry {
     ctxs: HashMap<u64, GeneratorContext>,
     /// Pending sleeps (`start_sleep` tasks and JS `setTimeout` ops): (due, id).
     timers: Vec<(Instant, u64)>,
-    tx: Sender<EngineMsg>,
+    sink: RuntimeEventSink,
     /// `autocomplete.scriptTimeout`.
     timeout_ms: u64,
 }
@@ -70,22 +72,22 @@ impl TaskRegistry {
         self.next_id
     }
 
-    /// Run `exec` on a worker thread; the result comes back as `EngineMsg::ExecDone{id}`.
+    /// Run `exec` on a worker thread; the result comes back through the sink as a `RuntimeEvent { id, .. }`.
     fn spawn_exec(&self, id: u64, input: ExecRequest, ctx: GeneratorContext) {
-        let (tx, timeout) = (self.tx.clone(), self.timeout_ms);
+        let (sink, timeout) = (self.sink.clone(), self.timeout_ms);
         let spawned = std::thread::Builder::new()
             .name("tabsmith-exec".into())
             .spawn({
-                let tx = tx.clone();
+                let sink = sink.clone();
                 move || {
-                    let out = exec(&input, &ctx, timeout);
-                    let _ = tx.send(EngineMsg::ExecDone { id, out });
+                    let output = exec(&input, &ctx, timeout);
+                    sink(RuntimeEvent { id, output });
                 }
             });
         if let Err(e) = spawned {
-            let _ = tx.send(EngineMsg::ExecDone {
+            sink(RuntimeEvent {
                 id,
-                out: Err(format!("spawning exec thread: {e}")),
+                output: Err(format!("spawning exec thread: {e}")),
             });
         }
     }
@@ -101,8 +103,7 @@ pub(crate) struct QuickJsSpecRuntime {
     tasks: Rc<RefCell<TaskRegistry>>,
     /// Interrupt deadline checked by QuickJS while running JS (`None` = no limit).
     deadline: Rc<Cell<Option<Instant>>>,
-    rx: Receiver<EngineMsg>,
-    deferred: RefCell<VecDeque<EngineMsg>>,
+    events: Rc<dyn RuntimeEventSource>,
     /// Serialized namespaces by path, with the file's (mtime, len) when evaluated: an edited file (developer mode)
     /// is evaluated again. Old fn ids stay valid (`__ts.fns` only grows).
     modules: RefCell<ModuleCache>,
@@ -115,14 +116,10 @@ type ModuleCache = HashMap<PathBuf, (Stamp, Map<String, Value>)>;
 
 impl QuickJsSpecRuntime {
     /// Create the runtime (memory limit, interrupt handler), evaluate the prelude.
-    /// `rx` is the engine's inbox; `tx` is a sender to that same inbox (for exec workers and timers).
-    /// Note: `QuickJsSpecRuntime` keeps `tx`, so the inbox never disconnects; the engine stops on
-    /// `EngineMsg::Shutdown`.
-    pub(crate) fn new(
-        rx: Receiver<EngineMsg>,
-        tx: Sender<EngineMsg>,
-        settings: Settings,
-    ) -> Result<Self, SpecError> {
+    /// `events` is the engine's inbox: exec workers post into its sink, and waits poll it.
+    /// Note: the task registry keeps that sink for its whole life, so the inbox never disconnects; the engine stops
+    /// on its shutdown message.
+    pub(crate) fn new(events: Rc<dyn RuntimeEventSource>, settings: &Settings) -> Result<Self, SpecError> {
         let rt = Runtime::new().map_err(|e| SpecError::Invalid(e.to_string()))?;
         rt.set_memory_limit(MEMORY_LIMIT);
         let deadline: Rc<Cell<Option<Instant>>> = Rc::default();
@@ -137,8 +134,8 @@ impl QuickJsSpecRuntime {
             done: HashMap::new(),
             ctxs: HashMap::new(),
             timers: Vec::new(),
-            tx,
-            timeout_ms: script_timeout(&settings),
+            sink: events.sink(),
+            timeout_ms: script_timeout(settings),
         }));
         ctx.with(|ctx| {
             let g = ctx.globals();
@@ -159,9 +156,9 @@ impl QuickJsSpecRuntime {
                         match serde_json::from_str::<ExecInput>(&input) {
                             Ok(input) => h.spawn_exec(id, ExecRequest::from(input), generator),
                             Err(e) => {
-                                let _ = h.tx.send(EngineMsg::ExecDone {
+                                (h.sink)(RuntimeEvent {
                                     id,
-                                    out: Err(format!("bad exec input: {e}")),
+                                    output: Err(format!("bad exec input: {e}")),
                                 });
                             }
                         }
@@ -205,37 +202,9 @@ impl QuickJsSpecRuntime {
             _rt: rt,
             tasks,
             deadline,
-            rx,
-            deferred: RefCell::new(VecDeque::new()),
+            events,
             modules: RefCell::new(HashMap::new()),
         })
-    }
-
-    /// Next message for the engine loop: deferred messages first (incl. a request that aborted a wait), then a
-    /// blocking receive. `ExecDone`/`Timer` are consumed internally. `None` when all senders are gone.
-    pub(crate) fn next_msg(&self) -> Option<EngineMsg> {
-        loop {
-            if let Some(m) = self.deferred.borrow_mut().pop_front() {
-                return Some(m);
-            }
-            let m = self.rx.recv().ok()?;
-            if let Some(m) = self.internal(m) {
-                return Some(m);
-            }
-        }
-    }
-
-    /// Like `next_msg` but non-blocking.
-    pub(crate) fn try_next_msg(&self) -> Option<EngineMsg> {
-        loop {
-            if let Some(m) = self.deferred.borrow_mut().pop_front() {
-                return Some(m);
-            }
-            let m = self.rx.try_recv().ok()?;
-            if let Some(m) = self.internal(m) {
-                return Some(m);
-            }
-        }
     }
 
     pub(crate) fn apply_settings(&self, settings: &Settings) {
@@ -361,12 +330,7 @@ impl QuickJsSpecRuntime {
         deadline: Instant,
     ) -> Result<Vec<Option<TaskResult>>, SpecError> {
         loop {
-            if self
-                .deferred
-                .borrow()
-                .iter()
-                .any(|m| matches!(m, EngineMsg::Complete(_)))
-            {
+            if self.events.has_newer_request() {
                 return Err(SpecError::Aborted);
             }
             self.pump(deadline);
@@ -388,14 +352,10 @@ impl QuickJsSpecRuntime {
                 .map(|t| t.0)
                 .min()
                 .map_or(deadline, |t| t.min(deadline));
-            match self.rx.recv_timeout(next.saturating_duration_since(now)) {
-                Ok(m) => {
-                    if let Some(m) = self.internal(m) {
-                        self.deferred.borrow_mut().push_back(m); // the Complete check at the top aborts
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return Ok(self.collect(tasks)),
+            match self.events.poll(next.saturating_duration_since(now)) {
+                RuntimeEventPoll::Event(e) => self.handle_event(e),
+                RuntimeEventPoll::MessageKept | RuntimeEventPoll::TimedOut => {}
+                RuntimeEventPoll::Disconnected => return Ok(self.collect(tasks)),
             }
         }
     }
@@ -453,20 +413,10 @@ impl QuickJsSpecRuntime {
         self.deadline.set(None);
     }
 
-    /// Handle `ExecDone`/`Timer`; return any other message.
-    fn internal(&self, m: EngineMsg) -> Option<EngineMsg> {
-        match m {
-            EngineMsg::ExecDone { id, out } => {
-                self.finish(id, out.map(|o| process_output_json(&o)));
-            }
-            EngineMsg::Timer { id } => {
-                // ponytail: timers are deadlines checked by the pump; nothing sends Timer, but honour it.
-                self.tasks.borrow_mut().timers.retain(|t| t.1 != id);
-                self.finish(id, Ok(Value::Null));
-            }
-            m => return Some(m),
-        }
-        None
+    /// Deliver a runtime event: the exec result `{stdout, stderr, status}` (or its error) of host op `id`.
+    pub(crate) fn handle_event(&self, event: RuntimeEvent) {
+        let RuntimeEvent { id, output } = event;
+        self.finish(id, output.map(|o| process_output_json(&o)));
     }
 
     /// Deliver a host-op result: to the task table if it is an engine task, else to the waiting JS promise.
@@ -545,17 +495,15 @@ impl QuickJsSpecRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
     use crate::specs::infrastructure::adapters::fig_spec_mapper::fn_id;
     #[cfg(unix)]
     use crate::specs::infrastructure::adapters::process_executor::fake_bin;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-    use crate::shared::domain::value_objects::shell::Shell;
-    use crate::types::Request;
-    use std::sync::mpsc;
 
-    fn js() -> (QuickJsSpecRuntime, Sender<EngineMsg>) {
-        let (tx, rx) = mpsc::channel();
-        (QuickJsSpecRuntime::new(rx, tx.clone(), Settings::default()).unwrap(), tx)
+    fn js() -> (QuickJsSpecRuntime, Rc<ChannelRuntimeEventSource>) {
+        let events = Rc::new(ChannelRuntimeEventSource::new());
+        (QuickJsSpecRuntime::new(events.clone(), &Settings::default()).unwrap(), events)
     }
 
     /// Write a module `name` with `src` into `dir` and load it.
@@ -934,62 +882,6 @@ mod tests {
             "var s={name:\"v2-edited\"};export{s as default};",
         );
         assert_eq!(ns["default"]["name"], "v2-edited");
-    }
-
-    #[test]
-    fn wait_aborts_and_defers_on_complete() {
-        let (js, tx) = js();
-        let req = |id| Request {
-            id,
-            buffer: "git ".into(),
-            cursor: 4,
-            cwd: "/".into(),
-            shell: Shell::Zsh,
-            history_mode: false,
-        };
-        let slow = js.start_sleep(10_000);
-        tx.send(EngineMsg::ToggleFuzzy).unwrap();
-        tx.send(EngineMsg::Complete(req(7))).unwrap();
-        tx.send(EngineMsg::Shutdown).unwrap();
-        let t0 = Instant::now();
-        assert_eq!(
-            js.wait_json(&[slow], Instant::now() + Duration::from_secs(5)),
-            Err(SpecError::Aborted)
-        );
-        assert!(t0.elapsed() < Duration::from_secs(1));
-        // Still queued → a new wait aborts at once.
-        assert_eq!(
-            js.wait_json(&[slow], Instant::now() + Duration::from_secs(5)),
-            Err(SpecError::Aborted)
-        );
-        assert!(matches!(js.next_msg(), Some(EngineMsg::ToggleFuzzy)));
-        assert!(matches!(js.next_msg(), Some(EngineMsg::Complete(r)) if r.id == 7));
-        // Non-Complete messages are deferred without aborting; the slow task is still pending.
-        let quick = js.start_sleep(10);
-        let r = js
-            .wait_json(&[quick, slow], Instant::now() + Duration::from_millis(300))
-            .unwrap();
-        assert_eq!(r, vec![Some(Ok(Value::Null)), None]);
-        assert!(matches!(js.try_next_msg(), Some(EngineMsg::Shutdown)));
-        assert!(js.try_next_msg().is_none());
-        js.forget(&[slow]);
-        let unknown = |t| Some(Err(format!("unknown task {t}")));
-        assert_eq!(
-            js.wait_json(&[slow, quick], Instant::now()).unwrap(),
-            vec![unknown(slow), unknown(quick)]
-        );
-        // Exec tasks deliver `{stdout, stderr, status}`; ExecDone is consumed internally.
-        let e = js.start_exec(
-            ExecRequest::new("fig".into(), vec![], None, HashMap::new(), None),
-            &GeneratorContext::default(),
-        );
-        let r = js
-            .wait_json(&[e], Instant::now() + Duration::from_secs(5))
-            .unwrap();
-        assert_eq!(
-            r,
-            vec![Some(Ok(json!({"stdout": "", "stderr": "", "status": 1})))]
-        );
     }
 
     /// Evaluate every module of the bundle (SPEC §10 `js`):

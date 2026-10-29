@@ -771,30 +771,22 @@ fn first_token_spec_identity_is_stable() {
 #[test]
 fn cli_version_detection_survives_an_aborted_parse() {
     // cli-version-respawn-per-keystroke: an abort keeps the detection running; the next parse reuses it
-    use crate::types::{EngineMsg, Request};
-    let (tx, rx) = std::sync::mpsc::channel();
-    let js = QuickJsSpecRuntime::new(rx, tx.clone(), Settings::default()).unwrap();
+    use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
+    let events = Rc::new(ChannelRuntimeEventSource::new());
+    let js = QuickJsSpecRuntime::new(events.clone(), &Settings::default()).unwrap();
     let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("cliver");
     let p = dir.path().join("v.js");
     let src = "var v=async()=>{await new Promise(r=>setTimeout(r,200));globalThis.n=(globalThis.n||0)+1;return `${globalThis.n}.0.0`};export{v as getVersionCommand};";
     std::fs::write(&p, src).unwrap();
     let exports = js.load_module(&p).unwrap();
     let (generator, mut inflight) = (GeneratorContext::default(), HashMap::new());
-    let req = Request {
-        id: 1,
-        buffer: "az ".into(),
-        cursor: 3,
-        cwd: "/".into(),
-        shell: Shell::Zsh,
-        history_mode: false,
-    };
-    tx.send(EngineMsg::Complete(req)).unwrap();
+    events.send_newer_request();
     assert!(matches!(
         cli_version(&exports, "az", &js, &generator, &mut inflight),
         Err(ParseError::Aborted)
     ));
     assert_eq!(inflight.len(), 1);
-    assert!(matches!(js.next_msg(), Some(EngineMsg::Complete(_))));
+    assert!(events.take_newer_request());
     assert_eq!(
         cli_version(&exports, "az", &js, &generator, &mut inflight)
             .unwrap()
@@ -807,8 +799,8 @@ fn cli_version_detection_survives_an_aborted_parse() {
 #[test]
 fn spec_identity_survives_dev_reload_and_cache_clear() {
     // arg-key-pointer-identity-devmode: an unchanged spec keeps its Rc (the engine's arg/generator keys)
-    let (tx, rx) = std::sync::mpsc::channel();
-    let js = QuickJsSpecRuntime::new(rx, tx, Settings::default()).unwrap();
+    use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
+    let js = QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap();
     let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("devid");
     let build = dir.path().join(".fig").join("autocomplete").join("build");
     std::fs::create_dir_all(&build).unwrap();
