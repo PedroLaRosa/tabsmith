@@ -2,7 +2,7 @@ use crate::terminal_session::domain::entities::session_context::SessionContext;
 use crate::terminal_session::domain::terminal_session_error::TerminalSessionError;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 #[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
@@ -67,6 +67,44 @@ impl SessionContextRepository for InMemorySessionContextRepository {
         self.contexts
             .borrow_mut()
             .retain(|_, (_, modified)| modified.elapsed().unwrap_or_default() <= max_age);
+    }
+}
+
+/// Session contexts that can never be saved, like a purged data directory, for tests. It remembers whether it was
+/// asked to prune, so a test can tell pruning waits for a successful save.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct UnwritableSessionContextRepository {
+    prune_ran: Cell<bool>,
+}
+
+#[cfg(test)]
+impl UnwritableSessionContextRepository {
+    pub(crate) fn prune_ran(&self) -> bool {
+        self.prune_ran.get()
+    }
+}
+
+#[cfg(test)]
+impl SessionContextRepository for UnwritableSessionContextRepository {
+    fn save(&self, _context: &SessionContext) -> Result<(), TerminalSessionError> {
+        Err(TerminalSessionError::Storage(
+            "No such file or directory (os error 2)".into(),
+        ))
+    }
+
+    fn find(&self, _id: &SessionId) -> Option<SessionContext> {
+        None
+    }
+
+    fn last_modified(&self, _id: &SessionId) -> Option<SystemTime> {
+        None
+    }
+
+    fn remove(&self, _id: &SessionId) {}
+
+    fn prune_older_than(&self, _max_age: Duration) {
+        self.prune_ran.set(true);
     }
 }
 
@@ -153,5 +191,26 @@ mod tests {
             ["stale", "fresh"].map(|id| repository.find(&session_id(id)).is_some()),
             [false, true]
         );
+    }
+
+    #[test]
+    fn should_have_no_modification_time_for_a_session_that_never_reported() {
+        let repository = InMemorySessionContextRepository::default();
+
+        let modified = repository.last_modified(&session_id("abc123"));
+
+        assert_eq!(modified, None);
+    }
+
+    /// A clock set back leaves a context stamped in the future: it is not stale.
+    #[test]
+    fn should_keep_a_context_stamped_in_the_future_when_pruning() {
+        let repository = InMemorySessionContextRepository::default();
+        let in_two_days = SystemTime::now() + Duration::from_secs(2 * 24 * 3600);
+        repository.save_modified_at(&empty_context("future"), in_two_days);
+
+        repository.prune_older_than(Duration::from_secs(24 * 3600));
+
+        assert!(repository.find(&session_id("future")).is_some());
     }
 }
