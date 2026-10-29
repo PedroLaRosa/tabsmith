@@ -768,6 +768,7 @@ fn restore_cursor_on_ctrl_c() {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
+    use crate::shell_integration::infrastructure::testing::integration_fixtures::install_dotfiles;
     use std::cell::Cell;
 
     fn run(all: bool, strict: bool) -> Run {
@@ -844,10 +845,10 @@ mod tests {
             home.join(".config/fish"),
             Some(home.join("profile.ps1")),
         );
-        integrations::install_dotfiles(&c, &[Shell::Bash]).unwrap();
+        install_dotfiles(&c, &[Shell::Bash]).unwrap();
         std::fs::remove_file(home.join(".bash_profile")).unwrap();
         let moved = c.with_binary("/new/tabsmith".into());
-        integrations::install_dotfiles(&moved, &[Shell::Bash]).unwrap(); // the check's fix
+        install_dotfiles(&moved, &[Shell::Bash]).unwrap(); // the check's fix
         assert!(moved.data_root().join("shell/bash_profile.pre.bash").exists());
         if which("bash").is_some() {
             let bins = script_bins(&moved);
