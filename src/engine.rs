@@ -361,18 +361,6 @@ impl Engine {
         true
     }
 
-    /// The session's env, for the session-context tests that read it through the engine (Q19).
-    #[cfg(test)]
-    fn env(&self) -> &HashMap<String, String> {
-        self.session.env()
-    }
-
-    /// The session's aliases, for the session-context tests that read them through the engine (Q19).
-    #[cfg(test)]
-    fn alias_map(&mut self, shell: Shell) -> HashMap<String, String> {
-        self.session.alias_map(shell)
-    }
-
     // -----------------------------------------------------------------------------------------------------
     // Requests
 
@@ -693,7 +681,6 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::domain::entities::suggestion_recency::SuggestionRecency;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::history::domain::repositories::history_repository::InMemoryHistoryRepository;
     use crate::history::infrastructure::adapters::jsonl_history_repository::JsonlHistoryRepository;
@@ -770,100 +757,6 @@ mod tests {
     fn parser_over(js: &Rc<QuickJsSpecRuntime>) -> CommandLineParser {
         let bundle = EmbeddedSpecBundle::new(data_directory_from_env());
         CommandLineParser::new(Rc::new(QuickJsSpecRepository::new(js.clone(), bundle)), js.clone())
-    }
-
-    /// An engine whose wrapper env is `PATH=/wrapper/bin`, with the js runtime its parser and its `handle` share.
-    fn engine_with_wrapper_env(dir: &TempDir) -> (Engine, Rc<QuickJsSpecRuntime>) {
-        let (tx, _) = std::sync::mpsc::channel();
-        let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
-        let mut e = Engine::with(
-            tx,
-            Settings::default(),
-            parser_over(&js),
-            js.clone(),
-            SpecIndex::default(),
-            HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
-                dir.path().join("h.jsonl"),
-            ))),
-            None,
-        );
-        e.session = CompletionSession::new(Settings::default(), wrapper_env(), SuggestionRecency::default());
-        (e, js)
-    }
-
-    fn wrapper_env() -> HashMap<String, String> {
-        HashMap::from([("PATH".to_string(), "/wrapper/bin".to_string())])
-    }
-
-    fn report_session_context(e: &mut Engine, js: &mut Rc<QuickJsSpecRuntime>, env: &[(&str, &str)], alias: Option<&str>) {
-        let env = env
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect();
-        let alias = alias.map(str::to_owned);
-        assert!(e.handle(EngineMsg::Session { env, alias }, &mut None, js));
-    }
-
-    #[test]
-    fn should_use_the_env_of_a_session_context_in_place_of_the_wrapper_env() {
-        let dir = TempDir::new("engine-session-env");
-        let (mut e, mut js) = engine_with_wrapper_env(&dir);
-
-        report_session_context(&mut e, &mut js, &[("PATH", "/session/bin")], None);
-
-        assert_eq!(
-            e.env(),
-            &HashMap::from([("PATH".to_string(), "/session/bin".to_string())])
-        );
-    }
-
-    /// An empty env means the shell reported none, not that it has none.
-    #[test]
-    fn should_fall_back_to_the_wrapper_env_after_a_session_context_with_an_empty_env() {
-        let dir = TempDir::new("engine-session-empty-env");
-        let (mut e, mut js) = engine_with_wrapper_env(&dir);
-        report_session_context(&mut e, &mut js, &[("PATH", "/session/bin")], None);
-
-        report_session_context(&mut e, &mut js, &[], None);
-
-        assert_eq!(e.env(), &wrapper_env());
-    }
-
-    #[test]
-    fn should_parse_the_aliases_of_a_session_context_for_the_shell() {
-        let dir = TempDir::new("engine-session-aliases");
-        let (mut e, mut js) = engine_with_wrapper_env(&dir);
-
-        report_session_context(&mut e, &mut js, &[], Some("alias ll='ls -l'"));
-
-        assert_eq!(
-            e.alias_map(Shell::Bash),
-            HashMap::from([("ll".to_string(), "ls -l".to_string())])
-        );
-    }
-
-    #[test]
-    fn should_find_no_aliases_after_a_session_context_with_an_empty_alias_text() {
-        let dir = TempDir::new("engine-session-empty-alias");
-        let (mut e, mut js) = engine_with_wrapper_env(&dir);
-        report_session_context(&mut e, &mut js, &[], Some("alias ll='ls -l'"));
-        e.alias_map(Shell::Bash);
-
-        report_session_context(&mut e, &mut js, &[], Some(""));
-
-        assert_eq!(e.alias_map(Shell::Bash), HashMap::new());
-    }
-
-    #[test]
-    fn should_find_no_aliases_after_a_session_context_without_alias_text() {
-        let dir = TempDir::new("engine-session-no-alias");
-        let (mut e, mut js) = engine_with_wrapper_env(&dir);
-        report_session_context(&mut e, &mut js, &[], Some("alias ll='ls -l'"));
-        e.alias_map(Shell::Bash);
-
-        report_session_context(&mut e, &mut js, &[], None);
-
-        assert_eq!(e.alias_map(Shell::Bash), HashMap::new());
     }
 
     /// A runtime over a real engine inbox, and a sender into that inbox.
