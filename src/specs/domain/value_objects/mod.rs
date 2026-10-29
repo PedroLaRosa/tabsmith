@@ -11,6 +11,7 @@ pub(crate) mod process_output;
 pub(crate) mod repeatability;
 pub(crate) mod semantic_version;
 pub(crate) mod spec_function_call;
+pub(crate) mod spec_function_kind;
 pub(crate) mod spec_function_ref;
 pub(crate) mod spec_index;
 pub(crate) mod spec_load_directive;
