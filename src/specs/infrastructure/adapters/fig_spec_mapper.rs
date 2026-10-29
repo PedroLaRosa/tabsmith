@@ -31,7 +31,7 @@ pub(crate) fn normalise(v: &Value) -> Result<Subcommand, SpecError> {
 }
 
 /// Parse one suggestion: a string or an object with `name` (string or array).
-pub(crate) fn suggestion_from_json(v: &Value) -> Option<SpecSuggestion> {
+fn suggestion_from_json(v: &Value) -> Option<SpecSuggestion> {
     if let Some(s) = v.as_str() {
         return Some(SpecSuggestion::default().with_names(vec![s.to_string()]));
     }
