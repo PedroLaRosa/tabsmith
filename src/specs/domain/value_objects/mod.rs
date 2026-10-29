@@ -24,5 +24,6 @@ pub(crate) mod spec_suggestion;
 pub(crate) mod spec_value;
 pub(crate) mod suggestion_kind;
 pub(crate) mod task_id;
+pub(crate) mod task_outcome;
 pub(crate) mod template_suggestions;
 pub(crate) mod text_or_function;

@@ -1,17 +1,35 @@
+use crate::specs::application::ports::interrupted::Interrupted;
 use crate::specs::domain::spec_error::SpecError;
+use crate::specs::domain::value_objects::exec_request::ExecRequest;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_function_result::SpecFunctionResult;
-use std::time::Duration;
+use crate::specs::domain::value_objects::task_id::TaskId;
+use crate::specs::domain::value_objects::task_outcome::TaskOutcome;
+use std::time::{Duration, Instant};
 #[cfg(test)]
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 #[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::collections::HashMap;
 
-/// Runs spec functions.
+/// Runs spec functions, processes and sleeps as tasks, and waits for them.
 pub(crate) trait SpecRuntime {
+    /// Starts a spec function call. It cannot fail: a failure to start becomes the task's result.
+    fn start(&self, call: SpecFunctionCall, context: Option<&GeneratorContext>) -> TaskId;
+    /// Starts a process, run with the context's directory and environment.
+    fn start_exec(&self, request: ExecRequest, context: &GeneratorContext) -> TaskId;
+    /// Starts a task that finishes, with null, after `ms` milliseconds (a generator's debounce).
+    fn start_sleep(&self, ms: u64) -> TaskId;
+    /// Waits until every task finished or `deadline`, and gives one outcome per task: `None` while it runs. A
+    /// finished task's outcome is given once; an unknown or forgotten task gives `Some(Err("unknown task {t}"))`.
+    /// `Interrupted` when a newer request is waiting; no task is dropped then.
+    fn wait(
+        &self,
+        tasks: &[TaskId],
+        deadline: Instant,
+    ) -> Result<Vec<Option<TaskOutcome>>, Interrupted>;
     /// Calls a spec function and reads its result by `call.kind()`.
     fn call(
         &self,
@@ -30,6 +48,7 @@ type Answer = Box<dyn Fn(&SpecFunctionCall) -> Result<SpecFunctionResult, SpecEr
 pub(crate) struct InMemorySpecRuntime {
     answers: HashMap<SpecFunctionRef, Answer>,
     calls: RefCell<Vec<SpecFunctionCall>>,
+    next_task: Cell<TaskId>,
 }
 
 #[cfg(test)]
@@ -47,10 +66,36 @@ impl InMemorySpecRuntime {
     pub(crate) fn calls(&self) -> Vec<SpecFunctionCall> {
         self.calls.borrow().clone()
     }
+
+    fn start_task(&self) -> TaskId {
+        let task = self.next_task.get();
+        self.next_task.set(task + 1);
+        task
+    }
 }
 
 #[cfg(test)]
 impl SpecRuntime for InMemorySpecRuntime {
+    fn start(&self, _call: SpecFunctionCall, _context: Option<&GeneratorContext>) -> TaskId {
+        self.start_task()
+    }
+
+    fn start_exec(&self, _request: ExecRequest, _context: &GeneratorContext) -> TaskId {
+        self.start_task()
+    }
+
+    fn start_sleep(&self, _ms: u64) -> TaskId {
+        self.start_task()
+    }
+
+    fn wait(
+        &self,
+        tasks: &[TaskId],
+        _deadline: Instant,
+    ) -> Result<Vec<Option<TaskOutcome>>, Interrupted> {
+        Ok(tasks.iter().map(|_| None).collect())
+    }
+
     fn call(
         &self,
         call: SpecFunctionCall,
@@ -118,5 +163,23 @@ mod tests {
         let result = runtime.call(call, None, Duration::from_secs(5));
 
         assert!(matches!(result, Err(SpecError::Invalid(text)) if text == "unknown fn"));
+    }
+
+    #[test]
+    fn should_give_none_for_a_running_task() {
+        let runtime = InMemorySpecRuntime::default();
+        let script = SpecFunctionCall::Script {
+            function: 0,
+            tokens: vec!["git".into()],
+        };
+        let tasks = [
+            runtime.start(script, None),
+            runtime.start_exec(ExecRequest::default(), &GeneratorContext::default()),
+            runtime.start_sleep(100),
+        ];
+
+        let outcomes = runtime.wait(&tasks, Instant::now());
+
+        assert_eq!(outcomes, Ok(vec![None, None, None]));
     }
 }
