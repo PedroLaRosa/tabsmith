@@ -265,7 +265,8 @@ fn is_test_only_attribute(code: &str) -> bool {
 }
 
 /// The segments of every `a::b::c` path in `code`; `::serde::X` and `serde::{` both start at `serde`. A member of
-/// a `use a::{..}` group gets the `a` prefix, and the name right after `use` is a path even without `::`.
+/// a `use a::{..}` group gets the `a` prefix, and the name right after `use` or `extern crate` is a path even
+/// without `::`.
 /// `open_braces` holds each open brace's prefix across lines (empty for a block).
 // ponytail: a line scanner, not a Rust parser. String literals are read as code (a `//` in one cuts the line unless
 // it follows `:`, and an unpaired brace, bracket or parenthesis in one shifts the use-group and test-only item
@@ -273,12 +274,12 @@ fn is_test_only_attribute(code: &str) -> bool {
 // if a false hit or a miss ever shows up.
 fn paths_in<'a>(code: &'a str, open_braces: &mut Vec<Vec<&'a str>>) -> Vec<Vec<&'a str>> {
     let mut paths = Vec::new();
-    let mut previous_word = "";
+    let mut previous_words = ("", "");
     for piece in code.split_inclusive(|c: char| !is_path_char(c)) {
         let chunk = piece.trim_end_matches(|c: char| !is_path_char(c));
-        let imported = previous_word == "use";
+        let imported = matches!(previous_words, (_, "use") | ("extern", "crate"));
         if !chunk.is_empty() {
-            previous_word = chunk;
+            previous_words = (previous_words.1, chunk);
         }
         let segments: Vec<&str> = chunk.split("::").filter(|segment| !segment.is_empty()).collect();
         if piece.ends_with("::{") {
@@ -1013,6 +1014,17 @@ mod tests {
                       use unicode_width;\n";
 
         let found = violations_in("settings/domain/settings.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
+    }
+
+    #[test]
+    fn should_flag_an_external_crate_linked_under_another_name() {
+        let source = "extern crate serde as probe_serde;\n\
+                      let value: Option<probe_serde::de::IgnoredAny> = None;\n\
+                      extern crate unicode_width as width;\n";
+
+        let found = violations_in("shell_integration/domain/value_objects/init_script.rs", source);
 
         assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
     }
