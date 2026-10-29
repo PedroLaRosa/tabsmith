@@ -1,3 +1,4 @@
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::specs::application::ports::interrupted::Interrupted;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::exec_request::ExecRequest;
@@ -32,19 +33,23 @@ pub(crate) trait SpecRuntime {
     ) -> Result<Vec<Option<TaskOutcome>>, Interrupted>;
     /// Drops tasks the caller no longer waits for.
     fn forget(&self, tasks: &[TaskId]);
-    /// Calls a spec function and reads its result by `call.kind()`.
+    /// Starts the call, waits for it until `timeout` and reads its result by `call.kind()`. It forgets the task when
+    /// it times out or a newer request aborts it, not when the call failed.
     fn call(
         &self,
         call: SpecFunctionCall,
         context: Option<&GeneratorContext>,
         timeout: Duration,
     ) -> Result<SpecFunctionResult, SpecError>;
+    /// Applies the settings the runtime reads (`autocomplete.scriptTimeout`).
+    fn apply_settings(&self, settings: &Settings);
 }
 
 #[cfg(test)]
 type Answer = Box<dyn Fn(&SpecFunctionCall) -> Result<SpecFunctionResult, SpecError>>;
 
-/// Answers calls with the answers it was given, and records them, for tests. Its tasks never finish.
+/// Answers calls with the answers it was given, and records them, for tests. Its tasks never finish, and it
+/// ignores settings.
 // ponytail: tasks only run or are unknown; Phase 6.4 adds scripted task completion when the generator tests need it.
 #[cfg(test)]
 #[derive(Default)]
@@ -128,6 +133,8 @@ impl SpecRuntime for InMemorySpecRuntime {
             None => Err(SpecError::Invalid("unknown fn".into())),
         }
     }
+
+    fn apply_settings(&self, _settings: &Settings) {}
 }
 
 #[cfg(test)]
