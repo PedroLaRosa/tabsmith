@@ -8,33 +8,17 @@
 use crate::inline::{self, GhostCache, Source};
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
-use crate::shared::infrastructure::system_clock::SystemClock;
-use crate::shared::application::ports::clock::Clock;
-use crate::completion::application::apply_completion_settings_use_case::ApplyCompletionSettingsUseCase;
-use crate::completion::application::apply_session_context_use_case::ApplySessionContextUseCase;
-use crate::completion::application::command_line_parser::CommandLineParser;
-use crate::completion::application::complete_command_line_use_case::CompleteCommandLineUseCase;
 use crate::completion::application::completion_notice::CompletionNotice;
-use crate::completion::application::generator_runner::GeneratorRunner;
-use crate::completion::application::record_suggestion_insertion_use_case::RecordSuggestionInsertionUseCase;
-use crate::completion::application::reset_generators_use_case::ResetGeneratorsUseCase;
-use crate::completion::application::toggle_fuzzy_search_use_case::ToggleFuzzySearchUseCase;
 use crate::completion::domain::entities::completion_session::CompletionSession;
-use crate::completion::domain::repositories::recency_repository::RecencyRepository;
-use crate::completion::infrastructure::adapters::fs_directory_lister::FsDirectoryLister;
-use crate::completion::infrastructure::adapters::path_executable_catalog::PathExecutableCatalog;
-use crate::completion::infrastructure::adapters::state_file_recency_repository::StateFileRecencyRepository;
+use crate::completion::infrastructure::completion_module::{build_completion_module, CompletionModule};
 use crate::settings::domain::services::settings_catalog::{INLINE_ENABLED, INLINE_HISTORY_COUNT};
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::application::completion_request::CompletionRequest;
-use crate::completion::domain::services::completion_result_builder::build_completion_result;
-use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
 use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
-use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
@@ -64,7 +48,7 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
     let spawned = std::thread::Builder::new()
         .name("engine".into())
         .spawn(move || {
-            // QuickJS is !Send: the inbox and the runtime are created on this thread.
+            // QuickJS is !Send: the inbox, the runtime and everything holding them are created on this thread.
             let inbox = Rc::new(EngineInbox::new(erx, inner));
             let runtime = match QuickJsSpecRuntime::new(inbox.clone(), &settings) {
                 Ok(r) => Rc::new(r),
@@ -78,8 +62,27 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
                 runtime.clone(),
                 EmbeddedSpecBundle::new(dependencies.data_directory.clone()),
             ));
-            let command_line_parser = CommandLineParser::new(repository, runtime.clone());
-            Engine::new(tx, settings, command_line_parser, runtime.clone(), &dependencies).run(&runtime, &inbox);
+            let bundle = EmbeddedSpecBundle::new(dependencies.data_directory.clone());
+            // ponytail: load_index ensures the bundle a second time (touch + cleanup twice), as the engine always did.
+            let index = build_specs_module(&dependencies)
+                .install_spec_bundle
+                .execute()
+                .and_then(|()| bundle.load_index())
+                .unwrap_or_else(|e| {
+                    logger::error(&format!("engine: specs: {e:#}"));
+                    SpecIndex::default()
+                });
+            let history_module = build_history_module(&dependencies);
+            let completion = build_completion_module(
+                &dependencies,
+                repository,
+                runtime.clone(),
+                history_module.history.clone(),
+                index,
+            );
+            let recency = completion.recency.load();
+            let session = CompletionSession::new(settings, std::env::vars().collect(), recency);
+            Engine::new(tx, session, completion, history_module).run(&runtime, &inbox);
         });
     if let Err(e) = spawned {
         logger::error(&format!("engine: spawn: {e}"));
@@ -170,11 +173,6 @@ impl RuntimeEventSource for EngineInbox {
     }
 }
 
-/// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
-fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
-    inline::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
-}
-
 /// Logs what the completion services report, the moment they report it (D5).
 fn log_completion_notice(notice: CompletionNotice) {
     match notice {
@@ -186,86 +184,26 @@ fn log_completion_notice(notice: CompletionNotice) {
 
 struct Engine {
     tx: Sender<Msg>,
-    history: Rc<dyn HistoryRepository>,
-    record_command: RecordCommandUseCase,
-    recency_repository: Rc<dyn RecencyRepository>,
-    ghost_cache: Arc<Mutex<GhostCache>>,
-    generators: Rc<GeneratorRunner>,
-    apply_completion_settings: ApplyCompletionSettingsUseCase,
-    record_suggestion_insertion: RecordSuggestionInsertionUseCase,
-    complete_command_line: CompleteCommandLineUseCase,
     session: CompletionSession,
+    completion: CompletionModule,
+    record_command: RecordCommandUseCase,
+    history: Rc<dyn HistoryRepository>,
+    ghost_cache: Arc<Mutex<GhostCache>>,
 }
 
 impl Engine {
-    fn new(
-        tx: Sender<Msg>,
-        settings: Settings,
-        command_line_parser: CommandLineParser,
-        runtime: Rc<dyn SpecRuntime>,
-        dependencies: &SharedDependencies,
-    ) -> Engine {
-        let bundle = EmbeddedSpecBundle::new(dependencies.data_directory.clone());
-        // ponytail: load_index ensures the bundle a second time (touch + cleanup twice), as the engine always did.
-        let index = build_specs_module(dependencies)
-            .install_spec_bundle
-            .execute()
-            .and_then(|()| bundle.load_index())
-            .unwrap_or_else(|e| {
-                logger::error(&format!("engine: specs: {e:#}"));
-                SpecIndex::default()
-            });
-        Engine::with(
-            tx,
-            settings,
-            command_line_parser,
-            runtime,
-            index,
-            build_history_module(dependencies),
-            dependencies.data_directory.state_file().ok(),
-        )
-    }
-
-    fn with(
-        tx: Sender<Msg>,
-        settings: Settings,
-        command_line_parser: CommandLineParser,
-        runtime: Rc<dyn SpecRuntime>,
-        index: SpecIndex,
-        history_module: HistoryModule,
-        state_path: Option<PathBuf>,
-    ) -> Engine {
+    fn new(tx: Sender<Msg>, session: CompletionSession, completion: CompletionModule, history_module: HistoryModule) -> Engine {
         let HistoryModule {
             history,
             record_command,
         } = history_module;
-        let recency_repository: Rc<dyn RecencyRepository> = Rc::new(StateFileRecencyRepository::new(state_path));
-        let recency = recency_repository.load();
-        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
-        let command_line_parser = Rc::new(command_line_parser);
-        let apply_completion_settings = ApplyCompletionSettingsUseCase::new(runtime.clone(), command_line_parser.clone());
-        let record_suggestion_insertion = RecordSuggestionInsertionUseCase::new(recency_repository.clone(), clock.clone());
-        let generators = Rc::new(GeneratorRunner::new(runtime.clone(), Rc::new(FsDirectoryLister), clock.clone()));
-        let complete_command_line = CompleteCommandLineUseCase::new(
-            command_line_parser,
-            runtime,
-            generators.clone(),
-            Rc::new(PathExecutableCatalog),
-            history.clone(),
-            clock,
-            index,
-        );
         Engine {
             tx,
-            history,
+            session,
+            completion,
             record_command,
-            recency_repository,
+            history,
             ghost_cache: Arc::new(Mutex::new(GhostCache::default())),
-            generators,
-            apply_completion_settings,
-            record_suggestion_insertion,
-            complete_command_line,
-            session: CompletionSession::new(settings, std::env::vars().collect(), recency),
         }
     }
 
@@ -290,17 +228,21 @@ impl Engine {
             }
             if let Some(req) = pending.take() {
                 if let Some(result) =
-                    self.complete_command_line.execute(&mut self.session, &req, &mut |n| log_completion_notice(n))
+                    self.completion.complete_command_line.execute(&mut self.session, &req, &mut |n| log_completion_notice(n))
                 {
                     self.send_reply(result);
                 }
                 continue;
             }
             if self.session.has_running_generators() {
-                self.pump();
+                if let Some(result) =
+                    self.completion.progress_generators.execute(&mut self.session, &mut |n| log_completion_notice(n))
+                {
+                    self.send_reply(result);
+                }
             }
         }
-        self.recency_repository.flush();
+        self.completion.recency.flush();
     }
 
     /// Handle one message; `false` = shut down.
@@ -311,49 +253,39 @@ impl Engine {
                 if let EngineMsg::CommandFinished(e) = m {
                     self.record_command.execute(e);
                 }
-                if let Ok(mut c) = self.ghost_cache.lock() {
-                    c.clear();
-                }
+                self.clear_ghost_text_cache();
                 // generator results without `cache` live until the command ends
-                ResetGeneratorsUseCase.execute(&mut self.session);
+                self.completion.reset_generators.execute(&mut self.session);
             }
-            EngineMsg::RecordInsert { cmd, name } => self.record_suggestion_insertion.execute(&mut self.session, cmd, name),
+            EngineMsg::RecordInsert { cmd, name } => {
+                self.completion.record_suggestion_insertion.execute(&mut self.session, cmd, name)
+            }
             EngineMsg::Llm {
                 req,
                 buffer,
                 cwd,
                 shell,
-            } => self.llm(req, buffer, cwd, shell),
-            EngineMsg::Settings(s) => self.apply_completion_settings.execute(&mut self.session, s),
-            EngineMsg::Session { env, alias } => ApplySessionContextUseCase.execute(&mut self.session, env, alias),
-            EngineMsg::ToggleFuzzy => ToggleFuzzySearchUseCase.execute(&mut self.session),
+            } => self.request_llm_ghost_text(req, buffer, cwd, shell),
+            EngineMsg::Settings(s) => self.completion.apply_completion_settings.execute(&mut self.session, s),
+            EngineMsg::Session { env, alias } => {
+                self.completion.apply_session_context.execute(&mut self.session, env, alias)
+            }
+            EngineMsg::ToggleFuzzy => self.completion.toggle_fuzzy_search.execute(&mut self.session),
             EngineMsg::Runtime(_) => {} // handed to the js host by the inbox
             EngineMsg::Shutdown => return false,
         }
         true
     }
 
-    // -----------------------------------------------------------------------------------------------------
-    // Generator runs (SPEC §6.6.2–6.6.5)
-
-    /// Wait (one slice) on every running generator task; reply again when a current slot changed.
-    fn pump(&mut self) {
-        if self.generators.progress(&mut self.session, &mut |n| log_completion_notice(n)) == Some(true)
-            && self.session.served().is_some()
-        {
-            self.send_reply(build_completion_result(&self.session, CompletionPhase::Generators, &self.history.recent()));
-        }
-    }
-
-    // -----------------------------------------------------------------------------------------------------
-    // Replies
-
     /// The one place a completion result is sent: with the local ghost text for its buffer (Q15).
     fn send_reply(&self, result: CompletionResult) {
         let ghost = self.local_ghost_text(&result);
         let _ = self.tx.send(Msg::Completion(Box::new(result.with_ghost(ghost))));
     }
+}
 
+// legacy ghost text: Phase 7.6 replaces this block
+impl Engine {
     /// Local inline ghost (SPEC §6.11) of a reply; error replies (commands without a spec) get one too.
     fn local_ghost_text(&self, result: &CompletionResult) -> Option<String> {
         if !self.session.settings().bool(INLINE_ENABLED)
@@ -371,10 +303,8 @@ impl Engine {
         }
     }
 
-    // -----------------------------------------------------------------------------------------------------
-    // LLM ghost text (SPEC §8.4)
-
-    fn llm(&mut self, req: u64, buffer: String, cwd: PathBuf, shell: Shell) {
+    /// LLM ghost text (SPEC §8.4).
+    fn request_llm_ghost_text(&mut self, req: u64, buffer: String, cwd: PathBuf, shell: Shell) {
         let tx = self.tx.clone();
         let Ok(Source::Profile(profile)) = inline::source(self.session.settings()) else {
             let _ = tx.send(Msg::Ghost { req, text: None });
@@ -403,6 +333,18 @@ impl Engine {
             logger::warn(&format!("engine: llm worker: {e}"));
         }
     }
+
+    /// A finished or ended command makes the LLM ghost texts of its line stale.
+    fn clear_ghost_text_cache(&self) {
+        if let Ok(mut c) = self.ghost_cache.lock() {
+            c.clear();
+        }
+    }
+}
+
+/// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
+fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
+    inline::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
 }
 
 #[cfg(test)]
@@ -411,12 +353,17 @@ mod tests {
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::history::domain::repositories::history_repository::InMemoryHistoryRepository;
     use crate::history::infrastructure::adapters::jsonl_history_repository::JsonlHistoryRepository;
+    use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
+    use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+    use crate::shared::infrastructure::system_clock::SystemClock;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use std::path::Path;
     use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
     use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
+    use crate::specs::application::ports::spec_runtime::SpecRuntime;
+    use crate::specs::domain::repositories::spec_repository::SpecRepository;
     use crate::specs::domain::value_objects::process_output::ProcessOutput;
     use crate::specs::domain::value_objects::exec_request::ExecRequest;
     use crate::specs::domain::spec_error::SpecError;
@@ -462,27 +409,36 @@ mod tests {
         assert!(e.handle(session_context(&[], Some("")), &mut None));
     }
 
-    /// A parser over `js` and a spec repository that reads the env this process was started with.
-    fn parser_over(js: &Rc<QuickJsSpecRuntime>) -> CommandLineParser {
+    /// A spec repository over `js` that reads the env this process was started with.
+    fn spec_repository_over(js: &Rc<QuickJsSpecRuntime>) -> Rc<dyn SpecRepository> {
         let bundle = EmbeddedSpecBundle::new(data_directory_from_env());
-        CommandLineParser::new(Rc::new(QuickJsSpecRepository::new(js.clone(), bundle)), js.clone())
+        Rc::new(QuickJsSpecRepository::new(js.clone(), bundle))
+    }
+
+    /// What the engine is built from in the tests: no data directory, so there is no recency file.
+    fn without_a_data_directory() -> SharedDependencies {
+        SharedDependencies {
+            data_directory: DataDirectory::new(None, None),
+            clock: Arc::new(SystemClock),
+        }
     }
 
     /// An engine over a real runtime and a JSONL history in `dir`, whose replies go nowhere.
     fn engine_over(dir: &TempDir) -> Engine {
         let (tx, _) = std::sync::mpsc::channel();
         let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
-        Engine::with(
-            tx,
-            Settings::default(),
-            parser_over(&js),
+        let history_module = HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
+            dir.path().join("h.jsonl"),
+        )));
+        let completion = build_completion_module(
+            &without_a_data_directory(),
+            spec_repository_over(&js),
             js.clone(),
+            history_module.history.clone(),
             SpecIndex::default(),
-            HistoryModule::new(Rc::new(JsonlHistoryRepository::load(
-                dir.path().join("h.jsonl"),
-            ))),
-            None,
-        )
+        );
+        let session = CompletionSession::new(Settings::default(), std::env::vars().collect(), completion.recency.load());
+        Engine::new(tx, session, completion, history_module)
     }
 
     /// The message a shell's session context arrives as: its env and its alias text.
@@ -698,8 +654,16 @@ mod tests {
         let inbox = Rc::new(EngineInbox::new(from_senders, to_engine.clone()));
         let runtime = Rc::new(QuickJsSpecRuntime::new(inbox.clone(), &settings).unwrap());
         let (replies, from_engine) = mpsc::channel();
-        let history = HistoryModule::new(Rc::new(InMemoryHistoryRepository::new(history)));
-        let engine = Engine::with(replies, settings, parser_over(&runtime), runtime.clone(), SpecIndex::default(), history, None);
+        let history_module = HistoryModule::new(Rc::new(InMemoryHistoryRepository::new(history)));
+        let completion = build_completion_module(
+            &without_a_data_directory(),
+            spec_repository_over(&runtime),
+            runtime.clone(),
+            history_module.history.clone(),
+            SpecIndex::default(),
+        );
+        let session = CompletionSession::new(settings, std::env::vars().collect(), completion.recency.load());
+        let engine = Engine::new(replies, session, completion, history_module);
         for message in first {
             to_engine.send(message).unwrap();
         }
