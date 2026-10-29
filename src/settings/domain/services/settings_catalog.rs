@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(read, if cfg!(windows) { 20000.0 } else { 5000.0 });
     }
 
-    /// js.rs script_timeout: `i64(.., if cfg!(windows) { 20000 } else { 5000 })`.
+    /// specs quickjs_spec_runtime.rs script_timeout: `i64(.., if cfg!(windows) { 20000 } else { 5000 })`.
     #[test]
     fn should_default_the_js_script_timeout_to_20000_ms_on_windows_and_5000_elsewhere() {
         let settings = Settings::default();

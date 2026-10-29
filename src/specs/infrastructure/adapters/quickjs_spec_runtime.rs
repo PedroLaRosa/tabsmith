@@ -322,8 +322,8 @@ impl QuickJsSpecRuntime {
 
     /// Pump until every task finished or `deadline`. Returns one entry per task (`None` = still pending).
     /// Pending tasks stay alive and can be waited on again; finished results are delivered once (then dropped,
-    /// like `forget`; an unknown/forgotten task yields `Some(Err)`). `Err(Aborted)` when a newer `Complete`
-    /// arrived (or is already queued); no task is dropped then.
+    /// like `forget`; an unknown/forgotten task yields `Some(Err)`). `Err(Aborted)` when the event source
+    /// reports a newer request (`has_newer_request`); no task is dropped then.
     pub(crate) fn wait_json(
         &self,
         tasks: &[TaskId],

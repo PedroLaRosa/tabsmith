@@ -511,7 +511,7 @@ impl Engine {
     // -----------------------------------------------------------------------------------------------------
     // Requests
 
-    /// Phase-Parse reply for `req`; `None` when a newer request aborted it (it is queued in `js`).
+    /// Phase-Parse reply for `req`; `None` when a newer request aborted it (it is kept in the engine inbox).
     fn compute(&mut self, req: &Request, js: &QuickJsSpecRuntime) -> Option<Completion> {
         let cursor = req.cursor.min(req.buffer.len());
         // SPEC §6.1.5 mid-word guard
