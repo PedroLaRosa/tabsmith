@@ -529,3 +529,16 @@ fn should_pass_generate_spec_the_tokens_and_the_exec_function() {
 
     assert_eq!(arguments, (8, vec![JsArg::Json(json!(tokens)), JsArg::Exec]));
 }
+
+#[test]
+fn should_pass_a_script_function_the_tokens() {
+    let tokens = vec!["git".to_string(), "checkout".to_string()];
+    let call = SpecFunctionCall::Script {
+        function: 9,
+        tokens: tokens.clone(),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(arguments, (9, vec![JsArg::Json(json!(tokens))]));
+}

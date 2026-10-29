@@ -514,6 +514,7 @@ pub(crate) fn call_arguments(
         SpecFunctionCall::GenerateSpec { tokens, .. } => {
             vec![JsArg::Json(json!(tokens)), JsArg::Exec]
         }
+        SpecFunctionCall::Script { tokens, .. } => vec![JsArg::Json(json!(tokens))],
         _ => Vec::new(),
     };
     (call.function(), arguments)
