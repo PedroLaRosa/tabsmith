@@ -702,6 +702,16 @@ fn should_read_the_stdout_of_an_exec_result() {
 }
 
 #[test]
+fn should_read_no_stdout_from_a_value_without_a_text_stdout() {
+    let (js, _events) = js();
+    let values = [SpecValue::Null, spec_value_from_json(&json!({"stdout": 1}))];
+
+    let stdouts: Vec<String> = values.iter().map(|v| js.read_exec_stdout(v)).collect();
+
+    assert_eq!(stdouts, ["", ""]);
+}
+
+#[test]
 fn should_interrupt_a_wait_while_a_newer_request_is_waiting() {
     let (js, events) = js();
     let task = js.start_sleep(10_000);
