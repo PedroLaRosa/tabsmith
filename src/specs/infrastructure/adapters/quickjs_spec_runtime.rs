@@ -523,7 +523,11 @@ impl SpecRuntime for QuickJsSpecRuntime {
     ) -> Result<Vec<Option<TaskOutcome>>, Interrupted> {
         match self.wait_json(tasks, deadline) {
             Ok(results) => Ok(results.into_iter().map(|r| r.map(task_outcome)).collect()),
-            Err(_) => todo!(),
+            Err(SpecError::Aborted) => Err(Interrupted),
+            // wait_json only fails with Aborted; any other error fails every task, as the engine's pump maps it.
+            Err(
+                e @ (SpecError::Timeout | SpecError::Invalid(_) | SpecError::BundleUnavailable(_)),
+            ) => Ok(vec![Some(Err(e.to_string())); tasks.len()]),
         }
     }
 

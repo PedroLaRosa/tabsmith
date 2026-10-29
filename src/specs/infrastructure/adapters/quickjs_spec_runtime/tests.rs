@@ -661,3 +661,14 @@ fn should_give_a_started_call_its_outcome_as_a_spec_value() {
 
     assert_eq!(outcomes, Ok(vec![Some(Ok(spec_value_from_json(&returned)))]));
 }
+
+#[test]
+fn should_interrupt_a_wait_while_a_newer_request_is_waiting() {
+    let (js, events) = js();
+    let task = js.start_sleep(10_000);
+    events.send_newer_request();
+
+    let outcomes = js.wait(&[task], Instant::now() + Duration::from_secs(5));
+
+    assert_eq!(outcomes, Err(Interrupted));
+}
