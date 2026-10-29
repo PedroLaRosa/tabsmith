@@ -14,14 +14,19 @@ impl UninstallIntegrationsUseCase {
         UninstallIntegrationsUseCase { installer }
     }
 
-    /// Ok(true) if something was uninstalled.
+    /// Uninstalls every integration with something on disk, not only the installed ones: a moved binary or lines
+    /// appended after the post block fail the check exactly when an uninstall is needed. Ok(true) if any.
     pub(crate) fn execute(
         &self,
         paths: &IntegrationPaths,
         shells: &[Shell],
     ) -> Result<bool, Vec<IntegrationFailure>> {
-        self.installer
-            .apply(paths, shells, |_| true, |i| self.installer.uninstall(paths, i))
+        self.installer.apply(
+            paths,
+            shells,
+            |i| self.installer.has_traces(paths, i),
+            |i| self.installer.uninstall(paths, i),
+        )
     }
 }
 
@@ -81,5 +86,16 @@ mod tests {
             ),
             (true, false, false)
         );
+    }
+
+    /// What `integrations uninstall` reports as `Not installed` (T30).
+    #[test]
+    fn should_report_nothing_uninstalled_when_no_integration_left_traces() {
+        let use_case =
+            UninstallIntegrationsUseCase::new(installer(Rc::new(InMemoryDotfileRepository::default())));
+
+        let uninstalled = use_case.execute(&paths(), &[Shell::Bash, Shell::Zsh, Shell::Fish]);
+
+        assert!(matches!(uninstalled, Ok(false)), "{uninstalled:?}");
     }
 }
