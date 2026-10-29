@@ -358,14 +358,15 @@ fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
 
 /// Another module's use cases and adapters are reached only through bootstrap. The shared kernel is open to every
 /// module; rules 1-2 still keep its infrastructure out of domain and application files. A use case is its file
-/// (`*_use_case`) or its type (`*UseCase`), so a re-export that keeps the type name is caught on any path.
-// ponytail: a re-export under another name (`type Installer = ..UseCase;`, a wrapper fn) outside a mod.rs still
-// passes; read every application file for those, as rule 6 reads mod.rs, if one shows up.
+/// (`*_use_case`) or its type (`*UseCase`) anywhere under another module, so a re-export that keeps the type name is
+/// caught at the module root or in a legacy shim (`crate::specs::InstallSpecBundleUseCase`) too.
+// ponytail: a re-export under another name (`type Installer = ..UseCase;`, a wrapper fn), an `as` rename and a
+// `super::` path still pass; read every file of the module for those, as rule 6 reads mod.rs, if one shows up.
 fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| match path.as_slice() {
         ["crate", "shared", ..] => false,
         ["crate", module, "infrastructure", ..] => *module != own_module,
-        ["crate", module, "application", rest @ ..] => {
+        ["crate", module, rest @ ..] => {
             *module != own_module
                 && rest.iter().any(|segment| segment.ends_with("_use_case") || segment.ends_with("UseCase"))
         }
@@ -748,6 +749,15 @@ mod tests {
     #[test]
     fn should_flag_another_modules_use_case_re_exported_by_its_type_name_outside_its_file() {
         let source = "use crate::specs::application::installers::InstallSpecBundleUseCase;\n";
+
+        let found = violations_in("shell_integration/infrastructure/shell_integration_module.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+    }
+
+    #[test]
+    fn should_flag_another_modules_use_case_re_exported_by_its_type_name_outside_its_application_layer() {
+        let source = "use crate::specs::InstallSpecBundleUseCase;\n";
 
         let found = violations_in("shell_integration/infrastructure/shell_integration_module.rs", source);
 
