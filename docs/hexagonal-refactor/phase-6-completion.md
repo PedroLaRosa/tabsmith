@@ -829,9 +829,12 @@ prefix (`ENG-E24` = `P6-ENG-E24`). Never cite a bare `T`/`GT`/`E`.
   - Rule 3's accepted ceilings (plan section 9, Phase 5 notes): another module's `*UseCase`/`*_use_case` is flagged on
     any path, but a re-export under another name (a `type` alias, a wrapper fn), an `as` rename, a `super::` path and
     an adapter re-exported by a legacy file or module root are not. So no `pub(crate) use` shim is added anywhere
-    (6.3d's `Parser` facade is a struct, not a re-export) and every step greps for one by hand. Infrastructure may
-    still import a legacy module (rule 3 never flags it); domain and application may not (rules 1-2 with
-    `LEGACY_MODULES`).
+    (6.3d's `Parser` facade is a struct, not a re-export) and every step greps for one by hand. Nor is a use case
+    that names a sibling use case of its own module (rule 3 reads only another module's): 6.7 greps every
+    `src/<module>/application/*_use_case.rs` above its `#[cfg(test)]` for a `*UseCase`/`*_use_case` other than its
+    own and records this ceiling in plan section 9 (none at run 5's review, settings and shell_integration
+    included). Infrastructure may still import a legacy module (rule 3 never flags it); domain and application may not
+    (rules 1-2 with `LEGACY_MODULES`).
   - `spec_value_to_json` `.expect`s a finite float: after 6.4d, build `SpecValue::Float`s only from parsed JSON, never
     from arithmetic, or a NaN/inf panics the engine thread.
 - **Local fitness check, every step.** `completion` is registered only at 6.7. Before each commit (once
@@ -1590,7 +1593,9 @@ Engine-server dispatch (final shape, `bootstrap/engine_server.rs`):
     (it hands out internal state). This keeps the moves verbatim; it is not the intended end design (hand-off,
     Phase 11).
 38. **History.** Run 4 left two 73-character subjects, not rewritten: `0d1ea43` (6.4a) and `87dc339` (6.4c).
-    Later steps commit through a script that refuses a subject over 72 characters.
+    Later steps commit through a script that refuses a subject over 72 characters. Run 5's `1f18684` (6.5a) is typed
+    `test(completion)` but also rewrites the production doc comment of `ApplyCompletionSettingsUseCase`, so
+    `refactor(completion)` would have fit; not rewritten either.
 
 ## Hand-off notes for later phases
 
