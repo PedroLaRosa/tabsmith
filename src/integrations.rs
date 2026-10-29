@@ -6,7 +6,6 @@ use crate::shared::infrastructure::atomic_file::AtomicFile;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::os::process_info::is_root;
-use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::shell_integration::application::integration_installer::IntegrationInstaller;
@@ -20,66 +19,15 @@ use crate::shell_integration::infrastructure::adapters::os_shell_environment::{
     integration_paths_from, OsShellEnvironment,
 };
 use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
-use crate::shell_integration::infrastructure::cli::init_command::ShellArg;
 use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
 use crate::types::{now_ms, SessionCtx};
 use anyhow::{bail, Context, Result};
-use clap::{Args, Subcommand};
+use clap::Args;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-
-#[derive(Subcommand, Clone, Debug)]
-pub enum IntegrationTargetArg {
-    /// Shell dotfile integrations
-    Dotfiles { shell: Option<ShellArg> },
-    /// All integrations
-    All,
-}
-
-impl From<IntegrationTargetArg> for IntegrationTarget {
-    fn from(t: IntegrationTargetArg) -> IntegrationTarget {
-        match t {
-            IntegrationTargetArg::Dotfiles { shell } => IntegrationTarget::Dotfiles(shell.map(Shell::from)),
-            IntegrationTargetArg::All => IntegrationTarget::All,
-        }
-    }
-}
-
-#[derive(Subcommand)]
-pub enum IntegrationsCmd {
-    /// Install an integration
-    Install {
-        #[command(subcommand)]
-        target: IntegrationTargetArg,
-        /// Suppress status messages
-        #[arg(long, short)]
-        silent: bool,
-    },
-    /// Uninstall an integration
-    Uninstall {
-        #[command(subcommand)]
-        target: IntegrationTargetArg,
-        #[arg(long, short)]
-        silent: bool,
-    },
-    /// Reinstall an integration
-    Reinstall {
-        #[command(subcommand)]
-        target: IntegrationTargetArg,
-        #[arg(long, short)]
-        silent: bool,
-    },
-    /// Check the status of an integration
-    Status {
-        #[command(subcommand)]
-        target: IntegrationTargetArg,
-        #[arg(long, short, value_enum, default_value_t)]
-        format: OutputFormat,
-    },
-}
 
 #[derive(Args)]
 pub struct SetupArgs {
@@ -170,106 +118,6 @@ pub fn install_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool
     legacy_installer()
         .install_missing(ctx, shells)
         .map_err(integration_failures_error)
-}
-
-/// Uninstall every integration of `shells` with something on disk. Not only the installed ones: `is_installed`
-/// fails exactly when uninstall is needed (a moved binary, lines appended after the post block). Ok(true) if any.
-fn uninstall_dotfiles(ctx: &IntegrationPaths, shells: &[Shell]) -> Result<bool> {
-    legacy_installer()
-        .uninstall_traced(ctx, shells)
-        .map_err(integration_failures_error)
-}
-
-fn target_shells(t: &IntegrationTargetArg) -> Vec<Shell> {
-    IntegrationTarget::from(t.clone()).shells(|| which("pwsh").is_some())
-}
-
-pub fn integrations_cmd(cmd: IntegrationsCmd) -> anyhow::Result<i32> {
-    let ctx = integration_paths_from(&data_directory_from_env())?;
-    let install = |target: &IntegrationTargetArg, silent: bool| -> Result<i32> {
-        let installed = install_dotfiles(&ctx, &target_shells(target))?;
-        if installed {
-            mark_restart();
-        }
-        if !silent {
-            println!(
-                "{}",
-                if installed {
-                    "Installed!"
-                } else {
-                    "Already installed"
-                }
-            );
-        }
-        Ok(0)
-    };
-    let uninstall = |target: &IntegrationTargetArg, silent: bool| -> Result<i32> {
-        let done = uninstall_dotfiles(&ctx, &target_shells(target))?;
-        if !silent {
-            println!(
-                "{}",
-                if done {
-                    "Uninstalled!"
-                } else {
-                    "Not installed"
-                }
-            );
-        }
-        Ok(0)
-    };
-    match cmd {
-        IntegrationsCmd::Install { target, silent } => install(&target, silent),
-        IntegrationsCmd::Uninstall { target, silent } => uninstall(&target, silent),
-        IntegrationsCmd::Reinstall { target, silent } => {
-            uninstall(&target, true)?;
-            install(&target, silent)
-        }
-        IntegrationsCmd::Status { target, format } => status(&ctx, &target_shells(&target), format),
-    }
-}
-
-/// `integrations status` (SPEC §2.6); honours the SHELL argument.
-fn status(ctx: &IntegrationPaths, shells: &[Shell], format: OutputFormat) -> Result<i32> {
-    let installer = legacy_installer();
-    let (mut rows, mut errs) = (Vec::new(), Vec::new());
-    for &shell in shells {
-        match installer.integrations(ctx, shell) {
-            Ok(list) => rows.extend(list.into_iter().map(|i| (installer.check(ctx, &i).is_ok(), i))),
-            Err(e) => errs.push((shell, format!("{e:#}"))),
-        }
-    }
-    if format == OutputFormat::Plain {
-        for (ok, i) in &rows {
-            println!(
-                "{} {}",
-                if *ok {
-                    paint("32", "✔")
-                } else {
-                    paint("31", "✘")
-                },
-                i.describe()
-            );
-        }
-        for (shell, e) in &errs {
-            println!("{}: {e}", shell.name());
-        }
-        return Ok(0);
-    }
-    let v = serde_json::json!({
-        "integrations": rows.iter().map(|(ok, i)| serde_json::json!({
-            "installed": ok, "description": i.describe(), "shell": i.shell().name(), "file_name": i.file_name(),
-        })).collect::<Vec<_>>(),
-        "errors": errs.iter().map(|(s, e)| serde_json::json!({
-            "shell": s.name(), "error": {"title": e, "message": null},
-        })).collect::<Vec<_>>(),
-    });
-    let out = if format == OutputFormat::Json {
-        v.to_string()
-    } else {
-        serde_json::to_string_pretty(&v)?
-    };
-    println!("{out}");
-    Ok(0)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -418,26 +266,8 @@ mod tests {
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     #[cfg(unix)]
     use crate::shell_integration::domain::value_objects::dotfile::PRE_MARKER;
+    #[cfg(unix)]
     use crate::shell_integration::infrastructure::testing::integration_fixtures::{ctx, install_dotfiles};
-
-    #[test]
-    fn integrations_install_dotfiles_reports() {
-        let temp_dir = TempDir::new("apply");
-        let dir = temp_dir.path().to_path_buf();
-        let c = ctx(&dir);
-        assert!(install_dotfiles(&c, &[Shell::Zsh, Shell::Fish]).unwrap());
-        assert!(!install_dotfiles(&c, &[Shell::Zsh, Shell::Fish]).unwrap());
-        // A dotfile that cannot be written is reported with its description.
-        std::fs::create_dir_all(c.home().join(".bashrc")).unwrap(); // a directory where the file should be
-        let e = format!("{:#}", install_dotfiles(&c, &[Shell::Bash]).unwrap_err());
-        assert!(
-            e.starts_with("\n\n")
-                && e.contains("bash pre post into .bashrc")
-                && !e.contains(".profile"),
-            "{e}"
-        );
-        let _ = std::fs::remove_dir_all(dir);
-    }
 
     /// The file modes and the purge guard of this scenario are asserted in shared atomic_file.rs
     /// (`integrations_pre_cmd_file`); this half keeps the SessionCtx round trip.

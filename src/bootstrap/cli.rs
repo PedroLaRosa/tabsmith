@@ -8,6 +8,7 @@ use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::terminal_style::epaint;
 use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
 use crate::shell_integration::infrastructure::cli::init_command::{run_init_command, InitArgs};
+use crate::shell_integration::infrastructure::cli::integrations_command::{run_integrations_command, IntegrationsCmd};
 use crate::shell_integration::infrastructure::cli::should_launch_command::run_should_launch_command;
 use crate::shell_integration::infrastructure::shell_integration_module::{
     build_shell_integration_module, ShellIntegrationModule,
@@ -43,7 +44,7 @@ enum Command {
     Inline(cli::InlineCmd),
     /// Manage system integrations
     #[command(subcommand)]
-    Integrations(integrations::IntegrationsCmd),
+    Integrations(IntegrationsCmd),
     /// Generate the dotfiles for the given shell
     Init(InitArgs),
     /// Fix and diagnose common issues
@@ -119,7 +120,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         ),
         Some(Command::Theme(a)) => cli::theme(a),
         Some(Command::Inline(c)) => cli::inline(c),
-        Some(Command::Integrations(c)) => integrations::integrations_cmd(c),
+        Some(Command::Integrations(c)) => run_integrations_command(c, &shell_integration_module()),
         Some(Command::Init(a)) => run_init_command(a, &shell_integration_module()),
         Some(Command::Doctor(a)) => doctor::run(a),
         Some(Command::Setup(a)) => integrations::setup(a),

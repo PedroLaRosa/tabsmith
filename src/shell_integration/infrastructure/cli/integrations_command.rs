@@ -1,7 +1,116 @@
+use crate::shared::domain::value_objects::shell::Shell;
+use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{sgr, stdout_tty};
 use crate::shell_integration::application::integration_failure::IntegrationFailure;
 use crate::shell_integration::application::integration_status_report::IntegrationStatusReport;
+use crate::shell_integration::domain::value_objects::integration_target::IntegrationTarget;
+use crate::shell_integration::infrastructure::cli::init_command::ShellArg;
+use crate::shell_integration::infrastructure::shell_integration_module::ShellIntegrationModule;
+use clap::Subcommand;
+
+#[derive(Subcommand, Clone, Debug)]
+pub(crate) enum IntegrationTargetArg {
+    /// Shell dotfile integrations
+    Dotfiles { shell: Option<ShellArg> },
+    /// All integrations
+    All,
+}
+
+impl From<IntegrationTargetArg> for IntegrationTarget {
+    fn from(t: IntegrationTargetArg) -> IntegrationTarget {
+        match t {
+            IntegrationTargetArg::Dotfiles { shell } => IntegrationTarget::Dotfiles(shell.map(Shell::from)),
+            IntegrationTargetArg::All => IntegrationTarget::All,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+pub(crate) enum IntegrationsCmd {
+    /// Install an integration
+    Install {
+        #[command(subcommand)]
+        target: IntegrationTargetArg,
+        /// Suppress status messages
+        #[arg(long, short)]
+        silent: bool,
+    },
+    /// Uninstall an integration
+    Uninstall {
+        #[command(subcommand)]
+        target: IntegrationTargetArg,
+        #[arg(long, short)]
+        silent: bool,
+    },
+    /// Reinstall an integration
+    Reinstall {
+        #[command(subcommand)]
+        target: IntegrationTargetArg,
+        #[arg(long, short)]
+        silent: bool,
+    },
+    /// Check the status of an integration
+    Status {
+        #[command(subcommand)]
+        target: IntegrationTargetArg,
+        #[arg(long, short, value_enum, default_value_t)]
+        format: OutputFormat,
+    },
+}
+
+/// `tabsmith integrations` (SPEC §2.6): the paths first, whatever the subcommand, then its target's shells. A
+/// failure is the error main prints, never a print of its own.
+pub(crate) fn run_integrations_command(
+    cmd: IntegrationsCmd,
+    module: &ShellIntegrationModule,
+) -> anyhow::Result<i32> {
+    let paths = module.locate_integration_paths()?;
+    match cmd {
+        IntegrationsCmd::Install { target, silent } => {
+            let installed = module
+                .install_integrations
+                .execute(&paths, &target_shells(target))
+                .map_err(integration_failures_error)?;
+            announce(silent, if installed { "Installed!" } else { "Already installed" });
+        }
+        IntegrationsCmd::Uninstall { target, silent } => {
+            let uninstalled = module
+                .uninstall_integrations
+                .execute(&paths, &target_shells(target))
+                .map_err(integration_failures_error)?;
+            announce(silent, if uninstalled { "Uninstalled!" } else { "Not installed" });
+        }
+        IntegrationsCmd::Reinstall { target, silent } => {
+            let installed = module
+                .reinstall_integrations
+                .execute(&paths, &target_shells(target))
+                .map_err(integration_failures_error)?;
+            announce(silent, if installed { "Installed!" } else { "Already installed" });
+        }
+        IntegrationsCmd::Status { target, format } => {
+            let report = module
+                .get_integration_status
+                .execute(&paths, &target_shells(target));
+            for line in status_lines(&report, format, stdout_tty())? {
+                println!("{line}");
+            }
+        }
+    }
+    Ok(0)
+}
+
+/// The shells `target` names; pwsh is looked up on PATH only when it names no shell (SPEC §2.6).
+fn target_shells(target: IntegrationTargetArg) -> Vec<Shell> {
+    IntegrationTarget::from(target).shells(|| which("pwsh").is_some())
+}
+
+/// `message` on stdout unless `--silent`.
+fn announce(silent: bool, message: &str) {
+    if !silent {
+        println!("{message}");
+    }
+}
 
 /// The failures of a run over integrations as one error, the text main prints after `error: ` (the legacy
 /// `bail!`); a failed integration's description is bold when stdout is a terminal, as `paint` does.
@@ -78,7 +187,9 @@ fn plain_status_lines(report: &IntegrationStatusReport, styled: bool) -> Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::shell_integration::application::integration_status::IntegrationStatus;
+    use crate::shell_integration::infrastructure::testing::integration_fixtures::{ctx, install_dotfiles};
 
     #[test]
     fn should_word_a_shell_it_could_not_list_as_the_shell_and_reason_after_a_blank_line() {
@@ -251,5 +362,24 @@ mod tests {
   ]
 }"#]
         );
+    }
+
+    #[test]
+    fn integrations_install_dotfiles_reports() {
+        let temp_dir = TempDir::new("apply");
+        let dir = temp_dir.path().to_path_buf();
+        let c = ctx(&dir);
+        assert!(install_dotfiles(&c, &[Shell::Zsh, Shell::Fish]).unwrap());
+        assert!(!install_dotfiles(&c, &[Shell::Zsh, Shell::Fish]).unwrap());
+        // A dotfile that cannot be written is reported with its description.
+        std::fs::create_dir_all(c.home().join(".bashrc")).unwrap(); // a directory where the file should be
+        let e = format!("{:#}", install_dotfiles(&c, &[Shell::Bash]).unwrap_err());
+        assert!(
+            e.starts_with("\n\n")
+                && e.contains("bash pre post into .bashrc")
+                && !e.contains(".profile"),
+            "{e}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
