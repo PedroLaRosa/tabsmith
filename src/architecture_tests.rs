@@ -378,6 +378,24 @@ fn only_declares_children(code: &str) -> bool {
     item.is_empty() || child.is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
 }
 
+/// The lines of `main_rs` every module would see as `crate::<name>`, a path rules 1-3 cannot read as the shared
+/// infrastructure or bootstrap: a crate-root item other than a child declaration or `fn main` (a `type` alias, a
+/// wrapper fn), and a `use` anywhere.
+// ponytail: braces are counted per line, so an unpaired brace in a string literal shifts what counts as the crate root.
+fn crate_root_back_doors(main_rs: &str) -> Vec<&str> {
+    let mut depth = 0;
+    let mut found = Vec::new();
+    for line in main_rs.lines() {
+        let code = without_line_comment(line);
+        let root_item = depth == 0 && !only_declares_children(code) && !code.starts_with("fn main(");
+        if root_item || imports_or_re_exports(code) {
+            found.push(line);
+        }
+        depth += code.matches('{').count() as isize - code.matches('}').count() as isize;
+    }
+    found
+}
+
 /// A `use` item (`use`, `pub(crate) use`, a glob).
 fn imports_or_re_exports(code: &str) -> bool {
     code.split(|c: char| !is_path_char(c)).any(|word| word == "use")
@@ -428,18 +446,47 @@ mod tests {
         assert!(report.is_empty(), "architecture rules broken:\n{}", report.join("\n"));
     }
 
-    /// Every module sees the crate root's private `use` items as `crate::<name>`: `crate::logger` would reach the
-    /// shared infrastructure and `crate::Cli` the composition root by paths rules 1-3 cannot read as either.
+    /// Every module sees the crate root's private items as `crate::<name>`: a `use crate::shared::..::logger;` or a
+    /// `type Cli = ..;` there would reach the shared infrastructure or the composition root by a path rules 1-3 cannot
+    /// read as either.
     #[test]
     fn should_keep_use_items_out_of_the_crate_root() {
         let main_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs");
         let source = fs::read_to_string(main_rs).expect("read src/main.rs");
 
-        let imports: Vec<&str> =
-            source.lines().filter(|line| imports_or_re_exports(without_line_comment(line))).collect();
+        let back_doors = crate_root_back_doors(&source);
 
-        let message = "src/main.rs imports, so every module can use these by the back door";
-        assert!(imports.is_empty(), "{message}:\n{}", imports.join("\n"));
+        let message = "src/main.rs holds more than its module declarations and fn main, so every module can use these";
+        assert!(back_doors.is_empty(), "{message}:\n{}", back_doors.join("\n"));
+    }
+
+    /// A crate-root `type` alias or wrapper fn is a `crate::<name>` path rules 1-3 cannot read, as a `use` item is.
+    #[test]
+    fn should_flag_a_crate_root_item_other_than_a_module_declaration_or_main() {
+        let main_rs = "//! tabsmith.\n\
+                       #![allow(dead_code)]\n\
+                       \n\
+                       #[cfg(test)]\n\
+                       mod architecture_tests;\n\
+                       mod settings;\n\
+                       type SetSetting = settings::application::set_setting_use_case::SetSettingUseCase;\n\
+                       fn logger() {}\n\
+                       \n\
+                       fn main() {\n    \
+                       let code = run(crate::shared::infrastructure::logger::init());\n    \
+                       use crate::bootstrap::cli::Cli;\n\
+                       }\n";
+
+        let found = crate_root_back_doors(main_rs);
+
+        assert_eq!(
+            found,
+            [
+                "type SetSetting = settings::application::set_setting_use_case::SetSettingUseCase;",
+                "fn logger() {}",
+                "    use crate::bootstrap::cli::Cli;",
+            ]
+        );
     }
 
     #[test]
