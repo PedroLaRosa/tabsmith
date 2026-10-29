@@ -26,6 +26,7 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::services::command_line_tokenizer;
+use crate::completion::domain::services::suggestion_ranker;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
@@ -1162,7 +1163,7 @@ impl Engine {
                 .as_ref()
                 .filter(|_| use_recency)
                 .and_then(|r| r.get(cmd));
-            suggest::rank(list, pr.search_term(), map, &fo)
+            suggestion_ranker::rank(list, pr.search_term(), map, &fo)
         };
         let ic = InsertionContext {
             search_term: pr.search_term(),
