@@ -387,30 +387,8 @@ impl GeneratorRunner {
     /// `splitOn` takes precedence over `postProcess`; neither → [].
     fn exec_output(&self, run: &mut GeneratorRun, g: &Generator, v: &SpecValue) -> GeneratorOutcome {
         let stdout = self.runtime.read_exec_stdout(v);
-        if let Some(sep) = g.split_on() {
-            let t = stdout.trim();
-            if t.is_empty() {
-                return GeneratorOutcome::Done(Vec::new());
-            }
-            return GeneratorOutcome::Done(
-                t.split(sep.as_str())
-                    .map(|s| SpecSuggestion::from_script_output(s, run.context().is_dangerous()))
-                    .collect(),
-            );
-        }
-        let Some(pp) = g.post_process() else {
-            return GeneratorOutcome::Done(Vec::new());
-        };
-        let task = self.runtime.start(
-            SpecFunctionCall::PostProcess {
-                function: pp,
-                stdout,
-                tokens: run.tokens().to_vec(),
-            },
-            Some(run.context()),
-        );
-        run.wait_on(task, GeneratorStep::PostProcess);
-        GeneratorOutcome::Pending
+        let command = run.exec_command(g, &stdout);
+        self.start(run, command, GeneratorStep::PostProcess)
     }
 
     /// Custom result; `filterTemplateSuggestions` applies when the first item has a `context`.
