@@ -59,7 +59,10 @@ impl Rule {
             Rule::ModuleBoundary => "uses another module's use case or infrastructure, or bootstrap",
             Rule::SharedKernel => "shared uses a crate module other than shared",
             Rule::ModuleDeclarations => "a mod.rs imports, re-exports or holds an item; it only declares its children",
-            Rule::SplicedCode => "compiles in a file the rules never read (#[path], include!)",
+            Rule::SplicedCode => {
+                "compiles in a file the rules never read (#[path], include!) or hands a macro to other modules \
+                 (#[macro_export], #[macro_use])"
+            }
         }
     }
 }
@@ -385,9 +388,11 @@ fn only_declares_children(code: &str) -> bool {
     item.is_empty() || child.is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
 }
 
-/// `#[path = ..]` and `include!` compile a file the rules never read into the module.
+/// `#[path = ..]` and `include!` compile a file the rules never read into the module; `#[macro_export]` and
+/// `#[macro_use]` hand a macro to modules that call it as `crate::name!` or `name!`, a path rules 1-3 cannot read.
 fn splices_in_unread_code(code: &str) -> bool {
-    code.contains("#[path") || macro_names(code).any(|name| name == "include")
+    let attributes = ["#[path", "#[macro_export", "#[macro_use"];
+    attributes.iter().any(|attribute| code.contains(attribute)) || macro_names(code).any(|name| name == "include")
 }
 
 /// The lines of `main_rs` every module would see as `crate::<name>`, a path rules 1-3 cannot read as the shared
@@ -1120,6 +1125,30 @@ mod tests {
             [
                 vec![Violation { line: 1, rule: Rule::SplicedCode }],
                 vec![Violation { line: 2, rule: Rule::SplicedCode }],
+            ]
+        );
+    }
+
+    /// The domain would call the macro as `crate::warn_user!` or `warn_user!`, a path that names no logger.
+    #[test]
+    fn should_flag_a_file_that_hands_a_macro_to_other_modules() {
+        let exported = "#[macro_export]\n\
+                        macro_rules! warn_user {\n    \
+                        ($m:expr) => { $crate::shared::infrastructure::logger::warn($m) };\n\
+                        }\n";
+        let in_scope = "#[macro_use]\n\
+                        pub(crate) mod user_log;\n";
+
+        let found = [
+            violations_in("shared/infrastructure/user_log.rs", exported),
+            violations_in("shared/infrastructure/mod.rs", in_scope),
+        ];
+
+        assert_eq!(
+            found,
+            [
+                vec![Violation { line: 1, rule: Rule::SplicedCode }],
+                vec![Violation { line: 1, rule: Rule::SplicedCode }],
             ]
         );
     }
