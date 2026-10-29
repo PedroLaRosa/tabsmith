@@ -36,7 +36,11 @@ mod tests {
     use crate::shared::application::ports::clock::FixedClock;
     use crate::shell_integration::application::ports::shell_environment::RecordingShellEnvironment;
     use crate::shell_integration::domain::repositories::backup_repository::InMemoryBackupRepository;
-    use crate::shell_integration::domain::repositories::dotfile_repository::InMemoryDotfileRepository;
+    use crate::shell_integration::domain::entities::integration::Integration;
+    use crate::shell_integration::domain::repositories::dotfile_repository::{
+        DotfileRepository, InMemoryDotfileRepository,
+    };
+    use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -97,5 +101,24 @@ mod tests {
         let uninstalled = use_case.execute(&paths(), &[Shell::Bash, Shell::Zsh, Shell::Fish]);
 
         assert!(matches!(uninstalled, Ok(false)), "{uninstalled:?}");
+    }
+
+    /// Not installed (no source lines), yet its pre script file is left behind: it is uninstalled all the same.
+    #[test]
+    fn should_take_out_an_integration_that_left_only_a_script_file() {
+        let dotfiles = Rc::new(InMemoryDotfileRepository::default());
+        let zshrc = Integration::dotfile(Shell::Zsh, PathBuf::from("/home/u/.zshrc"));
+        dotfiles
+            .write(zshrc.script(&paths(), IntegrationPhase::Pre).path(), "echo left behind\n")
+            .unwrap();
+        let installer = installer(dotfiles);
+        let use_case = UninstallIntegrationsUseCase::new(installer.clone());
+
+        let uninstalled = use_case.execute(&paths(), &[Shell::Zsh]);
+
+        assert_eq!(
+            (uninstalled.unwrap(), has_traces(&installer, Shell::Zsh)),
+            (true, false)
+        );
     }
 }
