@@ -620,7 +620,7 @@ impl ArgState {
 
     fn advance(&mut self) {
         match self.cur() {
-            Some(a) if a.is_variadic => self.variadic_count += 1,
+            Some(a) if a.is_variadic() => self.variadic_count += 1,
             Some(_) if self.index + 1 < self.args.len() => {
                 *self = ArgState {
                     args: std::mem::take(&mut self.args),
@@ -634,7 +634,7 @@ impl ArgState {
 }
 
 fn mandatory_or_var(a: Option<&Rc<Arg>>) -> bool {
-    a.is_some_and(|a| a.is_variadic || !a.is_optional)
+    a.is_some_and(|a| a.is_variadic() || !a.is_optional())
 }
 
 #[derive(Clone, Debug)]
@@ -670,10 +670,10 @@ impl State {
     fn initial(spec: Rc<Subcommand>, text: &str, spec_name: &str, tokens: Vec<String>) -> State {
         State {
             path: vec![spec.clone()],
-            directives: spec.directives.clone(),
-            persistent: spec.persistent.clone(),
+            directives: spec.directives().clone(),
+            persistent: spec.persistent().clone(),
             opt_args: ArgState::default(),
-            sub_args: ArgState::new(&spec.args),
+            sub_args: ArgState::new(spec.args()),
             annotations: vec![ann(AnnKind::Subcommand, text)],
             passed: Vec::new(),
             command_index: 0,
@@ -716,25 +716,25 @@ impl State {
             return false;
         }
         if let Some(o) = self.opt_args.cur().filter(|a| mandatory_or_var(Some(a))) {
-            return o.is_variadic
+            return o.is_variadic()
                 && self.opt_args.variadic_count > 0
-                && o.options_can_break_variadic != Some(false);
+                && o.options_can_break_variadic() != Some(false);
         }
         !self.sub_args.cur().is_some_and(|s| {
-            s.is_variadic
+            s.is_variadic()
                 && self.sub_args.variadic_count > 0
-                && s.options_can_break_variadic == Some(false)
+                && s.options_can_break_variadic() == Some(false)
         })
     }
 
     /// `options[flag] || persistentOptions[flag]`.
     fn find_option(&self, flag: &str) -> Option<Rc<SpecOption>> {
-        match self.completion.opt_index.get(flag) {
-            Some(&(false, i)) => self.completion.options.get(i).cloned(),
+        match self.completion.opt_index().get(flag) {
+            Some(&(false, i)) => self.completion.options().get(i).cloned(),
             _ => self
                 .persistent
                 .iter()
-                .find(|o| o.names.iter().any(|n| n == flag))
+                .find(|o| o.names().iter().any(|n| n == flag))
                 .cloned(),
         }
     }
@@ -764,21 +764,21 @@ fn subcommand(st: &State, token: &str, fin: bool) -> Option<State> {
     }
     let child = st
         .completion
-        .subcommands
-        .get(*st.completion.sub_index.get(token)?)?
+        .subcommands()
+        .get(*st.completion.sub_index().get(token)?)?
         .clone();
     let mut s = st.clone();
     s.annotations.push(ann(AnnKind::Subcommand, token));
     if fin {
         return Some(s); // siblings stay suggestable
     }
-    if child.has_directives {
-        s.directives = child.directives.clone();
+    if child.has_directives() {
+        s.directives = child.directives().clone();
     }
-    s.persistent.extend(child.persistent.iter().cloned());
+    s.persistent.extend(child.persistent().iter().cloned());
     s.passed.clear();
     s.opt_args = ArgState::default();
-    s.sub_args = ArgState::new(&child.args);
+    s.sub_args = ArgState::new(child.args());
     s.path.push(child.clone());
     s.completion = child;
     Some(s)
@@ -786,11 +786,11 @@ fn subcommand(st: &State, token: &str, fin: bool) -> Option<State> {
 
 fn option(st: &State, flag: &str, fin: bool) -> Option<State> {
     let o = st.find_option(flag)?;
-    if let Repeatability::Times(n) = o.is_repeatable {
+    if let Repeatability::Times(n) = o.is_repeatable() {
         let count = st
             .passed
             .iter()
-            .filter(|p| p.names.iter().any(|x| o.names.contains(x)))
+            .filter(|p| p.names().iter().any(|x| o.names().contains(x)))
             .count();
         if count >= n as usize {
             return None;
@@ -799,7 +799,7 @@ fn option(st: &State, flag: &str, fin: bool) -> Option<State> {
     let mut s = st.clone();
     s.annotations.push(ann(AnnKind::Option, flag));
     if !fin {
-        s.opt_args = ArgState::new(&o.args);
+        s.opt_args = ArgState::new(o.args());
         s.passed.push(o);
     }
     Some(s)
@@ -871,7 +871,7 @@ fn option_or_chain(st: &State, token: &str, fin: bool) -> Option<State> {
         }
         let mut s = option(st, token, fin)?;
         let o = st.find_option(token)?;
-        if o.requires_equals || o.requires_separator.is_some() {
+        if o.requires_equals() || o.requires_separator().is_some() {
             s.opt_args = ArgState::default(); // the next word is not its value
         }
         return Some(s);
@@ -1061,7 +1061,7 @@ impl ParseCaches {
         let cache_key = key(loc);
         let mut st = State::initial(spec, &texts[0], name, texts.clone());
         let mut cur = cmd.clone();
-        let root_ls = st.completion.load_spec.clone();
+        let root_ls = st.completion.load_spec().clone();
         if let Some(nested) = self.apply_load_spec(
             &mut st, root_ls, 0, None, &cur, start, cwd, dev, host, depth,
         )? {
@@ -1070,7 +1070,7 @@ impl ParseCaches {
         let mut substituted: HashSet<String> = HashSet::new();
         let mut i = 1;
         while i < cur.tokens.len() - start {
-            if st.completion.generate_spec.is_some() {
+            if st.completion.generate_spec().is_some() {
                 let tokens: Vec<String> =
                     cur.tokens[start..].iter().map(|t| t.text.clone()).collect();
                 st = self.generate_spec(st, &tokens, dev, host)?;
@@ -1092,7 +1092,7 @@ impl ParseCaches {
             let mut alias_err = None;
             if let Some(alias) = last_arg
                 .as_ref()
-                .and_then(|a| a.alias_directive.clone())
+                .and_then(|a| a.alias_directive().clone())
                 .filter(|_| last_type == last_kind && !substituted.contains(&token))
             {
                 match self.substitute_alias(&cur, start + i, &token, &alias, host) {
@@ -1109,20 +1109,20 @@ impl ParseCaches {
                 }
             }
             let mut ls = if last_type == AnnKind::Subcommand {
-                st.completion.load_spec.clone()
+                st.completion.load_spec().clone()
             } else {
                 None
             };
             if let Some(a) = last_arg.filter(|_| last_type == last_kind) {
-                if a.load_spec.is_some() {
-                    ls = a.load_spec.clone();
-                } else if a.is_command || a.is_script {
+                if a.load_spec().is_some() {
+                    ls = a.load_spec().clone();
+                } else if a.is_command() || a.is_script() {
                     ls = Some(SpecLoadDirective::Locations(vec![spec_location(
                         &token,
                         cwd,
-                        Some(a.is_script),
+                        Some(a.is_script()),
                     )]));
-                } else if let Some(prefix) = &a.is_module {
+                } else if let Some(prefix) = a.is_module() {
                     ls = Some(SpecLoadDirective::Locations(vec![SpecLocation::Global {
                         name: format!("{prefix}{token}"),
                     }]));
@@ -1216,13 +1216,13 @@ impl ParseCaches {
             }
             Some(SpecLoadDirective::Inline(sub)) => {
                 // ponytail: parserDirectives merge per object, not per field (4 inline specs upstream).
-                if sub.has_directives {
-                    st.directives = sub.directives.clone();
+                if sub.has_directives() {
+                    st.directives = sub.directives().clone();
                 }
-                st.persistent = sub.persistent.clone();
+                st.persistent = sub.persistent().clone();
                 st.opt_args = ArgState::default();
                 st.passed.clear();
-                st.sub_args = ArgState::new(&sub.args);
+                st.sub_args = ArgState::new(sub.args());
                 st.entered_sub_args = false;
                 st.set_completion(sub);
                 Ok(None)
@@ -1240,10 +1240,10 @@ impl ParseCaches {
         dev: bool,
         host: &mut dyn Host,
     ) -> Result<State, ParseError> {
-        let Some(f) = st.completion.generate_spec else {
+        let Some(f) = st.completion.generate_spec() else {
             return Ok(st);
         };
-        let cache_key = match &st.completion.generate_spec_cache_key {
+        let cache_key = match st.completion.generate_spec_cache_key() {
             Some(TextOrFunction::Str(k)) => Some(k.clone()),
             Some(TextOrFunction::Fn(kf)) => match host.call(
                 *kf,
@@ -1281,25 +1281,13 @@ impl ParseCaches {
                 }
             }
         };
-        let mut c = (*st.completion).clone();
-        // Object-merge by name, generated wins (later entries win in `reindex`; fully shadowed ones are dropped).
-        fn merge<T>(base: &[Rc<T>], generator: &[Rc<T>], names: fn(&T) -> &[String]) -> Vec<Rc<T>> {
-            let shadowed: HashSet<&String> = generator.iter().flat_map(|g| names(g)).collect();
-            let kept = base
-                .iter()
-                .filter(|b| !names(b).iter().all(|n| shadowed.contains(n)));
-            kept.chain(generator).cloned().collect()
+        let args_were_empty = st.completion.args().is_empty();
+        let c = st.completion.merged_with_generated(&generator);
+        if args_were_empty {
+            st.sub_args = ArgState::new(c.args());
         }
-        c.subcommands = merge(&c.subcommands, &generator.subcommands, |s| &s.names);
-        c.options = merge(&c.options, &generator.options, |o| &o.names);
-        c.persistent = merge(&c.persistent, &generator.persistent, |o| &o.names);
-        if c.args.is_empty() {
-            c.args = generator.args.clone();
-            st.sub_args = ArgState::new(&c.args);
-        }
-        c.reindex();
         st.persistent = generator
-            .persistent
+            .persistent()
             .iter()
             .chain(&st.persistent)
             .cloned()

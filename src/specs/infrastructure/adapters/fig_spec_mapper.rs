@@ -99,32 +99,33 @@ fn location(v: &Value) -> Option<SpecLocation> {
 }
 
 fn subcommand(v: &Value) -> Subcommand {
-    let mut sc = Subcommand {
-        names: strs(v.get("name")),
-        description: s(v, "description"),
-        display_name: s(v, "displayName"),
-        insert_value: s(v, "insertValue"),
-        icon: s(v, "icon"),
-        priority: v.get("priority").and_then(Value::as_f64),
-        hidden: b(v, "hidden"),
-        is_dangerous: b(v, "isDangerous"),
-        subcommands: objects(v.get("subcommands"))
-            .map(|x| Rc::new(subcommand(x)))
-            .collect(),
-        args: args(v.get("args")),
-        load_spec: v.get("loadSpec").and_then(load_spec),
-        generate_spec: v.get("generateSpec").and_then(fn_id),
-        generate_spec_cache_key: v.get("generateSpecCacheKey").and_then(str_or_fn),
-        additional_suggestions: items(v.get("additionalSuggestions"))
-            .filter_map(suggestion_from_json)
-            .collect(),
-        filter_strategy: strategy(v),
-        requires_subcommand: v.get("requiresSubcommand").and_then(Value::as_bool),
-        ..Default::default()
-    };
+    let mut sc = Subcommand::default()
+        .with_names(strs(v.get("name")))
+        .with_description(s(v, "description"))
+        .with_display_name(s(v, "displayName"))
+        .with_insert_value(s(v, "insertValue"))
+        .with_icon(s(v, "icon"))
+        .with_priority(v.get("priority").and_then(Value::as_f64))
+        .with_hidden(b(v, "hidden"))
+        .with_is_dangerous(b(v, "isDangerous"))
+        .with_subcommands(
+            objects(v.get("subcommands"))
+                .map(|x| Rc::new(subcommand(x)))
+                .collect(),
+        )
+        .with_args(args(v.get("args")))
+        .with_load_spec(v.get("loadSpec").and_then(load_spec))
+        .with_generate_spec(v.get("generateSpec").and_then(fn_id))
+        .with_generate_spec_cache_key(v.get("generateSpecCacheKey").and_then(str_or_fn))
+        .with_additional_suggestions(
+            items(v.get("additionalSuggestions"))
+                .filter_map(suggestion_from_json)
+                .collect(),
+        )
+        .with_filter_strategy(strategy(v))
+        .with_requires_subcommand(v.get("requiresSubcommand").and_then(Value::as_bool));
     if let Some(d) = v.get("parserDirectives").filter(|d| d.is_object()) {
-        sc.has_directives = true;
-        sc.directives = ParserDirectives::default()
+        let directives = ParserDirectives::default()
             .with_flags_posix_noncompliant(b(d, "flagsArePosixNoncompliant"))
             .with_options_must_precede_args(b(d, "optionsMustPrecedeArguments"))
             // The separators form a set: a string is a set of chars.
@@ -133,46 +134,48 @@ fn subcommand(v: &Value) -> Subcommand {
                 Some(Value::Array(_)) => strs(d.get("optionArgSeparators")),
                 _ => vec!["=".into()],
             });
+        sc = sc.with_directives(directives);
     }
+    let (mut persistent, mut options) = (Vec::new(), Vec::new());
     for o in objects(v.get("options")).map(option) {
-        if o.is_persistent {
-            sc.persistent.push(Rc::new(o));
+        if o.is_persistent() {
+            persistent.push(Rc::new(o));
         } else {
-            sc.options.push(Rc::new(o));
+            options.push(Rc::new(o));
         }
     }
+    sc = sc.with_persistent(persistent).with_options(options);
     sc.reindex();
     sc
 }
 
 fn option(v: &Value) -> SpecOption {
-    SpecOption {
-        names: strs(v.get("name")),
-        description: s(v, "description"),
-        display_name: s(v, "displayName"),
-        insert_value: s(v, "insertValue"),
-        icon: s(v, "icon"),
-        priority: v.get("priority").and_then(Value::as_f64),
-        hidden: b(v, "hidden"),
-        is_dangerous: b(v, "isDangerous"),
-        args: args(v.get("args")),
-        is_persistent: b(v, "isPersistent"),
-        is_repeatable: match v.get("isRepeatable") {
+    SpecOption::default()
+        .with_names(strs(v.get("name")))
+        .with_description(s(v, "description"))
+        .with_display_name(s(v, "displayName"))
+        .with_insert_value(s(v, "insertValue"))
+        .with_icon(s(v, "icon"))
+        .with_priority(v.get("priority").and_then(Value::as_f64))
+        .with_hidden(b(v, "hidden"))
+        .with_is_dangerous(b(v, "isDangerous"))
+        .with_args(args(v.get("args")))
+        .with_is_persistent(b(v, "isPersistent"))
+        .with_is_repeatable(match v.get("isRepeatable") {
             Some(Value::Bool(true)) => Repeatability::Unlimited,
             // Explicit `false` is enforced by the parser (absent is not): same limit as `No` for suggestions.
             Some(Value::Bool(false)) => Repeatability::Times(1),
             Some(n) if n.is_number() => Repeatability::Times(n.as_f64().unwrap_or(1.0) as u32),
             _ => Repeatability::No,
-        },
-        requires_equals: b(v, "requiresEquals"),
-        requires_separator: match v.get("requiresSeparator") {
+        })
+        .with_requires_equals(b(v, "requiresEquals"))
+        .with_requires_separator(match v.get("requiresSeparator") {
             Some(Value::String(x)) => Some(x.clone()),
             Some(Value::Bool(true)) => Some(String::new()),
             _ => None,
-        },
-        exclusive_on: strs(v.get("exclusiveOn")),
-        depends_on: strs(v.get("dependsOn")),
-    }
+        })
+        .with_exclusive_on(strs(v.get("exclusiveOn")))
+        .with_depends_on(strs(v.get("dependsOn")))
 }
 
 fn args(v: Option<&Value>) -> Vec<Rc<Arg>> {
@@ -185,34 +188,39 @@ fn arg(v: &Value) -> Arg {
     if !template.is_empty() {
         generators.insert(0, generator(&serde_json::json!({ "template": template })));
     }
-    Arg {
-        name: s(v, "name"),
-        description: s(v, "description"),
-        is_optional: b(v, "isOptional"),
-        is_variadic: b(v, "isVariadic"),
-        is_dangerous: b(v, "isDangerous"),
-        is_command: b(v, "isCommand"),
-        is_script: b(v, "isScript"),
-        is_module: s(v, "isModule"),
-        suggest_current_token: v.get("suggestCurrentToken").and_then(Value::as_bool),
-        debounce: match v.get("debounce") {
+    Arg::default()
+        .with_name(s(v, "name"))
+        .with_description(s(v, "description"))
+        .with_is_optional(b(v, "isOptional"))
+        .with_is_variadic(b(v, "isVariadic"))
+        .with_is_dangerous(b(v, "isDangerous"))
+        .with_is_command(b(v, "isCommand"))
+        .with_is_script(b(v, "isScript"))
+        .with_is_module(s(v, "isModule"))
+        .with_suggest_current_token(v.get("suggestCurrentToken").and_then(Value::as_bool))
+        .with_debounce(match v.get("debounce") {
             Some(Value::Bool(true)) => Some(200),
             Some(n) => n.as_f64().filter(|&ms| ms > 0.0).map(|ms| ms as u64),
             None => None,
-        },
-        options_can_break_variadic: v.get("optionsCanBreakVariadicArg").and_then(Value::as_bool),
-        suggestions: items(v.get("suggestions"))
-            .filter_map(suggestion_from_json)
-            .collect(),
-        generators,
-        load_spec: v.get("loadSpec").and_then(load_spec),
-        filter_strategy: strategy(v),
-        alias_directive: v
-            .get("parserDirectives")
-            .and_then(|d| d.get("alias"))
-            .and_then(str_or_fn),
-        default: s(v, "default"),
-    }
+        })
+        .with_options_can_break_variadic(
+            v.get("optionsCanBreakVariadicArg").and_then(Value::as_bool),
+        )
+        .with_suggestions(
+            items(v.get("suggestions"))
+                .filter_map(suggestion_from_json)
+                .collect(),
+        )
+        .with_generators(generators)
+        .with_load_spec(v.get("loadSpec").and_then(load_spec))
+        .with_filter_strategy(strategy(v))
+        .with_alias_directive(
+            v
+                .get("parserDirectives")
+                .and_then(|d| d.get("alias"))
+                .and_then(str_or_fn),
+        )
+        .with_default(s(v, "default"))
 }
 
 fn generator(v: &Value) -> Generator {
@@ -472,43 +480,43 @@ mod tests {
     }
 
     fn sub<'a>(s: &'a Subcommand, name: &str) -> &'a Subcommand {
-        &s.subcommands[s.sub_index[name]]
+        &s.subcommands()[s.sub_index()[name]]
     }
 
     fn opt<'a>(s: &'a Subcommand, flag: &str) -> &'a SpecOption {
-        match s.opt_index[flag] {
-            (true, i) => &s.persistent[i],
-            (false, i) => &s.options[i],
+        match s.opt_index()[flag] {
+            (true, i) => &s.persistent()[i],
+            (false, i) => &s.options()[i],
         }
     }
 
     #[test]
     fn normalise_sudo() {
         let s = fixture("sudo");
-        assert_eq!(s.names, ["sudo"]);
-        assert_eq!(s.options.len(), 3);
-        assert_eq!(opt(&s, "--group").names, ["-g", "--group"]);
+        assert_eq!(*s.names(), ["sudo"]);
+        assert_eq!(s.options().len(), 3);
+        assert_eq!(*opt(&s, "--group").names(), ["-g", "--group"]);
         assert!(std::ptr::eq(opt(&s, "-u"), opt(&s, "--user")));
-        assert_eq!(opt(&s, "-g").args[0].name.as_deref(), Some("group"));
-        assert!(opt(&s, "-h").args.is_empty());
-        assert_eq!(s.args.len(), 1);
-        assert!(s.args[0].is_command && !s.args[0].is_optional);
-        assert_eq!(s.directives, ParserDirectives::default());
-        assert!(!s.has_directives);
+        assert_eq!(opt(&s, "-g").args()[0].name().as_deref(), Some("group"));
+        assert!(opt(&s, "-h").args().is_empty());
+        assert_eq!(s.args().len(), 1);
+        assert!(s.args()[0].is_command() && !s.args()[0].is_optional());
+        assert_eq!(*s.directives(), ParserDirectives::default());
+        assert!(!s.has_directives());
     }
 
     #[test]
     fn normalise_cd_function_generator() {
         let s = fixture("cd");
-        let a = &s.args[0];
-        assert_eq!(a.filter_strategy, FilterStrategy::Fuzzy);
-        let g = &a.generators[0];
+        let a = &s.args()[0];
+        assert_eq!(a.filter_strategy(), FilterStrategy::Fuzzy);
+        let g = &a.generators()[0];
         assert_eq!(
             (g.trigger().clone(), g.get_query_term().clone(), g.custom()),
             (Some(GeneratorTrigger::Fn(0)), Some(TextOrFunction::Fn(1)), Some(2))
         );
         assert_eq!(
-            a.suggestions
+            a.suggestions()
                 .iter()
                 .map(|x| (x.names()[0].as_str(), x.hidden()))
                 .collect::<Vec<_>>(),
@@ -520,11 +528,11 @@ mod tests {
     fn normalise_templates_and_persistent() {
         let s = fixture("tailcall");
         let check = sub(&s, "check");
-        assert_eq!((check.persistent.len(), check.options.len()), (2, 1));
-        assert_eq!(check.opt_index["--schema"], (true, 1));
-        assert_eq!(check.opt_index["--format"], (false, 0));
-        assert_eq!(opt(check, "--format").args[0].suggestions.len(), 5);
-        let g = &check.args[0].generators[0];
+        assert_eq!((check.persistent().len(), check.options().len()), (2, 1));
+        assert_eq!(check.opt_index()["--schema"], (true, 1));
+        assert_eq!(check.opt_index()["--format"], (false, 0));
+        assert_eq!(opt(check, "--format").args()[0].suggestions().len(), 5);
+        let g = &check.args()[0].generators()[0];
         assert_eq!(*g.template(), ["filepaths"]);
         assert_eq!(
             (g.trigger().clone(), g.get_query_term().clone()),
@@ -533,13 +541,13 @@ mod tests {
                 Some(TextOrFunction::Str("/".into()))
             )
         );
-        assert!(check.args[0].is_variadic);
+        assert!(check.args()[0].is_variadic());
         assert_eq!(
-            *sub(&s, "start").args[0].generators[0].template(),
+            *sub(&s, "start").args()[0].generators()[0].template(),
             ["filepaths", "folders"]
         );
         assert_eq!(
-            *sub(&s, "init").args[0].generators[0].trigger(),
+            *sub(&s, "init").args()[0].generators()[0].trigger(),
             Some(GeneratorTrigger::Str("/".into()))
         );
     }
@@ -547,42 +555,42 @@ mod tests {
     #[test]
     fn normalise_requires_separator() {
         let s = fixture("do-release-upgrade");
-        assert_eq!(opt(&s, "--mode").requires_separator.as_deref(), Some(""));
-        assert_eq!(opt(&s, "-m").requires_separator, None);
-        assert!(opt(&s, "-m").hidden);
-        assert_eq!(*opt(&s, "--mode").args[0].suggestions[1].names(), ["server"]);
+        assert_eq!(opt(&s, "--mode").requires_separator().as_deref(), Some(""));
+        assert_eq!(*opt(&s, "-m").requires_separator(), None);
+        assert!(opt(&s, "-m").hidden());
+        assert_eq!(*opt(&s, "--mode").args()[0].suggestions()[1].names(), ["server"]);
     }
 
     #[test]
     fn normalise_git_like() {
         let s = fixture("git_min");
-        assert_eq!(s.generate_spec, Some(7));
-        assert_eq!(s.args[0].alias_directive, Some(TextOrFunction::Fn(8)));
-        assert!(s.has_directives);
-        assert_eq!(*s.directives.option_arg_separators(), ["=", ":"]); // a string is a set of chars
-        let short = &s.additional_suggestions[0];
+        assert_eq!(s.generate_spec(), Some(7));
+        assert_eq!(*s.args()[0].alias_directive(), Some(TextOrFunction::Fn(8)));
+        assert!(s.has_directives());
+        assert_eq!(*s.directives().option_arg_separators(), ["=", ":"]); // a string is a set of chars
+        let short = &s.additional_suggestions()[0];
         assert_eq!(
             (short.kind(), short.insert_value().as_deref()),
             (Some(SuggestionKind::Shortcut), Some("commit -m '{cursor}'"))
         );
-        assert_eq!(opt(&s, "-C").is_repeatable, Repeatability::Unlimited);
-        assert_eq!(opt(&s, "-c").is_repeatable, Repeatability::Times(3));
-        assert_eq!(opt(&s, "--version").is_repeatable, Repeatability::No);
-        assert!(opt(&s, "--no-pager").is_persistent);
-        assert_eq!(s.opt_index["--no-pager"], (true, 0));
+        assert_eq!(opt(&s, "-C").is_repeatable(), Repeatability::Unlimited);
+        assert_eq!(opt(&s, "-c").is_repeatable(), Repeatability::Times(3));
+        assert_eq!(opt(&s, "--version").is_repeatable(), Repeatability::No);
+        assert!(opt(&s, "--no-pager").is_persistent());
+        assert_eq!(s.opt_index()["--no-pager"], (true, 0));
 
         let commit = sub(&s, "ci");
         assert!(std::ptr::eq(commit, sub(&s, "commit")));
-        assert_eq!(opt(commit, "--amend").is_repeatable, Repeatability::Times(1)); // explicit false
-        assert_eq!(opt(commit, "--amend").exclusive_on, ["--no-edit"]);
+        assert_eq!(opt(commit, "--amend").is_repeatable(), Repeatability::Times(1)); // explicit false
+        assert_eq!(*opt(commit, "--amend").exclusive_on(), ["--no-edit"]);
         assert_eq!(
-            opt(commit, "--pathspec-file-nul").depends_on,
+            *opt(commit, "--pathspec-file-nul").depends_on(),
             ["--pathspec-from-file"]
         );
-        assert_eq!(opt(commit, "-m").args[0].debounce, Some(200));
-        let a = &commit.args[0];
-        assert_eq!(a.options_can_break_variadic, Some(false));
-        let g = &a.generators[0];
+        assert_eq!(opt(commit, "-m").args()[0].debounce(), Some(200));
+        let a = &commit.args()[0];
+        assert_eq!(a.options_can_break_variadic(), Some(false));
+        let g = &a.generators()[0];
         assert_eq!(
             *g.script(),
             Some(GeneratorScript::Argv(vec![
@@ -605,7 +613,7 @@ mod tests {
         );
 
         let co = sub(&s, "checkout");
-        let (g0, g1) = (&co.args[0].generators[0], &co.args[0].generators[1]);
+        let (g0, g1) = (&co.args()[0].generators()[0], &co.args()[0].generators()[1]);
         assert_eq!(
             (g0.script().clone(), g0.trigger().clone(), g0.script_timeout()),
             (
@@ -623,15 +631,15 @@ mod tests {
             ),
             (Some(12), Some(GeneratorTrigger::Change), Some(13))
         );
-        assert_eq!(co.args[0].suggest_current_token, Some(true));
-        assert_eq!(*co.args[1].generators[0].template(), ["filepaths"]);
+        assert_eq!(co.args()[0].suggest_current_token(), Some(true));
+        assert_eq!(*co.args()[1].generators()[0].template(), ["filepaths"]);
 
         assert!(
-            matches!(&sub(&s, "flow").load_spec, Some(SpecLoadDirective::Locations(l)) if l == &[SpecLocation::Global { name: "git-flow".into() }])
+            matches!(sub(&s, "flow").load_spec(), Some(SpecLoadDirective::Locations(l)) if l == &[SpecLocation::Global { name: "git-flow".into() }])
         );
-        let help = &sub(&s, "help").args[0];
+        let help = &sub(&s, "help").args()[0];
         assert_eq!(
-            (help.default.as_deref(), help.generators[0].trigger().clone()),
+            (help.default_value().as_deref(), help.generators()[0].trigger().clone()),
             (Some("git"), None)
         );
     }
@@ -641,21 +649,21 @@ mod tests {
         let s = fixture("cmd_spec");
         let man = sub(&s, "man");
         assert_eq!(
-            (man.args.len(), man.options.len(), man.subcommands.len()),
+            (man.args().len(), man.options().len(), man.subcommands().len()),
             (2, 10, 4)
         );
-        assert_eq!(opt(man, "--multiple").args.len(), 2);
+        assert_eq!(opt(man, "--multiple").args().len(), 2);
         assert_eq!(
-            opt(man, "--req-sep").requires_separator.as_deref(),
+            opt(man, "--req-sep").requires_separator().as_deref(),
             Some(":")
         );
-        assert!(opt(man, "--req-eq").requires_equals);
-        assert_eq!(*sub(&s, "oas").directives.option_arg_separators(), ["=", ":"]);
-        assert!(sub(&s, "pnf").directives.flags_posix_noncompliant());
-        assert!(sub(&s, "ompa").directives.options_must_precede_args());
-        assert_eq!(sub(&s, "generateSpec").generate_spec, Some(1));
+        assert!(opt(man, "--req-eq").requires_equals());
+        assert_eq!(*sub(&s, "oas").directives().option_arg_separators(), ["=", ":"]);
+        assert!(sub(&s, "pnf").directives().flags_posix_noncompliant());
+        assert!(sub(&s, "ompa").directives().options_must_precede_args());
+        assert_eq!(sub(&s, "generateSpec").generate_spec(), Some(1));
         assert_eq!(
-            sub(&s, "module").args[0].is_module.as_deref(),
+            sub(&s, "module").args()[0].is_module().as_deref(),
             Some("python/")
         );
     }
@@ -672,15 +680,15 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            (s.sub_index["a"], s.sub_index["b"], s.subcommands.len()),
+            (s.sub_index()["a"], s.sub_index()["b"], s.subcommands().len()),
             (0, 1, 2)
         ); // later wins
-        assert_eq!(s.opt_index["-o"], (false, 0)); // options win over persistent
-        assert_eq!((s.args.len(), s.args[0].debounce), (1, Some(50)));
+        assert_eq!(s.opt_index()["-o"], (false, 0)); // options win over persistent
+        assert_eq!((s.args().len(), s.args()[0].debounce()), (1, Some(50)));
         assert!(
-            matches!(&s.args[0].load_spec, Some(SpecLoadDirective::Inline(i)) if i.names == ["inner"] && i.args.len() == 1)
+            matches!(s.args()[0].load_spec(), Some(SpecLoadDirective::Inline(i)) if *i.names() == ["inner"] && i.args().len() == 1)
         );
-        assert!(matches!(s.load_spec, Some(SpecLoadDirective::Fn(4))));
+        assert!(matches!(s.load_spec(), Some(SpecLoadDirective::Fn(4))));
     }
 
     #[test]
@@ -745,7 +753,7 @@ mod tests {
 
         let s = normalise(&spec).unwrap();
 
-        let generators = &s.args[0].generators;
+        let generators = s.args()[0].generators();
         let Some(GeneratorScript::Object(object)) = generators[0].script() else {
             panic!("not an object script: {:?}", generators[0].script());
         };

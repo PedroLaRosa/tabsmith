@@ -464,7 +464,7 @@ impl Engine {
         }
         let strategy = arg
             .as_ref()
-            .map_or(pr.completion.filter_strategy, |a| a.filter_strategy);
+            .map_or(pr.completion.filter_strategy(), |a| a.filter_strategy());
         let fuzzy = match strategy {
             FilterStrategy::Prefix => false,
             FilterStrategy::Fuzzy => true,
@@ -475,7 +475,7 @@ impl Engine {
             env: env.clone(),
             shell: req.shell.name().into(),
             search_term: pr.search_term.clone(),
-            is_dangerous: arg.as_ref().is_some_and(|a| a.is_dangerous),
+            is_dangerous: arg.as_ref().is_some_and(|a| a.is_dangerous()),
         };
         let (path, pathext) = (env_var(env, "PATH"), env_var(env, "PATHEXT"));
         let queries = self.queries(&pr, req.shell, js)?;
@@ -527,8 +527,8 @@ impl Engine {
         let Some(arg) = &pr.current_arg else {
             return Some(Vec::new());
         };
-        let mut out = Vec::with_capacity(arg.generators.len());
-        for g in &arg.generators {
+        let mut out = Vec::with_capacity(arg.generators().len());
+        for g in arg.generators() {
             out.push(if is_path_template(g) {
                 Query::Path {
                     backslash: shell == Shell::Pwsh,
@@ -567,7 +567,7 @@ impl Engine {
             _ => false,
         };
         let (new, old) = (pr.search_term.as_str(), self.prev_search.as_str());
-        let gens: &[Generator] = arg.as_deref().map_or(&[], |a| &a.generators);
+        let gens: &[Generator] = arg.as_deref().map_or(&[], |a| a.generators());
         let mut fire = Vec::with_capacity(gens.len());
         for (i, g) in gens.iter().enumerate() {
             fire.push(if !same || i >= self.slots.len() {
@@ -576,7 +576,7 @@ impl Engine {
                 suggest::dir_changed(new, old, ctx.shell == Shell::Pwsh.name())
             } else {
                 match g.trigger() {
-                    None => arg.as_ref().is_some_and(|a| a.debounce.is_some()),
+                    None => arg.as_ref().is_some_and(|a| a.debounce().is_some()),
                     Some(GeneratorTrigger::Fn(f)) => match js.call(
                         *f,
                         vec![JsArg::Json(json!(new)), JsArg::Json(json!(old))],
@@ -625,7 +625,7 @@ impl Engine {
             slot.gen_id = self.next_gen;
             slot.loading = true;
             triggered.push(slot.key);
-            let debounce = arg.debounce.map(|ms| if ms > 0 { ms } else { 200 });
+            let debounce = arg.debounce().map(|ms| if ms > 0 { ms } else { 200 });
             // ponytail: one deadline for the whole run (custom generators may exec several times)
             let budget =
                 debounce.unwrap_or(0) + 2 * floor.max(gens[i].script_timeout().unwrap_or(0)) + 1000;
@@ -693,7 +693,7 @@ impl Engine {
     /// First step after the (optional) debounce: template, script or custom.
     fn begin(&mut self, run: &mut Run, js: &mut Js) -> Outcome {
         let arg = run.arg.clone();
-        let g = &arg.generators[run.idx];
+        let g = &arg.generators()[run.idx];
         if !g.template().is_empty() {
             let mut items = Vec::new();
             let files = g.template().iter().any(|t| t == "filepaths");
@@ -891,7 +891,7 @@ impl Engine {
             return Outcome::Done(Vec::new()); // superseded (e.g. after a debounce): abandon
         }
         let arg = run.arg.clone();
-        let g = &arg.generators[run.idx];
+        let g = &arg.generators()[run.idx];
         match run.step {
             Step::Debounce => self.begin(run, js),
             Step::Script => self.script_input(run, g, v, js),
@@ -1012,7 +1012,7 @@ impl Engine {
             suggest_current_token: pr
                 .current_arg
                 .as_ref()
-                .and_then(|a| a.suggest_current_token)
+                .and_then(|a| a.suggest_current_token())
                 .unwrap_or_else(|| s.bool(AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN)),
         };
         let cmd = pr.tokens.get(pr.command_index).map_or("", String::as_str); // D21
@@ -1049,8 +1049,8 @@ impl Engine {
             command_index: pr.command_index,
             arg_key: cur.arg_key,
             current_arg: pr.current_arg.as_ref().map(|a| ArgInfo {
-                name: a.name.clone().unwrap_or_default(),
-                description: a.description.clone().unwrap_or_default(),
+                name: a.name().clone().unwrap_or_default(),
+                description: a.description().clone().unwrap_or_default(),
             }),
             search_term: pr.search_term.clone(),
             triggered_generators: if phase == Phase::Parse {

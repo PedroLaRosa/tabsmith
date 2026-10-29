@@ -107,45 +107,45 @@ impl Sugg {
     }
 
     fn from_sub(s: &Subcommand) -> Sugg {
-        let mandatory = s.args.first().is_some_and(|a| !a.is_optional);
+        let mandatory = s.args().first().is_some_and(|a| !a.is_optional());
         Sugg {
-            names: s.names.clone(),
-            display_name: s.display_name.clone(),
-            insert_value: s.insert_value.clone(),
-            description: s.description.clone(),
-            icon: s.icon.clone(),
-            priority: s.priority.unwrap_or(0.0),
-            hidden: s.hidden,
-            is_dangerous: s.is_dangerous,
-            args: s.args.clone(),
+            names: s.names().clone(),
+            display_name: s.display_name().clone(),
+            insert_value: s.insert_value().clone(),
+            description: s.description().clone(),
+            icon: s.icon().clone(),
+            priority: s.priority().unwrap_or(0.0),
+            hidden: s.hidden(),
+            is_dangerous: s.is_dangerous(),
+            args: s.args().clone(),
             // SPEC §6.7.1 should_add_space
             should_add_space: mandatory
-                || s.requires_subcommand.unwrap_or(!s.subcommands.is_empty()),
+                || s.requires_subcommand().unwrap_or(!s.subcommands().is_empty()),
             ..Sugg::new("", SuggestionKind::Subcommand)
         }
     }
 
     fn from_opt(o: &SpecOption, separators: &[String]) -> Sugg {
-        let separator = if o.args.first().is_some_and(|a| a.is_optional) {
+        let separator = if o.args().first().is_some_and(|a| a.is_optional()) {
             None
         } else {
-            match &o.requires_separator {
+            match o.requires_separator() {
                 Some(s) if !s.is_empty() => Some(s.clone()),
                 Some(_) => Some(separators.first().cloned().unwrap_or_else(|| "=".into())),
-                None => o.requires_equals.then(|| "=".to_string()),
+                None => o.requires_equals().then(|| "=".to_string()),
             }
         };
         Sugg {
-            names: o.names.clone(),
-            display_name: o.display_name.clone(),
-            insert_value: o.insert_value.clone(),
-            description: o.description.clone(),
-            icon: o.icon.clone(),
-            priority: o.priority.unwrap_or(0.0),
-            hidden: o.hidden,
-            is_dangerous: o.is_dangerous,
-            args: o.args.clone(),
-            should_add_space: o.args.first().is_some_and(|a| !a.is_optional),
+            names: o.names().clone(),
+            display_name: o.display_name().clone(),
+            insert_value: o.insert_value().clone(),
+            description: o.description().clone(),
+            icon: o.icon().clone(),
+            priority: o.priority().unwrap_or(0.0),
+            hidden: o.hidden(),
+            is_dangerous: o.is_dangerous(),
+            args: o.args().clone(),
+            should_add_space: o.args().first().is_some_and(|a| !a.is_optional()),
             separator,
             ..Sugg::new("", SuggestionKind::Option)
         }
@@ -203,14 +203,14 @@ fn static_options(pr: &ParseResult) -> Vec<Sugg> {
     let passed = &pr.passed_options;
     let excluded: HashSet<&str> = passed
         .iter()
-        .flat_map(|o| o.exclusive_on.iter().map(String::as_str))
+        .flat_map(|o| o.exclusive_on().iter().map(String::as_str))
         .collect();
     let mut unmet: HashSet<&str> = passed
         .iter()
-        .flat_map(|o| o.depends_on.iter().map(String::as_str))
+        .flat_map(|o| o.depends_on().iter().map(String::as_str))
         .collect();
     for o in passed {
-        for n in &o.names {
+        for n in o.names() {
             unmet.remove(n.as_str());
         }
     }
@@ -218,20 +218,20 @@ fn static_options(pr: &ParseResult) -> Vec<Sugg> {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut out = Vec::new();
     for o in comp
-        .options
+        .options()
         .iter()
         .chain(&pr.persistent)
-        .chain(&comp.persistent)
+        .chain(comp.persistent())
     {
         // "unique": the same option may be reachable as local and inherited persistent
-        if o.names.iter().any(|n| seen.contains(n.as_str())) {
+        if o.names().iter().any(|n| seen.contains(n.as_str())) {
             continue;
         }
-        seen.extend(o.names.iter().map(String::as_str));
-        if o.names.iter().any(|n| excluded.contains(n.as_str())) {
+        seen.extend(o.names().iter().map(String::as_str));
+        if o.names().iter().any(|n| excluded.contains(n.as_str())) {
             continue;
         }
-        let limit = match o.is_repeatable {
+        let limit = match o.is_repeatable() {
             Repeatability::No | Repeatability::Times(0) => Some(1),
             Repeatability::Times(n) => Some(n as usize),
             Repeatability::Unlimited => None,
@@ -239,14 +239,14 @@ fn static_options(pr: &ParseResult) -> Vec<Sugg> {
         if let Some(limit) = limit {
             let used = passed
                 .iter()
-                .filter(|p| p.names.iter().any(|n| o.names.contains(n)))
+                .filter(|p| p.names().iter().any(|n| o.names().contains(n)))
                 .count();
             if used >= limit {
                 continue;
             }
         }
         let mut s = Sugg::from_opt(o, pr.directives.option_arg_separators());
-        if o.names.iter().any(|n| unmet.contains(n.as_str())) {
+        if o.names().iter().any(|n| unmet.contains(n.as_str())) {
             s.priority = 75.0;
         }
         out.push(s);
@@ -270,16 +270,16 @@ pub fn assemble(pr: &ParseResult, gens: &[GenView]) -> Vec<Sugg> {
     let chain = pr.option_chain.as_deref();
     let mut out = Vec::new();
     if pr.suggest_subcommands {
-        let mut subs: Vec<Sugg> = comp.subcommands.iter().map(|s| Sugg::from_sub(s)).collect();
+        let mut subs: Vec<Sugg> = comp.subcommands().iter().map(|s| Sugg::from_sub(s)).collect();
         subs.sort_by(cmp_first);
         out.extend(subs);
     }
     if pr.suggest_args {
         if let Some(arg) = &pr.current_arg {
             out.extend(
-                arg.suggestions
+                arg.suggestions()
                     .iter()
-                    .map(|s| Sugg::from_suggestion(s, arg.is_dangerous, None, Query::Term)),
+                    .map(|s| Sugg::from_suggestion(s, arg.is_dangerous(), None, Query::Term)),
             );
             for g in gens {
                 // SPEC §6.6.1: stale results of a loading generator only without getQueryTerm
@@ -294,11 +294,11 @@ pub fn assemble(pr: &ParseResult, gens: &[GenView]) -> Vec<Sugg> {
         }
     }
     let mut additional: Vec<Sugg> = comp
-        .additional_suggestions
+        .additional_suggestions()
         .iter()
         // untyped rows are not `arg`s: dropped inside an option chain (only option/arg types are kept)
         .filter(|s| chain.is_none() || s.kind().is_some())
-        .map(|s| Sugg::from_suggestion(s, comp.is_dangerous, None, Query::Term))
+        .map(|s| Sugg::from_suggestion(s, comp.is_dangerous(), None, Query::Term))
         .collect();
     additional.sort_by(cmp_first);
     out.extend(additional);
@@ -629,7 +629,7 @@ pub fn filter(list: Vec<Sugg>, search_term: &str, o: &FilterOpts) -> Vec<(Sugg, 
                 && !o.auto_exec_hidden
                 && plain
                 && (!s.is_dangerous || o.run_dangerous)
-                && s.args.first().is_none_or(|a| a.is_optional)
+                && s.args.first().is_none_or(|a| a.is_optional())
             {
                 let mut x = s.clone();
                 x.kind = SuggestionKind::AutoExecute;
@@ -992,13 +992,13 @@ pub fn insertion(s: &Sugg, c: &InsCtx) -> Insertion {
 fn args_hint(args: &[Rc<Arg>]) -> String {
     args.iter()
         .filter_map(|a| {
-            let n = a.name.as_deref().filter(|n| !n.is_empty())?;
-            let n = if a.is_variadic {
+            let n = a.name().as_deref().filter(|n| !n.is_empty())?;
+            let n = if a.is_variadic() {
                 format!("{n}...")
             } else {
                 n.to_string()
             };
-            Some(if a.is_optional {
+            Some(if a.is_optional() {
                 format!("[{n}]")
             } else {
                 format!("<{n}>")
@@ -1333,14 +1333,14 @@ pub fn help_items(pr: &ParseResult) -> Vec<SpecSuggestion> {
     let n = pr.path.len();
     let (level, exclude): (&Subcommand, &[String]) = match trig {
         Some(a) if a.kind == AnnKind::Subcommand && n >= 2 => {
-            (&pr.path[n - 2], &pr.path[n - 1].names)
+            (&pr.path[n - 2], pr.path[n - 1].names())
         }
         _ => (pr.path.last().unwrap_or(&pr.completion), &[]),
     };
     level
-        .subcommands
+        .subcommands()
         .iter()
-        .flat_map(|s| s.names.iter())
+        .flat_map(|s| s.names().iter())
         .filter(|n| !exclude.contains(n))
         .map(|n| {
             SpecSuggestion::default()
@@ -1473,25 +1473,15 @@ mod tests {
     }
 
     fn sub(names: &[&str]) -> Rc<Subcommand> {
-        Rc::new(Subcommand {
-            names: names.iter().map(|s| s.to_string()).collect(),
-            ..Default::default()
-        })
+        Rc::new(Subcommand::default().with_names(names.iter().map(|s| s.to_string()).collect()))
     }
 
     fn opt(names: &[&str]) -> SpecOption {
-        SpecOption {
-            names: names.iter().map(|s| s.to_string()).collect(),
-            ..Default::default()
-        }
+        SpecOption::default().with_names(names.iter().map(|s| s.to_string()).collect())
     }
 
     fn arg(optional: bool) -> Rc<Arg> {
-        Rc::new(Arg {
-            name: Some("x".into()),
-            is_optional: optional,
-            ..Default::default()
-        })
+        Rc::new(Arg::default().with_name(Some("x".into())).with_is_optional(optional))
     }
 
     fn names(v: &[(Sugg, bool)]) -> Vec<String> {
@@ -1780,31 +1770,23 @@ mod tests {
 
     #[test]
     fn assembly_options_rules() {
-        let excl = Rc::new(SpecOption {
-            exclusive_on: vec!["-b".into()],
-            depends_on: vec!["-c".into()],
-            ..opt(&["-a"])
-        });
-        let comp = Subcommand {
-            subcommands: vec![sub(&["zeta"]), sub(&["Alpha"]), sub(&["beta"])],
-            options: vec![
+        let excl = Rc::new(
+            opt(&["-a"])
+                .with_exclusive_on(vec!["-b".into()])
+                .with_depends_on(vec!["-c".into()]),
+        );
+        let comp = Subcommand::default()
+            .with_subcommands(vec![sub(&["zeta"]), sub(&["Alpha"]), sub(&["beta"])])
+            .with_options(vec![
                 excl.clone(),
                 Rc::new(opt(&["-b"])),
                 Rc::new(opt(&["-c"])),
-                Rc::new(SpecOption {
-                    is_repeatable: Repeatability::Unlimited,
-                    ..opt(&["-v"])
-                }),
-            ],
-            ..Default::default()
-        };
+                Rc::new(opt(&["-v"]).with_is_repeatable(Repeatability::Unlimited)),
+            ]);
         let mut pr = pr_for(comp, "");
         pr.passed_options = vec![
             excl,
-            Rc::new(SpecOption {
-                is_repeatable: Repeatability::Unlimited,
-                ..opt(&["-v"])
-            }),
+            Rc::new(opt(&["-v"]).with_is_repeatable(Repeatability::Unlimited)),
         ];
         let out = assemble(&pr, &[]);
         let got: Vec<(&str, f64)> = out.iter().map(|s| (s.first(), s.priority)).collect();
@@ -1824,16 +1806,14 @@ mod tests {
     #[test]
     fn option_chain_rewriting() {
         let l = Rc::new(opt(&["-l"]));
-        let comp = Subcommand {
-            options: vec![
+        let comp = Subcommand::default()
+            .with_options(vec![
                 l.clone(),
                 Rc::new(opt(&["-a", "--all"])),
                 Rc::new(opt(&["-h"])),
                 Rc::new(opt(&["--long"])),
-            ],
-            subcommands: vec![sub(&["sub"])],
-            ..Default::default()
-        };
+            ])
+            .with_subcommands(vec![sub(&["sub"])]);
         let mut pr = pr_for(comp, "-la");
         pr.passed_options = vec![l];
         pr.option_chain = Some("-la".into());
@@ -2351,16 +2331,13 @@ mod tests {
         let mut s = Sugg::new("-m", SuggestionKind::Option);
         s.names.push("--message".into());
         s.args = vec![
-            Rc::new(Arg {
-                name: Some("msg".into()),
-                ..Default::default()
-            }),
-            Rc::new(Arg {
-                name: Some("more".into()),
-                is_optional: true,
-                is_variadic: true,
-                ..Default::default()
-            }),
+            Rc::new(Arg::default().with_name(Some("msg".into()))),
+            Rc::new(
+                Arg::default()
+                    .with_name(Some("more".into()))
+                    .with_is_optional(true)
+                    .with_is_variadic(true),
+            ),
         ];
         let it = to_item(s, true, &ctx("--m", "--m", Shell::Bash));
         assert_eq!(it.title(), "-m, --message");
@@ -2510,10 +2487,10 @@ mod tests {
     #[test]
     fn help_template() {
         let help = sub(&["help", "h"]);
-        let root = Rc::new(Subcommand {
-            subcommands: vec![sub(&["add"]), help.clone(), sub(&["commit", "ci"])],
-            ..Default::default()
-        });
+        let root = Rc::new(
+            Subcommand::default()
+                .with_subcommands(vec![sub(&["add"]), help.clone(), sub(&["commit", "ci"])]),
+        );
         let mut pr = pr_for(Subcommand::default(), "");
         pr.completion = help.clone();
         pr.path = vec![root, help];

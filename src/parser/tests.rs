@@ -54,16 +54,16 @@ fn fixture(name: &str) -> Rc<Subcommand> {
 }
 
 fn sub(s: &Rc<Subcommand>, name: &str) -> Rc<Subcommand> {
-    s.subcommands[s.sub_index[name]].clone()
+    s.subcommands()[s.sub_index()[name]].clone()
 }
 
 fn pos(s: &Rc<Subcommand>, i: usize) -> Option<Rc<Arg>> {
-    Some(s.args[i].clone())
+    Some(s.args()[i].clone())
 }
 
 fn oarg(s: &Rc<Subcommand>, flag: &str) -> Option<Rc<Arg>> {
-    let (_, i) = s.opt_index[flag];
-    Some(s.options[i].args[0].clone())
+    let (_, i) = s.opt_index()[flag];
+    Some(s.options()[i].args()[0].clone())
 }
 
 fn flags(r: &ParseResult) -> u8 {
@@ -234,7 +234,7 @@ fn parse_arguments_table() {
         assert!(
             Rc::ptr_eq(&r.completion, comp),
             "{buf:?}: completion {:?}",
-            r.completion.names
+            r.completion.names()
         );
         assert_eq!(
             ptr(&r.current_arg),
@@ -264,7 +264,7 @@ fn result_fields() {
     assert_eq!(
         r.path
             .iter()
-            .map(|s| s.names[0].as_str())
+            .map(|s| s.names()[0].as_str())
             .collect::<Vec<_>>(),
         ["cmd", "man"]
     );
@@ -273,7 +273,7 @@ fn result_fields() {
         ("cmd", 0, false)
     );
     assert_eq!(r.tokens, ["cmd", "man", "-m", "x", ""]);
-    assert_eq!(r.passed_options[0].names, ["-m", "--man"]);
+    assert_eq!(*r.passed_options[0].names(), ["-m", "--man"]);
     let kinds: Vec<AnnKind> = r.annotations.iter().map(|a| a.kind).collect();
     assert_eq!(
         kinds,
@@ -437,7 +437,7 @@ fn sudo_git_command_index() {
         (3, "git", "ch")
     );
     assert_eq!(r.tokens[r.command_index..], ["git", "ch"]);
-    assert!(r.completion.names == ["git"] && r.suggest_subcommands); // a generateSpec merge makes a new level
+    assert!(*r.completion.names() == ["git"] && r.suggest_subcommands); // a generateSpec merge makes a new level
 }
 
 #[test]
@@ -465,12 +465,12 @@ fn generate_spec_merge() {
     assert_eq!(*calls.borrow(), [json!(["cmd", "generateSpec", ""])]);
     assert_eq!((flags(&r), r.search_term.as_str()), (ANY, ""));
     let comp = &r.completion;
-    assert_eq!(comp.names, ["generateSpec"]);
+    assert_eq!(*comp.names(), ["generateSpec"]);
     assert!(["these", "are", "generated", "subcommands"]
         .iter()
-        .all(|n| comp.sub_index.contains_key(*n)));
-    assert!(comp.opt_index.contains_key("--anOpt") && comp.opt_index.contains_key("--genOpt"));
-    assert_eq!(comp.args.len(), 1);
+        .all(|n| comp.sub_index().contains_key(*n)));
+    assert!(comp.opt_index().contains_key("--anOpt") && comp.opt_index().contains_key("--genOpt"));
+    assert_eq!(comp.args().len(), 1);
     assert_eq!(ptr(&r.current_arg), ptr(&pos(comp, 0)));
     assert!(Rc::ptr_eq(r.path.last().unwrap(), comp));
 
@@ -520,16 +520,16 @@ fn persistent_options_inherit_without_mutation() {
     }));
     let mut m = Mock::with(&[("p", &p)]);
     let r = run(&mut m, "p sub --verbose ").unwrap();
-    assert_eq!(r.passed_options[0].names, ["--verbose"]);
+    assert_eq!(*r.passed_options[0].names(), ["--verbose"]);
     let r = run(&mut m, "p sub -x ").unwrap();
-    assert_eq!(r.current_arg.unwrap().name.as_deref(), Some("parent-x")); // parent wins
+    assert_eq!(r.current_arg.unwrap().name().as_deref(), Some("parent-x")); // parent wins
     assert!(run(&mut m, "p sub --root-only ").is_err());
     let r = run(&mut m, "p sub leaf -x ").unwrap();
-    assert_eq!(r.current_arg.unwrap().name.as_deref(), Some("parent-x"));
+    assert_eq!(r.current_arg.unwrap().name().as_deref(), Some("parent-x"));
     assert_eq!(r.persistent.len(), 3);
-    assert_eq!(sub(&p, "sub").persistent.len(), 1);
+    assert_eq!(sub(&p, "sub").persistent().len(), 1);
     let r = run(&mut m, "p sub leaf --verbose ").unwrap();
-    assert_eq!(r.current_arg.unwrap().name.as_deref(), Some("leafarg"));
+    assert_eq!(r.current_arg.unwrap().name().as_deref(), Some("leafarg"));
 }
 
 #[test]
@@ -586,8 +586,8 @@ fn inline_and_function_load_specs() {
     assert!(r.current_arg.is_none()); // `foo` took the only arg
 
     let r = run(&mut m, "y inl ").unwrap();
-    assert_eq!(r.completion.names, ["inner"]);
-    assert_eq!(r.current_arg.unwrap().name.as_deref(), Some("a"));
+    assert_eq!(*r.completion.names(), ["inner"]);
+    assert_eq!(r.current_arg.unwrap().name().as_deref(), Some("a"));
     assert!(r.directives.options_must_precede_args());
 }
 
@@ -608,7 +608,7 @@ fn git_alias_directive() {
     assert_eq!(r.tokens, ["git", "checkout", ""]);
     assert!(Rc::ptr_eq(&r.completion, &sub(&git, "checkout")));
     assert_eq!(
-        r.current_arg.unwrap().name.as_deref(),
+        r.current_arg.unwrap().name().as_deref(),
         Some("branch, file, tag or commit")
     );
 
@@ -922,7 +922,7 @@ fn spec_identity_survives_dev_reload_and_cache_clear() {
     )
     .unwrap();
     let d = p.load_spec(&loc, &ctx, &mut js).unwrap().unwrap();
-    assert_eq!(d.args[0].name.as_deref(), Some("target"));
+    assert_eq!(d.args()[0].name().as_deref(), Some("target"));
 }
 
 #[test]
