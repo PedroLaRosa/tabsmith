@@ -153,4 +153,20 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn should_list_every_row_plainly_before_the_shells_it_could_not_list_when_not_styled() {
+        let report = status_report();
+
+        let lines = plain_status_lines(&report, false);
+
+        assert_eq!(
+            lines,
+            [
+                "✔ zsh pre post into .zshrc",
+                "✘ fish pre",
+                "pwsh: pwsh printed an empty $PROFILE"
+            ]
+        );
+    }
 }
