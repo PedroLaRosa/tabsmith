@@ -26,7 +26,7 @@ pub(crate) trait SessionContextRepository {
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct InMemorySessionContextRepository {
-    contexts: RefCell<HashMap<SessionId, SessionContext>>,
+    contexts: RefCell<HashMap<SessionId, (SessionContext, SystemTime)>>,
 }
 
 #[cfg(test)]
@@ -34,16 +34,20 @@ impl SessionContextRepository for InMemorySessionContextRepository {
     fn save(&self, context: &SessionContext) -> Result<(), TerminalSessionError> {
         self.contexts
             .borrow_mut()
-            .insert(context.id().clone(), context.clone());
+            .insert(context.id().clone(), (context.clone(), SystemTime::now()));
         Ok(())
     }
 
     fn find(&self, id: &SessionId) -> Option<SessionContext> {
-        self.contexts.borrow().get(id).cloned()
+        let contexts = self.contexts.borrow();
+        let (context, _) = contexts.get(id)?;
+        Some(context.clone())
     }
 
-    fn last_modified(&self, _id: &SessionId) -> Option<SystemTime> {
-        None
+    fn last_modified(&self, id: &SessionId) -> Option<SystemTime> {
+        let contexts = self.contexts.borrow();
+        let (_, modified) = contexts.get(id)?;
+        Some(*modified)
     }
 
     fn remove(&self, _id: &SessionId) {}
@@ -59,6 +63,10 @@ mod tests {
         SessionId::new(id.to_string()).unwrap()
     }
 
+    fn empty_context(id: &str) -> SessionContext {
+        SessionContext::new(session_id(id), HashMap::new(), None, 0)
+    }
+
     #[test]
     fn should_find_no_context_for_a_session_that_never_reported() {
         let repository = InMemorySessionContextRepository::default();
@@ -71,7 +79,7 @@ mod tests {
     #[test]
     fn should_find_the_context_the_session_last_reported() {
         let repository = InMemorySessionContextRepository::default();
-        let first = SessionContext::new(session_id("abc123"), HashMap::new(), None, 1);
+        let first = empty_context("abc123");
         let last = SessionContext::new(
             session_id("abc123"),
             HashMap::from([("A".to_string(), "1".to_string())]),
@@ -87,5 +95,17 @@ mod tests {
             (found.env(), found.alias(), found.reported_at_ms()),
             (last.env(), last.alias(), 2)
         );
+    }
+
+    /// The pty reloads the context when this time changes.
+    #[test]
+    fn should_stamp_the_time_a_context_was_saved() {
+        let repository = InMemorySessionContextRepository::default();
+        let before = SystemTime::now();
+
+        repository.save(&empty_context("abc123")).unwrap();
+
+        let modified = repository.last_modified(&session_id("abc123")).unwrap();
+        assert!(modified >= before && modified <= SystemTime::now());
     }
 }
