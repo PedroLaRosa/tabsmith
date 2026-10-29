@@ -10,12 +10,11 @@ use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
 use crate::specs::domain::value_objects::repeatability::Repeatability;
-use crate::specs::domain::value_objects::semantic_version::{
-    semver_clean, semver_cmp, SemanticVersion,
-};
+use crate::specs::domain::value_objects::semantic_version::semver_clean;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
 use crate::specs::domain::services::spec_locator::spec_location;
+use crate::specs::domain::services::spec_version_selector::versions_to_apply;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_option::SpecOption;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
@@ -25,7 +24,6 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;
 use serde_json::{Map, Value};
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -365,17 +363,10 @@ fn cli_version(
 // Diff-versioned specs (SPEC §6.3)
 
 /// Apply every diff whose version is `<= target` (all when `target` is None), in semver order.
-fn apply_versions(mut base: Value, diffs: &Map<String, Value>, target: Option<&str>) -> Value {
-    let mut keys: Vec<&String> = diffs.keys().collect();
-    keys.sort_by(|a, b| semver_cmp(a, b));
-    // ponytail: an unparsable target applies everything (JS semver would throw).
-    let target = target.filter(|t| SemanticVersion::parse(t).is_some());
-    for k in keys {
-        if target.is_none_or(|t| semver_cmp(k, t) != Ordering::Greater) {
-            base = merge_subcommand(&base, &diffs[k]);
-        }
-    }
-    base
+fn apply_versions(base: Value, diffs: &Map<String, Value>, target: Option<&str>) -> Value {
+    versions_to_apply(diffs.keys().map(String::as_str), target)
+        .into_iter()
+        .fold(base, |base, version| merge_subcommand(&base, &diffs[version]))
 }
 
 fn merge_subcommand(base: &Value, diff: &Value) -> Value {
