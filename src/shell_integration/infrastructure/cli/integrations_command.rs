@@ -1,3 +1,4 @@
+use crate::shared::infrastructure::output_format::OutputFormat;
 use crate::shared::infrastructure::terminal_style::{sgr, stdout_tty};
 use crate::shell_integration::application::integration_failure::IntegrationFailure;
 use crate::shell_integration::application::integration_status_report::IntegrationStatusReport;
@@ -22,6 +23,36 @@ fn failures_text(failures: &[IntegrationFailure], styled: bool) -> String {
         })
         .collect();
     format!("\n\n{}", parts.join("\n\n"))
+}
+
+/// What `integrations status` prints in `format`, one `println!` each (SPEC §2.6): the plain rows and failures, or
+/// one JSON document, its keys sorted (serde_json without `preserve_order`), compact or pretty.
+fn status_lines(
+    report: &IntegrationStatusReport,
+    format: OutputFormat,
+    styled: bool,
+) -> serde_json::Result<Vec<String>> {
+    let document = match format {
+        OutputFormat::Plain => return Ok(plain_status_lines(report, styled)),
+        OutputFormat::Json => status_json(report).to_string(),
+        OutputFormat::JsonPretty => serde_json::to_string_pretty(&status_json(report))?,
+    };
+    Ok(vec![document])
+}
+
+fn status_json(report: &IntegrationStatusReport) -> serde_json::Value {
+    serde_json::json!({
+        "integrations": report.integrations.iter().map(|row| serde_json::json!({
+            "installed": row.installed, "description": row.description, "shell": row.shell, "file_name": row.file_name,
+        })).collect::<Vec<_>>(),
+        "errors": report.failures.iter().map(|failure| {
+            let (shell, reason) = match failure {
+                IntegrationFailure::Listing { shell, reason } => (shell, reason),
+                IntegrationFailure::Operation { description, reason } => (description, reason),
+            };
+            serde_json::json!({"shell": shell, "error": {"title": reason, "message": null}})
+        }).collect::<Vec<_>>(),
+    })
 }
 
 /// `integrations status` in plain text (SPEC §2.6): every row, its mark green when installed and red when not if
@@ -167,6 +198,23 @@ mod tests {
                 "✘ fish pre",
                 "pwsh: pwsh printed an empty $PROFILE"
             ]
+        );
+    }
+
+    #[test]
+    fn should_give_the_status_as_one_line_of_json_with_sorted_keys_and_a_null_message() {
+        let report = status_report();
+
+        let lines = status_lines(&report, OutputFormat::Json, false).unwrap();
+
+        assert_eq!(
+            lines,
+            [concat!(
+                r#"{"errors":[{"error":{"message":null,"title":"pwsh printed an empty $PROFILE"},"shell":"pwsh"}],"#,
+                r#""integrations":[{"description":"zsh pre post into .zshrc","file_name":".zshrc","installed":true,"#,
+                r#""shell":"zsh"},{"description":"fish pre","file_name":"00_tabsmith_pre.fish","installed":false,"#,
+                r#""shell":"fish"}]}"#
+            )]
         );
     }
 }
