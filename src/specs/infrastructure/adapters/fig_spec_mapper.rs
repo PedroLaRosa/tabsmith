@@ -501,7 +501,7 @@ pub(crate) fn function_result(
         ),
         SpecFunctionKind::Script => SpecFunctionResult::Script(script_resolution(v, context.cwd())),
         SpecFunctionKind::Custom => {
-            SpecFunctionResult::Custom(CustomGeneratorResult::new(templated(v), json_items(v)))
+            SpecFunctionResult::Custom(CustomGeneratorResult::new(is_templated(v), json_items(v)))
         }
         SpecFunctionKind::PostProcess => {
             SpecFunctionResult::PostProcess(post_process_items(v, context.is_dangerous()))
@@ -513,7 +513,7 @@ pub(crate) fn function_result(
 }
 
 /// A custom generator's result is templated when its first item has a `context` key, even null.
-fn templated(v: &Value) -> bool {
+fn is_templated(v: &Value) -> bool {
     v.as_array()
         .and_then(|a| a.first())
         .is_some_and(|x| x.get("context").is_some())

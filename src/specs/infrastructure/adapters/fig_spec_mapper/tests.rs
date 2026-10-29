@@ -605,7 +605,7 @@ fn should_read_a_custom_result_as_templated_when_its_first_item_has_a_context_ev
 
     let result = custom(&v);
 
-    assert!(result.templated());
+    assert!(result.is_templated());
     assert_eq!(result.suggestions(), &json_items(&v));
 }
 
@@ -615,7 +615,7 @@ fn should_find_no_suggestions_and_no_template_in_an_exec_result_read_as_custom()
 
     let result = custom(&v);
 
-    assert!(!result.templated());
+    assert!(!result.is_templated());
     assert!(result.suggestions().is_empty());
 }
 

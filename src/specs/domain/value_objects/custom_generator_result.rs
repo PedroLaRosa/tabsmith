@@ -15,7 +15,7 @@ impl CustomGeneratorResult {
         }
     }
 
-    pub(crate) fn templated(&self) -> bool {
+    pub(crate) fn is_templated(&self) -> bool {
         self.templated
     }
 
@@ -34,7 +34,7 @@ mod tests {
 
         let result = CustomGeneratorResult::new(true, suggestions.clone());
 
-        assert!(result.templated());
+        assert!(result.is_templated());
         assert_eq!(result.suggestions(), &suggestions);
     }
 }
