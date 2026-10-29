@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-// ponytail: not the lookup js::find_exe does (that one takes cwd and env, checks the exec bit and orders PATHEXT
-// differently); merging them changes either the setup/doctor shell checks or generator exec.
+// ponytail: not the lookup specs' process_executor::find_exe does (that one takes cwd and env, checks the exec bit
+// and orders PATHEXT differently); merging them changes either the setup/doctor shell checks or generator exec.
 /// First `name` executable on PATH (Windows: tries PATHEXT extensions).
 pub(crate) fn which(name: &str) -> Option<PathBuf> {
     let exts: Vec<String> = if cfg!(windows) {

@@ -111,7 +111,7 @@ fn argv(shell: Option<&str>, extra: &[String], login: bool) -> Vec<String> {
 fn fallback(err: &anyhow::Error, argv: &[String]) -> i32 {
     logger::error(&format!("pty: {err:#}"));
     eprintln!("tabsmith had an error: {err:#}");
-    crate::js::kill_live_children(); // exec skips atexit
+    crate::specs::infrastructure::adapters::process_executor::kill_live_children(); // exec skips atexit
 
     let argv = if argv.is_empty() {
         vec![if cfg!(windows) { "pwsh" } else { "/bin/sh" }.to_string()]
@@ -1306,7 +1306,7 @@ impl Session {
         out.extend_from_slice(b"\x1b[0m\x1b[?25h");
         self.emit(&out);
         let _ = self.engine.send(EngineMsg::Shutdown);
-        crate::js::kill_live_children(); // Windows has no atexit hook for running generators
+        crate::specs::infrastructure::adapters::process_executor::kill_live_children(); // Windows has no atexit hook for running generators
         self.modes.restore();
         if let Some(id) = &self.session_id {
             self.session_contexts.remove(id);
