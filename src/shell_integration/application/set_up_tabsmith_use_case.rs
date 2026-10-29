@@ -3,6 +3,7 @@ use crate::shell_integration::application::integration_installer::IntegrationIns
 use crate::shell_integration::application::ports::spec_bundle_installer::SpecBundleInstaller;
 use crate::shell_integration::application::setup_progress::SetupProgress;
 use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
+use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use std::rc::Rc;
@@ -33,16 +34,22 @@ impl SetUpTabsmithUseCase {
         &self,
         paths: &IntegrationPaths,
         shells: &[Shell],
-        _automatic: bool,
+        automatic: bool,
         mut report: impl FnMut(SetupProgress),
     ) -> Result<bool, ShellIntegrationError> {
-        if let Ok(installed) = self.installer.install_missing(paths, shells) {
-            if installed {
-                self.restart_reminder.save_pending();
+        if automatic {
+            if let Ok(installed) = self.installer.install_missing(paths, shells) {
+                if installed {
+                    self.restart_reminder.save_pending();
+                }
+                report(SetupProgress::Installed(installed));
             }
-            report(SetupProgress::Installed(installed));
         }
-        Ok(false)
+        let manual = !automatic;
+        if manual {
+            report(SetupProgress::ManualInstructions(manual_install_instructions::text(paths, shells)));
+        }
+        Ok(manual)
     }
 }
 
@@ -150,6 +157,24 @@ mod tests {
         assert_eq!(
             (events, bed.restart_reminder.is_pending()),
             (vec![SetupProgress::Installed(false)], false)
+        );
+    }
+
+    #[test]
+    fn should_give_the_manual_instructions_when_not_asked_to_install() {
+        let bed = test_bed();
+        let mut events = Vec::new();
+
+        let manual = bed.use_case.execute(&paths(), &[Shell::Bash, Shell::Zsh], false, |event| events.push(event));
+
+        assert!(
+            matches!(manual, Ok(true))
+                && events
+                    == [SetupProgress::ManualInstructions(manual_install_instructions::text(
+                        &paths(),
+                        &[Shell::Bash, Shell::Zsh]
+                    ))],
+            "{manual:?} {events:?}"
         );
     }
 }

@@ -3,4 +3,6 @@
 pub(crate) enum SetupProgress {
     /// The automatic install ran; true if something was installed.
     Installed(bool),
+    /// The lines to add to the dotfiles by hand.
+    ManualInstructions(String),
 }
