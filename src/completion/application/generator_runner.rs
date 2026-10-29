@@ -347,16 +347,9 @@ impl GeneratorRunner {
 
     /// SPEC §6.6.3: script value → exec input → (cached) exec.
     fn script_input(&self, session: &mut CompletionSession, run: &mut GeneratorRun, g: &Generator, v: SpecValue) -> GeneratorOutcome {
-        let (request, cache_key_source) = match self.runtime.read(&v, SpecFunctionKind::Script, run.context()) {
-            SpecFunctionResult::Script(ScriptResolution::Ready {
-                request,
-                cache_key_source,
-            }) => (request, cache_key_source),
-            SpecFunctionResult::Script(ScriptResolution::Invalid(e)) => {
-                return GeneratorOutcome::Fail(format!("bad script input: {e}"))
-            }
-            SpecFunctionResult::Script(ScriptResolution::Skip)
-            | SpecFunctionResult::QueryTerm(_)
+        let resolution = match self.runtime.read(&v, SpecFunctionKind::Script, run.context()) {
+            SpecFunctionResult::Script(resolution) => resolution,
+            SpecFunctionResult::QueryTerm(_)
             | SpecFunctionResult::Trigger(_)
             | SpecFunctionResult::Alias(_)
             | SpecFunctionResult::LoadSpec(_)
@@ -366,20 +359,27 @@ impl GeneratorRunner {
             | SpecFunctionResult::PostProcess(_)
             | SpecFunctionResult::FilterTemplateSuggestions(_) => return GeneratorOutcome::Done(Vec::new()), // falsy → []
         };
-        let timeout = script_timeout(session.settings())
-            .max(g.script_timeout().unwrap_or(0))
-            .max(request.timeout().unwrap_or(0));
-        let request = request.with_timeout(Some(timeout));
-        let key = g
-            .cache()
-            .as_ref()
-            .map(|c| cache_key(c, run.context().cwd(), c.cache_key().clone().unwrap_or(cache_key_source)));
-        let ctx = run.context().clone();
-        match self.fetch(session, run, g, key, GeneratorStep::Exec, move |js| {
-            js.start_exec(request, &ctx)
-        }) {
-            Ok(v) => self.exec_output(run, g, &v),
-            Err(o) => o,
+        let key = match &resolution {
+            ScriptResolution::Ready { cache_key_source, .. } => {
+                let cache_key_source = cache_key_source.clone();
+                g.cache()
+                    .as_ref()
+                    .map(|c| cache_key(c, run.context().cwd(), c.cache_key().clone().unwrap_or(cache_key_source)))
+            }
+            ScriptResolution::Skip | ScriptResolution::Invalid(_) => None,
+        };
+        match run.script_command(g, resolution, script_timeout(session.settings())) {
+            GeneratorCommand::StartExec(request, ctx) => {
+                match self.fetch(session, run, g, key, GeneratorStep::Exec, move |js| {
+                    js.start_exec(request, &ctx)
+                }) {
+                    Ok(v) => self.exec_output(run, g, &v),
+                    Err(o) => o,
+                }
+            }
+            command @ (GeneratorCommand::Settle(_) | GeneratorCommand::StartCall(..) | GeneratorCommand::StartSleep(_)) => {
+                self.start(run, command, GeneratorStep::Exec)
+            }
         }
     }
 
