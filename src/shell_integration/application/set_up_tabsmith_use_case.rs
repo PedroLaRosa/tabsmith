@@ -293,4 +293,21 @@ mod tests {
 
         assert_eq!(installs, [(vec![0], 1), (vec![0, 0, 0], 1), (vec![0], 1)]);
     }
+
+    #[test]
+    fn should_fail_with_the_spec_bundle_error_once_everything_was_reported() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default(),
+            RecordingSpecBundleInstaller::failing("creating /home/u/.tabsmith/specs: disk full"),
+        );
+        let mut events = Vec::new();
+
+        let manual = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
+
+        assert!(
+            matches!(&manual, Err(ShellIntegrationError::SpecBundle(m)) if m == "creating /home/u/.tabsmith/specs: disk full")
+                && events == [SetupProgress::Installed(true)],
+            "{manual:?} {events:?}"
+        );
+    }
 }
