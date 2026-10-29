@@ -211,23 +211,15 @@ fn gen_ctx(ctx: &ParseCtx) -> GenCtx {
     }
 }
 
-/// Cache key `type,path,name`.
-fn loc_key(loc: &SpecLocation) -> String {
-    match loc {
-        SpecLocation::Global { name } => format!("global,,{name}"),
-        SpecLocation::Local { dir, name } => format!("local,{},{name}", dir.display()),
-    }
-}
-
 #[derive(Default)]
 struct Loader {
-    /// Spec cache by `loc_key` (None = missing, cached too).
+    /// Spec cache by `SpecLocation::cache_key` (None = missing, cached too).
     specs: HashMap<String, Option<Rc<Subcommand>>>,
     /// `cliVersion-<name>` memo (successful detections only).
     versions: HashMap<String, String>,
     /// Version detections still running after an aborted parse, reused by the next one (no respawn per keystroke).
     inflight: HashMap<String, TaskId>,
-    /// Last normalised spec per `loc_key` with the JSON it came from: an unchanged spec keeps its `Rc` through
+    /// Last normalised spec per cache key with the JSON it came from: an unchanged spec keeps its `Rc` through
     /// developer-mode reloads and `clear_caches` (the engine keys arg/generator identity on the address).
     by_json: HashMap<String, (Value, Rc<Subcommand>)>,
 }
@@ -249,7 +241,7 @@ impl Loader {
             return Ok(None);
         }
         let dev = dev_mode(ctx.settings);
-        let key = loc_key(loc);
+        let key = loc.cache_key();
         if let Some(spec) = self.specs.get(&key).filter(|_| !dev) {
             return Ok(spec.clone());
         }
@@ -1039,7 +1031,7 @@ impl ParseCaches {
             format!(
                 "{},{},{}",
                 texts[..texts.len() - 1].join(" "),
-                loc_key(loc),
+                loc.cache_key(),
                 cwd.display()
             )
         };
