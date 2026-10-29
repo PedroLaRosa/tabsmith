@@ -386,6 +386,11 @@ Each settles a plan gap or a conflict between the researchers. Deviations from t
     `script(paths, phase) -> IntegrationScript` (the `~/.tabsmith/shell` file: `script_path` + `script_contents`
     bodies); `whole_file_script(paths) -> Option<IntegrationScript>` (fish `conf.d`: its own path + the contents of
     its phase); `pub(crate) source_line(paths, phase)`.
+    **(deviation: accessors in place of `to_primitives()`.)** Plan section 1 lists `Integration` among the entities
+    exposed through a DTO with `to_primitives()`; it keeps the read-only accessors above instead, and
+    `GetIntegrationStatusUseCase` maps `describe()`, `shell().name()` and `file_name()` into each `IntegrationStatus`
+    row (P10), because the row also carries the check result (`installed`), which is not an entity property, so a
+    `to_primitives()` would not replace that mapping (precedent: `Settings::entries()`, plan section 9).
   - `IntegrationScript` VO: `new(path, contents)`, `path()`, `contents()`, `check(actual: &str) -> Result<(),
     ShellIntegrationError>` (the `Improper` message of `check_file`, 456-459). The read stays with the caller (T16).
   - `Dotfile` VO (`domain/value_objects/dotfile.rs`, also `pub(crate) const PRE_MARKER/POST_MARKER` and the private
@@ -534,7 +539,9 @@ Each settles a plan gap or a conflict between the researchers. Deviations from t
     `as_str()`, `Clone, Debug, PartialEq, Eq, Hash`. The CLI builds it first and maps `Err` to `Ok(1)` silently
     (T41); pty uses `SessionId::new(sid).ok()` where it resolved the path. Generation stays in `pty.rs` (Phase 9).
   - `SessionContext` entity with its identity: `new(id, env: HashMap<String,String>, alias: Option<String>,
-    reported_at_ms: u64)`, accessors, `Clone + Debug` (no `Default`, no `PartialEq`).
+    reported_at_ms: u64)`, accessors, `Clone + Debug` (no `Default`, no `PartialEq`). **(deviation: accessors in place
+    of `to_primitives()`, as for `Integration` in P5)**: plan section 1 lists `SessionContext` among the entities with
+    `to_primitives()`; the file adapter maps the accessors into its private serde `SessionContextRecord`.
   - `TerminalSessionError { InvalidSessionId(String), Storage(Box<dyn Error + Send + Sync>) }`, Storage transparent
     like `SettingsError::Storage` (Display = inner, `source()` = inner's source): its only printer is main's anyhow
     `{:#}`, so the T42 texts stay byte-identical. `InvalidSessionId` Display `not a session id: {id}` (never printed).
@@ -576,6 +583,8 @@ Each settles a plan gap or a conflict between the researchers. Deviations from t
 - **P18 Registration and docs.** Step 16b deletes `I` once it is empty, with `mod integrations;` and bootstrap's
   `integrations` import (left in place it is an unused-import warning, over the clippy budget, T57). The last step
   registers `shell_integration`, records P1-P17's deviations and hand-offs in plan section 9 (Phase 4 notes, including
+  that `Integration` (P5) and `SessionContext` (P17) keep read-only accessors in place of the plan's `to_primitives()`,
+  that the Phase 4 review added fitness rule 7 (no `use` item in `src/main.rs`, so `main` calls by full path),
   that fitness rule 3 cannot see the `IntegrationInstaller` application service, and that `DataDirectory::shell_dir()`
   /`backups_dir()` stay unused, P1), updates the plan's status lines and the glossary, and re-points the
   `atomic_file.rs` doc comments (111-112, 145-147) to the new test homes.
