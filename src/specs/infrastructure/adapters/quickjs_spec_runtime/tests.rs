@@ -692,6 +692,16 @@ fn should_read_a_kept_value_like_a_fresh_result_of_its_kind() {
 }
 
 #[test]
+fn should_read_the_stdout_of_an_exec_result() {
+    let (js, _events) = js();
+    let finished = spec_value_from_json(&json!({"status": 0, "stderr": "", "stdout": "a\nb"}));
+
+    let stdout = js.read_exec_stdout(&finished);
+
+    assert_eq!(stdout, "a\nb");
+}
+
+#[test]
 fn should_interrupt_a_wait_while_a_newer_request_is_waiting() {
     let (js, events) = js();
     let task = js.start_sleep(10_000);

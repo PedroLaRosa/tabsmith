@@ -543,6 +543,14 @@ impl SpecRuntime for QuickJsSpecRuntime {
         function_result(kind, &spec_value_to_json(value), context)
     }
 
+    fn read_exec_stdout(&self, value: &SpecValue) -> String {
+        spec_value_to_json(value)
+            .get("stdout")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    }
+
     fn apply_settings(&self, settings: &Settings) {
         self.tasks.borrow_mut().timeout_ms = script_timeout(settings);
     }

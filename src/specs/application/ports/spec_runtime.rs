@@ -15,6 +15,8 @@ use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 #[cfg(test)]
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{function_result, spec_value_to_json};
 #[cfg(test)]
+use serde_json::Value;
+#[cfg(test)]
 use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::collections::{HashMap, HashSet};
@@ -52,6 +54,8 @@ pub(crate) trait SpecRuntime {
         kind: SpecFunctionKind,
         context: &GeneratorContext,
     ) -> SpecFunctionResult;
+    /// The `stdout` text of an exec task's `{stdout, stderr, status}` value; empty when it has none.
+    fn read_exec_stdout(&self, value: &SpecValue) -> String;
     /// Applies the settings the runtime reads (`autocomplete.scriptTimeout`).
     fn apply_settings(&self, settings: &Settings);
 }
@@ -152,6 +156,14 @@ impl SpecRuntime for InMemorySpecRuntime {
         context: &GeneratorContext,
     ) -> SpecFunctionResult {
         function_result(kind, &spec_value_to_json(value), context)
+    }
+
+    fn read_exec_stdout(&self, value: &SpecValue) -> String {
+        spec_value_to_json(value)
+            .get("stdout")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
     }
 
     fn apply_settings(&self, _settings: &Settings) {}
