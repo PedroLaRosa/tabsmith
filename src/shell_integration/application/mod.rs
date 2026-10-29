@@ -11,3 +11,5 @@ pub(crate) mod render_init_script_use_case;
 pub(crate) mod set_up_tabsmith_use_case;
 pub(crate) mod setup_progress;
 pub(crate) mod uninstall_integrations_use_case;
+pub(crate) mod uninstall_progress;
+pub(crate) mod uninstall_tabsmith_use_case;
