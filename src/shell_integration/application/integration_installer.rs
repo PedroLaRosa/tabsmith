@@ -186,10 +186,7 @@ impl IntegrationInstaller {
         let (mut ran, mut failures) = (false, Vec::new());
         for &shell in shells {
             match self.integrations(paths, shell) {
-                Err(e) => failures.push(IntegrationFailure::Listing {
-                    shell: shell.name().to_string(),
-                    reason: e.to_string(),
-                }),
+                Err(e) => failures.push(IntegrationFailure::listing(shell, &e)),
                 Ok(list) => {
                     for i in list.iter().filter(|i| pick(i)) {
                         ran = true;

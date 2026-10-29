@@ -28,10 +28,7 @@ impl GetIntegrationStatusUseCase {
                     shell: i.shell().name().to_string(),
                     file_name: i.file_name(),
                 })),
-                Err(e) => failures.push(IntegrationFailure::Listing {
-                    shell: shell.name().to_string(),
-                    reason: e.to_string(),
-                }),
+                Err(e) => failures.push(IntegrationFailure::listing(shell, &e)),
             }
         }
         IntegrationStatusReport {
