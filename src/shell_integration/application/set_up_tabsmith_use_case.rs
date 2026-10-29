@@ -48,12 +48,14 @@ impl SetUpTabsmithUseCase {
         let manual = !automatic;
         if manual {
             report(SetupProgress::ManualInstructions(manual_install_instructions::text(paths, shells)));
-            let _ = self.installer.apply(
+            if let Err(failures) = self.installer.apply(
                 paths,
                 shells,
                 |i| i.whole_file_phase().is_none(),
                 |i| self.installer.write_scripts(paths, i),
-            );
+            ) {
+                report(SetupProgress::ScriptFilesFailed(failures));
+            }
         }
         Ok(manual)
     }
@@ -63,6 +65,7 @@ impl SetUpTabsmithUseCase {
 mod tests {
     use super::*;
     use crate::shared::application::ports::clock::FixedClock;
+    use crate::shell_integration::application::integration_failure::IntegrationFailure;
     use crate::shell_integration::application::ports::shell_environment::RecordingShellEnvironment;
     use crate::shell_integration::application::ports::spec_bundle_installer::RecordingSpecBundleInstaller;
     use crate::shell_integration::domain::repositories::backup_repository::InMemoryBackupRepository;
@@ -206,6 +209,30 @@ mod tests {
                     PathBuf::from("/home/u/.tabsmith/shell/zprofile.post.zsh"),
                 ]
             )
+        );
+    }
+
+    #[test]
+    fn should_report_the_script_files_that_could_not_be_written() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+            RecordingSpecBundleInstaller::default(),
+        );
+        let mut events = Vec::new();
+
+        let manual = bed.use_case.execute(&paths(), &[Shell::Pwsh], false, |event| events.push(event));
+
+        assert!(
+            matches!(manual, Ok(true))
+                && events
+                    == [
+                        SetupProgress::ManualInstructions(manual_install_instructions::text(&paths(), &[Shell::Pwsh])),
+                        SetupProgress::ScriptFilesFailed(vec![IntegrationFailure::Listing {
+                            shell: "pwsh".into(),
+                            reason: "pwsh printed an empty $PROFILE".into(),
+                        }]),
+                    ],
+            "{manual:?} {events:?}"
         );
     }
 }
