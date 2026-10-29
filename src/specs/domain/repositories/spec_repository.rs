@@ -3,6 +3,8 @@ use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_lookup::SpecLookup;
 #[cfg(test)]
+use std::cell::RefCell;
+#[cfg(test)]
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -21,11 +23,12 @@ pub(crate) trait SpecRepository {
     fn forget_loaded_specs(&self);
 }
 
-/// Specs by location (`name` for a Global, `dir|name` for a Local), for tests.
+/// Specs by location (`name` for a Global, `dir|name` for a Local), for tests; records every find, never caches.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct InMemorySpecRepository {
     specs: HashMap<String, Rc<Subcommand>>,
+    finds: RefCell<Vec<SpecLocation>>,
 }
 
 #[cfg(test)]
@@ -36,7 +39,13 @@ impl InMemorySpecRepository {
                 .iter()
                 .map(|(k, v)| (k.to_string(), (*v).clone()))
                 .collect(),
+            ..Default::default()
         }
+    }
+
+    /// Every location asked for, in order, repeats included.
+    pub(crate) fn finds(&self) -> Vec<SpecLocation> {
+        self.finds.borrow().clone()
     }
 }
 
@@ -47,6 +56,7 @@ impl SpecRepository for InMemorySpecRepository {
         location: &SpecLocation,
         _lookup: &SpecLookup<'_>,
     ) -> Result<Option<Rc<Subcommand>>, SpecError> {
+        self.finds.borrow_mut().push(location.clone());
         let key = match location {
             SpecLocation::Global { name } => name.clone(),
             SpecLocation::Local { dir, name } => format!("{}|{name}", dir.display()),
@@ -115,5 +125,26 @@ mod tests {
             .unwrap();
 
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn should_record_every_find_in_order() {
+        let repository = InMemorySpecRepository::with(&[("git", &spec("git"))]);
+        let (settings, index, generator_context) =
+            (Settings::default(), SpecIndex::default(), GeneratorContext::default());
+        let lookup = SpecLookup::new(&settings, &index, &generator_context);
+        let local = SpecLocation::Local {
+            dir: "/cwd/".into(),
+            name: "run".into(),
+        };
+
+        for location in [global("git"), local.clone(), global("cargo"), global("git")] {
+            repository.find(&location, &lookup).unwrap();
+        }
+
+        assert_eq!(
+            repository.finds(),
+            [global("git"), local, global("cargo"), global("git")]
+        );
     }
 }
