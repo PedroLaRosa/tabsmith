@@ -1,8 +1,13 @@
+use crate::completion::domain::value_objects::generator_command::GeneratorCommand;
+use crate::completion::domain::value_objects::generator_outcome::GeneratorOutcome;
 use crate::completion::domain::value_objects::generator_step::GeneratorStep;
 use crate::specs::domain::value_objects::arg::Arg;
+use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
+use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::task_id::TaskId;
+use crate::specs::domain::value_objects::template_suggestions::TemplateSuggestions;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -120,5 +125,70 @@ impl GeneratorRun {
         let mut bg = self.clone();
         bg.background = true;
         bg
+    }
+
+    /// A template generator's rows, `listed` then the help rows: through its `filterTemplateSuggestions`, or settled.
+    pub(crate) fn template_command(&self, generator: &Generator, listed: Vec<SpecSuggestion>) -> GeneratorCommand {
+        let mut items = listed;
+        items.extend(self.help().iter().cloned()); // `history` template: [] (F6)
+        match generator.filter_template_suggestions() {
+            Some(f) => GeneratorCommand::StartCall(
+                SpecFunctionCall::FilterTemplateSuggestions {
+                    function: f,
+                    suggestions: TemplateSuggestions::Listed(items),
+                },
+                self.context().clone(),
+            ),
+            None => GeneratorCommand::Settle(GeneratorOutcome::Done(items)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn run_of(generator: &Generator, help: Vec<SpecSuggestion>) -> GeneratorRun {
+        let arg = Rc::new(Arg::default().with_generators(vec![generator.clone()]));
+        let context = GeneratorContext::new("/repo".into(), HashMap::new(), "zsh".into(), String::new(), false);
+        let tokens = vec!["git".to_string(), "checkout".to_string()];
+        GeneratorRun::new(0, 1, arg, context, tokens, help, Instant::now())
+    }
+
+    fn row(name: &str) -> SpecSuggestion {
+        SpecSuggestion::default().with_names(vec![name.into()])
+    }
+
+    #[test]
+    fn should_list_templates_then_help_rows() {
+        let generator = Generator::default().with_template(vec!["filepaths".into()]);
+        let run = run_of(&generator, vec![row("h")]);
+
+        let command = run.template_command(&generator, vec![row("a"), row("b")]);
+
+        let GeneratorCommand::Settle(GeneratorOutcome::Done(rows)) = command else {
+            panic!("expected the rows to settle, got {command:?}");
+        };
+        assert_eq!(rows, vec![row("a"), row("b"), row("h")]);
+    }
+
+    #[test]
+    fn should_filter_template_rows_through_filter_template_suggestions() {
+        let generator = Generator::default()
+            .with_template(vec!["filepaths".into()])
+            .with_filter_template_suggestions(Some(3));
+        let run = run_of(&generator, vec![row("h")]);
+
+        let command = run.template_command(&generator, vec![row("a"), row("b")]);
+
+        let GeneratorCommand::StartCall(call, context) = command else {
+            panic!("expected a filter call, got {command:?}");
+        };
+        let filter = SpecFunctionCall::FilterTemplateSuggestions {
+            function: 3,
+            suggestions: TemplateSuggestions::Listed(vec![row("a"), row("b"), row("h")]),
+        };
+        assert_eq!((call, context.cwd()), (filter, "/repo"));
     }
 }

@@ -6,6 +6,7 @@ pub(crate) mod command_line;
 pub(crate) mod completion_phase;
 pub(crate) mod completion_result;
 pub(crate) mod filter_options;
+pub(crate) mod generator_command;
 pub(crate) mod generator_key;
 pub(crate) mod generator_outcome;
 pub(crate) mod generator_slot_view;
