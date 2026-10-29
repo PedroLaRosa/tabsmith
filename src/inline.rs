@@ -8,7 +8,7 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;
 use crate::history::domain::entities::history_entry::HistoryEntry;
-use crate::types::Item;
+use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -141,7 +141,7 @@ pub fn history_ghost(history: &[HistoryEntry], buffer: &str) -> Option<String> {
 
 /// Specs source (SPEC §6.11): first non-auto-execute/history item with `delete == 0`, prefix match and non-empty
 /// text (trailing space trimmed).
-pub fn spec_ghost(items: &[Item]) -> Option<String> {
+pub fn spec_ghost(items: &[Suggestion]) -> Option<String> {
     items.iter().find_map(|i| {
         let text = i.insert.text.strip_suffix(' ').unwrap_or(&i.insert.text);
         // accepting a ghost types its text and leaves the cursor at the end: rows that move it back are skipped
@@ -795,8 +795,8 @@ mod tests {
         assert_eq!(history_ghost(&h2, "git st").as_deref(), Some("atus"));
     }
 
-    fn item(kind: SuggestionKind, delete: usize, text: &str, prefix: bool) -> Item {
-        Item {
+    fn item(kind: SuggestionKind, delete: usize, text: &str, prefix: bool) -> Suggestion {
+        Suggestion {
             names: vec!["n".into()],
             display_name: None,
             description: None,

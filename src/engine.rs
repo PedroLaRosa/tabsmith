@@ -22,6 +22,7 @@ use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::domain::services::command_line_tokenizer;
 use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::completion::domain::value_objects::generator_key::{argument_key, GeneratorKey};
+use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
@@ -55,7 +56,7 @@ use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::types::{
-    now_ms, ArgInfo, Completion, EngineMsg, Item, Msg, Phase, Request,
+    now_ms, ArgInfo, Completion, EngineMsg, Msg, Phase, Request,
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -1138,7 +1139,7 @@ impl Engine {
             prefer_verbose: s.bool(AUTOCOMPLETE_PREFER_VERBOSE_SUGGESTIONS),
             insert_space: s.bool(AUTOCOMPLETE_INSERT_SPACE_AUTOMATICALLY),
         };
-        let items: Vec<Item> = ranked
+        let items: Vec<Suggestion> = ranked
             .into_iter()
             .map(|(x, p)| suggest::to_item(x, p, &ic))
             .collect();
@@ -1171,7 +1172,7 @@ impl Engine {
     }
 
     /// Local inline ghost (SPEC §6.11). Also computed for parse-error replies (commands without a spec).
-    fn ghost(&self, req: &Request, cursor: usize, items: Option<&[Item]>) -> Option<String> {
+    fn ghost(&self, req: &Request, cursor: usize, items: Option<&[Suggestion]>) -> Option<String> {
         if !self.settings.bool(INLINE_ENABLED)
             || req.buffer.is_empty()
             || cursor != req.buffer.len()

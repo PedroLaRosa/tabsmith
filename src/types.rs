@@ -1,56 +1,14 @@
 //! Types shared between the wrapper (main thread), the UI and the completion engine thread (SPEC §4.3).
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
-use crate::completion::domain::value_objects::insertion::Insertion;
+use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
-use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-/// One dropdown row, already filtered, ranked and with its insertion precomputed by the engine.
-#[derive(Clone, Debug)]
-pub struct Item {
-    pub names: Vec<String>,
-    pub display_name: Option<String>,
-    pub description: Option<String>,
-    pub kind: SuggestionKind,
-    /// For auto-execute rows: the type of the row it was derived from.
-    pub original_kind: Option<SuggestionKind>,
-    pub priority: f64,
-    pub is_dangerous: bool,
-    /// e.g. `<file> [mode]...` (SPEC §7.4.2), empty if none.
-    pub args_hint: String,
-    /// Char indexes into `title()` to highlight as matching (SPEC §7.4.2).
-    pub highlight: Vec<usize>,
-    /// Query term this item was matched against (SPEC §6.7.3 `query(s)`).
-    pub query: String,
-    pub insert: Insertion,
-    /// Generator that produced it, if any.
-    pub generator: Option<GeneratorKey>,
-    /// Matched by prefix (not only fuzzy) — used by the spec ghost source (SPEC §6.11).
-    pub prefix_match: bool,
-    /// `context.templateType` of the generator result (`filepaths`/`folders`/`help`), if any.
-    pub template_type: Option<String>,
-    /// Spec `icon`, if any (SPEC §7.4.2).
-    pub icon: Option<String>,
-}
-
-impl Item {
-    /// Display title: `display_name` or names joined by ", ".
-    pub fn title(&self) -> String {
-        self.display_name
-            .clone()
-            .unwrap_or_else(|| self.names.join(", "))
-    }
-
-    pub fn first_name(&self) -> &str {
-        self.names.first().map(String::as_str).unwrap_or("")
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ArgInfo {
@@ -84,7 +42,7 @@ pub struct Completion {
     pub current_arg: Option<ArgInfo>,
     pub search_term: String,
     pub triggered_generators: Vec<GeneratorKey>,
-    pub items: Vec<Item>,
+    pub items: Vec<Suggestion>,
     /// Some generator is still running.
     pub loading: bool,
     /// Local inline ghost text for this buffer (SPEC §6.11).

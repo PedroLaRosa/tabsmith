@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use unicode_width::UnicodeWidthChar;
 
-use crate::types::Item;
+use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
 macro_rules! pngs {
@@ -136,7 +136,7 @@ fn tmux_graphics(out: &str) -> Graphics {
 }
 
 /// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
-pub fn slot(it: &Item, g: Graphics) -> Slot {
+pub fn slot(it: &Suggestion, g: Graphics) -> Slot {
     let spec = it.icon.as_deref();
     if let Some(emoji) = spec.and_then(wide_emoji) {
         return text(&emoji);
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn resolves_like_q() {
-        let it = |icon: Option<&str>, kind| Item {
+        let it = |icon: Option<&str>, kind| Suggestion {
             icon: icon.map(String::from),
             ..item("x", kind, "")
         };
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn tmux_uses_placeholders() {
-        let it = |icon: Option<&str>, kind| Item {
+        let it = |icon: Option<&str>, kind| Suggestion {
             icon: icon.map(String::from),
             ..item("x", kind, "")
         };

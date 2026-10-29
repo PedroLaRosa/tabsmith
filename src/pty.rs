@@ -1794,7 +1794,7 @@ mod tests {
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
-    use crate::types::Item;
+    use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
     use alacritty_terminal::event::VoidListener;
 
@@ -1873,7 +1873,7 @@ mod tests {
     }
 
     /// Engine reply for the latest request (twice: the first one after a reset only arms the menu).
-    fn reply(s: &mut Session, items: Vec<Item>, ghost: Option<&str>) {
+    fn reply(s: &mut Session, items: Vec<Suggestion>, ghost: Option<&str>) {
         let (buffer, _) = s.sent.clone().expect("a request was sent");
         let mut c = comp(&buffer, 1, items);
         c.req = s.req;
@@ -1882,7 +1882,7 @@ mod tests {
         s.on_completion(c);
     }
 
-    fn subs(q: &str) -> Vec<Item> {
+    fn subs(q: &str) -> Vec<Suggestion> {
         ["cherry-pick", "checkout"]
             .iter()
             .map(|n| item(n, SuggestionKind::Subcommand, q))

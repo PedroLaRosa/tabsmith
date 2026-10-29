@@ -15,7 +15,7 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::insertion::Insertion;
-use crate::types::Item;
+use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::Value;
 use std::cmp::Ordering;
@@ -58,7 +58,7 @@ pub fn after_sep(s: &str, backslash: bool) -> usize {
         .map_or(0, |i| i + 1)
 }
 
-/// A suggestion row inside the pipeline (Fig `Suggestion` + internal fields), before it becomes an `Item`.
+/// A suggestion row inside the pipeline (Fig `Suggestion` + internal fields), before it becomes a `Suggestion`.
 #[derive(Clone, Debug)]
 pub struct Sugg {
     pub names: Vec<String>,
@@ -1044,9 +1044,9 @@ fn highlight(s: &Sugg, q: &str, fuzzy: bool) -> Vec<usize> {
 }
 
 /// Final dropdown row with its insertion precomputed.
-pub fn to_item(s: Sugg, prefix_match: bool, c: &InsCtx) -> Item {
+pub fn to_item(s: Sugg, prefix_match: bool, c: &InsCtx) -> Suggestion {
     let query = s.query.of(c.search_term);
-    Item {
+    Suggestion {
         insert: insertion(&s, c),
         highlight: highlight(&s, &query, c.fuzzy),
         args_hint: args_hint(&s.args),
@@ -1611,7 +1611,7 @@ mod tests {
             ]
         };
         let ghost = |search: &str| {
-            let items: Vec<Item> = filter(subs(), search, &opts())
+            let items: Vec<Suggestion> = filter(subs(), search, &opts())
                 .into_iter()
                 .map(|(s, p)| to_item(s, p, &ctx(search, search, Shell::Zsh)))
                 .collect();

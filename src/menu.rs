@@ -9,7 +9,8 @@ use crate::settings::domain::services::settings_catalog::{
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
 use crate::completion::domain::value_objects::insertion::Insertion;
-use crate::types::{ArgInfo, Completion, Item, Phase};
+use crate::completion::domain::value_objects::suggestion::Suggestion;
+use crate::types::{ArgInfo, Completion, Phase};
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
 
@@ -43,7 +44,7 @@ pub enum Effect {
 
 pub struct Menu {
     vis: Vis,
-    items: Vec<Item>,
+    items: Vec<Suggestion>,
     selected: usize,
     /// The user navigated: keep the selection across recomputes.
     sticky: bool,
@@ -72,12 +73,12 @@ fn typing(a: &str, b: &str, steps: usize) -> bool {
 
 /// Compares names, type, insertValue and description; `insert.text` has the typed query stripped, so it is
 /// left out (it changes on every keystroke).
-fn same_item(a: &Item, b: &Item) -> bool {
+fn same_item(a: &Suggestion, b: &Suggestion) -> bool {
     a.names == b.names && a.kind == b.kind && a.description == b.description
 }
 
 /// Whether the types match (`../` only matches `../`; file and folder match each other).
-fn matching_type(a: &Item, b_first: &str, b_kind: SuggestionKind) -> bool {
+fn matching_type(a: &Suggestion, b_first: &str, b_kind: SuggestionKind) -> bool {
     if a.first_name() == "../" {
         return b_first == "../";
     }
@@ -163,7 +164,7 @@ impl Menu {
 
     /// Keeps a sticky selection if still listed. While HiddenUntilKeypress nothing is drawn, but the list is still
     /// replaced, so show/toggle/Tab never act on a stale list.
-    fn set_items(&mut self, items: Vec<Item>, settings: &Settings) {
+    fn set_items(&mut self, items: Vec<Suggestion>, settings: &Settings) {
         let keep = match self.items.get(self.selected) {
             Some(old) if self.sticky && self.vis == Vis::Visible => {
                 items.iter().position(|it| same_item(it, old))
@@ -299,7 +300,7 @@ impl Menu {
         self.last.as_ref()
     }
 
-    pub fn items(&self) -> &[Item] {
+    pub fn items(&self) -> &[Suggestion] {
         &self.items
     }
 
@@ -472,9 +473,9 @@ pub(crate) mod tests {
     use crate::types::ArgInfo;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
-    pub fn item(name: &str, kind: SuggestionKind, query: &str) -> Item {
+    pub fn item(name: &str, kind: SuggestionKind, query: &str) -> Suggestion {
         let typed = name.starts_with(query) && !query.is_empty();
-        Item {
+        Suggestion {
             names: vec![name.to_string()],
             display_name: None,
             description: Some(format!("about {name}")),
@@ -503,7 +504,7 @@ pub(crate) mod tests {
     }
 
     /// A Parse reply for `buffer` (tokens split on spaces, a trailing space adds an empty token).
-    pub fn comp(buffer: &str, arg_key: u64, items: Vec<Item>) -> Completion {
+    pub fn comp(buffer: &str, arg_key: u64, items: Vec<Suggestion>) -> Completion {
         let tokens: Vec<String> = buffer.split(' ').map(String::from).collect();
         Completion {
             req: 1,
@@ -535,7 +536,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn subs(q: &str) -> Vec<Item> {
+    fn subs(q: &str) -> Vec<Suggestion> {
         ["checkout", "cherry-pick", "clone", "commit"]
             .iter()
             .filter(|n| n.starts_with(q))
@@ -616,7 +617,7 @@ pub(crate) mod tests {
             comp(
                 "git c ",
                 5,
-                vec![Item {
+                vec![Suggestion {
                     generator: Some(GeneratorKey::from_raw(7)),
                     ..item("src/", SuggestionKind::Folder, "")
                 }],
@@ -912,7 +913,7 @@ pub(crate) mod tests {
         ));
 
         // Escaped spaces: the raw token `my\ d` (5 chars) is deleted and retyped escaped (D22).
-        let mk = |n: &str| Item {
+        let mk = |n: &str| Suggestion {
             insert: Insertion {
                 delete: 5,
                 text: n.replace(' ', "\\ "),
@@ -927,7 +928,7 @@ pub(crate) mod tests {
         );
 
         // A shared prefix with shell syntax (`zz;` of branches `zz;a`, `zz;b`) is never typed unquoted → bell.
-        let quoted = |n: &str, q: &str, ins: &str| Item {
+        let quoted = |n: &str, q: &str, ins: &str| Suggestion {
             insert: Insertion {
                 delete: q.chars().count(),
                 text: ins.into(),
@@ -973,7 +974,7 @@ pub(crate) mod tests {
 
         // Auto-execute / special → failure.
         let mut m = with(vec![
-            Item {
+            Suggestion {
                 original_kind: Some(SuggestionKind::Special),
                 ..item("↪", SuggestionKind::AutoExecute, "")
             },
@@ -988,7 +989,7 @@ pub(crate) mod tests {
     }
 
     /// Visible menu over `items` (one-char buffer: not a large change).
-    fn with(items: Vec<Item>) -> Menu {
+    fn with(items: Vec<Suggestion>) -> Menu {
         let mut m = Menu::new();
         m.on_completion(comp("x", 1, items), &Settings::default());
         assert_eq!(m.vis(), Vis::Visible);

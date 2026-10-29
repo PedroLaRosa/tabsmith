@@ -5,7 +5,8 @@ use crate::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::{AUTOCOMPLETE_THEME, AUTOCOMPLETE_WIDTH};
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
-use crate::types::{Item, Model};
+use crate::completion::domain::value_objects::suggestion::Suggestion;
+use crate::types::Model;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
@@ -480,7 +481,7 @@ impl Renderer {
 
     /// `' '` + icon slot (two columns) + `' '` + title (match highlight) + (`' '` + dim args hint when room) + pad
     /// (SPEC §7.4.2). The image, if any, goes over the slot.
-    fn list_row(&self, it: &Item, selected: bool, w: usize) -> (String, String, Option<Image>) {
+    fn list_row(&self, it: &Suggestion, selected: bool, w: usize) -> (String, String, Option<Image>) {
         let t = &self.theme;
         let (fg, bg, mbg) = if selected {
             (t.selected_text, t.selected_bg, t.selected_matching_bg)
@@ -958,15 +959,15 @@ mod tests {
     }
 
     /// Visible menu over `items` (typed query "c").
-    fn menu(items: Vec<Item>, s: &Settings) -> Menu {
+    fn menu(items: Vec<Suggestion>, s: &Settings) -> Menu {
         let mut m = Menu::new();
         m.on_completion(comp("c", 1, items), s);
         assert!(m.shown(s));
         m
     }
 
-    fn subs() -> Vec<Item> {
-        let mut v: Vec<Item> = ["checkout", "cherry-pick", "clone", "commit"]
+    fn subs() -> Vec<Suggestion> {
+        let mut v: Vec<Suggestion> = ["checkout", "cherry-pick", "clone", "commit"]
             .iter()
             .map(|n| item(n, SuggestionKind::Subcommand, "c"))
             .collect();
