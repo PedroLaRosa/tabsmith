@@ -480,3 +480,16 @@ fn should_read_a_load_spec_result_as_its_directive() {
     ));
     assert!(matches!(number, SpecFunctionResult::LoadSpec(None)));
 }
+
+#[test]
+fn should_read_a_generate_spec_cache_key_only_from_a_string() {
+    let context = GeneratorContext::default();
+
+    let (text, number) = (
+        function_result(SpecFunctionKind::GenerateSpecCacheKey, &json!(" v1 "), &context),
+        function_result(SpecFunctionKind::GenerateSpecCacheKey, &json!(5), &context),
+    );
+
+    assert!(matches!(text, SpecFunctionResult::GenerateSpecCacheKey(Some(key)) if key == " v1 "));
+    assert!(matches!(number, SpecFunctionResult::GenerateSpecCacheKey(None)));
+}
