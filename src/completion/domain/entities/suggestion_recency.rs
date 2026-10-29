@@ -8,6 +8,10 @@ pub(crate) struct SuggestionRecency {
 }
 
 impl SuggestionRecency {
+    pub(crate) fn new(times: HashMap<String, HashMap<String, u64>>) -> Self {
+        SuggestionRecency { times }
+    }
+
     /// The recency as plain values: what it is persisted as.
     pub(crate) fn to_primitives(&self) -> HashMap<String, HashMap<String, u64>> {
         self.times.clone()
@@ -21,6 +25,11 @@ impl SuggestionRecency {
         }
         self.times.entry(command).or_default().insert(name, at_ms);
         true
+    }
+
+    /// When each suggestion of `command` was last inserted; `None` for a command with no insertion yet.
+    pub(crate) fn of_command(&self, command: &str) -> Option<&HashMap<String, u64>> {
+        self.times.get(command)
     }
 }
 
@@ -51,5 +60,14 @@ mod tests {
         let recorded = recency.record("git".into(), "↪".into(), 1_700_000_000_000);
 
         assert_eq!((recorded, recency), (false, SuggestionRecency::default()));
+    }
+
+    #[test]
+    fn should_answer_no_times_for_an_unknown_command() {
+        let recency = SuggestionRecency::new(times("git", "checkout", 1_700_000_000_000));
+
+        let unknown = recency.of_command("ls");
+
+        assert_eq!(unknown, None);
     }
 }
