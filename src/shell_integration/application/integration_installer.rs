@@ -208,6 +208,20 @@ impl IntegrationInstaller {
         }
         Ok(ran)
     }
+
+    /// Install every integration of `shells` that is not installed. Ok(true) if something was installed.
+    pub(crate) fn install_missing(
+        &self,
+        paths: &IntegrationPaths,
+        shells: &[Shell],
+    ) -> Result<bool, Vec<IntegrationFailure>> {
+        self.apply(
+            paths,
+            shells,
+            |i| self.check(paths, i).is_err(),
+            |i| self.install(paths, i),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -873,5 +887,26 @@ mod tests {
         let ran = bed.installer.apply(&paths(), &[Shell::Zsh, Shell::Pwsh], |_| true, |_| Ok(()));
 
         assert_eq!(failures_of(ran), [failure("listing", "pwsh", "pwsh printed an empty $PROFILE")]);
+    }
+
+    #[test]
+    fn should_install_only_the_integrations_that_are_not_installed() {
+        let bed = test_bed();
+        bed.installer.install(&paths(), &zshrc()).unwrap();
+        let installed_before = bed.dotfiles.writes().len();
+
+        let installed = bed.installer.install_missing(&paths(), &[Shell::Zsh]).unwrap();
+
+        assert_eq!(
+            (installed, bed.dotfiles.writes()[installed_before..].to_vec()),
+            (
+                true,
+                vec![
+                    PathBuf::from("/home/u/.tabsmith/shell/zprofile.pre.zsh"),
+                    PathBuf::from("/home/u/.tabsmith/shell/zprofile.post.zsh"),
+                    PathBuf::from("/home/u/.zprofile"),
+                ]
+            )
+        );
     }
 }
