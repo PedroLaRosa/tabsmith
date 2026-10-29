@@ -590,3 +590,21 @@ fn should_read_a_fractional_script_timeout_as_no_timeout_asked() {
         ScriptResolution::Ready { request, .. } if request.timeout() == Some(0)
     ));
 }
+
+/// A custom generator's result, as the variant the Custom kind always gives.
+fn custom(v: &Value) -> CustomGeneratorResult {
+    match function_result(SpecFunctionKind::Custom, v, &GeneratorContext::default()) {
+        SpecFunctionResult::Custom(result) => result,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn should_read_a_custom_result_as_templated_when_its_first_item_has_a_context_even_null() {
+    let v = json!([{"name": "main", "context": null}, "dev"]);
+
+    let result = custom(&v);
+
+    assert!(result.templated());
+    assert_eq!(result.suggestions(), &json_items(&v));
+}

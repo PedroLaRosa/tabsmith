@@ -501,13 +501,20 @@ pub(crate) fn function_result(
         ),
         SpecFunctionKind::Script => SpecFunctionResult::Script(script_resolution(v, context.cwd())),
         SpecFunctionKind::Custom => {
-            SpecFunctionResult::Custom(CustomGeneratorResult::new(false, Vec::new()))
+            SpecFunctionResult::Custom(CustomGeneratorResult::new(templated(v), json_items(v)))
         }
         SpecFunctionKind::PostProcess => SpecFunctionResult::PostProcess(Vec::new()),
         SpecFunctionKind::FilterTemplateSuggestions => {
             SpecFunctionResult::FilterTemplateSuggestions(Vec::new())
         }
     }
+}
+
+/// A custom generator's result is templated when its first item has a `context` key, even null.
+fn templated(v: &Value) -> bool {
+    v.as_array()
+        .and_then(|a| a.first())
+        .is_some_and(|x| x.get("context").is_some())
 }
 
 /// A script value read as the engine's script_input reads it (SPEC §6.6.3), up to the timeout: the request asks
