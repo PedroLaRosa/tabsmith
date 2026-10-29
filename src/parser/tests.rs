@@ -1,18 +1,16 @@
 //! Parser tests: parseArguments and loadSpec cases, loadSpec recursion, aliases, diffs.
 use super::*;
-use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
-use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
-use crate::completion::domain::services::command_line_tokenizer::substitute_token;
+use crate::settings::domain::value_objects::setting_value::SettingValue;
+use crate::completion::application::completion_notice::CompletionNotice;
+use crate::completion::domain::entities::parse_prefix_cache::ParsePrefixCache;
 use crate::completion::domain::value_objects::token::Token;
 use crate::specs::application::ports::spec_runtime::InMemorySpecRuntime;
 use crate::specs::domain::repositories::spec_repository::InMemorySpecRepository;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
-use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{function_result, normalise};
-use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
-use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{call_arguments, JsArg, QuickJsSpecRuntime};
+use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{call_arguments, JsArg};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 
@@ -130,26 +128,6 @@ impl Mock {
     }
 }
 
-impl Host for Mock {
-    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, CompletionError> {
-        let repository = self.repository();
-        let found = repository.find(
-            loc,
-            &SpecLookup::new(&Settings::default(), &SpecIndex::default(), &GeneratorContext::default()),
-        );
-        self.loads.extend(repository.finds());
-        found.map_err(CompletionError::from)
-    }
-
-    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, CompletionError> {
-        Ok(self.fns.runtime().call(call, None, Duration::from_secs(5))?)
-    }
-
-    fn substitute(&mut self, c: &CommandLine, index: usize, value: &str) -> Option<CommandLine> {
-        substitute_token(c, index, value, Shell::Bash)
-    }
-}
-
 fn json_arg(args: &[JsArg], i: usize) -> Value {
     match &args[i] {
         JsArg::Json(v) => v.clone(),
@@ -157,8 +135,46 @@ fn json_arg(args: &[JsArg], i: usize) -> Value {
     }
 }
 
+/// One parse of `command_line` over `mock`'s specs and functions, the way the engine parses (developer mode read
+/// from the settings); the finds land in `mock.loads` whether or not the parse failed.
+fn parse_reporting(
+    cache: &mut ParsePrefixCache,
+    command_line: &CommandLine,
+    cwd: &Path,
+    dev: bool,
+    mock: &mut Mock,
+    report: &mut dyn FnMut(CompletionNotice),
+) -> Result<ParsedCommandLine, CompletionError> {
+    let specs = Rc::new(mock.repository());
+    let runtime = Rc::new(mock.fns.runtime());
+    let mut settings = Settings::default();
+    if dev {
+        settings = settings.with(AUTOCOMPLETE_DEVELOPER_MODE, SettingValue::Bool(true));
+    }
+    let ctx = ParseCtx {
+        cwd,
+        settings: &settings,
+        env: &HashMap::new(),
+        shell: Shell::Bash,
+        index: &SpecIndex::default(),
+    };
+    let parsed = CommandLineParser::new(specs.clone(), runtime).parse(cache, command_line, &ctx, report);
+    mock.loads.extend(specs.finds());
+    parsed
+}
+
+fn parse(
+    cache: &mut ParsePrefixCache,
+    command_line: &CommandLine,
+    cwd: &Path,
+    dev: bool,
+    mock: &mut Mock,
+) -> Result<ParsedCommandLine, CompletionError> {
+    parse_reporting(cache, command_line, cwd, dev, mock, &mut |_| {})
+}
+
 fn run(mock: &mut Mock, buf: &str) -> Result<ParsedCommandLine, CompletionError> {
-    ParseCaches::default().parse(&cmd(buf), Path::new("/cwd"), false, mock)
+    parse(&mut ParsePrefixCache::default(), &cmd(buf), Path::new("/cwd"), false, mock)
 }
 
 #[test]
@@ -535,12 +551,12 @@ fn generate_spec_cache_key() {
             Ok(json!("k"))
         }),
     );
-    let mut caches = ParseCaches::default();
+    let mut caches = ParsePrefixCache::default();
     for buf in ["g gen x", "g gen y", "g other "] {
-        let _ = caches.parse(&cmd(buf), Path::new("/cwd"), false, &mut m);
+        let _ = parse(&mut caches, &cmd(buf), Path::new("/cwd"), false, &mut m);
     }
     assert_eq!(*count.borrow(), 1);
-    assert!(caches.generated.contains_key("g:k"));
+    assert!(caches.generated_spec("g:k").is_some());
 }
 
 #[test]
@@ -655,25 +671,17 @@ fn git_alias_directive() {
 fn prefix_cache() {
     let c = fixture("cmd_spec");
     let mut m = Mock::with(&[("cmd", &c)]);
-    let mut caches = ParseCaches::default();
+    let mut caches = ParsePrefixCache::default();
     let cwd = Path::new("/cwd");
-    caches
-        .parse(&cmd("cmd man -m x"), cwd, false, &mut m)
-        .unwrap();
-    let r = caches
-        .parse(&cmd("cmd man -m xyz"), cwd, false, &mut m)
-        .unwrap();
+    parse(&mut caches, &cmd("cmd man -m x"), cwd, false, &mut m).unwrap();
+    let r = parse(&mut caches, &cmd("cmd man -m xyz"), cwd, false, &mut m).unwrap();
     assert_eq!(m.loads.len(), 1);
     assert_eq!(
         (r.search_term(), r.tokens().last().unwrap().as_str()),
         ("xyz", "xyz")
     );
-    caches
-        .parse(&cmd("cmd man -m xyz"), Path::new("/other"), false, &mut m)
-        .unwrap();
-    caches
-        .parse(&cmd("cmd man -m xyz"), cwd, true, &mut m)
-        .unwrap(); // dev mode: no cache
+    parse(&mut caches, &cmd("cmd man -m xyz"), Path::new("/other"), false, &mut m).unwrap();
+    parse(&mut caches, &cmd("cmd man -m xyz"), cwd, true, &mut m).unwrap(); // dev mode: no cache
     assert_eq!(m.loads.len(), 3);
 }
 
@@ -694,13 +702,9 @@ fn cached_nested_state_keeps_this_commands_prefix() {
         spec(json!({"name": "inner", "subcommands": [{"name": "ch"}]})),
     );
     let mut m = Mock::with(&[("sudo", &sudo), ("doas", &doas), ("inner", &inner)]);
-    let mut caches = ParseCaches::default();
-    caches
-        .parse(&cmd("sudo inner c"), Path::new("/cwd"), false, &mut m)
-        .unwrap();
-    let r = caches
-        .parse(&cmd("doas inner c"), Path::new("/cwd"), false, &mut m)
-        .unwrap();
+    let mut caches = ParsePrefixCache::default();
+    parse(&mut caches, &cmd("sudo inner c"), Path::new("/cwd"), false, &mut m).unwrap();
+    let r = parse(&mut caches, &cmd("doas inner c"), Path::new("/cwd"), false, &mut m).unwrap();
     assert_eq!(
         (r.tokens().join(" "), r.command_index()),
         ("doas inner c".to_string(), 1)
@@ -731,68 +735,21 @@ fn composite_option_value_raw_is_the_value_only() {
 fn first_token_spec_identity_is_stable() {
     // first-token-identity-churn: one Rc for every first-token parse, so the engine's arg key does not change
     let mut m = Mock::default();
-    let mut caches = ParseCaches::default();
-    let a = caches
-        .parse(&cmd("g"), Path::new("/cwd"), false, &mut m)
-        .unwrap();
-    let b = caches
-        .parse(&cmd("gi"), Path::new("/cwd"), false, &mut m)
-        .unwrap();
+    let mut caches = ParsePrefixCache::default();
+    let a = parse(&mut caches, &cmd("g"), Path::new("/cwd"), false, &mut m).unwrap();
+    let b = parse(&mut caches, &cmd("gi"), Path::new("/cwd"), false, &mut m).unwrap();
     assert!(a.first_token() && Rc::ptr_eq(a.completion(), b.completion()));
 }
 
 #[test]
-fn spec_identity_survives_dev_reload_and_cache_clear() {
-    // arg-key-pointer-identity-devmode: an unchanged spec keeps its Rc (the engine's arg/generator keys)
-    use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
-    let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
-    let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("devid");
-    let build = dir.path().join(".fig").join("autocomplete").join("build");
-    std::fs::create_dir_all(&build).unwrap();
-    std::fs::write(
-        build.join("mk.js"),
-        r#"var s={name:"mk",args:{name:"t"}};export{s as default};"#,
-    )
-    .unwrap();
-    let settings = settings_from_json(
-        json!({"autocomplete.developerMode": true})
-            .as_object()
-            .unwrap()
-            .clone(),
-    );
-    let (env, index) = (HashMap::new(), SpecIndex::default());
-    let ctx = ParseCtx {
-        cwd: dir.path(),
-        settings: &settings,
-        env: &env,
-        shell: Shell::Zsh,
-        index: &index,
-    };
-    let loc = SpecLocation::Local {
-        dir: dir.path().to_path_buf(),
-        name: "mk".into(),
-    };
-    let mut p = Parser::new(
-        Rc::new(QuickJsSpecRepository::new(
-            js.clone(),
-            EmbeddedSpecBundle::new(data_directory_from_env()),
-        )),
-        js,
-    );
-    let a = p.load_spec(&loc, &ctx).unwrap().unwrap();
-    let b = p.load_spec(&loc, &ctx).unwrap().unwrap();
-    let first = p.caches.first.clone();
-    p.clear_caches(); // settings save
-    let c = p.load_spec(&loc, &ctx).unwrap().unwrap();
-    assert!(Rc::ptr_eq(&a, &b) && Rc::ptr_eq(&a, &c) && Rc::ptr_eq(&first, &p.caches.first));
-    // an edited spec still reloads in developer mode
-    std::fs::write(
-        build.join("mk.js"),
-        r#"var s={name:"mk",args:{name:"target"}};export{s as default};"#,
-    )
-    .unwrap();
-    let d = p.load_spec(&loc, &ctx).unwrap().unwrap();
-    assert_eq!(d.args()[0].name().as_deref(), Some("target"));
+fn spec_identity_survives_dev_reload_and_cache_clear_first_token() {
+    let mut cache = ParsePrefixCache::default();
+    let first = cache.first().clone();
+
+    CommandLineParser::new(Rc::new(InMemorySpecRepository::default()), Rc::new(InMemorySpecRuntime::default()))
+        .clear_caches(&mut cache);
+
+    assert!(Rc::ptr_eq(&first, cache.first()));
 }
 
 #[test]
@@ -801,4 +758,50 @@ fn aborts_propagate() {
     let mut m = Mock::with(&[("g", &g)]);
     m.fns.insert(1, Box::new(|_| Err(CompletionError::Aborted)));
     assert!(matches!(run(&mut m, "g x"), Err(CompletionError::Aborted)));
+}
+
+#[test]
+fn should_report_a_failed_generate_spec_with_its_debug_text() {
+    let g = spec(json!({"name": "g", "generateSpec": {"$fn": 1}}));
+    let mut m = Mock::with(&[("g", &g)]);
+    m.fns.insert(1, Box::new(|_| Err(no("boom"))));
+    let mut notices = Vec::new();
+
+    let parsed = parse_reporting(
+        &mut ParsePrefixCache::default(),
+        &cmd("g "),
+        Path::new("/cwd"),
+        false,
+        &mut m,
+        &mut |notice| notices.push(notice),
+    );
+
+    assert!(parsed.is_ok());
+    assert_eq!(
+        notices,
+        [CompletionNotice::GenerateSpecFailed("generateSpec (g): NoSuggestions(\"boom\")".into())]
+    );
+}
+
+#[test]
+fn should_report_a_failed_generate_spec_even_when_the_parse_then_fails() {
+    let g = spec(json!({"name": "g", "generateSpec": {"$fn": 1}}));
+    let mut m = Mock::with(&[("g", &g)]);
+    m.fns.insert(1, Box::new(|_| Err(no("boom"))));
+    let mut notices = Vec::new();
+
+    let parsed = parse_reporting(
+        &mut ParsePrefixCache::default(),
+        &cmd("g x y"),
+        Path::new("/cwd"),
+        false,
+        &mut m,
+        &mut |notice| notices.push(notice),
+    );
+
+    assert!(matches!(parsed, Err(CompletionError::NoSuggestions(t)) if t == "cannot consume \"x\""));
+    assert_eq!(
+        notices,
+        [CompletionNotice::GenerateSpecFailed("generateSpec (g): NoSuggestions(\"boom\")".into())]
+    );
 }

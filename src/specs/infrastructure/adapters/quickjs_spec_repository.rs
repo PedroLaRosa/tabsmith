@@ -240,9 +240,11 @@ mod tests {
     use super::*;
     use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DISABLE_FOR_COMMANDS;
     use crate::settings::domain::value_objects::setting_value::SettingValue;
+    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
     use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::specs::domain::value_objects::spec_index::SpecIndex;
+    use serde_json::json;
 
     const MK: &str = r#"var s={name:"mk",args:{name:"t"}};export{s as default};"#;
 
@@ -360,5 +362,47 @@ mod tests {
             Some("1.0.0")
         );
         assert!(inflight.is_empty());
+    }
+
+    #[test]
+    fn spec_identity_survives_dev_reload_and_cache_clear() {
+        // arg-key-pointer-identity-devmode: an unchanged spec keeps its Rc (the engine's arg/generator keys)
+        use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
+        let js = Rc::new(QuickJsSpecRuntime::new(Rc::new(ChannelRuntimeEventSource::new()), &Settings::default()).unwrap());
+        let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("devid");
+        let build = dir.path().join(".fig").join("autocomplete").join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(
+            build.join("mk.js"),
+            r#"var s={name:"mk",args:{name:"t"}};export{s as default};"#,
+        )
+        .unwrap();
+        let settings = settings_from_json(
+            json!({"autocomplete.developerMode": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        let (env, index) = (HashMap::new(), SpecIndex::default());
+        let generator = GeneratorContext::new(dir.path().to_string_lossy().into_owned(), env.clone(), "zsh".into(), String::new(), false);
+        let lookup = SpecLookup::new(&settings, &index, &generator);
+        let loc = SpecLocation::Local {
+            dir: dir.path().to_path_buf(),
+            name: "mk".into(),
+        };
+        let repository = QuickJsSpecRepository::new(js.clone(), EmbeddedSpecBundle::new(data_directory_from_env()));
+        let a = repository.find(&loc, &lookup).unwrap().unwrap();
+        let b = repository.find(&loc, &lookup).unwrap().unwrap();
+        repository.forget_loaded_specs(); // settings save
+        let c = repository.find(&loc, &lookup).unwrap().unwrap();
+        assert!(Rc::ptr_eq(&a, &b) && Rc::ptr_eq(&a, &c));
+        // an edited spec still reloads in developer mode
+        std::fs::write(
+            build.join("mk.js"),
+            r#"var s={name:"mk",args:{name:"target"}};export{s as default};"#,
+        )
+        .unwrap();
+        let d = repository.find(&loc, &lookup).unwrap().unwrap();
+        assert_eq!(d.args()[0].name().as_deref(), Some("target"));
     }
 }

@@ -2,8 +2,11 @@
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DEVELOPER_MODE;
 use crate::settings::domain::value_objects::settings::Settings;
+use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::domain::completion_error::CompletionError;
+use crate::completion::domain::entities::parse_prefix_cache::ParsePrefixCache;
 use crate::completion::domain::services::argv_parser::{result, update, update_final, ArgvState};
+use crate::completion::domain::services::command_line_tokenizer::substitute_token;
 use crate::completion::domain::value_objects::annotation_kind::AnnotationKind;
 use crate::completion::domain::value_objects::command_line::CommandLine;
 use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
@@ -45,55 +48,71 @@ pub struct ParseCtx<'a> {
     pub index: &'a SpecIndex,
 }
 
-/// Spec repository + spec runtime + parse caches (engine thread).
-pub struct Parser {
-    repository: Rc<dyn SpecRepository>,
+/// Parses the command under the cursor over the spec repository and the spec runtime (SPEC §6.3–6.4).
+pub(crate) struct CommandLineParser {
+    specs: Rc<dyn SpecRepository>,
     runtime: Rc<dyn SpecRuntime>,
-    caches: ParseCaches,
+}
+
+impl CommandLineParser {
+    pub(crate) fn new(specs: Rc<dyn SpecRepository>, runtime: Rc<dyn SpecRuntime>) -> Self {
+        CommandLineParser { specs, runtime }
+    }
+
+    /// Drop caches (dev mode toggles, settings reload). The CLI-version memo survives, and so
+    /// do spec identities (`by_json`, the first-token spec): unchanged specs are not a "new argument".
+    pub(crate) fn clear_caches(&self, cache: &mut ParsePrefixCache) {
+        self.specs.forget_loaded_specs();
+        cache.clear_keeping_first();
+    }
+
+    /// Parse the command under the cursor against its spec (SPEC §6.4). A failed generateSpec is reported at once.
+    pub(crate) fn parse(
+        &self,
+        cache: &mut ParsePrefixCache,
+        cmd: &CommandLine,
+        ctx: &ParseCtx,
+        report: &mut dyn FnMut(CompletionNotice),
+    ) -> Result<ParsedCommandLine, CompletionError> {
+        let dev = dev_mode(ctx.settings);
+        let generator = gen_ctx(ctx);
+        let lookup = SpecLookup::new(ctx.settings, ctx.index, &generator);
+        let mut pass = ParsePass {
+            cache,
+            specs: &*self.specs,
+            runtime: &*self.runtime,
+            lookup,
+            generator: &generator,
+            shell: ctx.shell,
+            report,
+        };
+        pass.parse(cmd, ctx.cwd, dev)
+    }
+}
+
+/// The engine's parser and its parse cache, until the engine holds both itself (intra-phase facade, 6.3d-6.3e).
+pub struct Parser {
+    parser: CommandLineParser,
+    cache: ParsePrefixCache,
 }
 
 impl Parser {
     pub fn new(repository: Rc<dyn SpecRepository>, runtime: Rc<dyn SpecRuntime>) -> Parser {
         Parser {
-            repository,
-            runtime,
-            caches: ParseCaches::default(),
+            parser: CommandLineParser::new(repository, runtime),
+            cache: ParsePrefixCache::default(),
         }
     }
 
-    /// Drop caches (dev mode toggles, settings reload). The CLI-version memo survives, and so
-    /// do spec identities (`by_json`, the first-token spec): unchanged specs are not a "new argument".
     pub fn clear_caches(&mut self) {
-        self.repository.forget_loaded_specs();
-        self.caches = ParseCaches {
-            first: self.caches.first.clone(),
-            ..ParseCaches::default()
-        };
+        self.parser.clear_caches(&mut self.cache);
     }
 
-    /// Parse the command under the cursor against its spec (SPEC §6.4).
+    /// Logs a failed generateSpec at warn the moment the parser reports it.
     pub fn parse(&mut self, cmd: &CommandLine, ctx: &ParseCtx) -> Result<ParsedCommandLine, CompletionError> {
-        let dev = dev_mode(ctx.settings);
-        let mut host = JsHost {
-            repository: &*self.repository,
-            runtime: &*self.runtime,
-            ctx,
-            generator: gen_ctx(ctx),
-        };
-        self.caches.parse(cmd, ctx.cwd, dev, &mut host)
-    }
-
-    /// Load (and cache) the spec at `loc`, applying diff versions (SPEC §6.3). `Ok(None)` when it does not exist
-    /// or is disabled.
-    #[cfg(test)]
-    pub fn load_spec(
-        &self,
-        loc: &SpecLocation,
-        ctx: &ParseCtx,
-    ) -> Result<Option<Rc<Subcommand>>, CompletionError> {
-        self.repository
-            .find(loc, &SpecLookup::new(ctx.settings, ctx.index, &gen_ctx(ctx)))
-            .map_err(CompletionError::from)
+        self.parser.parse(&mut self.cache, cmd, ctx, &mut |notice| match notice {
+            CompletionNotice::GenerateSpecFailed(line) => logger::warn(&line),
+        })
     }
 }
 
@@ -117,64 +136,46 @@ fn gen_ctx(ctx: &ParseCtx) -> GeneratorContext {
 // ---------------------------------------------------------------------------------------------------------------
 // Argv state machine (SPEC §6.4)
 
-/// What the state machine needs from outside (spec files, JS callbacks, re-tokenizing); mocked in tests.
-trait Host {
-    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, CompletionError>;
-    /// Call a spec function; its `executeShellCommand` is bound to the session's exec.
-    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, CompletionError>;
-    fn substitute(&mut self, cmd: &CommandLine, index: usize, value: &str) -> Option<CommandLine>;
-}
-
-struct JsHost<'a, 'c> {
-    repository: &'a dyn SpecRepository,
+/// One parse: the caller's cache, the spec ports, the parse's spec lookup and generator context, the request's shell
+/// (alias re-tokenizing) and where notices go.
+struct ParsePass<'a> {
+    cache: &'a mut ParsePrefixCache,
+    specs: &'a dyn SpecRepository,
     runtime: &'a dyn SpecRuntime,
-    ctx: &'a ParseCtx<'c>,
-    generator: GeneratorContext,
+    lookup: SpecLookup<'a>,
+    generator: &'a GeneratorContext,
+    shell: Shell,
+    report: &'a mut dyn FnMut(CompletionNotice),
 }
 
-impl Host for JsHost<'_, '_> {
-    fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, CompletionError> {
-        self.repository
-            .find(loc, &SpecLookup::new(self.ctx.settings, self.ctx.index, &self.generator))
-            .map_err(CompletionError::from)
-    }
-
-    fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, CompletionError> {
-        Ok(SpecRuntime::call(self.runtime, call, Some(&self.generator), TIMEOUT)?)
-    }
-
-    fn substitute(&mut self, cmd: &CommandLine, index: usize, value: &str) -> Option<CommandLine> {
-        crate::completion::domain::services::command_line_tokenizer::substitute_token(cmd, index, value, self.ctx.shell)
-    }
-}
-
-/// Prefix-parse cache and generateSpec cache (SPEC §6.4); pure over a [`Host`].
-#[derive(Default)]
-struct ParseCaches {
-    prefix: HashMap<String, ArgvState>,
-    generated: HashMap<String, Rc<Subcommand>>,
-    /// The empty first-token spec, one Rc for every parse (the engine keys arg identity on its address).
-    first: Rc<Subcommand>,
-}
-
-/// ponytail: caches are cleared wholesale past this size (entries are never evicted otherwise).
-const MAX_CACHED: usize = 1000;
 /// Guards loadSpec cycles in user specs (they would recurse forever).
 const MAX_DEPTH: usize = 64;
 
-impl ParseCaches {
+impl ParsePass<'_> {
+    fn load(&self, location: &SpecLocation) -> Result<Option<Rc<Subcommand>>, CompletionError> {
+        self.specs.find(location, &self.lookup).map_err(CompletionError::from)
+    }
+
+    /// Call a spec function; its `executeShellCommand` is bound to the session's exec.
+    fn call(&self, call: SpecFunctionCall) -> Result<SpecFunctionResult, CompletionError> {
+        Ok(SpecRuntime::call(self.runtime, call, Some(self.generator), TIMEOUT)?)
+    }
+
+    fn substitute(&self, cmd: &CommandLine, index: usize, value: &str) -> Option<CommandLine> {
+        substitute_token(cmd, index, value, self.shell)
+    }
+
     fn parse(
         &mut self,
         cmd: &CommandLine,
         cwd: &Path,
         dev: bool,
-        host: &mut dyn Host,
     ) -> Result<ParsedCommandLine, CompletionError> {
         let last = cmd.tokens().last().ok_or_else(|| no("no tokens"))?;
         let texts: Vec<String> = cmd.tokens().iter().map(|t| t.text().to_string()).collect();
         if cmd.tokens().len() == 1 {
             if !last.text().contains('/') {
-                let st = ArgvState::initial(self.first.clone(), last.text(), "", texts);
+                let st = ArgvState::initial(self.cache.first().clone(), last.text(), "", texts);
                 return Ok(result(st, last.text(), last.raw(), true));
             }
             let name = if last.text() == "bin/console" {
@@ -182,7 +183,7 @@ impl ParseCaches {
             } else {
                 "dotslash"
             };
-            let spec = host
+            let spec = self
                 .load(&SpecLocation::Global { name: name.into() })?
                 .ok_or_else(|| no(format!("no {name} spec")))?;
             return Ok(result(
@@ -193,7 +194,7 @@ impl ParseCaches {
             ));
         }
         let loc = spec_location(&texts[0], cwd, None);
-        let st = self.parse_prefix(cmd, vec![loc], 0, cwd, dev, host, 0)?;
+        let st = self.parse_prefix(cmd, vec![loc], 0, cwd, dev, 0)?;
         let st = update_final(st, last.text());
         Ok(result(st, last.text(), last.raw(), false))
     }
@@ -207,7 +208,6 @@ impl ParseCaches {
         start: usize,
         cwd: &Path,
         dev: bool,
-        host: &mut dyn Host,
         depth: usize,
     ) -> Result<ArgvState, CompletionError> {
         if depth > MAX_DEPTH {
@@ -223,13 +223,13 @@ impl ParseCaches {
             )
         };
         if !dev {
-            if let Some(st) = locations.iter().find_map(|l| self.prefix.get(&key(l))) {
+            if let Some(st) = locations.iter().find_map(|l| self.cache.prefix_state(&key(l))) {
                 return Ok(st.clone());
             }
         }
         let mut found = None;
         for loc in &locations {
-            if let Some(spec) = host.load(loc)? {
+            if let Some(spec) = self.load(loc)? {
                 found = Some((spec, loc));
                 break;
             }
@@ -242,7 +242,7 @@ impl ParseCaches {
         let mut cur = cmd.clone();
         let root_ls = st.completion().load_spec().clone();
         if let Some(nested) = self.apply_load_spec(
-            &mut st, root_ls, 0, None, &cur, start, cwd, dev, host, depth,
+            &mut st, root_ls, 0, None, &cur, start, cwd, dev, depth,
         )? {
             return Ok(nested);
         }
@@ -252,7 +252,7 @@ impl ParseCaches {
             if st.completion().generate_spec().is_some() {
                 let tokens: Vec<String> =
                     cur.tokens()[start..].iter().map(|t| t.text().to_string()).collect();
-                st = self.generate_spec(st, &tokens, dev, host)?;
+                st = self.generate_spec(st, &tokens, dev)?;
             }
             if i == cur.tokens().len() - start - 1 {
                 break; // the final token never loads specs
@@ -274,7 +274,7 @@ impl ParseCaches {
                 .and_then(|a| a.alias_directive().clone())
                 .filter(|_| last_type == last_kind && !substituted.contains(&token))
             {
-                match self.substitute_alias(&cur, start + i, &token, &alias, host) {
+                match self.substitute_alias(&cur, start + i, &token, &alias) {
                     Ok(next) => {
                         substituted.insert(token);
                         cur = next;
@@ -316,7 +316,6 @@ impl ParseCaches {
                 start,
                 cwd,
                 dev,
-                host,
                 depth,
             )? {
                 return Ok(nested);
@@ -329,10 +328,7 @@ impl ParseCaches {
         }
         st = st.with_tokens(cur.tokens()[start..].iter().map(|t| t.text().to_string()).collect());
         if !dev {
-            if self.prefix.len() >= MAX_CACHED {
-                self.prefix.clear();
-            }
-            self.prefix.insert(cache_key, st.clone());
+            self.cache.remember_prefix_state(cache_key, st.clone());
         }
         Ok(st)
     }
@@ -344,13 +340,12 @@ impl ParseCaches {
         index: usize,
         token: &str,
         alias: &TextOrFunction,
-        host: &mut dyn Host,
     ) -> Result<CommandLine, CompletionError> {
         let value = match alias {
             TextOrFunction::Str(s) => s.clone(),
             TextOrFunction::Fn(f) => {
                 let SpecFunctionResult::Alias(Some(value)) =
-                    host.call(SpecFunctionCall::Alias {
+                    self.call(SpecFunctionCall::Alias {
                         function: *f,
                         token: token.to_string(),
                     })?
@@ -361,7 +356,7 @@ impl ParseCaches {
             }
         };
         // `git config --get` output ends with "\n"; a newline would not split words in the re-tokenized command.
-        host.substitute(cmd, index, value.trim_end())
+        self.substitute(cmd, index, value.trim_end())
             .ok_or_else(|| no(format!("invalid alias for {token:?}")))
     }
 
@@ -377,12 +372,11 @@ impl ParseCaches {
         start: usize,
         cwd: &Path,
         dev: bool,
-        host: &mut dyn Host,
         depth: usize,
     ) -> Result<Option<ArgvState>, CompletionError> {
         let ls = match (ls, token) {
             (Some(SpecLoadDirective::Fn(f)), Some(t)) => {
-                match host.call(SpecFunctionCall::LoadSpec {
+                match self.call(SpecFunctionCall::LoadSpec {
                     function: f,
                     token: t.to_string(),
                 })? {
@@ -396,7 +390,7 @@ impl ParseCaches {
         match ls {
             Some(SpecLoadDirective::Locations(l)) => {
                 let nested =
-                    self.parse_prefix(cmd, l, start + index, cwd, dev, host, depth + 1)?;
+                    self.parse_prefix(cmd, l, start + index, cwd, dev, depth + 1)?;
                 let prefix = cmd.tokens()[start..start + index]
                     .iter()
                     .map(|t| t.text().to_string());
@@ -406,7 +400,7 @@ impl ParseCaches {
                 st.apply_inline_spec(sub);
                 Ok(None)
             }
-            _ => Ok(None),
+            Some(SpecLoadDirective::Fn(_)) | None => Ok(None),
         }
     }
 
@@ -417,7 +411,6 @@ impl ParseCaches {
         mut st: ArgvState,
         tokens: &[String],
         dev: bool,
-        host: &mut dyn Host,
     ) -> Result<ArgvState, CompletionError> {
         let Some(f) = st.completion().generate_spec() else {
             return Ok(st);
@@ -425,7 +418,7 @@ impl ParseCaches {
         let cache_key = match st.completion().generate_spec_cache_key() {
             Some(TextOrFunction::Str(k)) => Some(k.clone()),
             Some(TextOrFunction::Fn(kf)) => {
-                match host.call(SpecFunctionCall::GenerateSpecCacheKey {
+                match self.call(SpecFunctionCall::GenerateSpecCacheKey {
                     function: *kf,
                     tokens: tokens.to_vec(),
                 }) {
@@ -438,10 +431,10 @@ impl ParseCaches {
         }
         .filter(|_| !dev)
         .map(|k| format!("{}:{k}", tokens[0]));
-        let generator = match cache_key.as_ref().and_then(|k| self.generated.get(k)) {
+        let generator = match cache_key.as_ref().and_then(|k| self.cache.generated_spec(k)) {
             Some(g) => g.clone(),
             None => {
-                let generated = host
+                let generated = self
                     .call(SpecFunctionCall::GenerateSpec {
                         function: f,
                         tokens: tokens.to_vec(),
@@ -454,16 +447,13 @@ impl ParseCaches {
                     Ok(g) => {
                         let g = Rc::new(g);
                         if let Some(k) = cache_key {
-                            if self.generated.len() >= MAX_CACHED {
-                                self.generated.clear();
-                            }
-                            self.generated.insert(k, g.clone());
+                            self.cache.remember_generated_spec(k, g.clone());
                         }
                         g
                     }
                     Err(CompletionError::Aborted) => return Err(CompletionError::Aborted),
                     Err(e) => {
-                        logger::warn(&format!("generateSpec ({}): {e:?}", tokens[0])); // spec name only: logs never hold typed text
+                        (self.report)(CompletionNotice::GenerateSpecFailed(format!("generateSpec ({}): {e:?}", tokens[0]))); // spec name only: logs never hold typed text
                         return Ok(st);
                     }
                 }
