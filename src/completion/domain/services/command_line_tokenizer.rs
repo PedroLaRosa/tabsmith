@@ -1,40 +1,19 @@
 //! Command-line tokenizer (SPEC §6.1). Pure, no I/O.
 //!
 //! Scans bytes: every syntax char is ASCII, so node boundaries always fall on UTF-8 char boundaries.
+use crate::completion::domain::value_objects::alias_table::AliasTable;
+use crate::completion::domain::value_objects::command_line::CommandLine;
+use crate::completion::domain::value_objects::token::Token;
 use crate::shared::domain::value_objects::shell::Shell;
-use std::collections::HashMap;
-
-/// One argument of the current command.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Token {
-    /// Unquoted/unescaped text (`inner_text`).
-    pub(crate) text: String,
-    /// Raw source text as typed (quotes/escapes included).
-    pub(crate) raw: String,
-    /// Byte offsets into the (alias-expanded) command source.
-    pub(crate) start: usize,
-    pub(crate) end: usize,
-}
-
-/// The command under the cursor.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CommandInfo {
-    /// Tokens up to the cursor; a trailing empty token when the text ends with whitespace.
-    pub(crate) tokens: Vec<Token>,
-    /// Source text of the command (after alias expansion).
-    pub(crate) text: String,
-    /// Source text as typed, before alias expansion (what the menu compares between keystrokes).
-    pub(crate) original_text: String,
-}
 
 /// Parse `buffer_before_cursor` and return the command containing the end of it (SPEC §6.1.3), with aliases
 /// expanded (SPEC §6.1.6). `None` when there is no command at the cursor (e.g. `ls |`, empty, only spaces).
-/// Token offsets are relative to `CommandInfo::text`.
+/// Token offsets are relative to `CommandLine::text`.
 pub(crate) fn current_command(
     buffer_before_cursor: &str,
     shell: Shell,
-    aliases: &HashMap<String, String>,
-) -> Option<CommandInfo> {
+    aliases: &AliasTable,
+) -> Option<CommandLine> {
     let p = P::new(buffer_before_cursor, shell);
     let tree = p.parse();
     let mut cmd = p.command_info(descendant_at(&tree, buffer_before_cursor.len())?);
@@ -60,33 +39,15 @@ pub(crate) fn current_command(
     (!cmd.tokens.is_empty()).then_some(cmd)
 }
 
-/// Parse the `alias` builtin output into a map (SPEC §6.1.6). Fish uses `alias name 'value'` lines.
-pub(crate) fn parse_aliases(text: &str, shell: Shell) -> HashMap<String, String> {
-    let sep = if shell == Shell::Fish { ' ' } else { '=' };
-    text.lines()
-        .filter_map(|line| {
-            let line = line
-                .strip_prefix("alias")
-                .and_then(|r| r.strip_prefix(char::is_whitespace))
-                .unwrap_or(line);
-            let (key, value) = line.split_once(sep)?;
-            let value = value.strip_prefix('\'').unwrap_or(value);
-            let value = value.strip_suffix('\'').unwrap_or(value);
-            // Empty values never expand (falsy lookup), so they are not aliases.
-            (!key.is_empty() && !value.is_empty()).then(|| (key.to_string(), value.to_string()))
-        })
-        .collect()
-}
-
 /// Re-tokenize `command` with the token at `index` replaced by `replacement` (parserDirectives.alias, SPEC §6.4).
 /// `None` unless the result is exactly one plain command (so `|`, `&&`, `;` in `replacement` fail). Tokens that
 /// come from `replacement` keep the replaced token's `raw` (what is on screen).
 pub(crate) fn substitute_token(
-    command: &CommandInfo,
+    command: &CommandLine,
     index: usize,
     replacement: &str,
     shell: Shell,
-) -> Option<CommandInfo> {
+) -> Option<CommandLine> {
     let tok = command.tokens.get(index)?;
     let text = format!(
         "{}{}{}",
@@ -552,7 +513,7 @@ impl<'a> P<'a> {
     }
 
     /// `convertCommandNodeToCommand`, offsets relative to the command text.
-    fn command_info(&self, cmd: &Node) -> CommandInfo {
+    fn command_info(&self, cmd: &Node) -> CommandLine {
         let text = self.text(cmd).to_string();
         let mut tokens: Vec<Token> = cmd
             .children
@@ -573,7 +534,7 @@ impl<'a> P<'a> {
                 end: text.len(),
             });
         }
-        CommandInfo {
+        CommandLine {
             tokens,
             original_text: text.clone(),
             text,

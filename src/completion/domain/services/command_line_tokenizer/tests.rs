@@ -1,6 +1,8 @@
 use super::*;
+use crate::completion::domain::value_objects::alias_table::parse_aliases;
+use std::collections::HashMap;
 
-fn cmd(buf: &str, shell: Shell, aliases: &[(&str, &str)]) -> Option<CommandInfo> {
+fn cmd(buf: &str, shell: Shell, aliases: &[(&str, &str)]) -> Option<CommandLine> {
     let map = aliases
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

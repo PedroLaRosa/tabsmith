@@ -2,7 +2,7 @@
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_DEVELOPER_MODE;
 use crate::settings::domain::value_objects::settings::Settings;
-use crate::completion::domain::services::command_line_tokenizer::CommandInfo;
+use crate::completion::domain::value_objects::command_line::CommandLine;
 use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::repositories::spec_repository::SpecRepository;
@@ -143,7 +143,7 @@ impl Parser {
     }
 
     /// Parse the command under the cursor against its spec (SPEC §6.4).
-    pub fn parse(&mut self, cmd: &CommandInfo, ctx: &ParseCtx) -> Result<ParseResult, ParseError> {
+    pub fn parse(&mut self, cmd: &CommandLine, ctx: &ParseCtx) -> Result<ParseResult, ParseError> {
         let dev = dev_mode(ctx.settings);
         let mut host = JsHost {
             repository: &*self.repository,
@@ -193,7 +193,7 @@ trait Host {
     fn load(&mut self, loc: &SpecLocation) -> Result<Option<Rc<Subcommand>>, ParseError>;
     /// Call a spec function; its `executeShellCommand` is bound to the session's exec.
     fn call(&mut self, call: SpecFunctionCall) -> Result<SpecFunctionResult, ParseError>;
-    fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo>;
+    fn substitute(&mut self, cmd: &CommandLine, index: usize, value: &str) -> Option<CommandLine>;
 }
 
 struct JsHost<'a, 'c> {
@@ -214,7 +214,7 @@ impl Host for JsHost<'_, '_> {
         Ok(SpecRuntime::call(self.runtime, call, Some(&self.generator), TIMEOUT)?)
     }
 
-    fn substitute(&mut self, cmd: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo> {
+    fn substitute(&mut self, cmd: &CommandLine, index: usize, value: &str) -> Option<CommandLine> {
         crate::completion::domain::services::command_line_tokenizer::substitute_token(cmd, index, value, self.ctx.shell)
     }
 }
@@ -603,7 +603,7 @@ const MAX_DEPTH: usize = 64;
 impl ParseCaches {
     fn parse(
         &mut self,
-        cmd: &CommandInfo,
+        cmd: &CommandLine,
         cwd: &Path,
         dev: bool,
         host: &mut dyn Host,
@@ -644,7 +644,7 @@ impl ParseCaches {
     #[allow(clippy::too_many_arguments)]
     fn parse_prefix(
         &mut self,
-        cmd: &CommandInfo,
+        cmd: &CommandLine,
         locations: Vec<SpecLocation>,
         start: usize,
         cwd: &Path,
@@ -782,12 +782,12 @@ impl ParseCaches {
     /// `parserDirectives.alias` (git aliases): the token's expansion re-tokenized into the command.
     fn substitute_alias(
         &mut self,
-        cmd: &CommandInfo,
+        cmd: &CommandLine,
         index: usize,
         token: &str,
         alias: &TextOrFunction,
         host: &mut dyn Host,
-    ) -> Result<CommandInfo, ParseError> {
+    ) -> Result<CommandLine, ParseError> {
         let value = match alias {
             TextOrFunction::Str(s) => s.clone(),
             TextOrFunction::Fn(f) => {
@@ -815,7 +815,7 @@ impl ParseCaches {
         ls: Option<SpecLoadDirective>,
         index: usize,
         token: Option<&str>,
-        cmd: &CommandInfo,
+        cmd: &CommandLine,
         start: usize,
         cwd: &Path,
         dev: bool,

@@ -2,7 +2,7 @@
 use super::*;
 use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
-use crate::completion::domain::services::command_line_tokenizer::Token;
+use crate::completion::domain::value_objects::token::Token;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{function_result, normalise};
@@ -18,7 +18,7 @@ const ANY: u8 = 7;
 const NOT_S: u8 = O | A;
 
 /// Whitespace tokenizer good enough for these buffers (trailing space → trailing empty token).
-fn cmd(s: &str) -> CommandInfo {
+fn cmd(s: &str) -> CommandLine {
     let mut tokens = Vec::new();
     let mut pos = 0;
     for w in s.split(' ') {
@@ -40,7 +40,7 @@ fn cmd(s: &str) -> CommandInfo {
             end: s.len(),
         });
     }
-    CommandInfo {
+    CommandLine {
         tokens,
         text: s.into(),
         original_text: s.into(),
@@ -119,7 +119,7 @@ impl Host for Mock {
         Ok(function_result(call.kind(), &v, &context))
     }
 
-    fn substitute(&mut self, c: &CommandInfo, index: usize, value: &str) -> Option<CommandInfo> {
+    fn substitute(&mut self, c: &CommandLine, index: usize, value: &str) -> Option<CommandLine> {
         let mut words: Vec<String> = c.tokens.iter().map(|t| t.text.clone()).collect();
         words.splice(index..=index, value.split(' ').map(String::from));
         Some(cmd(&words.join(" ")))

@@ -20,6 +20,7 @@ use crate::settings::domain::services::settings_catalog::{
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::completion::domain::services::command_line_tokenizer;
+use crate::completion::domain::value_objects::alias_table::parse_aliases;
 use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
@@ -510,7 +511,7 @@ impl Engine {
     fn alias_map(&mut self, shell: Shell) -> HashMap<String, String> {
         if !matches!(&self.aliases, Some((s, _)) if *s == shell) {
             let map = match self.session_alias.as_deref() {
-                Some(text) if !text.is_empty() => command_line_tokenizer::parse_aliases(text, shell),
+                Some(text) if !text.is_empty() => parse_aliases(text, shell),
                 _ => HashMap::new(),
             };
             self.aliases = Some((shell, map));
