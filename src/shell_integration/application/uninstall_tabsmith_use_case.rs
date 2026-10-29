@@ -39,7 +39,10 @@ impl UninstallTabsmithUseCase {
             failed = true;
         }
         if purge {
-            let _ = self.purger.purge(paths.data_root());
+            if let Err(error) = self.purger.purge(paths.data_root()) {
+                report(UninstallProgress::PurgeFailed(error.to_string()));
+                failed = true;
+            }
         }
         failed
     }
@@ -172,6 +175,23 @@ mod tests {
         assert_eq!(
             (failed, events, bed.purger.purged()),
             (false, vec![], vec![PathBuf::from("/home/u/.tabsmith")])
+        );
+    }
+
+    /// The CLI prints `Could not remove <data>: <reason>`, with the io error's own text as the old `{e}` (T34).
+    #[test]
+    fn should_report_a_failed_purge_by_the_io_error_text_and_fail() {
+        let bed = test_bed_with(
+            RecordingShellEnvironment::default(),
+            RecordingDataDirectoryPurger::failing("Permission denied (os error 13)"),
+        );
+        let mut events = Vec::new();
+
+        let failed = bed.use_case.execute(&paths(), &[Shell::Zsh], true, |event| events.push(event));
+
+        assert_eq!(
+            (failed, events),
+            (true, vec![UninstallProgress::PurgeFailed("Permission denied (os error 13)".into())])
         );
     }
 }
