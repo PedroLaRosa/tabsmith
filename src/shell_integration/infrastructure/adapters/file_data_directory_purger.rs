@@ -38,4 +38,17 @@ mod tests {
 
         assert!(purged.is_ok(), "{purged:?}");
     }
+
+    /// The CLI prints `Could not remove <data>: <error>` with the io error's own text, no path added (T34).
+    #[cfg(unix)]
+    #[test]
+    fn should_return_any_other_failure_as_the_raw_io_error() {
+        let dir = TempDir::new("purge-not-a-directory");
+        let data_root = dir.path().join(".tabsmith");
+        std::fs::write(&data_root, "not a directory").unwrap();
+
+        let failure = FileDataDirectoryPurger.purge(&data_root).unwrap_err();
+
+        assert_eq!(failure.to_string(), "Not a directory (os error 20)");
+    }
 }
