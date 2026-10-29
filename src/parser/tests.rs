@@ -652,50 +652,6 @@ fn load_spec_cycle_is_an_error() {
 }
 
 #[test]
-fn spec_location_table() {
-    let cwd = Path::new("test_cwd");
-    let g = |n: &str| SpecLocation::Global { name: n.into() };
-    let l = |d: &str, n: &str| SpecLocation::Local {
-        dir: d.into(),
-        name: n.into(),
-    };
-    assert_eq!(spec_location("git", cwd, None), g("git"));
-    assert_eq!(
-        spec_location("@withfig/autocomplete-tools", cwd, Some(false)),
-        g("@withfig/autocomplete-tools")
-    );
-    assert_eq!(
-        spec_location("@withfig/autocomplete-tools", cwd, None),
-        l("test_cwd/@withfig/", "autocomplete-tools")
-    );
-    assert_eq!(spec_location("./test", cwd, None), l("test_cwd/", "test"));
-    assert_eq!(spec_location("~/test", cwd, None), l("~/", "test"));
-    assert_eq!(spec_location("/test", cwd, None), l("/", "test"));
-    assert_eq!(spec_location("/dir/test", cwd, None), l("/dir/", "test"));
-    assert_eq!(spec_location("~/dir/test", cwd, None), l("~/dir/", "test"));
-    assert_eq!(
-        spec_location("./dir/test", cwd, None),
-        l("test_cwd/dir/", "test")
-    );
-    assert_eq!(
-        spec_location("bin/console", cwd, None),
-        g("php/bin-console")
-    );
-    assert_eq!(
-        spec_location("vendor/bin/console", cwd, None),
-        g("php/bin-console")
-    );
-    assert_eq!(
-        spec_location("./run.sh", cwd, Some(false)),
-        l("test_cwd/", "run.sh")
-    );
-    assert_eq!(
-        spec_location("script", cwd, Some(true)),
-        l("test_cwd", "script")
-    );
-}
-
-#[test]
 fn diff_merge() {
     let base = json!({
         "name": "h", "description": "old",

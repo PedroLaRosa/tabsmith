@@ -12,6 +12,7 @@ use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
 use crate::specs::domain::value_objects::repeatability::Repeatability;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::specs::domain::value_objects::spec_load_directive::SpecLoadDirective;
+use crate::specs::domain::services::spec_locator::spec_location;
 use crate::specs::domain::value_objects::spec_location::SpecLocation;
 use crate::specs::domain::value_objects::spec_option::SpecOption;
 use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
@@ -164,34 +165,6 @@ impl Parser {
         js: &mut Js,
     ) -> Result<Option<Rc<Subcommand>>, ParseError> {
         self.loader.load(loc, ctx, js, &gen_ctx(ctx))
-    }
-}
-
-/// Where the spec for `name` lives (SPEC §6.3 `spec_location`). `is_script`: `None` for the first token,
-/// `Some(false)` for `isCommand` args, `Some(true)` for `isScript` args.
-pub fn spec_location(name: &str, cwd: &Path, is_script: Option<bool>) -> SpecLocation {
-    let (path, base) = name.split_at(name.rfind('/').map_or(0, |i| i + 1));
-    let global = match is_script {
-        None if name == "bin/console" || name.ends_with("/bin/console") => {
-            return SpecLocation::Global {
-                name: "php/bin-console".into(),
-            }
-        }
-        None => !path.contains('/'),
-        Some(false) => !["/", "./", "~/"].iter().any(|p| path.starts_with(p)),
-        Some(true) => false,
-    };
-    if global {
-        return SpecLocation::Global { name: name.into() };
-    }
-    let dir = if path.starts_with('/') || path.starts_with("~/") {
-        PathBuf::from(path)
-    } else {
-        cwd.join(path.strip_prefix("./").unwrap_or(path))
-    };
-    SpecLocation::Local {
-        dir,
-        name: base.into(),
     }
 }
 
