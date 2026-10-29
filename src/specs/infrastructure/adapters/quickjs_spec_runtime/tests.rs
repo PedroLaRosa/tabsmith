@@ -487,3 +487,16 @@ fn should_pass_an_alias_function_the_token_and_the_exec_function() {
 
     assert_eq!(arguments, (5, vec![JsArg::Json(token.into()), JsArg::Exec]));
 }
+
+#[test]
+fn should_pass_a_load_spec_function_the_token_and_the_exec_function() {
+    let token = "run";
+    let call = SpecFunctionCall::LoadSpec {
+        function: 6,
+        token: token.into(),
+    };
+
+    let arguments = call_arguments(&call, &GeneratorContext::default());
+
+    assert_eq!(arguments, (6, vec![JsArg::Json(token.into()), JsArg::Exec]));
+}
