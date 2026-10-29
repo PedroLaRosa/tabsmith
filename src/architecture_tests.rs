@@ -368,7 +368,7 @@ fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
 /// module; rules 1-2 still keep its infrastructure out of domain and application files. A use case is its file
 /// (`*_use_case`) or its type (`*UseCase`) anywhere under another module, so a use case re-exported under its own
 /// type name is caught at the module root (`crate::specs::InstallSpecBundleUseCase`) or in a legacy shim
-/// (`crate::parser::InstallSpecBundleUseCase`) too. An adapter has no name suffix, so only its `infrastructure`
+/// (`crate::types::InstallSpecBundleUseCase`) too. An adapter has no name suffix, so only its `infrastructure`
 /// segment gives it away.
 // ponytail: a use case re-exported under another name (`type Installer = ..UseCase;`, a wrapper fn), an `as` rename,
 // a `super::` path, and an adapter re-exported by a legacy file (`crate::engine::X` from a

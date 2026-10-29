@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// doctor.rs, parser.rs, embedded_spec_bundle.rs and quickjs_spec_repository.rs:
+    /// doctor.rs, command_line_parser.rs, embedded_spec_bundle.rs and quickjs_spec_repository.rs:
     /// `bool("autocomplete.developerMode", false)`.
     #[test]
     fn should_default_developer_mode_to_off() {

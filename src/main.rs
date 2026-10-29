@@ -14,7 +14,6 @@ mod icons;
 mod inline;
 mod keys;
 mod menu;
-mod parser;
 mod pty;
 mod render;
 mod settings;

@@ -2,7 +2,7 @@
 //! recency, history and the inline cache. Serves only the latest request.
 //! OWNER: engine agent.
 //!
-//! Per request: mid-word guard → `command_line_tokenizer::current_command` → `Parser::parse` → generator triggers →
+//! Per request: mid-word guard → `command_line_tokenizer::current_command` → `CommandLineParser::parse` → generator triggers →
 //! reply (phase `Parse`). Triggered generators run as small state machines over `QuickJsSpecRuntime` tasks;
 //! whenever one finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
@@ -10,8 +10,10 @@ use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::completion::domain::completion_error::CompletionError;
 use crate::completion::domain::value_objects::parsed_command_line::ParsedCommandLine;
+use crate::completion::application::command_line_parser::CommandLineParser;
+use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::application::parse_context::ParseContext;
-use crate::parser::Parser;
+use crate::completion::domain::entities::parse_prefix_cache::ParsePrefixCache;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SUGGEST_CURRENT_TOKEN, AUTOCOMPLETE_FIRST_TOKEN_COMPLETION,
     AUTOCOMPLETE_FUZZY_SEARCH, AUTOCOMPLETE_HIDE_AUTO_EXECUTE_SUGGESTION,
@@ -107,8 +109,8 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
                 runtime.clone(),
                 EmbeddedSpecBundle::new(dependencies.data_directory.clone()),
             ));
-            let parser = Parser::new(repository, runtime.clone());
-            Engine::new(tx, settings, parser, &dependencies).run(&runtime, &inbox);
+            let command_line_parser = CommandLineParser::new(repository, runtime.clone());
+            Engine::new(tx, settings, command_line_parser, &dependencies).run(&runtime, &inbox);
         });
     if let Err(e) = spawned {
         logger::error(&format!("engine: spawn: {e}"));
@@ -266,6 +268,13 @@ fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntr
     inline::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
 }
 
+/// Logs what the completion services report, the moment they report it (D5).
+fn log_completion_notice(notice: CompletionNotice) {
+    match notice {
+        CompletionNotice::GenerateSpecFailed(line) => logger::warn(&line),
+    }
+}
+
 /// Generator results of the current argument, one per generator (SPEC §6.6.1).
 struct Slot {
     key: GeneratorKey,
@@ -328,7 +337,8 @@ struct Current {
 struct Engine {
     tx: Sender<Msg>,
     settings: Settings,
-    parser: Parser,
+    command_line_parser: CommandLineParser,
+    parse_prefix_cache: ParsePrefixCache,
     index: SpecIndex,
     history: Rc<dyn HistoryRepository>,
     record_command: RecordCommandUseCase,
@@ -353,7 +363,12 @@ struct Engine {
 }
 
 impl Engine {
-    fn new(tx: Sender<Msg>, settings: Settings, parser: Parser, dependencies: &SharedDependencies) -> Engine {
+    fn new(
+        tx: Sender<Msg>,
+        settings: Settings,
+        command_line_parser: CommandLineParser,
+        dependencies: &SharedDependencies,
+    ) -> Engine {
         let bundle = EmbeddedSpecBundle::new(dependencies.data_directory.clone());
         // ponytail: load_index ensures the bundle a second time (touch + cleanup twice), as the engine always did.
         let index = build_specs_module(dependencies)
@@ -367,7 +382,7 @@ impl Engine {
         Engine::with(
             tx,
             settings,
-            parser,
+            command_line_parser,
             index,
             build_history_module(dependencies),
             dependencies.data_directory.state_file().ok(),
@@ -377,7 +392,7 @@ impl Engine {
     fn with(
         tx: Sender<Msg>,
         settings: Settings,
-        parser: Parser,
+        command_line_parser: CommandLineParser,
         index: SpecIndex,
         history_module: HistoryModule,
         state_path: Option<PathBuf>,
@@ -391,7 +406,8 @@ impl Engine {
             tx,
             user_fuzzy: settings.bool(AUTOCOMPLETE_FUZZY_SEARCH),
             settings,
-            parser,
+            command_line_parser,
+            parse_prefix_cache: ParsePrefixCache::default(),
             index,
             history,
             record_command,
@@ -473,7 +489,7 @@ impl Engine {
             EngineMsg::Settings(s) => {
                 js.apply_settings(&s);
                 self.settings = s;
-                self.parser.clear_caches();
+                self.command_line_parser.clear_caches(&mut self.parse_prefix_cache);
                 self.reset_slots();
                 self.first_token_cache = None;
             }
@@ -550,7 +566,12 @@ impl Engine {
             shell: req.shell,
             index: &self.index,
         };
-        let pr = match self.parser.parse(&cmd, &pctx) {
+        let pr = match self.command_line_parser.parse(
+            &mut self.parse_prefix_cache,
+            &cmd,
+            &pctx,
+            &mut |notice| log_completion_notice(notice),
+        ) {
             Ok(pr) => pr,
             Err(CompletionError::Aborted) => return None,
             Err(CompletionError::NoSuggestions(e)) => {
@@ -1388,9 +1409,9 @@ mod tests {
     }
 
     /// A parser over `js` and a spec repository that reads the env this process was started with.
-    fn parser_over(js: &Rc<QuickJsSpecRuntime>) -> Parser {
+    fn parser_over(js: &Rc<QuickJsSpecRuntime>) -> CommandLineParser {
         let bundle = EmbeddedSpecBundle::new(data_directory_from_env());
-        Parser::new(Rc::new(QuickJsSpecRepository::new(js.clone(), bundle)), js.clone())
+        CommandLineParser::new(Rc::new(QuickJsSpecRepository::new(js.clone(), bundle)), js.clone())
     }
 
     /// An engine whose wrapper env is `PATH=/wrapper/bin`, with the js runtime its parser and its `handle` share.
