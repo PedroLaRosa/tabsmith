@@ -232,4 +232,132 @@ mod tests {
 
         assert_eq!((stale.exists(), future.exists()), (false, true));
     }
+
+    #[test]
+    fn should_save_no_alias_as_null() {
+        let temp_dir = TempDir::new("session-no-alias");
+        let repository = repository_in(&temp_dir);
+        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 7);
+
+        repository.save(&context).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(temp_dir.path().join("run/abc123.json")).unwrap(),
+            r#"{"env":{},"alias":null,"ts":7}"#
+        );
+    }
+
+    /// `#[serde(default)]` does not take an explicit null, so `{"env":null}` is no record either.
+    #[test]
+    fn should_find_nothing_in_a_missing_run_file_bad_json_or_a_null_env() {
+        let temp_dir = TempDir::new("session-unreadable");
+        let repository = repository_in(&temp_dir);
+        let run = temp_dir.path().join("run");
+        std::fs::create_dir(&run).unwrap();
+        std::fs::write(run.join("bad.json"), "{oops").unwrap();
+        std::fs::write(run.join("nulled.json"), r#"{"env":null}"#).unwrap();
+
+        let found =
+            ["missing", "bad", "nulled"].map(|id| repository.find(&session_id(id)).is_some());
+
+        assert_eq!(found, [false; 3]);
+    }
+
+    /// `_ pre-cmd` with a valid id and no home prints this through main's `{:#}`.
+    #[test]
+    fn should_fail_to_save_without_a_home_directory_with_the_original_message() {
+        let repository = FileSessionContextRepository::new(DataDirectory::new(None, None));
+        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+
+        let error = repository.save(&context).unwrap_err();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            "could not determine the home directory (set HOME or TABSMITH_HOME)"
+        );
+    }
+
+    /// A running session's next prompt does not bring back a data directory `uninstall --purge` removed.
+    #[cfg(unix)]
+    #[test]
+    fn should_fail_to_save_into_a_purged_data_directory_without_recreating_it() {
+        let temp_dir = TempDir::new("session-purged");
+        let root = temp_dir.path().join("purged");
+        let repository =
+            FileSessionContextRepository::new(DataDirectory::new(Some(root.clone()), None));
+        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+
+        let error = repository.save(&context).unwrap_err();
+
+        assert_eq!(
+            (format!("{:#}", anyhow::Error::from(error)), root.exists()),
+            ("No such file or directory (os error 2)".to_string(), false)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_report_a_failed_save_as_writing_the_run_file() {
+        let temp_dir = TempDir::new("session-unwritable");
+        let repository = repository_in(&temp_dir);
+        let path = temp_dir.path().join("run/abc123.json");
+        std::fs::create_dir_all(&path).unwrap();
+        let context = SessionContext::new(session_id("abc123"), HashMap::new(), None, 0);
+
+        let error = repository.save(&context).unwrap_err();
+
+        assert_eq!(
+            format!("{:#}", anyhow::Error::from(error)),
+            format!("writing {}: Is a directory (os error 21)", path.display())
+        );
+    }
+
+    /// The entry's own metadata is read: a link is not a regular file, so neither it nor its stale target goes.
+    #[cfg(unix)]
+    #[test]
+    fn should_keep_a_link_to_a_stale_file_when_pruning() {
+        let temp_dir = TempDir::new("session-prune-link");
+        let repository = repository_in(&temp_dir);
+        let run = temp_dir.path().join("run");
+        let (stale, target, link) = (
+            run.join("stale.json"),
+            temp_dir.path().join("old-target"),
+            run.join("link.json"),
+        );
+        let two_days_ago = SystemTime::now() - Duration::from_secs(2 * 24 * 3600);
+        std::fs::create_dir(&run).unwrap();
+        std::fs::write(&stale, "{}").unwrap();
+        std::fs::write(&target, "{}").unwrap();
+        set_modified(&stale, two_days_ago);
+        set_modified(&target, two_days_ago);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        repository.prune_older_than(Duration::from_secs(24 * 3600));
+
+        assert_eq!(
+            (
+                stale.exists(),
+                link.symlink_metadata().is_ok(),
+                target.exists()
+            ),
+            (false, true, true)
+        );
+    }
+
+    /// The pty still runs without a home: it just never finds, reloads or removes a context.
+    #[test]
+    fn should_find_nothing_and_remove_nothing_without_a_home_directory() {
+        let repository = FileSessionContextRepository::new(DataDirectory::new(None, None));
+
+        repository.remove(&session_id("abc123"));
+        repository.prune_older_than(Duration::from_secs(24 * 3600));
+
+        assert_eq!(
+            (
+                repository.find(&session_id("abc123")).is_none(),
+                repository.last_modified(&session_id("abc123"))
+            ),
+            (true, None)
+        );
+    }
 }
