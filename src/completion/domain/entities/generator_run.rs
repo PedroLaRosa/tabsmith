@@ -5,6 +5,7 @@ use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::custom_generator_result::CustomGeneratorResult;
 use crate::specs::domain::value_objects::generator::Generator;
 use crate::specs::domain::value_objects::generator_context::GeneratorContext;
+use crate::specs::domain::value_objects::script_resolution::ScriptResolution;
 use crate::specs::domain::value_objects::spec_function_call::SpecFunctionCall;
 use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 use crate::specs::domain::value_objects::spec_value::SpecValue;
@@ -189,11 +190,33 @@ impl GeneratorRun {
             _ => GeneratorCommand::Settle(GeneratorOutcome::Done(result.suggestions().clone())), // undefined → []
         }
     }
+
+    /// A script's `resolution`: the exec to start, its timeout raised to the largest of `floor` (the settings' script
+    /// timeout), the generator's `scriptTimeout` and the request's own; nothing to run → []; bad input → a failure.
+    pub(crate) fn script_command(
+        &self,
+        generator: &Generator,
+        resolution: ScriptResolution,
+        floor: u64,
+    ) -> GeneratorCommand {
+        let request = match resolution {
+            ScriptResolution::Ready { request, .. } => request,
+            ScriptResolution::Invalid(e) => {
+                return GeneratorCommand::Settle(GeneratorOutcome::Fail(format!("bad script input: {e}")))
+            }
+            ScriptResolution::Skip => return GeneratorCommand::Settle(GeneratorOutcome::Done(Vec::new())), // falsy → []
+        };
+        let timeout = floor
+            .max(generator.script_timeout().unwrap_or(0))
+            .max(request.timeout().unwrap_or(0));
+        GeneratorCommand::StartExec(request.with_timeout(Some(timeout)), self.context().clone())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::specs::domain::value_objects::exec_request::ExecRequest;
     use std::collections::{BTreeMap, HashMap};
 
     fn run_of(generator: &Generator, help: Vec<SpecSuggestion>) -> GeneratorRun {
@@ -319,5 +342,45 @@ mod tests {
             panic!("expected the rows to settle, got {command:?}");
         };
         assert_eq!(rows, vec![row("main")]);
+    }
+
+    fn git_branch(timeout: Option<u64>) -> ExecRequest {
+        ExecRequest::new("git".into(), vec!["branch".into()], Some("/repo".into()), HashMap::new(), timeout)
+    }
+
+    #[test]
+    fn should_fail_bad_script_input_with_its_serde_text() {
+        let generator = Generator::default();
+        let run = run_of(&generator, Vec::new());
+        let invalid = ScriptResolution::Invalid("missing field `command`".into());
+
+        let command = run.script_command(&generator, invalid, 5000);
+
+        let GeneratorCommand::Settle(GeneratorOutcome::Fail(reason)) = command else {
+            panic!("expected the run to fail, got {command:?}");
+        };
+        assert_eq!(reason, "bad script input: missing field `command`");
+    }
+
+    #[test]
+    fn should_raise_the_exec_timeout_to_the_largest_of_floor_generator_and_request() {
+        // (floor, generator scriptTimeout, request timeout): each is the largest once; a missing one counts as 0
+        let cases = [(9000, Some(5000), Some(7000)), (5000, Some(9000), None), (5000, None, Some(9000))];
+
+        for (floor, generator_timeout, request_timeout) in cases {
+            let generator = Generator::default().with_script_timeout(generator_timeout);
+            let run = run_of(&generator, Vec::new());
+            let ready = ScriptResolution::Ready {
+                request: git_branch(request_timeout),
+                cache_key_source: "git branch".into(),
+            };
+
+            let command = run.script_command(&generator, ready, floor);
+
+            let GeneratorCommand::StartExec(request, _) = command else {
+                panic!("expected an exec, got {command:?}");
+            };
+            assert_eq!(request, git_branch(request_timeout).with_timeout(Some(9000)));
+        }
     }
 }
