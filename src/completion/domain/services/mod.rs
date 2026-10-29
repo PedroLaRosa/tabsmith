@@ -1,5 +1,6 @@
 pub(crate) mod argv_parser;
 pub(crate) mod command_line_tokenizer;
+pub(crate) mod completion_request_policy;
 pub(crate) mod first_token_suggestions;
 pub(crate) mod fuzzy_matcher;
 pub(crate) mod generator_trigger_policy;
