@@ -24,6 +24,7 @@ use crate::specs::application::ports::runtime_event::RuntimeEvent;
 use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
 use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
 use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
+use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::exec_request::ExecRequest;

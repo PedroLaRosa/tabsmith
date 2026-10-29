@@ -216,10 +216,6 @@ impl QuickJsSpecRuntime {
         })
     }
 
-    pub(crate) fn apply_settings(&self, settings: &Settings) {
-        self.tasks.borrow_mut().timeout_ms = script_timeout(settings);
-    }
-
     /// Evaluate a spec module once (cached by path until its mtime/size changes) and return its exports, serialized
     /// (functions → `{"$fn": id}`), e.g. `{"default": {...}, "versions": {...}, "getVersionCommand": {"$fn": 3}}`.
     /// Empty file → empty map. 5 s deadline.
@@ -320,15 +316,6 @@ impl QuickJsSpecRuntime {
         id
     }
 
-    /// Start a native process (SPEC §9.3) on a worker thread; result `{stdout, stderr, status}`.
-    pub(crate) fn start_exec(&self, input: ExecRequest, ctx: &GeneratorContext) -> TaskId {
-        let mut h = self.tasks.borrow_mut();
-        let id = h.id();
-        h.live.insert(id);
-        h.spawn_exec(id, input, ctx.clone());
-        id
-    }
-
     /// Pump until every task finished or `deadline`. Returns one entry per task (`None` = still pending).
     /// Pending tasks stay alive and can be waited on again; finished results are delivered once (then dropped,
     /// like `forget`; an unknown/forgotten task yields `Some(Err)`). `Err(Aborted)` when the event source
@@ -390,27 +377,6 @@ impl QuickJsSpecRuntime {
                 self.forget(&[task]);
                 Err(e)
             }
-        }
-    }
-
-    /// Start a timer task that completes (with `null`) after `ms` (generator debounce).
-    pub(crate) fn start_sleep(&self, ms: u64) -> TaskId {
-        let mut h = self.tasks.borrow_mut();
-        let id = h.id();
-        h.live.insert(id);
-        h.timers
-            .push((Instant::now() + Duration::from_millis(ms), id));
-        id
-    }
-
-    /// Drop the result/bookkeeping of tasks the caller no longer cares about.
-    pub(crate) fn forget(&self, tasks: &[TaskId]) {
-        let mut h = self.tasks.borrow_mut();
-        for t in tasks {
-            h.live.remove(t);
-            h.done.remove(t);
-            h.ctxs.remove(t);
-            h.timers.retain(|x| x.1 != *t);
         }
     }
 
@@ -508,12 +474,23 @@ impl SpecRuntime for QuickJsSpecRuntime {
         self.start_call(function, args, context)
     }
 
-    fn start_exec(&self, request: ExecRequest, context: &GeneratorContext) -> TaskId {
-        QuickJsSpecRuntime::start_exec(self, request, context)
+    /// Start a native process (SPEC §9.3) on a worker thread; result `{stdout, stderr, status}`.
+    fn start_exec(&self, input: ExecRequest, ctx: &GeneratorContext) -> TaskId {
+        let mut h = self.tasks.borrow_mut();
+        let id = h.id();
+        h.live.insert(id);
+        h.spawn_exec(id, input, ctx.clone());
+        id
     }
 
+    /// Start a timer task that completes (with `null`) after `ms` (generator debounce).
     fn start_sleep(&self, ms: u64) -> TaskId {
-        QuickJsSpecRuntime::start_sleep(self, ms)
+        let mut h = self.tasks.borrow_mut();
+        let id = h.id();
+        h.live.insert(id);
+        h.timers
+            .push((Instant::now() + Duration::from_millis(ms), id));
+        id
     }
 
     fn wait(
@@ -531,8 +508,15 @@ impl SpecRuntime for QuickJsSpecRuntime {
         }
     }
 
+    /// Drop the result/bookkeeping of tasks the caller no longer cares about.
     fn forget(&self, tasks: &[TaskId]) {
-        QuickJsSpecRuntime::forget(self, tasks)
+        let mut h = self.tasks.borrow_mut();
+        for t in tasks {
+            h.live.remove(t);
+            h.done.remove(t);
+            h.ctxs.remove(t);
+            h.timers.retain(|x| x.1 != *t);
+        }
     }
 
     fn call(
@@ -549,7 +533,7 @@ impl SpecRuntime for QuickJsSpecRuntime {
     }
 
     fn apply_settings(&self, settings: &Settings) {
-        QuickJsSpecRuntime::apply_settings(self, settings)
+        self.tasks.borrow_mut().timeout_ms = script_timeout(settings);
     }
 }
 

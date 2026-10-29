@@ -5,6 +5,7 @@ use crate::settings::domain::services::settings_catalog::{
 };
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shell_parser::CommandInfo;
+use crate::specs::application::ports::spec_runtime::SpecRuntime;
 use crate::specs::domain::entities::subcommand::Subcommand;
 use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
