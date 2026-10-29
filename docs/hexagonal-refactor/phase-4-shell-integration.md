@@ -297,7 +297,9 @@ Every item is binding (D1). Trap IDs are cited by the step prompts.
   by 4 spaces, **except** the continuation lines of the literals at `I:1732-1737, 1822-1831, 2123-2125, 2158-2161,
   2381-2388, 2580-2583, 2632-2633, 2809-2812` (their leading spaces are shell input). testlock collapses spaces
   inside strings, so it would not notice: compare string tokens (step prompts give the check).
-- **T53 testlock** keys tests by fn name: a duplicated name silently hides a missing test. After every move
+- **T53 testlock** keys tests by fn name: a duplicated name silently hides a missing test. testlock's `DUPLICATE`
+  line lists every test name defined twice in the tree; only `should_not_save_over_settings_that_cannot_be_loaded`
+  (settings, before Phase 4) may be there. After every move
   `grep -rhn 'fn integrations_' src | sed 's/.*fn //;s/(.*//' | sort | uniq -d` prints nothing and
   `cargo test --locked integrations_` lists 42 (37 here + 5 in shared) plus new ones. Judge a step with
   `python3 scripts/hexagonal-refactor/testlock.py . phase4-start --diff` (Phase 1 left most `integrations_*` tests

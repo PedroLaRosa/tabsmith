@@ -59,7 +59,7 @@ fi
 
 echo "== test lock (baseline $BASELINE_REV)"
 python3 "$HERE/testlock.py" . "$BASELINE_REV" >"$LOG/testlock.txt"
-head -5 "$LOG/testlock.txt"
+head -6 "$LOG/testlock.txt"
 if grep -q "^MISSING ([1-9]" "$LOG/testlock.txt"; then echo "GATE FAIL: baseline tests missing"; fail=1; fi
 echo "(diffs of CHANGED tests: python3 $HERE/testlock.py . $BASELINE_REV --diff)"
 

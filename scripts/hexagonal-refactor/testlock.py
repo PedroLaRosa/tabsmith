@@ -3,7 +3,8 @@
 
 Usage: testlock.py <repo> <baseline-rev> [--diff]
 
-Keys tests by fn name (unique in this crate). Bodies are normalised twice:
+Keys tests by fn name, so a name defined twice hides one of the two tests: DUPLICATE lists every such name in the
+tree (it does not fail the run). Bodies are normalised twice:
   - "exact": comments dropped, whitespace collapsed;
   - "loose": additionally every `a::b::c` path is reduced to its last segment, so pure moves
     (`crate::settings::Settings` -> `crate::settings::domain::settings::Settings`) do not count.
@@ -74,7 +75,7 @@ def tests_in(src):
     toks = list(lex(src))
     text = "".join(t for _, t in toks)
     # positions of code chars only, to brace-match safely
-    out = {}
+    out = []
     pos = 0
     spans = []
     for kind, t in toks:
@@ -105,7 +106,7 @@ def tests_in(src):
                         break
             j += 1
         body = text[k:j + 1]
-        out[name] = body
+        out.append((name, body))
     return out
 
 
@@ -126,11 +127,14 @@ def normalise(body, loose):
 
 
 def collect_tree(repo):
-    out = {}
+    """The tests by name, and the names defined more than once."""
+    out, duplicates = {}, set()
     for p in sorted(pathlib.Path(repo, "src").rglob("*.rs")):
-        for name, body in tests_in(p.read_text()).items():
+        for name, body in tests_in(p.read_text()):
+            if name in out:
+                duplicates.add(name)
             out[name] = (str(p.relative_to(repo)), body)
-    return out
+    return out, sorted(duplicates)
 
 
 def collect_rev(repo, rev):
@@ -142,7 +146,7 @@ def collect_rev(repo, rev):
             continue
         src = subprocess.run(["git", "-C", repo, "show", f"{rev}:{f}"], capture_output=True, text=True,
                              check=True).stdout
-        for name, body in tests_in(src).items():
+        for name, body in tests_in(src):
             out[name] = (f, body)
     return out
 
@@ -150,7 +154,7 @@ def collect_rev(repo, rev):
 def main():
     repo, rev = sys.argv[1], sys.argv[2]
     show_diff = "--diff" in sys.argv
-    base, tree = collect_rev(repo, rev), collect_tree(repo)
+    base, (tree, duplicates) = collect_rev(repo, rev), collect_tree(repo)
     missing = sorted(set(base) - set(tree))
     new = sorted(set(tree) - set(base))
     changed, path_only = [], []
@@ -165,6 +169,7 @@ def main():
     print(f"NEW ({len(new)}): {' '.join(new)}")
     print(f"PATH-ONLY ({len(path_only)})")
     print(f"CHANGED ({len(changed)}): {' '.join(changed)}")
+    print(f"DUPLICATE ({len(duplicates)}): {' '.join(duplicates)}")
     if show_diff:
         for name in changed:
             print(f"\n===== {name}  {base[name][0]} -> {tree[name][0]}")
