@@ -6,7 +6,7 @@
 //! reply (phase `Parse`). Triggered generators run as small state machines over `Js` tasks; whenever one
 //! finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
-use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId, TaskResult};
+use crate::js::{ExecInput, GenCtx, Js, JsArg, TaskId, TaskResult};
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
@@ -21,6 +21,7 @@ use crate::settings::domain::services::settings_catalog::{
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::json_document_store::JsonDocumentStore;
 use crate::shell_parser;
+use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::filter_strategy::FilterStrategy;
 use crate::specs::domain::value_objects::generator::Generator;
@@ -550,8 +551,13 @@ impl Engine {
                         SYNC_CALL,
                     ) {
                         Ok(Value::String(s)) => Query::Value(s),
-                        Err(JsError::Aborted) => return None,
-                        _ => Query::Value(pr.search_term.clone()), // error → search term
+                        Err(SpecError::Aborted) => return None,
+                        Ok(_)
+                        | Err(
+                            SpecError::Timeout
+                            | SpecError::Invalid(_)
+                            | SpecError::BundleUnavailable(_),
+                        ) => Query::Value(pr.search_term.clone()), // error → search term
                     },
                 }
             });
@@ -590,8 +596,12 @@ impl Engine {
                         SYNC_CALL,
                     ) {
                         Ok(v) => truthy(&v),
-                        Err(JsError::Aborted) => return None,
-                        Err(_) => true, // a throwing trigger counts as a trigger
+                        Err(SpecError::Aborted) => return None,
+                        Err(
+                            SpecError::Timeout
+                            | SpecError::Invalid(_)
+                            | SpecError::BundleUnavailable(_),
+                        ) => true, // a throwing trigger counts as a trigger
                     },
                     Some(t) => suggest::triggered(t, new, old).unwrap_or(true),
                 }
@@ -921,8 +931,10 @@ impl Engine {
             .map_or(Instant::now() + SLICE, |d| d.min(Instant::now() + SLICE));
         let results = match js.wait(&tasks, deadline) {
             Ok(r) => r,
-            Err(JsError::Aborted) => return, // a newer request is queued
-            Err(e) => vec![Some(Err(e.to_string())); tasks.len()],
+            Err(SpecError::Aborted) => return, // a newer request is queued
+            Err(
+                e @ (SpecError::Timeout | SpecError::Invalid(_) | SpecError::BundleUnavailable(_)),
+            ) => vec![Some(Err(e.to_string())); tasks.len()],
         };
         let mut changed = false;
         let mut runs = std::mem::take(&mut self.runs);

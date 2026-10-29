@@ -11,6 +11,7 @@
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_SCRIPT_TIMEOUT;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::logger;
+use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 use crate::types::{EngineMsg, ExecOutput};
 use rquickjs::context::EvalOptions;
@@ -27,26 +28,6 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum JsError {
-    /// A newer completion request arrived; it is queued and returned by the next `next_msg()`.
-    Aborted,
-    Timeout,
-    Other(String),
-}
-
-impl std::fmt::Display for JsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            JsError::Aborted => write!(f, "aborted by a newer request"),
-            JsError::Timeout => write!(f, "timed out"),
-            JsError::Other(s) => write!(f, "{s}"),
-        }
-    }
-}
-
-impl std::error::Error for JsError {}
 
 /// `generatorContext` given to custom generators, plus what `exec` needs (SPEC §6.5, §9.3).
 #[derive(Clone, Debug, Default)]
@@ -360,7 +341,7 @@ impl Js {
     /// Evaluate a spec module once (cached by path until its mtime/size changes) and return its exports, serialized
     /// (functions → `{"$fn": id}`), e.g. `{"default": {...}, "versions": {...}, "getVersionCommand": {"$fn": 3}}`.
     /// Empty file → empty map. 5 s deadline.
-    pub fn load_module(&mut self, path: &Path) -> Result<Map<String, Value>, JsError> {
+    pub fn load_module(&mut self, path: &Path) -> Result<Map<String, Value>, SpecError> {
         let stamp = std::fs::metadata(path)
             .ok()
             .map(|m| (m.modified().ok(), m.len()));
@@ -372,12 +353,12 @@ impl Js {
             return Ok(ns.clone()); // ponytail: clone per call; the parser caches normalised specs anyway
         }
         let src = std::fs::read_to_string(path)
-            .map_err(|e| JsError::Other(format!("{}: {e}", path.display())))?;
+            .map_err(|e| SpecError::Invalid(format!("{}: {e}", path.display())))?;
         let ns = if src.trim().is_empty() {
             Map::new()
         } else {
             let script = wrap_module(&src).ok_or_else(|| {
-                JsError::Other(format!("{}: no trailing export clause", path.display()))
+                SpecError::Invalid(format!("{}: no trailing export clause", path.display()))
             })?;
             let deadline = Instant::now() + LOAD_TIMEOUT;
             let mut opts = EvalOptions::default();
@@ -391,15 +372,15 @@ impl Js {
             self.arm_off();
             let json = r.map_err(|e| {
                 if Instant::now() >= deadline {
-                    JsError::Timeout
+                    SpecError::Timeout
                 } else {
-                    JsError::Other(format!("{}: {e}", path.display()))
+                    SpecError::Invalid(format!("{}: {e}", path.display()))
                 }
             })?;
             match serde_json::from_str(&json) {
                 Ok(Value::Object(m)) => m,
                 Ok(_) => Map::new(),
-                Err(e) => return Err(JsError::Other(format!("{}: {e}", path.display()))),
+                Err(e) => return Err(SpecError::Invalid(format!("{}: {e}", path.display()))),
             }
         };
         self.modules.insert(path.to_path_buf(), (stamp, ns.clone()));
@@ -467,14 +448,14 @@ impl Js {
         &mut self,
         tasks: &[TaskId],
         deadline: Instant,
-    ) -> Result<Vec<Option<TaskResult>>, JsError> {
+    ) -> Result<Vec<Option<TaskResult>>, SpecError> {
         loop {
             if self
                 .deferred
                 .iter()
                 .any(|m| matches!(m, EngineMsg::Complete(_)))
             {
-                return Err(JsError::Aborted);
+                return Err(SpecError::Aborted);
             }
             self.pump(deadline);
             let now = Instant::now();
@@ -514,15 +495,15 @@ impl Js {
         args: Vec<JsArg>,
         ctx: Option<&GenCtx>,
         timeout: Duration,
-    ) -> Result<Value, JsError> {
+    ) -> Result<Value, SpecError> {
         let task = self.start_call(f, args, ctx);
         let r = self.wait(&[task], Instant::now() + timeout);
         match r.map(|mut v| v.pop().flatten()) {
             Ok(Some(Ok(v))) => Ok(v),
-            Ok(Some(Err(e))) => Err(JsError::Other(e)),
+            Ok(Some(Err(e))) => Err(SpecError::Invalid(e)),
             Ok(None) => {
                 self.forget(&[task]);
-                Err(JsError::Timeout)
+                Err(SpecError::Timeout)
             }
             Err(e) => {
                 self.forget(&[task]);
@@ -1137,7 +1118,7 @@ mod tests {
         ns: &Map<String, Value>,
         args: Vec<JsArg>,
         ctx: Option<&GenCtx>,
-    ) -> Result<Value, JsError> {
+    ) -> Result<Value, SpecError> {
         js.call(
             fn_id(&ns["default"]).unwrap(),
             args,
@@ -1245,7 +1226,7 @@ mod tests {
         std::fs::write(dir.path().join("bad.js"), "var = ;export{a as default};").unwrap();
         assert!(matches!(
             js.load_module(&dir.path().join("bad.js")),
-            Err(JsError::Other(_))
+            Err(SpecError::Invalid(_))
         ));
     }
 
@@ -1331,7 +1312,7 @@ mod tests {
         };
         assert_eq!(run(&mut js, "co"), Ok(json!("checkout")));
         assert!(
-            matches!(run(&mut js, "nope"), Err(JsError::Other(e)) if e.contains("Failed parsing alias"))
+            matches!(run(&mut js, "nope"), Err(SpecError::Invalid(e)) if e.contains("Failed parsing alias"))
         );
     }
 
@@ -1551,7 +1532,7 @@ mod tests {
             Duration::from_millis(200),
         );
         assert!(
-            matches!(r, Err(JsError::Timeout) | Err(JsError::Other(_))),
+            matches!(r, Err(SpecError::Timeout) | Err(SpecError::Invalid(_))),
             "{r:?}"
         );
         assert!(t0.elapsed() < Duration::from_secs(3));
@@ -1735,13 +1716,13 @@ mod tests {
         let t0 = Instant::now();
         assert_eq!(
             js.wait(&[slow], Instant::now() + Duration::from_secs(5)),
-            Err(JsError::Aborted)
+            Err(SpecError::Aborted)
         );
         assert!(t0.elapsed() < Duration::from_secs(1));
         // Still queued → a new wait aborts at once.
         assert_eq!(
             js.wait(&[slow], Instant::now() + Duration::from_secs(5)),
-            Err(JsError::Aborted)
+            Err(SpecError::Aborted)
         );
         assert!(matches!(js.next_msg(), Some(EngineMsg::ToggleFuzzy)));
         assert!(matches!(js.next_msg(), Some(EngineMsg::Complete(r)) if r.id == 7));

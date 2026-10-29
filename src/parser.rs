@@ -1,12 +1,13 @@
 //! Spec loading (resolution, diff-versioned merge) and the argv state machine (SPEC §6.3–6.4).
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
-use crate::js::{ExecInput, GenCtx, Js, JsArg, JsError, TaskId};
+use crate::js::{ExecInput, GenCtx, Js, JsArg, TaskId};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE_FOR_COMMANDS,
 };
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shell_parser::CommandInfo;
 use crate::specs::domain::entities::subcommand::Subcommand;
+use crate::specs::domain::spec_error::SpecError;
 use crate::specs::domain::value_objects::arg::Arg;
 use crate::specs::domain::value_objects::parser_directives::ParserDirectives;
 use crate::specs::domain::value_objects::repeatability::Repeatability;
@@ -95,11 +96,13 @@ pub enum ParseError {
     NoSuggestions(String),
 }
 
-impl From<JsError> for ParseError {
-    fn from(e: JsError) -> Self {
+impl From<SpecError> for ParseError {
+    fn from(e: SpecError) -> Self {
         match e {
-            JsError::Aborted => ParseError::Aborted,
-            other => ParseError::NoSuggestions(other.to_string()),
+            SpecError::Aborted => ParseError::Aborted,
+            SpecError::Timeout | SpecError::Invalid(_) | SpecError::BundleUnavailable(_) => {
+                ParseError::NoSuggestions(e.to_string())
+            }
         }
     }
 }
@@ -345,7 +348,7 @@ fn cli_version(
         ),
     });
     let r = js.wait(&[id], Instant::now() + TIMEOUT);
-    if matches!(r, Err(JsError::Aborted)) {
+    if matches!(r, Err(SpecError::Aborted)) {
         return Err(ParseError::Aborted);
     }
     inflight.remove(name);

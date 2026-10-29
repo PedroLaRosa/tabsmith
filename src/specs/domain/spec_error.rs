@@ -7,7 +7,7 @@ pub(crate) enum SpecError {
     Aborted,
     /// A spec call did not finish before its deadline.
     Timeout,
-    /// The spec is malformed, e.g. "spec is not an object".
+    /// The spec or a spec call failed, as its own text: "spec is not an object", a module load error, a JS failure.
     Invalid(String),
     /// The spec bundle cannot be installed or read: the failure with its causes, already rendered.
     BundleUnavailable(String),
