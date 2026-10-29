@@ -3,10 +3,9 @@
 //! OWNER: engine agent.
 //!
 //! Per request: mid-word guard → `shell_parser::current_command` → `Parser::parse` → generator triggers →
-//! reply (phase `Parse`). Triggered generators run as small state machines over `Js` tasks; whenever one
-//! finishes, the latest request is re-ranked and replied again (phase `Generators`).
+//! reply (phase `Parse`). Triggered generators run as small state machines over `QuickJsSpecRuntime` tasks;
+//! whenever one finishes, the latest request is re-ranked and replied again (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
-use crate::js::{Js, JsArg, TaskResult};
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::parser::{ParseCtx, ParseError, ParseResult, Parser};
@@ -39,6 +38,7 @@ use crate::specs::infrastructure::adapters::fig_spec_mapper::{
 };
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
+use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime, TaskResult};
 use crate::specs::infrastructure::specs_module::build_specs_module;
 use crate::suggest::{self, FilterOpts, GenCache, GenView, InsCtx, Lookup, Query, Sugg};
 use crate::shared::domain::value_objects::shell::Shell;
@@ -79,7 +79,7 @@ pub fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
         .name("engine".into())
         .spawn(move || {
             // QuickJS is !Send: the runtime is created on this thread.
-            match Js::new(erx, inner, settings.clone()) {
+            match QuickJsSpecRuntime::new(erx, inner, settings.clone()) {
                 Ok(mut js) => Engine::new(tx, settings).run(&mut js),
                 Err(e) => logger::error(&format!("engine: js host: {e:#}")),
             }
@@ -187,7 +187,7 @@ enum Step {
     Filter,
 }
 
-/// One generator run waiting on a `Js` task.
+/// One generator run waiting on a `QuickJsSpecRuntime` task.
 #[derive(Clone)]
 struct Run {
     slot: usize,
@@ -316,7 +316,7 @@ impl Engine {
         }
     }
 
-    fn run(mut self, js: &mut Js) {
+    fn run(mut self, js: &mut QuickJsSpecRuntime) {
         let mut pending: Option<Request> = None;
         'outer: loop {
             if pending.is_none() && self.runs.is_empty() {
@@ -351,7 +351,7 @@ impl Engine {
     }
 
     /// Handle one message; `false` = shut down.
-    fn handle(&mut self, m: EngineMsg, pending: &mut Option<Request>, js: &mut Js) -> bool {
+    fn handle(&mut self, m: EngineMsg, pending: &mut Option<Request>, js: &mut QuickJsSpecRuntime) -> bool {
         match m {
             EngineMsg::Complete(r) => *pending = Some(r),
             EngineMsg::CommandFinished(_) | EngineMsg::CommandEnded => {
@@ -423,7 +423,7 @@ impl Engine {
     // Requests
 
     /// Phase-Parse reply for `req`; `None` when a newer request aborted it (it is queued in `js`).
-    fn compute(&mut self, req: &Request, js: &mut Js) -> Option<Completion> {
+    fn compute(&mut self, req: &Request, js: &mut QuickJsSpecRuntime) -> Option<Completion> {
         let cursor = req.cursor.min(req.buffer.len());
         // SPEC §6.1.5 mid-word guard
         if !req.buffer.is_char_boundary(cursor)
@@ -529,7 +529,7 @@ impl Engine {
     }
 
     /// Query derivation per generator of the current arg (function `getQueryTerm`s are called once here).
-    fn queries(&self, pr: &ParseResult, shell: Shell, js: &mut Js) -> Option<Vec<Query>> {
+    fn queries(&self, pr: &ParseResult, shell: Shell, js: &mut QuickJsSpecRuntime) -> Option<Vec<Query>> {
         let Some(arg) = &pr.current_arg else {
             return Some(Vec::new());
         };
@@ -570,7 +570,7 @@ impl Engine {
         pr: &ParseResult,
         ctx: &GeneratorContext,
         tokens: &[String],
-        js: &mut Js,
+        js: &mut QuickJsSpecRuntime,
     ) -> Option<Vec<GenKey>> {
         let arg = pr.current_arg.clone();
         let same = match (&arg, &self.slot_arg) {
@@ -706,7 +706,7 @@ impl Engine {
     }
 
     /// First step after the (optional) debounce: template, script or custom.
-    fn begin(&mut self, run: &mut Run, js: &mut Js) -> Outcome {
+    fn begin(&mut self, run: &mut Run, js: &mut QuickJsSpecRuntime) -> Outcome {
         let arg = run.arg.clone();
         let g = &arg.generators()[run.idx];
         if !g.template().is_empty() {
@@ -782,8 +782,8 @@ impl Engine {
         g: &Generator,
         key: Option<String>,
         step: Step,
-        js: &mut Js,
-        start: impl FnOnce(&mut Js) -> TaskId,
+        js: &mut QuickJsSpecRuntime,
+        start: impl FnOnce(&mut QuickJsSpecRuntime) -> TaskId,
     ) -> Result<Value, Outcome> {
         let (Some(cfg), Some(key)) = (g.cache(), key) else {
             run.task = start(js);
@@ -820,7 +820,7 @@ impl Engine {
     }
 
     /// SPEC §6.6.3: script value → exec input → (cached) exec.
-    fn script_input(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut Js) -> Outcome {
+    fn script_input(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut QuickJsSpecRuntime) -> Outcome {
         let Some(mut input) = script_exec_input(v, run.ctx.cwd()) else {
             return Outcome::Done(Vec::new());
         }; // falsy → []
@@ -847,7 +847,7 @@ impl Engine {
     }
 
     /// `splitOn` takes precedence over `postProcess`; neither → [].
-    fn exec_output(&mut self, run: &mut Run, g: &Generator, v: &Value, js: &mut Js) -> Outcome {
+    fn exec_output(&mut self, run: &mut Run, g: &Generator, v: &Value, js: &mut QuickJsSpecRuntime) -> Outcome {
         let stdout = v.get("stdout").and_then(Value::as_str).unwrap_or("");
         if let Some(sep) = g.split_on() {
             let t = stdout.trim();
@@ -873,7 +873,7 @@ impl Engine {
     }
 
     /// Custom result; `filterTemplateSuggestions` applies when the first item has a `context`.
-    fn custom_result(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut Js) -> Outcome {
+    fn custom_result(&mut self, run: &mut Run, g: &Generator, v: Value, js: &mut QuickJsSpecRuntime) -> Outcome {
         let templated = v
             .as_array()
             .and_then(|a| a.first())
@@ -889,7 +889,7 @@ impl Engine {
     }
 
     /// A task of `run` finished.
-    fn advance(&mut self, run: &mut Run, res: TaskResult, js: &mut Js) -> Outcome {
+    fn advance(&mut self, run: &mut Run, res: TaskResult, js: &mut QuickJsSpecRuntime) -> Outcome {
         let v = match res {
             Ok(v) => v,
             Err(e) => {
@@ -918,7 +918,7 @@ impl Engine {
     }
 
     /// Wait (one slice) on every running generator task; reply again when a current slot changed.
-    fn pump(&mut self, js: &mut Js) {
+    fn pump(&mut self, js: &mut QuickJsSpecRuntime) {
         let mut tasks: Vec<TaskId> = self.runs.iter().map(|r| r.task).collect();
         tasks.sort_unstable();
         tasks.dedup();
@@ -1267,7 +1267,7 @@ mod tests {
             None,
         );
         let (jtx, jrx) = std::sync::mpsc::channel();
-        let mut js = Js::new(jrx, jtx, Settings::default()).unwrap();
+        let mut js = QuickJsSpecRuntime::new(jrx, jtx, Settings::default()).unwrap();
         assert!(e.first_token_items(&HashMap::new(), None, None).is_empty());
         assert!(e.handle(
             EngineMsg::Session { env: HashMap::new(), alias: None },
@@ -1285,7 +1285,7 @@ mod tests {
     }
 
     /// An engine whose wrapper env is `PATH=/wrapper/bin`, with the js runtime its `handle` takes.
-    fn engine_with_wrapper_env(dir: &TempDir) -> (Engine, Js) {
+    fn engine_with_wrapper_env(dir: &TempDir) -> (Engine, QuickJsSpecRuntime) {
         let (tx, _) = std::sync::mpsc::channel();
         let mut e = Engine::with(
             tx,
@@ -1298,7 +1298,7 @@ mod tests {
         );
         e.wrapper_env = wrapper_env();
         let (jtx, jrx) = std::sync::mpsc::channel();
-        let js = Js::new(jrx, jtx, Settings::default()).unwrap();
+        let js = QuickJsSpecRuntime::new(jrx, jtx, Settings::default()).unwrap();
         (e, js)
     }
 
@@ -1306,7 +1306,7 @@ mod tests {
         HashMap::from([("PATH".to_string(), "/wrapper/bin".to_string())])
     }
 
-    fn report_session_context(e: &mut Engine, js: &mut Js, env: &[(&str, &str)], alias: Option<&str>) {
+    fn report_session_context(e: &mut Engine, js: &mut QuickJsSpecRuntime, env: &[(&str, &str)], alias: Option<&str>) {
         let env = env
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))

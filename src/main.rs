@@ -11,7 +11,6 @@ mod engine;
 mod history;
 mod icons;
 mod inline;
-mod js;
 mod keys;
 mod menu;
 mod parser;

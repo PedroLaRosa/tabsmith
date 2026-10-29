@@ -773,7 +773,7 @@ fn cli_version_detection_survives_an_aborted_parse() {
     // cli-version-respawn-per-keystroke: an abort keeps the detection running; the next parse reuses it
     use crate::types::{EngineMsg, Request};
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut js = Js::new(rx, tx.clone(), Settings::default()).unwrap();
+    let mut js = QuickJsSpecRuntime::new(rx, tx.clone(), Settings::default()).unwrap();
     let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("cliver");
     let p = dir.path().join("v.js");
     let src = "var v=async()=>{await new Promise(r=>setTimeout(r,200));globalThis.n=(globalThis.n||0)+1;return `${globalThis.n}.0.0`};export{v as getVersionCommand};";
@@ -808,7 +808,7 @@ fn cli_version_detection_survives_an_aborted_parse() {
 fn spec_identity_survives_dev_reload_and_cache_clear() {
     // arg-key-pointer-identity-devmode: an unchanged spec keeps its Rc (the engine's arg/generator keys)
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut js = Js::new(rx, tx, Settings::default()).unwrap();
+    let mut js = QuickJsSpecRuntime::new(rx, tx, Settings::default()).unwrap();
     let dir = crate::shared::infrastructure::testing::temp_dir::TempDir::new("devid");
     let build = dir.path().join(".fig").join("autocomplete").join("build");
     std::fs::create_dir_all(&build).unwrap();

@@ -1,4 +1,5 @@
-//! QuickJS host for Fig specs (SPEC §9.2) and the native `exec` used by generators (SPEC §9.3).
+//! QuickJS runtime for Fig spec code (SPEC §9.2). Generator processes run in `process_executor` (SPEC §9.3); the
+//! prelude and the module wrapper live in `quickjs_module_wrapper`.
 //! Lives on the engine thread only (QuickJS is !Send). Every async JS call is resolved by a manual event pump
 //! that also receives the engine's messages: a newer `EngineMsg::Complete` aborts the current wait.
 //! OWNER: host agent.
@@ -32,14 +33,14 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// One argument to a JS callback.
 #[derive(Clone, Debug)]
-pub enum JsArg {
+pub(crate) enum JsArg {
     Json(Value),
     /// The `executeShellCommand` function, bound to the call's `GeneratorContext`.
     Exec,
 }
 
 /// Result of a finished task: JSON (callbacks: the returned value; exec: `{stdout, stderr, status}`) or an error.
-pub type TaskResult = Result<Value, String>;
+pub(crate) type TaskResult = Result<Value, String>;
 
 /// Module evaluation deadline (SPEC §6.3).
 const LOAD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -49,7 +50,7 @@ const MIN_PUMP: Duration = Duration::from_millis(50);
 const MEMORY_LIMIT: usize = 512 << 20;
 
 /// Rust-side state shared with the functions registered in JS.
-struct Host {
+struct TaskRegistry {
     next_id: u64,
     /// Tasks started by the engine and not yet delivered or forgotten.
     live: HashSet<TaskId>,
@@ -63,7 +64,7 @@ struct Host {
     timeout_ms: u64,
 }
 
-impl Host {
+impl TaskRegistry {
     fn id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
@@ -94,10 +95,10 @@ fn script_timeout(settings: &Settings) -> u64 {
     settings.i64(AUTOCOMPLETE_SCRIPT_TIMEOUT).max(0) as u64
 }
 
-pub struct Js {
+pub(crate) struct QuickJsSpecRuntime {
     ctx: Context,
     _rt: Runtime,
-    host: Rc<RefCell<Host>>,
+    tasks: Rc<RefCell<TaskRegistry>>,
     /// Interrupt deadline checked by QuickJS while running JS (`None` = no limit).
     deadline: Rc<Cell<Option<Instant>>>,
     rx: Receiver<EngineMsg>,
@@ -110,24 +111,25 @@ pub struct Js {
 /// A file's (mtime, len); `None` if it cannot be stat'ed.
 type Stamp = Option<(Option<SystemTime>, u64)>;
 
-impl Js {
+impl QuickJsSpecRuntime {
     /// Create the runtime (memory limit, interrupt handler), evaluate the prelude.
     /// `rx` is the engine's inbox; `tx` is a sender to that same inbox (for exec workers and timers).
-    /// Note: `Js` keeps `tx`, so the inbox never disconnects; the engine stops on `EngineMsg::Shutdown`.
-    pub fn new(
+    /// Note: `QuickJsSpecRuntime` keeps `tx`, so the inbox never disconnects; the engine stops on
+    /// `EngineMsg::Shutdown`.
+    pub(crate) fn new(
         rx: Receiver<EngineMsg>,
         tx: Sender<EngineMsg>,
         settings: Settings,
-    ) -> anyhow::Result<Js> {
-        let rt = Runtime::new()?;
+    ) -> Result<Self, SpecError> {
+        let rt = Runtime::new().map_err(|e| SpecError::Invalid(e.to_string()))?;
         rt.set_memory_limit(MEMORY_LIMIT);
         let deadline: Rc<Cell<Option<Instant>>> = Rc::default();
         let d = deadline.clone();
         rt.set_interrupt_handler(Some(Box::new(move || {
             d.get().is_some_and(|d| Instant::now() > d)
         })));
-        let ctx = Context::full(&rt)?;
-        let host = Rc::new(RefCell::new(Host {
+        let ctx = Context::full(&rt).map_err(|e| SpecError::Invalid(e.to_string()))?;
+        let tasks = Rc::new(RefCell::new(TaskRegistry {
             next_id: 0,
             live: HashSet::new(),
             done: HashMap::new(),
@@ -138,7 +140,7 @@ impl Js {
         }));
         ctx.with(|ctx| {
             let g = ctx.globals();
-            let (h1, h2, h3) = (host.clone(), host.clone(), host.clone());
+            let (h1, h2, h3) = (tasks.clone(), tasks.clone(), tasks.clone());
             (|| -> rquickjs::Result<()> {
                 g.set(
                     "__ts_log",
@@ -194,12 +196,12 @@ impl Js {
                 ctx.eval::<(), _>(PRELUDE)
             })()
             .catch(&ctx)
-            .map_err(|e| anyhow::anyhow!("js prelude: {e}"))
+            .map_err(|e| SpecError::Invalid(format!("js prelude: {e}")))
         })?;
-        Ok(Js {
+        Ok(QuickJsSpecRuntime {
             ctx,
             _rt: rt,
-            host,
+            tasks,
             deadline,
             rx,
             deferred: VecDeque::new(),
@@ -209,7 +211,7 @@ impl Js {
 
     /// Next message for the engine loop: deferred messages first (incl. a request that aborted a wait), then a
     /// blocking receive. `ExecDone`/`Timer` are consumed internally. `None` when all senders are gone.
-    pub fn next_msg(&mut self) -> Option<EngineMsg> {
+    pub(crate) fn next_msg(&mut self) -> Option<EngineMsg> {
         loop {
             if let Some(m) = self.deferred.pop_front() {
                 return Some(m);
@@ -222,7 +224,7 @@ impl Js {
     }
 
     /// Like `next_msg` but non-blocking.
-    pub fn try_next_msg(&mut self) -> Option<EngineMsg> {
+    pub(crate) fn try_next_msg(&mut self) -> Option<EngineMsg> {
         loop {
             if let Some(m) = self.deferred.pop_front() {
                 return Some(m);
@@ -234,14 +236,14 @@ impl Js {
         }
     }
 
-    pub fn set_settings(&mut self, settings: Settings) {
-        self.host.borrow_mut().timeout_ms = script_timeout(&settings);
+    pub(crate) fn set_settings(&mut self, settings: Settings) {
+        self.tasks.borrow_mut().timeout_ms = script_timeout(&settings);
     }
 
     /// Evaluate a spec module once (cached by path until its mtime/size changes) and return its exports, serialized
     /// (functions → `{"$fn": id}`), e.g. `{"default": {...}, "versions": {...}, "getVersionCommand": {"$fn": 3}}`.
     /// Empty file → empty map. 5 s deadline.
-    pub fn load_module(&mut self, path: &Path) -> Result<Map<String, Value>, SpecError> {
+    pub(crate) fn load_module(&mut self, path: &Path) -> Result<Map<String, Value>, SpecError> {
         let stamp = std::fs::metadata(path)
             .ok()
             .map(|m| (m.modified().ok(), m.len()));
@@ -288,7 +290,7 @@ impl Js {
     }
 
     /// Start a JS callback `fns[f](...args)`; the result is the serialized return value (Promises awaited).
-    pub fn start_call(
+    pub(crate) fn start_call(
         &mut self,
         f: SpecFunctionRef,
         args: Vec<JsArg>,
@@ -296,7 +298,7 @@ impl Js {
     ) -> TaskId {
         let generator = ctx.cloned().unwrap_or_default();
         let id = {
-            let mut h = self.host.borrow_mut();
+            let mut h = self.tasks.borrow_mut();
             let id = h.id();
             h.live.insert(id);
             h.ctxs.insert(id, generator.clone());
@@ -331,14 +333,14 @@ impl Js {
         });
         self.arm_off();
         if let Err(e) = r {
-            self.host.borrow_mut().done.insert(id, Err(e));
+            self.tasks.borrow_mut().done.insert(id, Err(e));
         }
         id
     }
 
     /// Start a native process (SPEC §9.3) on a worker thread; result `{stdout, stderr, status}`.
-    pub fn start_exec(&mut self, input: ExecRequest, ctx: &GeneratorContext) -> TaskId {
-        let mut h = self.host.borrow_mut();
+    pub(crate) fn start_exec(&mut self, input: ExecRequest, ctx: &GeneratorContext) -> TaskId {
+        let mut h = self.tasks.borrow_mut();
         let id = h.id();
         h.live.insert(id);
         h.spawn_exec(id, input, ctx.clone());
@@ -349,7 +351,7 @@ impl Js {
     /// Pending tasks stay alive and can be waited on again; finished results are delivered once (then dropped,
     /// like `forget`; an unknown/forgotten task yields `Some(Err)`). `Err(Aborted)` when a newer `Complete`
     /// arrived (or is already queued); no task is dropped then.
-    pub fn wait(
+    pub(crate) fn wait(
         &mut self,
         tasks: &[TaskId],
         deadline: Instant,
@@ -365,7 +367,7 @@ impl Js {
             self.pump(deadline);
             let now = Instant::now();
             let finished = {
-                let h = self.host.borrow();
+                let h = self.tasks.borrow();
                 tasks
                     .iter()
                     .all(|t| h.done.contains_key(t) || !h.live.contains(t))
@@ -374,7 +376,7 @@ impl Js {
                 return Ok(self.collect(tasks));
             }
             let next = self
-                .host
+                .tasks
                 .borrow()
                 .timers
                 .iter()
@@ -394,7 +396,7 @@ impl Js {
     }
 
     /// Convenience: start + wait for one callback.
-    pub fn call(
+    pub(crate) fn call(
         &mut self,
         f: SpecFunctionRef,
         args: Vec<JsArg>,
@@ -418,8 +420,8 @@ impl Js {
     }
 
     /// Start a timer task that completes (with `null`) after `ms` (generator debounce).
-    pub fn start_sleep(&mut self, ms: u64) -> TaskId {
-        let mut h = self.host.borrow_mut();
+    pub(crate) fn start_sleep(&mut self, ms: u64) -> TaskId {
+        let mut h = self.tasks.borrow_mut();
         let id = h.id();
         h.live.insert(id);
         h.timers
@@ -428,8 +430,8 @@ impl Js {
     }
 
     /// Drop the result/bookkeeping of tasks the caller no longer cares about.
-    pub fn forget(&mut self, tasks: &[TaskId]) {
-        let mut h = self.host.borrow_mut();
+    pub(crate) fn forget(&mut self, tasks: &[TaskId]) {
+        let mut h = self.tasks.borrow_mut();
         for t in tasks {
             h.live.remove(t);
             h.done.remove(t);
@@ -454,7 +456,7 @@ impl Js {
             }
             EngineMsg::Timer { id } => {
                 // ponytail: timers are deadlines checked by the pump; nothing sends Timer, but honour it.
-                self.host.borrow_mut().timers.retain(|t| t.1 != id);
+                self.tasks.borrow_mut().timers.retain(|t| t.1 != id);
                 self.finish(id, Ok(Value::Null));
             }
             m => return Some(m),
@@ -465,7 +467,7 @@ impl Js {
     /// Deliver a host-op result: to the task table if it is an engine task, else to the waiting JS promise.
     fn finish(&mut self, id: u64, r: TaskResult) {
         let r = {
-            let mut h = self.host.borrow_mut();
+            let mut h = self.tasks.borrow_mut();
             if h.live.contains(&id) {
                 h.done.insert(id, r);
                 return;
@@ -497,7 +499,7 @@ impl Js {
     fn pump(&mut self, deadline: Instant) {
         let now = Instant::now();
         let due: Vec<u64> = {
-            let mut h = self.host.borrow_mut();
+            let mut h = self.tasks.borrow_mut();
             let (due, keep) = h.timers.drain(..).partition(|t| t.0 <= now);
             h.timers = keep;
             due.into_iter().map(|t: (Instant, u64)| t.1).collect()
@@ -519,7 +521,7 @@ impl Js {
     }
 
     fn collect(&mut self, tasks: &[TaskId]) -> Vec<Option<TaskResult>> {
-        let mut h = self.host.borrow_mut();
+        let mut h = self.tasks.borrow_mut();
         tasks
             .iter()
             .map(|t| match h.done.remove(t) {
@@ -546,20 +548,20 @@ mod tests {
     use crate::types::Request;
     use std::sync::mpsc;
 
-    fn js() -> (Js, Sender<EngineMsg>) {
+    fn js() -> (QuickJsSpecRuntime, Sender<EngineMsg>) {
         let (tx, rx) = mpsc::channel();
-        (Js::new(rx, tx.clone(), Settings::default()).unwrap(), tx)
+        (QuickJsSpecRuntime::new(rx, tx.clone(), Settings::default()).unwrap(), tx)
     }
 
     /// Write a module `name` with `src` into `dir` and load it.
-    fn module(js: &mut Js, dir: &TempDir, name: &str, src: &str) -> Map<String, Value> {
+    fn module(js: &mut QuickJsSpecRuntime, dir: &TempDir, name: &str, src: &str) -> Map<String, Value> {
         let p = dir.path().join(name);
         std::fs::write(&p, src).unwrap();
         js.load_module(&p).unwrap()
     }
 
     fn call_default(
-        js: &mut Js,
+        js: &mut QuickJsSpecRuntime,
         ns: &Map<String, Value>,
         args: Vec<JsArg>,
         ctx: Option<&GeneratorContext>,
@@ -753,7 +755,7 @@ mod tests {
             String::new(),
             false,
         );
-        let run = |js: &mut Js, tok: &str| {
+        let run = |js: &mut QuickJsSpecRuntime, tok: &str| {
             js.call(
                 alias,
                 vec![JsArg::Json(tok.into()), JsArg::Exec],

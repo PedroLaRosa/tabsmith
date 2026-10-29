@@ -1,6 +1,5 @@
 //! Spec loading (resolution, diff-versioned merge) and the argv state machine (SPEC §6.3–6.4).
 //! OWNER: parser agent. `ParseResult` is consumed by the suggest agent — extend, don't rename.
-use crate::js::{Js, JsArg};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DEVELOPER_MODE, AUTOCOMPLETE_DISABLE_FOR_COMMANDS,
 };
@@ -25,6 +24,7 @@ use crate::specs::domain::value_objects::text_or_function::TextOrFunction;
 use crate::specs::infrastructure::adapters::fig_spec_mapper::{self, normalise};
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
+use crate::specs::infrastructure::adapters::quickjs_spec_runtime::{JsArg, QuickJsSpecRuntime};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::shared::infrastructure::logger;
@@ -152,7 +152,7 @@ impl Parser {
         &mut self,
         cmd: &CommandInfo,
         ctx: &ParseCtx,
-        js: &mut Js,
+        js: &mut QuickJsSpecRuntime,
     ) -> Result<ParseResult, ParseError> {
         let dev = dev_mode(ctx.settings);
         let mut host = JsHost {
@@ -170,7 +170,7 @@ impl Parser {
         &mut self,
         loc: &SpecLocation,
         ctx: &ParseCtx,
-        js: &mut Js,
+        js: &mut QuickJsSpecRuntime,
     ) -> Result<Option<Rc<Subcommand>>, ParseError> {
         self.loader.load(loc, ctx, js, &gen_ctx(ctx))
     }
@@ -211,7 +211,7 @@ impl Loader {
         &mut self,
         loc: &SpecLocation,
         ctx: &ParseCtx,
-        js: &mut Js,
+        js: &mut QuickJsSpecRuntime,
         generator: &GeneratorContext,
     ) -> Result<Option<Rc<Subcommand>>, ParseError> {
         let (SpecLocation::Global { name } | SpecLocation::Local { name, .. }) = loc;
@@ -261,7 +261,7 @@ impl Loader {
         name: &str,
         path: &Path,
         dev: bool,
-        js: &mut Js,
+        js: &mut QuickJsSpecRuntime,
         generator: &GeneratorContext,
     ) -> Result<Option<Value>, ParseError> {
         let memo = format!("cliVersion-{name}");
@@ -330,7 +330,7 @@ fn spec_file(loc: &SpecLocation, ctx: &ParseCtx) -> Option<PathBuf> {
 fn cli_version(
     exports: &Map<String, Value>,
     name: &str,
-    js: &mut Js,
+    js: &mut QuickJsSpecRuntime,
     generator: &GeneratorContext,
     inflight: &mut HashMap<String, TaskId>,
 ) -> Result<Option<String>, ParseError> {
@@ -492,7 +492,7 @@ trait Host {
 
 struct JsHost<'a, 'c> {
     loader: &'a mut Loader,
-    js: &'a mut Js,
+    js: &'a mut QuickJsSpecRuntime,
     ctx: &'a ParseCtx<'c>,
     generator: GeneratorContext,
 }
