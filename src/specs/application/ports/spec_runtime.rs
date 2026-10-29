@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use crate::specs::domain::value_objects::spec_function_ref::SpecFunctionRef;
 #[cfg(test)]
+use crate::specs::infrastructure::adapters::fig_spec_mapper::{function_result, spec_value_to_json};
+#[cfg(test)]
 use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::collections::{HashMap, HashSet};
@@ -145,11 +147,11 @@ impl SpecRuntime for InMemorySpecRuntime {
 
     fn read(
         &self,
-        _value: &SpecValue,
-        _kind: SpecFunctionKind,
-        _context: &GeneratorContext,
+        value: &SpecValue,
+        kind: SpecFunctionKind,
+        context: &GeneratorContext,
     ) -> SpecFunctionResult {
-        unimplemented!("the in-memory runtime does not read values yet")
+        function_result(kind, &spec_value_to_json(value), context)
     }
 
     fn apply_settings(&self, _settings: &Settings) {}
@@ -158,6 +160,7 @@ impl SpecRuntime for InMemorySpecRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::specs::domain::value_objects::spec_suggestion::SpecSuggestion;
 
     #[test]
     fn should_answer_a_known_function() {
@@ -241,5 +244,20 @@ mod tests {
             outcomes,
             Ok(vec![None, Some(Err(format!("unknown task {forgotten}")))])
         );
+    }
+
+    #[test]
+    fn should_decode_a_read_like_the_runtime() {
+        let runtime = InMemorySpecRuntime::default();
+        let lines = SpecValue::List(vec![SpecValue::Text("main".into()), SpecValue::Text("dev".into())]);
+        let dangerous = GeneratorContext::new("/repo".into(), HashMap::new(), "zsh".into(), "".into(), true);
+        let rows = vec![
+            SpecSuggestion::from_script_output("main", true),
+            SpecSuggestion::from_script_output("dev", true),
+        ];
+
+        let read = runtime.read(&lines, SpecFunctionKind::PostProcess, &dangerous);
+
+        assert!(matches!(read, SpecFunctionResult::PostProcess(read_rows) if read_rows == rows));
     }
 }
