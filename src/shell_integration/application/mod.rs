@@ -1,6 +1,9 @@
+pub(crate) mod get_integration_status_use_case;
 pub(crate) mod install_integrations_use_case;
 pub(crate) mod integration_failure;
 pub(crate) mod integration_installer;
+pub(crate) mod integration_status;
+pub(crate) mod integration_status_report;
 pub(crate) mod ports;
 pub(crate) mod reinstall_integrations_use_case;
 pub(crate) mod uninstall_integrations_use_case;
