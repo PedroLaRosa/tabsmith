@@ -130,12 +130,18 @@ mod tests {
         ];
 
         assert_eq!(
-            (targets, reads.get(), cd_target("cd ~/a", &env(&[]), || None)),
+            (targets, reads.get()),
             (
                 [Some("/h/a".to_string()), Some("/u/a".to_string()), Some("a".to_string()), None, Some("/f/a".to_string())],
-                1,
-                None
+                1
             )
         );
+    }
+
+    #[test]
+    fn should_not_resolve_a_tilde_target_when_neither_env_nor_fallback_know_the_home() {
+        let without_a_home = cd_target("cd ~/a", &env(&[]), || None);
+
+        assert_eq!(without_a_home, None);
     }
 }

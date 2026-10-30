@@ -10,7 +10,7 @@ impl GhostText {
         Self { computed_for, text }
     }
 
-    /// What is left of ghost `g` (computed for buffer `base`) once `buffer` is typed. Never with control characters:
+    /// What is left of this ghost text (computed for `computed_for`) once `buffer` is typed. Never with control characters:
     /// accepting writes the text to the shell, where a CR (e.g. from an LLM reply) would run commands.
     pub(crate) fn rest_after(&self, buffer: &str) -> Option<String> {
         let rest = self.text.strip_prefix(buffer.strip_prefix(self.computed_for.as_str())?)?;
