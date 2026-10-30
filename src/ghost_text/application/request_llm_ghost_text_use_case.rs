@@ -81,7 +81,7 @@ mod tests {
     use crate::history::domain::repositories::history_repository::InMemoryHistoryRepository;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
     use crate::shared::domain::value_objects::shell::Shell;
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::path::{Path, PathBuf};
 
     fn entry(command: &str, exit_code: i32) -> HistoryEntry {
@@ -219,5 +219,31 @@ mod tests {
         let answer = ask(&use_case, "git sta");
 
         assert!(matches!(answer, LlmGhostTextAnswer::Deferred(_)));
+    }
+
+    #[test]
+    fn llm_history_honours_history_count() {
+        // llm-history-count-ignored: only the last `inline.historyCount` usable entries leave the machine
+        let e = |c: &str| HistoryEntry::new(HistoryEntryPrimitives {
+            command: c.into(),
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        let entries: Vec<HistoryEntry> = (0..100).map(|i| e(&format!("echo {i}"))).collect();
+        let with = |v: Value| {
+            settings_from_json(
+                json!({ "inline.historyCount": v })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+        };
+        let got: Vec<String> = llm_history(&with(json!(2)), &entries)
+            .into_iter()
+            .map(|h| h.command().to_string())
+            .collect();
+        assert_eq!(got, ["echo 98", "echo 99"]);
+        assert!(llm_history(&with(json!(0)), &entries).is_empty());
+        assert_eq!(llm_history(&Settings::default(), &entries).len(), 49);
     }
 }

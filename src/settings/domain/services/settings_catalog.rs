@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(read, if cfg!(windows) { 20000 } else { 5000 });
     }
 
-    /// engine_server.rs llm_history: `i64("inline.historyCount", 49)`.
+    /// request_llm_ghost_text_use_case.rs llm_history: `i64("inline.historyCount", 49)`.
     #[test]
     fn should_default_the_llm_history_to_49_lines() {
         let settings = Settings::default();

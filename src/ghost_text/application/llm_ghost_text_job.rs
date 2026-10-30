@@ -87,3 +87,58 @@ fn validate(
     }
     directories.resolves_to_directory(&cwd.join(path))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ghost_text::infrastructure::adapters::fs_directory_probe::FsDirectoryProbe;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
+
+    #[test]
+    fn cd_validation() {
+        let temp_dir = TempDir::new("cd");
+        let d = temp_dir.path().to_path_buf();
+        std::fs::create_dir_all(d.join("a/b")).unwrap();
+        std::fs::create_dir_all(d.join("space in name")).unwrap();
+        std::fs::write(d.join("file"), "x").unwrap();
+        std::fs::write(d.join("a/file"), "x").unwrap();
+        let home = d.to_string_lossy().into_owned();
+        let env: HashMap<String, String> = [("HOME", home.as_str()), ("A", "a"), ("B", "b")]
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+        let valid = |c: &str| validate(c, &d, &env, &FsDirectoryProbe);
+        for ok in [
+            "echo \"hello\"",
+            "cd ~",
+            "cd ~/",
+            "cd ~/a/b",
+            "cd ~/$A/$B",
+            "cd ${A}/b",
+            "cd a/",
+            "cd $A",
+            "cd space\\ in\\ name",
+            "cd \"space in name\"",
+            "cd 'space in name'",
+            "cd space in name",
+            "cd $UNKNOWN/x",
+            "cd \"open",
+            &format!("cd {home}/a"),
+        ] {
+            assert!(valid(ok), "{ok}");
+        }
+        for bad in [
+            "cd /folder/doesnt/exist",
+            "cd ~/file",
+            "cd ~/$A/file",
+            "cd b",
+            "cd file",
+            "cd $B",
+            "cd a/b/file",
+        ] {
+            assert!(!valid(bad), "{bad}");
+        }
+        assert!(!valid(&format!("cd {home}/file")));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+}

@@ -1,47 +1,23 @@
 use super::*;
-use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
+use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntryPrimitives};
 use crate::history::domain::repositories::history_repository::InMemoryHistoryRepository;
 use crate::history::infrastructure::adapters::jsonl_history_repository::JsonlHistoryRepository;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::shared::domain::value_objects::data_directory::DataDirectory;
+use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::testing::temp_dir::TempDir;
 use std::path::Path;
+use std::sync::Arc;
 use crate::settings::domain::services::settings_catalog::INLINE_ENABLED;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
 use crate::specs::domain::repositories::spec_repository::SpecRepository;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
-
-#[test]
-fn llm_history_honours_history_count() {
-    // llm-history-count-ignored: only the last `inline.historyCount` usable entries leave the machine
-    let e = |c: &str| HistoryEntry::new(HistoryEntryPrimitives {
-        command: c.into(),
-        exit_code: Some(0),
-        ..Default::default()
-    });
-    let entries: Vec<HistoryEntry> = (0..100).map(|i| e(&format!("echo {i}"))).collect();
-    let with = |v: Value| {
-        settings_from_json(
-            json!({ "inline.historyCount": v })
-                .as_object()
-                .unwrap()
-                .clone(),
-        )
-    };
-    let got: Vec<String> = llm_history(&with(json!(2)), &entries)
-        .into_iter()
-        .map(|h| h.command().to_string())
-        .collect();
-    assert_eq!(got, ["echo 98", "echo 99"]);
-    assert!(llm_history(&with(json!(0)), &entries).is_empty());
-    assert_eq!(llm_history(&Settings::default(), &entries).len(), 49);
-}
 
 #[test]
 fn session_update_refreshes_first_token_items_keeps_the_engine_running() {

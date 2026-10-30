@@ -1,19 +1,15 @@
 //! The completion engine thread's server (SPEC §4.3, §6). `spawn` builds the inbox, the spec runtime and the modules
 //! on that thread; the server owns the inbox instance and dispatches each `EngineMessage` to the completion use cases
-//! and the legacy ghost text block (the engine-server event table, plan §4). Only the latest request is served; while
+//! and the ghost_text use cases (the engine-server event table, plan §4). Only the latest request is served; while
 //! generators run, a request is replied again whenever one of its generators finishes (phase `Generators`).
-use crate::ghost_text::domain::entities::ghost_text_cache::GhostTextCache;
-use crate::ghost_text::domain::services::ghost_text_source_resolver;
-use crate::ghost_text::domain::services::llm_prompt_builder;
-use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
+use crate::ghost_text::application::llm_ghost_text_answer::LlmGhostTextAnswer;
+use crate::ghost_text::application::llm_ghost_text_request::LlmGhostTextRequest;
 use crate::ghost_text::infrastructure::ghost_text_module::{build_ghost_text_module, GhostTextModule};
-use crate::inline;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::domain::entities::completion_session::CompletionSession;
 use crate::completion::infrastructure::completion_module::{build_completion_module, CompletionModule};
-use crate::settings::domain::services::settings_catalog::INLINE_HISTORY_COUNT;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
@@ -22,18 +18,13 @@ use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBu
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
 use crate::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
 use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::shared::domain::value_objects::shell::Shell;
-use crate::history::domain::entities::history_entry::HistoryEntry;
-use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::bootstrap::engine_inbox::EngineInbox;
 use crate::bootstrap::engine_message::EngineMessage;
 use crate::types::Msg;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
 
 /// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
 /// Returns the engine's inbox. The thread exits on `EngineMessage::Shutdown`; the inbox keeps a sender, so its
@@ -93,8 +84,6 @@ struct EngineServer {
     completion: CompletionModule,
     record_command: RecordCommandUseCase,
     ghost_text: GhostTextModule,
-    history: Rc<dyn HistoryRepository>,
-    ghost_cache: Arc<Mutex<GhostTextCache>>,
 }
 
 impl EngineServer {
@@ -105,18 +94,13 @@ impl EngineServer {
         history_module: HistoryModule,
         ghost_text: GhostTextModule,
     ) -> EngineServer {
-        let HistoryModule {
-            history,
-            record_command,
-        } = history_module;
+        let HistoryModule { record_command, .. } = history_module;
         EngineServer {
             replies,
             session,
             completion,
             record_command,
             ghost_text,
-            history,
-            ghost_cache: Arc::new(Mutex::new(GhostTextCache::default())),
         }
     }
 
@@ -166,7 +150,7 @@ impl EngineServer {
                 if let EngineMessage::CommandFinished(e) = m {
                     self.record_command.execute(e);
                 }
-                self.clear_ghost_text_cache();
+                self.ghost_text.clear_ghost_text_cache.execute();
                 // generator results without `cache` live until the command ends
                 self.completion.reset_generators.execute(&mut self.session);
             }
@@ -178,7 +162,7 @@ impl EngineServer {
                 buffer,
                 cwd,
                 shell,
-            } => self.request_llm_ghost_text(req, buffer, cwd, shell),
+            } => self.answer_llm_ghost_text_request(req, LlmGhostTextRequest { buffer, cwd, shell }),
             EngineMessage::Settings(s) => self.completion.apply_completion_settings.execute(&mut self.session, s),
             EngineMessage::Session { env, alias } => {
                 self.completion.apply_session_context.execute(&mut self.session, env, alias)
@@ -196,6 +180,32 @@ impl EngineServer {
         let _ = self.replies.send(Msg::Completion(Box::new(result.with_ghost(ghost))));
     }
 
+    /// LLM ghost text (SPEC §8.4): answered at once, or by the `llm` thread running the job.
+    fn answer_llm_ghost_text_request(&self, req: u64, request: LlmGhostTextRequest) {
+        let answer = self.ghost_text.request_llm_ghost_text.execute(
+            self.session.settings(),
+            self.session.env(),
+            request,
+        );
+        let tx = self.replies.clone();
+        match answer {
+            LlmGhostTextAnswer::Immediate(text) => {
+                let _ = tx.send(Msg::Ghost { req, text });
+            }
+            LlmGhostTextAnswer::Deferred(job) => {
+                let spawned = std::thread::Builder::new()
+                    .name("llm".into())
+                    .spawn(move || {
+                        let text = job.run();
+                        let _ = tx.send(Msg::Ghost { req, text });
+                    });
+                if let Err(e) = spawned {
+                    logger::warn(&format!("engine: llm worker: {e}"));
+                }
+            }
+        }
+    }
+
     /// Logs what the completion services report, the moment they report it (D5).
     fn log_notice(notice: CompletionNotice) {
         match notice {
@@ -204,52 +214,6 @@ impl EngineServer {
             CompletionNotice::NoSuggestions(e) => logger::debug(&format!("engine: no suggestions: {e}")),
         }
     }
-}
-
-// legacy ghost text: Phase 7.7 replaces this block
-impl EngineServer {
-    /// LLM ghost text (SPEC §8.4).
-    fn request_llm_ghost_text(&mut self, req: u64, buffer: String, cwd: PathBuf, shell: Shell) {
-        let tx = self.replies.clone();
-        let Ok(GhostTextSource::Profile(profile)) = ghost_text_source_resolver::source(self.session.settings()) else {
-            let _ = tx.send(Msg::Ghost { req, text: None });
-            return;
-        };
-        if let Some(text) = self.ghost_cache.lock().ok().and_then(|c| c.lookup(&buffer)) {
-            let _ = tx.send(Msg::Ghost {
-                req,
-                text: Some(text),
-            });
-            return;
-        }
-        let history = llm_history(self.session.settings(), &self.history.recent());
-        let env = self.session.env().clone();
-        let cache = self.ghost_cache.clone();
-        let spawned = std::thread::Builder::new()
-            .name("llm".into())
-            .spawn(move || {
-                let text = inline::llm_complete(&profile, &buffer, &cwd, shell, &history, &env);
-                if let (Some(t), Ok(mut c)) = (&text, cache.lock()) {
-                    c.insert(&[format!("{buffer}{t}")]);
-                }
-                let _ = tx.send(Msg::Ghost { req, text });
-            });
-        if let Err(e) = spawned {
-            logger::warn(&format!("engine: llm worker: {e}"));
-        }
-    }
-
-    /// A finished or ended command makes the LLM ghost texts of its line stale.
-    fn clear_ghost_text_cache(&self) {
-        if let Ok(mut c) = self.ghost_cache.lock() {
-            c.clear();
-        }
-    }
-}
-
-/// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
-fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
-    llm_prompt_builder::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
 }
 
 #[cfg(test)]
