@@ -1,6 +1,7 @@
 //! Inline ghost text: local sources, LLM profiles/clients, completion cache, validation (SPEC §8,
 //! §3.5, §6.11). OWNER: inline agent. Used by the engine (sources, LLM worker), the CLI (`inline` command) and
 //! doctor (profile checks).
+use crate::ghost_text::domain::services::cd_target_validator::cd_target;
 use crate::ghost_text::domain::services::llm_completion_cleaner::clean;
 use crate::ghost_text::domain::services::llm_prompt_builder::llm_prompt;
 use crate::ghost_text::domain::value_objects::llm_profile::LlmProfile;
@@ -121,16 +122,11 @@ fn parse_response(provider: LlmProvider, body: &Value) -> Option<String> {
 
 /// `cd` validation (SPEC §8.5): `full` = buffer + completion.
 pub fn validate(full: &str, cwd: &Path, env: &HashMap<String, String>) -> bool {
-    let Some(words) = split_words(full.trim()) else {
-        return true;
-    };
-    let [cd, arg] = words.as_slice() else {
-        return true;
-    };
-    if cd != "cd" {
-        return true;
-    }
-    let Some(path) = expand(arg, env) else {
+    let Some(path) = cd_target(full, env, || {
+        user_home_from_env()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    }) else {
         return true;
     };
     let path = Path::new(&path);
@@ -138,92 +134,6 @@ pub fn validate(full: &str, cwd: &Path, env: &HashMap<String, String>) -> bool {
         return false;
     }
     cwd.join(path).canonicalize().is_ok_and(|p| p.is_dir())
-}
-
-/// POSIX-ish word split (quotes, backslash escapes; backslash is literal on Windows). `None` on an open quote.
-fn split_words(s: &str) -> Option<Vec<String>> {
-    let escapes = !cfg!(windows);
-    let mut words = Vec::new();
-    let mut cur: Option<String> = None;
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            c if c.is_whitespace() => words.extend(cur.take()),
-            '\'' => {
-                let w = cur.get_or_insert_default();
-                loop {
-                    match chars.next()? {
-                        '\'' => break,
-                        c => w.push(c),
-                    }
-                }
-            }
-            '"' => {
-                let w = cur.get_or_insert_default();
-                loop {
-                    match chars.next()? {
-                        '"' => break,
-                        '\\' if escapes => {
-                            let n = chars.next()?;
-                            if !matches!(n, '"' | '\\' | '$' | '`') {
-                                w.push('\\');
-                            }
-                            w.push(n);
-                        }
-                        c => w.push(c),
-                    }
-                }
-            }
-            '\\' if escapes => cur.get_or_insert_default().extend(chars.next()),
-            c => cur.get_or_insert_default().push(c),
-        }
-    }
-    words.extend(cur);
-    Some(words)
-}
-
-/// Expand a leading `~` and `$VAR`/`${VAR}` from `env`. `None` when something is unknown (→ accept).
-fn expand(arg: &str, env: &HashMap<String, String>) -> Option<String> {
-    let mut out = String::new();
-    let mut s = arg;
-    if arg == "~" || arg.starts_with("~/") || (cfg!(windows) && arg.starts_with("~\\")) {
-        let home = env
-            .get("HOME")
-            .or_else(|| env.get("USERPROFILE"))
-            .cloned()
-            .or_else(|| {
-                user_home_from_env()
-                    .ok()
-                    .map(|p| p.to_string_lossy().into_owned())
-            })?;
-        out.push_str(&home);
-        s = &arg[1..];
-    }
-    while let Some(i) = s.find('$') {
-        out.push_str(&s[..i]);
-        let after = &s[i + 1..];
-        let (name, tail) = match after.strip_prefix('{') {
-            Some(b) => {
-                let end = b.find('}')?;
-                (&b[..end], &b[end + 1..])
-            }
-            None => {
-                let end = after
-                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                    .unwrap_or(after.len());
-                after.split_at(end)
-            }
-        };
-        if name.is_empty() {
-            out.push('$');
-            s = after;
-            continue;
-        }
-        out.push_str(env.get(name)?);
-        s = tail;
-    }
-    out.push_str(s);
-    Some(out)
 }
 
 #[cfg(test)]
