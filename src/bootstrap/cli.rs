@@ -3,8 +3,14 @@
 
 use crate::bootstrap::bridges::SpecBundleBridge;
 use crate::bootstrap::channel_completion_engine::start_completion_engine;
+use crate::ghost_text::infrastructure::cli::inline_command::{run_inline_command, InlineCmd};
+use crate::ghost_text::infrastructure::inline_command_module::{
+    build_inline_command_module, InlineCommandModule,
+};
+use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::cli::settings_command::{run_settings_command, SettingsArgs};
 use crate::settings::infrastructure::settings_module::build_settings_module;
+use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::terminal_style::epaint;
 use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
@@ -47,7 +53,7 @@ enum Command {
     Theme(cli::ThemeArgs),
     /// Inline shell completions
     #[command(subcommand)]
-    Inline(cli::InlineCmd),
+    Inline(InlineCmd),
     /// Manage system integrations
     #[command(subcommand)]
     Integrations(IntegrationsCmd),
@@ -125,7 +131,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
             print_settings_help,
         ),
         Some(Command::Theme(a)) => cli::theme(a),
-        Some(Command::Inline(c)) => cli::inline(c),
+        Some(Command::Inline(c)) => run_inline_command(c, &inline_command_module()),
         Some(Command::Integrations(c)) => run_integrations_command(c, &shell_integration_module()),
         Some(Command::Init(a)) => run_init_command(a, &shell_integration_module()),
         Some(Command::Doctor(a)) => doctor::run(a),
@@ -147,6 +153,11 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
             }
         },
     }
+}
+
+/// The inline command's module over the settings file the environment names (resolved when a command needs it).
+fn inline_command_module() -> InlineCommandModule {
+    build_inline_command_module(Rc::new(JsonFileSettingsRepository::new(data_directory_from_env())))
 }
 
 /// The shell integration commands' module, built for the one command that runs.

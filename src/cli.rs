@@ -1,13 +1,8 @@
-//! Small user-facing commands: theme, inline, diagnostic, debug (SPEC §2.4–2.5, §2.10).
+//! Small user-facing commands: theme, diagnostic, debug (SPEC §2.4, §2.10).
 //! OWNER: cli agent.
-use crate::ghost_text::domain::services::ghost_text_source_resolver;
-use crate::ghost_text::domain::value_objects::ghost_text_source::BUILTIN_SOURCES;
-use crate::ghost_text::domain::value_objects::llm_profile::LlmProfile;
 use crate::pty::CompletionEngineStarter;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
-use crate::settings::domain::services::settings_catalog::{
-    AUTOCOMPLETE_THEME, INLINE_ENABLED, INLINE_SOURCE,
-};
+use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_THEME;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::adapters::setting_value_json::setting_value_to_json;
@@ -25,7 +20,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use std::io::{IsTerminal, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -39,25 +34,6 @@ pub struct ThemeArgs {
     pub folder: bool,
     /// Theme name: dark, light, system, or a custom theme
     pub theme: Option<String>,
-}
-
-#[derive(Subcommand)]
-pub enum InlineCmd {
-    /// Enable inline suggestions
-    Enable,
-    /// Disable inline suggestions
-    Disable,
-    /// Show current status
-    Status,
-    /// Select the inline suggestion source (history, specs, history+specs or an LLM profile)
-    #[command(alias = "set-source")]
-    SetCustomization { name: Option<String> },
-    /// Show the available inline sources
-    #[command(alias = "show-sources")]
-    ShowCustomizations {
-        #[arg(long, short, value_enum, default_value_t)]
-        format: OutputFormat,
-    },
 }
 
 #[derive(Args)]
@@ -196,165 +172,6 @@ fn theme_banner(name: &str, file: &ThemeFile, color: bool) -> String {
         }
     }
     out + "\n\n"
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// inline (SPEC §2.5)
-
-const PROFILE_EXAMPLE: &str = r#"tabsmith settings inline.profiles.claude '{"provider":"anthropic","model":"claude-opus-5-5","api_key_env":"ANTHROPIC_API_KEY","effort":"low"}'"#;
-
-pub fn inline(cmd: InlineCmd) -> Result<i32> {
-    let color = stdout_tty();
-    match cmd {
-        InlineCmd::Enable => set_inline_enabled(true, color)?,
-        InlineCmd::Disable => set_inline_enabled(false, color)?,
-        InlineCmd::Status => {
-            let on = settings_repository().load()?.bool(INLINE_ENABLED);
-            println!(
-                "Inline is {}",
-                bold(if on { "enabled" } else { "disabled" }, color)
-            );
-        }
-        InlineCmd::SetCustomization { name } => set_customization(name, color)?,
-        InlineCmd::ShowCustomizations { format } => {
-            let s = settings_repository().load()?;
-            print!(
-                "{}",
-                render_sources(
-                    ghost_text_source_resolver::selected_source(&s),
-                    &ghost_text_source_resolver::profiles(&s),
-                    format,
-                    color
-                )
-            );
-        }
-    }
-    Ok(0)
-}
-
-fn set_inline_enabled(on: bool, color: bool) -> Result<()> {
-    let repository = settings_repository();
-    let settings = repository.load()?;
-    repository.save(&settings.with(INLINE_ENABLED, SettingValue::Bool(on)))?;
-    println!(
-        "{}",
-        sgr(
-            if on {
-                "Inline enabled"
-            } else {
-                "Inline disabled"
-            },
-            "35",
-            color
-        )
-    );
-    Ok(())
-}
-
-fn set_customization(name: Option<String>, color: bool) -> Result<()> {
-    let repository = settings_repository();
-    let settings = repository.load()?;
-    // Only valid profiles can be selected (an invalid one would only make doctor fail).
-    let profiles: Vec<(String, LlmProfile)> = ghost_text_source_resolver::profiles(&settings)
-        .into_iter()
-        .filter_map(|(n, p)| Some((n, p.ok()?)))
-        .collect();
-    let name = match name {
-        Some(n) => n,
-        None => match choose_source(&profiles)? {
-            Some(n) => n,
-            None => {
-                repository.save(&settings.without(INLINE_SOURCE))?;
-                println!("Customization unset");
-                return Ok(());
-            }
-        },
-    };
-    if !BUILTIN_SOURCES.iter().any(|(b, _)| *b == name) && !profiles.iter().any(|(n, _)| *n == name)
-    {
-        bail!("Customization not found");
-    }
-    repository.save(&settings.with(INLINE_SOURCE, SettingValue::Text(name.clone())))?;
-    println!("Customization {} selected", bold(&name, color));
-    Ok(())
-}
-
-/// Numbered prompt; `Ok(None)` = "None" picked. Non-tty or bad input → error.
-fn choose_source(profiles: &[(String, LlmProfile)]) -> Result<Option<String>> {
-    if !std::io::stdin().is_terminal() {
-        bail!("No customization selected");
-    }
-    let mut rows: Vec<(String, String)> = BUILTIN_SOURCES
-        .iter()
-        .map(|(n, d)| (n.to_string(), d.to_string()))
-        .collect();
-    rows.extend(profiles.iter().map(|(n, p)| {
-        (
-            n.clone(),
-            format!("{} {}", p.provider().name(), p.model()),
-        )
-    }));
-    for (i, (n, d)) in rows.iter().enumerate() {
-        println!("{}) {n} - {d}", i + 1);
-    }
-    println!("{}) None", rows.len() + 1);
-    print!("Select a customization: ");
-    std::io::stdout().flush()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    match input.trim().parse::<usize>() {
-        Ok(i) if (1..=rows.len()).contains(&i) => Ok(Some(rows[i - 1].0.clone())),
-        Ok(i) if i == rows.len() + 1 => Ok(None),
-        _ => bail!("No customization selected"),
-    }
-}
-
-/// `inline show-customizations` output (with trailing newline).
-fn render_sources(
-    selected: &str,
-    profiles: &[(String, std::result::Result<LlmProfile, String>)],
-    format: OutputFormat,
-    color: bool,
-) -> String {
-    let plain = || {
-        let block = |n: &str, d: &str| {
-            let mark = if n == selected { " (selected)" } else { "" };
-            format!("{}{mark}\n{d}\n\n", bold(n, color))
-        };
-        let mut out: String = BUILTIN_SOURCES.iter().map(|(n, d)| block(n, d)).collect();
-        for (n, p) in profiles {
-            out += &match p {
-                Ok(p) => block(n, &format!("{} {}", p.provider().name(), p.model())),
-                Err(reason) => format!("{} (invalid: {reason})\n\n", bold(n, color)),
-            };
-        }
-        if profiles.is_empty() {
-            out += &format!("No LLM profiles configured. Add one with:\n  {PROFILE_EXAMPLE}\n");
-        }
-        out
-    };
-    let json = || {
-        let builtins = BUILTIN_SOURCES
-            .iter()
-            .map(|(n, d)| json!({"name": n, "kind": "builtin", "description": d, "selected": *n == selected}));
-        let profiles = profiles.iter().map(|(n, p)| match p {
-            Ok(p) => json!({
-                "name": n, "kind": "profile",
-                "description": format!("{} {}", p.provider().name(), p.model()),
-                "selected": n == selected,
-                "provider": p.provider().name(), "model": p.model(),
-                "base_url": p.base_url(), "api_key_env": p.api_key_env(),
-            }),
-            Err(reason) => json!({
-                "name": n, "kind": "profile", "description": format!("invalid: {reason}"), "selected": n == selected,
-            }),
-        });
-        builtins.chain(profiles).collect()
-    };
-    match format {
-        OutputFormat::Plain => plain(),
-        f => f.render(String::new, json) + "\n",
-    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -642,8 +459,6 @@ fn debug_logs() -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ghost_text::domain::value_objects::llm_profile::LlmProfileParts;
-    use crate::ghost_text::domain::value_objects::llm_provider::LlmProvider;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     #[test]
@@ -675,53 +490,6 @@ mod tests {
         assert!(parse_theme(r#"{"author":"Ann"}"#).is_err());
         assert!(parse_theme(r#"{"shade3":5}"#).is_err());
         assert!(parse_theme("not json").is_err());
-    }
-
-    fn profile(name: &str) -> LlmProfile {
-        LlmProfile::new(LlmProfileParts {
-            name: name.into(),
-            provider: LlmProvider::Anthropic,
-            model: "claude-opus-5-5".into(),
-            base_url: "https://api.anthropic.com".into(),
-            api_key_env: "ANTHROPIC_API_KEY".into(),
-            max_tokens: 1024,
-            effort: None,
-        })
-    }
-
-    #[test]
-    fn inline_show_customizations() {
-        let profiles = vec![
-            ("claude".to_string(), Ok(profile("claude"))),
-            ("bad".to_string(), Err("model missing".into())),
-        ];
-        let out = render_sources("claude", &profiles, OutputFormat::Plain, false);
-        assert!(out.starts_with("history+specs\nLocal history, then completion specs\n\nhistory\n"));
-        assert!(out.contains("claude (selected)\nanthropic claude-opus-5-5\n\n"));
-        assert!(out.contains("bad (invalid: model missing)\n"));
-        assert!(!out.contains(PROFILE_EXAMPLE));
-
-        let out = render_sources("history+specs", &[], OutputFormat::Plain, false);
-        assert!(out.starts_with("history+specs (selected)\n"));
-        assert!(out.ends_with(&format!("{PROFILE_EXAMPLE}\n")));
-
-        let v: Value = serde_json::from_str(&render_sources(
-            "claude",
-            &profiles,
-            OutputFormat::Json,
-            false,
-        ))
-        .unwrap();
-        let rows = v.as_array().unwrap();
-        assert_eq!(rows.len(), 5);
-        assert_eq!(
-            rows[0],
-            json!({"name":"history+specs","kind":"builtin","description":"Local history, then completion specs","selected":false})
-        );
-        assert_eq!(rows[3]["selected"], json!(true));
-        assert_eq!(rows[3]["provider"], json!("anthropic"));
-        assert_eq!(rows[3]["api_key_env"], json!("ANTHROPIC_API_KEY"));
-        assert_eq!(rows[4]["description"], json!("invalid: model missing"));
     }
 
     #[test]

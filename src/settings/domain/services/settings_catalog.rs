@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(read, 300);
     }
 
-    /// cli.rs, doctor.rs, engine_server.rs and pty.rs: `bool("inline.enabled", true)`.
+    /// get_inline_status_use_case.rs, doctor.rs, suggest_local_ghost_text_use_case.rs and pty.rs: `bool("inline.enabled", true)`.
     #[test]
     fn should_default_ghost_text_to_enabled() {
         let settings = Settings::default();
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(read, Some("dark"));
     }
 
-    /// inline.rs and cli.rs: `string("inline.source").unwrap_or("history+specs")`.
+    /// ghost_text_source_resolver.rs and doctor.rs: `string("inline.source").unwrap_or("history+specs")`.
     #[test]
     fn should_default_the_ghost_text_source_to_history_then_specs() {
         let settings = Settings::default();
