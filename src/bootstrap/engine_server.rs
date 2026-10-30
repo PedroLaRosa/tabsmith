@@ -1,10 +1,7 @@
-//! The completion engine thread (SPEC §4.3, §6): owns the JS host, spec/parse caches, generator state,
-//! recency, history and the inline cache. Serves only the latest request.
-//! OWNER: engine agent.
-//!
-//! Per request: mid-word guard → `command_line_tokenizer::current_command` → `CommandLineParser::parse` → generator triggers →
-//! reply (phase `Parse`). Triggered generators run as small state machines over `SpecRuntime` tasks;
-//! whenever one finishes, the latest request is re-ranked and replied again (phase `Generators`).
+//! The completion engine thread's server (SPEC §4.3, §6). `spawn` builds the inbox, the spec runtime and the modules
+//! on that thread; the server owns the inbox instance and dispatches each `EngineMessage` to the completion use cases
+//! and the legacy ghost text block (the engine-server event table, plan §4). Only the latest request is served; while
+//! generators run, a request is replied again whenever one of its generators finishes (phase `Generators`).
 use crate::inline::{self, GhostCache, Source};
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
@@ -34,7 +31,8 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 
 /// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
-/// Returns the engine's inbox. The thread exits on `EngineMessage::Shutdown` or when all senders are dropped.
+/// Returns the engine's inbox. The thread exits on `EngineMessage::Shutdown`; the inbox keeps a sender, so its
+/// channel never disconnects.
 pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMessage> {
     let (etx, erx) = mpsc::channel();
     let inner = etx.clone();
