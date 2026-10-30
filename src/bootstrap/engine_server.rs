@@ -4,17 +4,16 @@
 //! generators run, a request is replied again whenever one of its generators finishes (phase `Generators`).
 use crate::ghost_text::domain::entities::ghost_text_cache::GhostTextCache;
 use crate::ghost_text::domain::services::ghost_text_source_resolver;
-use crate::ghost_text::domain::services::history_ghost_text::history_ghost;
 use crate::ghost_text::domain::services::llm_prompt_builder;
-use crate::ghost_text::domain::services::spec_ghost_text::spec_ghost;
 use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
+use crate::ghost_text::infrastructure::ghost_text_module::{build_ghost_text_module, GhostTextModule};
 use crate::inline;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::completion::application::completion_notice::CompletionNotice;
 use crate::completion::domain::entities::completion_session::CompletionSession;
 use crate::completion::infrastructure::completion_module::{build_completion_module, CompletionModule};
-use crate::settings::domain::services::settings_catalog::{INLINE_ENABLED, INLINE_HISTORY_COUNT};
+use crate::settings::domain::services::settings_catalog::INLINE_HISTORY_COUNT;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
@@ -70,6 +69,7 @@ pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMessage
                     SpecIndex::default()
                 });
             let history_module = build_history_module(&dependencies);
+            let ghost_text = build_ghost_text_module(Rc::clone(&history_module.history));
             let completion = build_completion_module(
                 &dependencies,
                 repository,
@@ -79,7 +79,7 @@ pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMessage
             );
             let recency = completion.recency.load();
             let session = CompletionSession::new(settings, std::env::vars().collect(), recency);
-            EngineServer::new(tx, session, completion, history_module).run(&runtime, &inbox);
+            EngineServer::new(tx, session, completion, history_module, ghost_text).run(&runtime, &inbox);
         });
     if let Err(e) = spawned {
         logger::error(&format!("engine: spawn: {e}"));
@@ -92,12 +92,19 @@ struct EngineServer {
     session: CompletionSession,
     completion: CompletionModule,
     record_command: RecordCommandUseCase,
+    ghost_text: GhostTextModule,
     history: Rc<dyn HistoryRepository>,
     ghost_cache: Arc<Mutex<GhostTextCache>>,
 }
 
 impl EngineServer {
-    fn new(replies: Sender<Msg>, session: CompletionSession, completion: CompletionModule, history_module: HistoryModule) -> EngineServer {
+    fn new(
+        replies: Sender<Msg>,
+        session: CompletionSession,
+        completion: CompletionModule,
+        history_module: HistoryModule,
+        ghost_text: GhostTextModule,
+    ) -> EngineServer {
         let HistoryModule {
             history,
             record_command,
@@ -107,6 +114,7 @@ impl EngineServer {
             session,
             completion,
             record_command,
+            ghost_text,
             history,
             ghost_cache: Arc::new(Mutex::new(GhostTextCache::default())),
         }
@@ -184,7 +192,7 @@ impl EngineServer {
 
     /// The one place a completion result is sent: with the local ghost text for its buffer (Q15).
     fn send_reply(&self, result: CompletionResult) {
-        let ghost = self.local_ghost_text(&result);
+        let ghost = self.ghost_text.suggest_local_ghost_text.execute(self.session.settings(), &result);
         let _ = self.replies.send(Msg::Completion(Box::new(result.with_ghost(ghost))));
     }
 
@@ -198,25 +206,8 @@ impl EngineServer {
     }
 }
 
-// legacy ghost text: Phase 7.6 replaces this block
+// legacy ghost text: Phase 7.7 replaces this block
 impl EngineServer {
-    /// Local inline ghost (SPEC §6.11) of a reply; error replies (commands without a spec) get one too.
-    fn local_ghost_text(&self, result: &CompletionResult) -> Option<String> {
-        if !self.session.settings().bool(INLINE_ENABLED)
-            || result.buffer().is_empty()
-            || result.cursor() != result.buffer().len()
-        {
-            return None;
-        }
-        let history = || history_ghost(&self.history.recent(), result.buffer());
-        let specs = || spec_ghost(result.suggestions());
-        match ghost_text_source_resolver::source(self.session.settings()) {
-            Ok(GhostTextSource::Specs) => specs(),
-            Ok(GhostTextSource::History) | Ok(GhostTextSource::Profile(_)) => history(),
-            _ => history().or_else(specs),
-        }
-    }
-
     /// LLM ghost text (SPEC §8.4).
     fn request_llm_ghost_text(&mut self, req: u64, buffer: String, cwd: PathBuf, shell: Shell) {
         let tx = self.replies.clone();

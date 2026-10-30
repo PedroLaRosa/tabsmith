@@ -8,6 +8,7 @@ use crate::shared::infrastructure::data_directory_from_env::data_directory_from_
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shared::infrastructure::testing::temp_dir::TempDir;
 use std::path::Path;
+use crate::settings::domain::services::settings_catalog::INLINE_ENABLED;
 use crate::settings::domain::value_objects::setting_value::SettingValue;
 use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
@@ -82,7 +83,8 @@ fn engine_over(dir: &TempDir) -> EngineServer {
         SpecIndex::default(),
     );
     let session = CompletionSession::new(Settings::default(), std::env::vars().collect(), completion.recency.load());
-    EngineServer::new(tx, session, completion, history_module)
+    let ghost_text = build_ghost_text_module(Rc::clone(&history_module.history));
+    EngineServer::new(tx, session, completion, history_module, ghost_text)
 }
 
 /// The message a shell's session context arrives as: its env and its alias text.
@@ -225,7 +227,8 @@ fn run_engine<T: Send + 'static>(
         SpecIndex::default(),
     );
     let session = CompletionSession::new(settings, std::env::vars().collect(), completion.recency.load());
-    let engine = EngineServer::new(replies, session, completion, history_module);
+    let ghost_text = build_ghost_text_module(Rc::clone(&history_module.history));
+    let engine = EngineServer::new(replies, session, completion, history_module, ghost_text);
     for message in first {
         to_engine.send(message).unwrap();
     }
