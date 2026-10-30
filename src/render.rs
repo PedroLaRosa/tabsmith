@@ -1550,4 +1550,151 @@ mod tests {
             ]
         );
     }
+
+    /// 64-bit FNV-1a: a stable hash that needs no crate and does not change between Rust versions.
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Draws `frames` one after the other and hashes every frame, then every clear (taken after each frame).
+    fn overlay_hashes(r: &mut Renderer, a: &Model, m: &Menu, frames: &[FrameInput]) -> (u64, u64) {
+        let (mut drawn, mut cleared) = (Vec::new(), Vec::new());
+        for inp in frames {
+            drawn.extend(r.frame(a, m, inp));
+            cleared.extend(r.take_clear());
+        }
+        (fnv1a(&drawn), fnv1a(&cleared))
+    }
+
+    #[test]
+    fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
+        // (scenario, hash of every frame, hash of every clear), generated once at the phase8-start tag. A refactor
+        // may change how a scenario is built, never a value. No scenario depends on time (nothing is loading).
+        const EXPECTED: &[(&str, u64, u64)] = &[
+            ("below", 0xef119818acef5714, 0x3fd0e0c7d118ca9c),
+            ("light_256", 0xbe62837ba0bae9f2, 0x3fd0e0c7d118ca9c),
+            ("scrolled", 0x5b2dbcd97d614206, 0xb5974c8ab0e1a615),
+            ("above_ghost_popout", 0xf2039310de2aeed9, 0x79cfb3d71e636be6),
+            ("arg_hint_wide_ghost", 0x19087c0c1de42343, 0xc4bf1afcc5ae6c08),
+            ("custom_base16", 0x3c68886e2010eab3, 0x3fd0e0c7d118ca9c),
+            ("icons_direct", 0x63e8d0517291ef1c, 0x49c6d5dfc1ea8156),
+            ("icons_tmux", 0x66355913b17a2222, 0x22e0c44f71632e9e),
+            ("long_description_bar", 0x09e5bda8de7ac765, 0xe0ae15a704c54ab1),
+            ("long_description_popout", 0xe79fca34ee4c38df, 0x55f9d31a52e19d65),
+        ];
+        let s = settings(r#"{"autocomplete.width": 20}"#);
+        let below = screen("\x1b[3;9H\x1b[32m");
+        // A custom base16 theme with one distinct colour per role the overlay draws (dark and light give the
+        // list and description roles the same colour, so only this one tells them apart).
+        let base16 = serde_json::json!({
+            "shade0": "#101010", "shade1": "#202020", "shade2": "#303030", "shade5": "#a0a0a0",
+            "shade6": "#b0b0b0", "shade7": "#c0c0c0", "accent6": "#123456"
+        });
+        let custom = || Theme::from_json(&base16);
+        let mut got = Vec::new();
+
+        // Below the cursor, wide characters at the edges of the span, truecolor, first row selected.
+        let (a, m) = (model(40, 12, &[&below]), menu(subs(), &s));
+        let mut r = Renderer::new(Theme::dark(), true);
+        got.push(("below", overlay_hashes(&mut r, &a, &m, &[input(&s, None)])));
+
+        // The light theme on a 256-colour terminal.
+        let mut r = Renderer::new(Theme::light(), false);
+        got.push((
+            "light_256",
+            overlay_hashes(&mut r, &a, &m, &[input(&s, None)]),
+        ));
+
+        // Scrolled: two rows high, third row selected, whose description has a newline and wide characters.
+        let tall = settings(r#"{"autocomplete.width": 20, "autocomplete.height": 2}"#);
+        let mut m = menu(subs(), &tall);
+        m.handle(crate::keys::Action::NavigateDown, &tall);
+        m.handle(crate::keys::Action::NavigateDown, &tall);
+        let mut r = Renderer::new(Theme::dark(), true);
+        got.push((
+            "scrolled",
+            overlay_hashes(&mut r, &a, &m, &[input(&tall, None)]),
+        ));
+
+        // Above the cursor on the bottom row, ghost text clipped at the right prompt, pop-out beside the list.
+        let always =
+            settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
+        let mut m = menu(subs(), &always);
+        m.handle(crate::keys::Action::NavigateDown, &always);
+        let mut out = String::from_utf8(screen("")).unwrap();
+        out += "\r\n\r\n\r\n\r\n\r\n$ ec          \x1b[36m[rprompt]\x1b[0m\x1b[14;5H";
+        let a = model(60, 14, &[out.as_bytes()]);
+        let mut r = Renderer::new(Theme::dark(), true);
+        let ghost = input(&always, Some("ho hello\tworld and more"));
+        got.push((
+            "above_ghost_popout",
+            overlay_hashes(&mut r, &a, &m, &[ghost]),
+        ));
+
+        // An argument hint and no rows (custom theme), with a wide ghost clipped at the last column.
+        let hint = Settings::default();
+        let m = menu(Vec::new(), &hint);
+        let a = model(40, 10, &[format!("{}$ c", " ".repeat(30)).as_bytes()]);
+        let mut r = Renderer::new(custom(), true);
+        let wide = input(&hint, Some("中文中文中文"));
+        got.push((
+            "arg_hint_wide_ghost",
+            overlay_hashes(&mut r, &a, &m, &[wide]),
+        ));
+
+        // The custom theme over the list, second row selected.
+        let mut m = menu(subs(), &s);
+        m.handle(crate::keys::Action::NavigateDown, &s);
+        let a = model(40, 12, &[&below]);
+        let mut r = Renderer::new(custom(), true);
+        got.push((
+            "custom_base16",
+            overlay_hashes(&mut r, &a, &m, &[input(&s, None)]),
+        ));
+
+        // Icons: sent once, then only placed (direct) or drawn as placeholders (tmux).
+        let m = menu(subs(), &s);
+        let a = model(40, 12, &[b"$ git c"]);
+        for (name, g) in [
+            ("icons_direct", Graphics::Direct),
+            ("icons_tmux", Graphics::Tmux),
+        ] {
+            let mut r = Renderer::new(Theme::dark(), true).with_images(g);
+            let frames = [input(&s, None), input(&s, Some("x"))];
+            got.push((name, overlay_hashes(&mut r, &a, &m, &frames)));
+        }
+
+        // A description longer than the bar (truncated with an ellipsis) and than the pop-out (wrapped).
+        let long = "a very long description that goes on and on past the end of any row ".repeat(3);
+        let rows = || {
+            let mut v = subs();
+            v[0] = v[0].clone().with_description(Some(long.clone()));
+            v
+        };
+        let m = menu(rows(), &s);
+        let a = model(40, 12, &[b"$ git c"]);
+        let mut r = Renderer::new(custom(), true);
+        got.push((
+            "long_description_bar",
+            overlay_hashes(&mut r, &a, &m, &[input(&s, None)]),
+        ));
+        let m = menu(rows(), &always);
+        let a = model(60, 12, &[b"$ git c"]);
+        let mut r = Renderer::new(custom(), true);
+        got.push((
+            "long_description_popout",
+            overlay_hashes(&mut r, &a, &m, &[input(&always, None)]),
+        ));
+
+        assert_eq!(got.len(), EXPECTED.len());
+        for ((name, (drawn, cleared)), (want_name, want_drawn, want_cleared)) in
+            got.iter().zip(EXPECTED)
+        {
+            assert_eq!(name, want_name);
+            assert_eq!(drawn, want_drawn, "{name}: the frame bytes changed");
+            assert_eq!(cleared, want_cleared, "{name}: the clear bytes changed");
+        }
+    }
 }
