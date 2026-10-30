@@ -17,3 +17,4 @@ pub(crate) mod theme;
 pub(crate) mod theme_author;
 pub(crate) mod theme_choice;
 pub(crate) mod theme_definition;
+pub(crate) mod theme_palette;
