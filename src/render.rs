@@ -1,6 +1,9 @@
 //! Themes, layout and frame bytes for the in-terminal overlay: menu, description bar, pop-out, ghost text, and
 //! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2). OWNER: ui agent.
-use crate::icons::{self, Graphics, Image};
+use crate::dropdown::domain::services::icon_resolver;
+use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
+use crate::dropdown::domain::value_objects::icon_id::{self, IconId};
+use crate::terminal_session::infrastructure::adapters::{icon_assets, kitty_graphics};
 use crate::dropdown::domain::entities::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::{AUTOCOMPLETE_THEME, AUTOCOMPLETE_WIDTH};
 use crate::settings::domain::value_objects::settings::Settings;
@@ -198,8 +201,8 @@ pub struct Renderer {
     /// Last frame emitted: an identical frame over a still-drawn one is skipped (render key, SPEC §7.5.3).
     /// ponytail: the key is the frame bytes themselves (a few rows per frame, cheap to build and compare).
     last: Vec<u8>,
-    /// How row icons are drawn (`icons::detect`); with direct placements the clear removes them too.
-    images: Graphics,
+    /// How row icons are drawn (`kitty_graphics::detect`); with direct placements the clear removes them too.
+    images: GraphicsSupport,
     /// Image ids the terminal already holds: each is transmitted once, placements come every frame.
     sent: HashSet<u32>,
 }
@@ -220,7 +223,7 @@ struct Patch {
     s: String,
     pad: String,
     /// Image covering the icon slot, placed at column `x + 1` (list rows only).
-    img: Option<Image>,
+    img: Option<IconId>,
 }
 
 #[derive(Default)]
@@ -251,13 +254,13 @@ impl Renderer {
             truecolor,
             clear: Vec::new(),
             last: Vec::new(),
-            images: Graphics::Off,
+            images: GraphicsSupport::Off,
             sent: HashSet::new(),
         }
     }
 
     /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); ASCII when `Off`.
-    pub fn with_images(mut self, g: Graphics) -> Renderer {
+    pub fn with_images(mut self, g: GraphicsSupport) -> Renderer {
         self.images = g;
         self
     }
@@ -307,8 +310,8 @@ impl Renderer {
         self.drop_clear();
         let grid = model.grid();
         let mut s = String::from(HEAD);
-        if self.images == Graphics::Direct {
-            s += icons::CLEAR_PLACEMENTS;
+        if self.images == GraphicsSupport::Direct {
+            s += kitty_graphics::CLEAR_PLACEMENTS;
         }
         for y in 0..grid.screen_lines() {
             let row = &grid[Line(y as i32)];
@@ -351,8 +354,8 @@ impl Renderer {
             return None;
         }
         let (mut frame, mut clear) = (String::from(HEAD), String::from(HEAD));
-        if self.images == Graphics::Direct {
-            clear += icons::CLEAR_PLACEMENTS;
+        if self.images == GraphicsSupport::Direct {
+            clear += kitty_graphics::CLEAR_PLACEMENTS;
         }
         // Images the terminal does not hold yet; `frame` marks them sent when it emits them.
         let mut transmit: Vec<(u32, String)> = Vec::new();
@@ -374,13 +377,16 @@ impl Renderer {
                 frame.push(' ');
             }
             if let Some(img) = &p.img {
-                if !self.sent.contains(&img.id) && transmit.iter().all(|(id, _)| *id != img.id) {
-                    transmit.push((img.id, icons::transmit(img, self.images)));
+                if !self.sent.contains(&img.value())
+                    && transmit.iter().all(|(id, _)| *id != img.value())
+                {
+                    let image = icon_assets::kitty_image(*img);
+                    transmit.push((img.value(), kitty_graphics::transmit(&image, self.images)));
                 }
                 // Behind tmux the placeholders in `p.s` show the image.
-                if self.images == Graphics::Direct {
+                if self.images == GraphicsSupport::Direct {
                     cup(&mut frame, p.row, p.x + 1);
-                    frame += &icons::place(img, k + 1);
+                    frame += &kitty_graphics::place(*img, k + 1);
                 }
             }
             cup(&mut clear, p.row, xs);
@@ -482,7 +488,7 @@ impl Renderer {
 
     /// `' '` + icon slot (two columns) + `' '` + title (match highlight) + (`' '` + dim args hint when room) + pad
     /// (SPEC §7.4.2). The image, if any, goes over the slot.
-    fn list_row(&self, it: &Suggestion, selected: bool, w: usize) -> (String, String, Option<Image>) {
+    fn list_row(&self, it: &Suggestion, selected: bool, w: usize) -> (String, String, Option<IconId>) {
         let t = &self.theme;
         let (fg, bg, mbg) = if selected {
             (t.selected_text, t.selected_bg, t.selected_matching_bg)
@@ -491,14 +497,14 @@ impl Renderer {
         };
         let (base, hl) = (self.pen(fg, bg, ""), self.pen(fg, mbg, ""));
         let mut r = Run::default();
-        let slot = icons::slot(it, self.images);
+        let slot = icon_resolver::slot(it, self.images);
         r.put(&base, " ");
-        if slot.badge {
-            r.put(&self.pen((255, 255, 255), bg, ""), &slot.text);
-        } else if let (Graphics::Tmux, Some(img)) = (self.images, &slot.image) {
-            r.put(&self.pen(fg, bg, &icons::color(img.id)), &slot.text);
+        if slot.is_badge() {
+            r.put(&self.pen((255, 255, 255), bg, ""), slot.text());
+        } else if let (GraphicsSupport::Tmux, Some(img)) = (self.images, slot.image()) {
+            r.put(&self.pen(fg, bg, &icon_id::color(img.value())), slot.text());
         } else {
-            r.put(&base, &slot.text);
+            r.put(&base, slot.text());
         }
         r.put(&base, " ");
         let avail = w.saturating_sub(5);
@@ -528,7 +534,7 @@ impl Renderer {
             r.put(&self.pen(fg, bg, ";2"), &hint);
         }
         r.pad_to(&base, w);
-        (r.s, base, slot.image)
+        (r.s, base, slot.image())
     }
 
     /// Description bar / argument hint: `' '` + bold `name: ` + italic description, `No description` in grey,
@@ -1315,14 +1321,14 @@ mod tests {
         let m = menu(subs(), &s);
         let base = b"$ git c".to_vec();
         let a = model(40, 12, &[&base]);
-        let mut r = Renderer::new(Theme::dark(), true).with_images(Graphics::Direct);
+        let mut r = Renderer::new(Theme::dark(), true).with_images(GraphicsSupport::Direct);
         // First frame sends each icon once, then places one image per row, under the text.
         let first = r.frame(&a, &m, &input(&s, None));
         let text = String::from_utf8_lossy(&first).into_owned();
         assert!(text.contains("\x1b_Ga=t,i="), "{text:?}");
         assert_eq!(text.matches("\x1b_Ga=p,").count(), 4, "{text:?}");
         let clear = r.take_clear();
-        assert!(String::from_utf8_lossy(&clear).contains(icons::CLEAR_PLACEMENTS));
+        assert!(String::from_utf8_lossy(&clear).contains(kitty_graphics::CLEAR_PLACEMENTS));
         assert!(
             differs(&a, &model(40, 12, &[&base, &first])),
             "the frame draws something"
@@ -1341,7 +1347,7 @@ mod tests {
         let m = menu(subs(), &s);
         let base = b"$ git c".to_vec();
         let a = model(40, 12, &[&base]);
-        let mut r = Renderer::new(Theme::dark(), true).with_images(Graphics::Tmux);
+        let mut r = Renderer::new(Theme::dark(), true).with_images(GraphicsSupport::Tmux);
         // Images go through tmux's passthrough once; each slot is two placeholder cells, no placement.
         let first = r.frame(&a, &m, &input(&s, None));
         let text = String::from_utf8_lossy(&first).into_owned();
@@ -1352,7 +1358,7 @@ mod tests {
         assert!(!text.contains("\x1b_Ga=p,"), "{text:?}");
         assert_eq!(text.matches('\u{10eeee}').count(), 8, "{text:?}");
         let clear = r.take_clear();
-        assert!(!String::from_utf8_lossy(&clear).contains(icons::CLEAR_PLACEMENTS));
+        assert!(!String::from_utf8_lossy(&clear).contains(kitty_graphics::CLEAR_PLACEMENTS));
         assert_same(&a, &model(40, 12, &[&base, &first, &clear]));
         let second = r.frame(&a, &m, &input(&s, Some("x")));
         assert!(!String::from_utf8_lossy(&second).contains("Ptmux"));
@@ -1659,8 +1665,8 @@ mod tests {
         let m = menu(subs(), &s);
         let a = model(40, 12, &[b"$ git c"]);
         for (name, g) in [
-            ("icons_direct", Graphics::Direct),
-            ("icons_tmux", Graphics::Tmux),
+            ("icons_direct", GraphicsSupport::Direct),
+            ("icons_tmux", GraphicsSupport::Tmux),
         ] {
             let mut r = Renderer::new(Theme::dark(), true).with_images(g);
             let frames = [input(&s, None), input(&s, Some("x"))];

@@ -1,4 +1,5 @@
 pub(crate) mod common_prefix_outcome;
+pub(crate) mod graphics_support;
 pub(crate) mod icon_id;
 pub(crate) mod icon_slot;
 pub(crate) mod key;

@@ -67,6 +67,22 @@ pub(crate) const ICON_NAMES: &[&str] = &[
     "yarn",
 ];
 
+/// Two placeholder cells (row 0, columns 0 and 1) of image `id`, which the foreground colour carries (`color`). A
+/// third diacritic holds the id's top byte: 1 for the tinted templates, absent for the PNGs.
+pub(crate) fn placeholders(id: u32) -> String {
+    let top = if id >> 24 == 0 { "" } else { "\u{30d}" };
+    format!("\u{10eeee}\u{305}\u{305}{top}\u{10eeee}\u{305}\u{30d}{top}")
+}
+
+/// SGR parameters (after a pen) for the foreground that names image `id` to its placeholders.
+pub(crate) fn color(id: u32) -> String {
+    if id < 256 {
+        format!(";38;5;{id}")
+    } else {
+        format!(";38;2;{};{};{}", id >> 16 & 255, id >> 8 & 255, id & 255)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

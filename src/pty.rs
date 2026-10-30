@@ -25,6 +25,7 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
+use crate::terminal_session::infrastructure::adapters::kitty_graphics;
 use crate::terminal_session::infrastructure::adapters::stdin_key_decoder::StdinKeyDecoder;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
 use crate::completion::application::completion_request::CompletionRequest;
@@ -448,7 +449,7 @@ impl Session {
             Ok("truecolor" | "24bit")
         ) || std::env::var_os("WT_SESSION").is_some();
         let renderer = Renderer::new(Theme::from_settings(&settings, terminal_bg), truecolor)
-            .with_images(crate::icons::detect());
+            .with_images(kitty_graphics::detect());
         let (menu, keymap) = (Menu::new(), Keymap::from_settings(&settings));
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;

@@ -11,7 +11,6 @@ mod doctor;
 mod dropdown;
 mod ghost_text;
 mod history;
-mod icons;
 mod pty;
 mod render;
 mod settings;
