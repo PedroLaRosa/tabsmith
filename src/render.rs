@@ -894,6 +894,7 @@ mod tests {
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::term::Config;
     use alacritty_terminal::vte::ansi::Processor;
+    use serde_json::json;
 
     struct Size(usize, usize);
 
@@ -1432,6 +1433,121 @@ mod tests {
         assert_eq!(
             Theme::from_settings(&Settings::default(), None),
             Theme::dark()
+        );
+    }
+
+    /// The eight colours of a theme in field order: main_bg, main_text, matching_bg, selected_bg, selected_text,
+    /// selected_matching_bg, description_text, description_border.
+    fn roles(t: &Theme) -> [Rgb; 8] {
+        [
+            t.main_bg,
+            t.main_text,
+            t.matching_bg,
+            t.selected_bg,
+            t.selected_text,
+            t.selected_matching_bg,
+            t.description_text,
+            t.description_border,
+        ]
+    }
+
+    #[test]
+    fn should_draw_a_json_value_that_is_not_a_fig_theme_with_the_base16_filler() {
+        let filler = [
+            (24, 24, 24),
+            (232, 232, 232),
+            (40, 40, 40),
+            (56, 56, 56),
+            (248, 248, 248),
+            (186, 139, 175),
+            (216, 216, 216),
+            (40, 40, 40),
+        ];
+        let not_fig = [
+            json!({}),
+            json!([1]),
+            json!("x"),
+            json!(null),
+            json!(5),
+            json!({"version": "1.0"}),
+            json!({"version": 1, "theme": {}}),
+            json!({"version": "1.0", "theme": "x"}),
+        ];
+
+        for value in not_fig {
+            assert_eq!(roles(&Theme::from_json(&value)), filler, "{value}");
+        }
+    }
+
+    #[test]
+    fn should_fall_back_per_colour_for_a_fig_theme_with_missing_or_unparsable_colours() {
+        let fig = json!({
+            "version": "1.0",
+            "theme": {
+                "backgroundColor": "#000",
+                "matchBackgroundColor": "red",
+                "selection": {"backgroundColor": 5, "textColor": null, "matchBackgroundColor": "rgb(1,2)"},
+                "description": {"textColor": "#102030"}
+            }
+        });
+        let dark = [
+            (48, 48, 48),
+            (180, 180, 180),
+            (95, 89, 56),
+            (30, 90, 199),
+            (253, 253, 253),
+            (106, 142, 218),
+            (180, 180, 180),
+            (65, 65, 65),
+        ];
+
+        let theme = Theme::from_json(&fig);
+
+        assert_eq!(
+            roles(&theme),
+            [
+                (0, 0, 0),
+                dark[1],
+                dark[2],
+                dark[3],
+                dark[4],
+                dark[5],
+                (16, 32, 48),
+                dark[7]
+            ]
+        );
+        // a Fig theme without a single colour is dark, not the base16 filler
+        let empty = json!({"version": "1.0", "theme": {}});
+        assert_eq!(roles(&Theme::from_json(&empty)), dark);
+    }
+
+    #[test]
+    fn should_fall_back_per_colour_for_a_base16_theme_with_missing_or_unparsable_colours() {
+        let base16 = json!({
+            "shade0": "#101010",
+            "shade1": "#0a0b0c",
+            "shade5": 5,
+            "shade6": null,
+            "shade7": "red",
+            "accent6": "rgb(1,2)",
+            "shade3": "#ffffff",
+            "accent0": "#ffffff"
+        });
+
+        let theme = Theme::from_json(&base16);
+
+        assert_eq!(
+            roles(&theme),
+            [
+                (16, 16, 16),
+                (232, 232, 232),
+                (10, 11, 12),
+                (56, 56, 56),
+                (248, 248, 248),
+                (186, 139, 175),
+                (216, 216, 216),
+                (10, 11, 12)
+            ]
         );
     }
 }
