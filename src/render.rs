@@ -1,6 +1,6 @@
 //! Themes, layout and frame bytes for the in-terminal overlay: menu, description bar, pop-out, ghost text, and
 //! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2). OWNER: ui agent.
-use crate::dropdown::domain::services::color_parser::{parse_color, xterm256};
+use crate::dropdown::domain::services::color_parser::xterm256;
 use crate::dropdown::domain::services::icon_resolver;
 use crate::dropdown::domain::services::menu_describer::describe;
 use crate::dropdown::domain::services::menu_layout_calculator::layout;
@@ -8,12 +8,11 @@ use crate::dropdown::domain::services::text_fitting::{clean, cw, fit, width, wra
 use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::dropdown::domain::value_objects::icon_id::{self, IconId};
 use crate::dropdown::domain::value_objects::rgb::Rgb;
-use crate::dropdown::domain::value_objects::theme::{Theme, ThemeParts};
+use crate::dropdown::domain::value_objects::theme::Theme;
 use crate::terminal_session::infrastructure::adapters::{icon_assets, kitty_graphics};
 use crate::dropdown::domain::entities::menu::{max_rows, Menu};
-use crate::settings::domain::services::settings_catalog::{AUTOCOMPLETE_THEME, AUTOCOMPLETE_WIDTH};
+use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_WIDTH;
 use crate::settings::domain::value_objects::settings::Settings;
-use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::types::Model;
 use alacritty_terminal::grid::{Dimensions, Row};
@@ -21,82 +20,10 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
-use serde_json::Value;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::ops::Range;
 use std::time::Instant;
-
-/// base16 filler for custom themes (`themes.ts:46-83`, dark variant).
-const SHADES: [&str; 8] = [
-    "#181818", "#282828", "#383838", "#585858", "#b8b8b8", "#d8d8d8", "#e8e8e8", "#f8f8f8",
-];
-const ACCENTS: [&str; 8] = [
-    "#ab4642", "#dc9656", "#f7ca88", "#a1b56c", "#86c1b9", "#7cafc2", "#ba8baf", "#a16946",
-];
-
-// SHIM (R13): the custom-theme branch (environment, file system, serde) has no home until ThemeRepository
-// exists. An inherent impl of the dropdown Theme, built through Theme::new and read through the accessors.
-// Step 8.5d deletes it with SHADES and ACCENTS.
-impl Theme {
-    /// From `autocomplete.theme` (dark/light/system/custom file). `terminal_bg` = OSC 11 reply (for `system`).
-    pub(crate) fn from_settings(settings: &Settings, terminal_bg: Option<(u8, u8, u8)>) -> Theme {
-        match settings.string(AUTOCOMPLETE_THEME).unwrap_or_default() {
-            "" | "dark" => Theme::dark(),
-            "light" => Theme::light(),
-            "system" => match terminal_bg {
-                Some((r, g, b))
-                    if (0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64) / 255.0 >= 0.5 =>
-                {
-                    Theme::light()
-                }
-                _ => Theme::dark(),
-            },
-            name => data_directory_from_env()
-                .themes_dir()
-                .ok()
-                .and_then(|dir| std::fs::read_to_string(dir.join(format!("{name}.json"))).ok())
-                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-                .map_or_else(Theme::dark, |v| Theme::from_json(&v)),
-        }
-    }
-
-    /// Custom theme file (SPEC §7.7): `version:"1.0"` + `theme{}`, else base16 shades/accents. Missing or
-    /// unparsable colours come from dark / the dark filler.
-    pub(crate) fn from_json(v: &Value) -> Theme {
-        let col = |p: &str| v.pointer(p).and_then(Value::as_str).and_then(parse_color);
-        let d = Theme::dark();
-        if v.get("version").and_then(Value::as_str) == Some("1.0")
-            && v.get("theme").is_some_and(Value::is_object)
-        {
-            return Theme::new(ThemeParts {
-                main_bg: col("/theme/backgroundColor").unwrap_or(d.main_bg()),
-                main_text: col("/theme/textColor").unwrap_or(d.main_text()),
-                matching_bg: col("/theme/matchBackgroundColor").unwrap_or(d.matching_bg()),
-                selected_bg: col("/theme/selection/backgroundColor").unwrap_or(d.selected_bg()),
-                selected_text: col("/theme/selection/textColor").unwrap_or(d.selected_text()),
-                selected_matching_bg: col("/theme/selection/matchBackgroundColor")
-                    .unwrap_or(d.selected_matching_bg()),
-                description_text: col("/theme/description/textColor").unwrap_or(d.description_text()),
-                description_border: col("/theme/description/borderColor")
-                    .unwrap_or(d.description_border()),
-            });
-        }
-        let filler = |list: &[&str; 8], i: usize| parse_color(list[i]).unwrap_or_default();
-        let shade = |i: usize| col(&format!("/shade{i}")).unwrap_or_else(|| filler(&SHADES, i));
-        let accent = |i: usize| col(&format!("/accent{i}")).unwrap_or_else(|| filler(&ACCENTS, i));
-        Theme::new(ThemeParts {
-            main_bg: shade(0),
-            main_text: shade(6),
-            matching_bg: shade(1),
-            selected_bg: shade(2),
-            selected_text: shade(7),
-            selected_matching_bg: accent(6),
-            description_text: shade(5),
-            description_border: shade(1),
-        })
-    }
-}
 
 /// Inputs to a frame besides the model and menu.
 pub struct FrameInput<'a> {
@@ -671,6 +598,7 @@ fn blank(c: &Cell) -> bool {
 mod tests {
     use super::*;
     use crate::completion::domain::test_fixtures::{comp, item, settings};
+    use crate::dropdown::infrastructure::adapters::theme_json_mapper::theme_palette_from_json;
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::term::Config;
@@ -1111,7 +1039,7 @@ mod tests {
             "shade0": "#101010", "shade1": "#202020", "shade2": "#303030", "shade5": "#a0a0a0",
             "shade6": "#b0b0b0", "shade7": "#c0c0c0", "accent6": "#123456"
         });
-        let custom = || Theme::from_json(&base16);
+        let custom = || theme_palette_from_json(&base16).theme();
         let mut got = Vec::new();
 
         // Below the cursor, wide characters at the edges of the span, truecolor, first row selected.

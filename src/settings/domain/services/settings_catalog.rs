@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// render.rs: `string("autocomplete.theme").unwrap_or("dark")`; the theme command prints `dark` too.
+    /// theme_resolver.rs: `string("autocomplete.theme").unwrap_or("dark")`; the theme command prints `dark` too.
     #[test]
     fn should_default_the_theme_to_dark() {
         let settings = Settings::default();
