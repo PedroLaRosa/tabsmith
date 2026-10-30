@@ -16,7 +16,8 @@ implementation session needs that the plan does not.
 | 5 specs | done, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5) | `1a466e2..d7079b9` (tag `phase5-start` at `1a466e2`), see [`phase-5-specs.md`](phase-5-specs.md) |
 | 6 completion | done, run in six chunks (6.0a-6.2b; 6.3a-e; 6.2c-f and 6.6a; 6.4a-d; 6.4e-f and 6.5a-b; 6.5c, 6.4g, 6.6b and 6.7) | `c38596c..7f48161`, registration at `f3fc30a` (tag `phase6-start` at `c38596c`, whose `src/` equals `ff2db5a`), see [`phase-6-completion.md`](phase-6-completion.md) |
 | 7 ghost_text | done, run in three chunks (7.0-7.4, 7.5-7.7, 7.8-7.10) | `c38dc4b..ab50884`, registration at `353faaa` (tag `phase7-start` at `eef4c88`, whose `src/` equals `7f48161`), see [`phase-7-ghost-text.md`](phase-7-ghost-text.md) |
-| 8-11 | not started | |
+| 8 dropdown | prepared (research, 19 step briefs in three runs; branch `refactor/hexagonal-dropdown-terminal-session`, tag `phase8-start` at `7aafcef`), see [`phase-8-dropdown.md`](phase-8-dropdown.md) | |
+| 9-11 | not started | |
 
 At `353faaa` (the registration; the docs commit that follows changes no code), `scripts/hexagonal-refactor/gate.sh`
 passes. `cargo test` has 986 passed, 0 failed, 1 ignored (the baseline was 283). clippy shows 3 warnings (baseline 3).
@@ -39,6 +40,10 @@ plus four). Against `phase7-start` there are 43 NEW names, 0 missing and 0 DUPLI
   - four reviewer lenses in parallel: behaviour, test lock, architecture, completeness;
   - one skeptic per finding, who tries to refute it;
   - a fixer, then another review round, up to 3 rounds.
+- [`phase-8-dropdown.md`](phase-8-dropdown.md) and [`phase-8-dropdown.args.json`](phase-8-dropdown.args.json):
+  Phase 8 research (traps P8-T1..., decisions R1-R30, rechecks K1-K22, deviations, test moves, the `theme-diff.sh` and
+  byte-hash guard design) and the 19 step briefs (`8.0a` ... `8.7`, three runs: 8.0a-8.2c + 8.4a, 8.4b alone, 8.3a-8.7), each
+  audited by five read-only lenses against `7aafcef`.
 - [`phase-7-ghost-text.md`](phase-7-ghost-text.md) and [`phase-7-ghost-text.args.json`](phase-7-ghost-text.args.json):
   Phase 7 research (traps P7-T1..., decisions R1-R24, rechecks K1-K16, RC1-RC8), the 11 step briefs (`7.0` ... `7.10`, three
   runs: 7.0-7.4, 7.5-7.7, 7.8-7.10) and their review notes. Written at `ff2db5a`, re-checked at `058bebd`; the binding

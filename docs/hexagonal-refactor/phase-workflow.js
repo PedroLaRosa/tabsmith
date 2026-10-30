@@ -15,6 +15,7 @@ export const meta = {
 const S = 'scripts/hexagonal-refactor'
 const BRIEF = `First read docs/hexagonal-refactor/agent-brief.md and follow it exactly (it is the contract for this refactor). Then read the parts of docs/hexagonal-refactor-plan.md and docs/ubiquitous-language.md relevant to your task.`
 const { phase: PHASE, startRev, steps, reviewNotes } = args
+const BRANCH = args.branch || 'refactor/hexagonal-architecture'
 
 const STEP_SCHEMA = {
   type: 'object',
@@ -71,7 +72,7 @@ for (const step of steps) {
   const r = await agent(
     `${BRIEF}\n\nYou implement ${PHASE}, step ${step.id}: ${step.title}.\n\n${step.prompt}\n\n` +
     (prior ? `Earlier steps of this phase reported:\n${prior}\n\n` : '') +
-    `Work in the repo's working tree on branch refactor/hexagonal-architecture (check \`git status\` first; it should be clean). ` +
+    `Work in the repo's working tree on branch ${BRANCH} (check \`git status\` first; it should be clean). ` +
     `Finish with everything committed and a full \`${S}/gate.sh\` run printing GATE PASS. If you cannot get the gate green without changing behaviour, stop, leave the tree committed at the last green state (git stash/checkout your broken work), set gatePassed=false and explain.`,
     { label: `${PHASE} step ${step.id}`, phase: 'Implement', schema: STEP_SCHEMA },
   )
