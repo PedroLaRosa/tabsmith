@@ -1,5 +1,5 @@
-//! Themes, layout and frame bytes for the in-terminal overlay: menu, description bar, pop-out, ghost text, and
-//! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2). OWNER: ui agent.
+//! Frame bytes for the in-terminal overlay: menu, description bar, pop-out, ghost text, and
+//! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2).
 use crate::dropdown::domain::services::color_parser::xterm256;
 use crate::dropdown::domain::services::icon_resolver;
 use crate::dropdown::domain::services::menu_describer::describe;
@@ -26,19 +26,19 @@ use std::ops::Range;
 use std::time::Instant;
 
 /// Inputs to a frame besides the model and menu.
-pub struct FrameInput<'a> {
-    pub settings: &'a Settings,
+pub(crate) struct FrameInput<'a> {
+    pub(crate) settings: &'a Settings,
     /// Ghost text to draw at the cursor (already decided by the wrapper), if any.
-    pub ghost: Option<&'a str>,
+    pub(crate) ghost: Option<&'a str>,
     /// Spinner frame counter (advanced every 80 ms by the wrapper while loading).
-    pub spinner: usize,
+    pub(crate) spinner: usize,
     /// Wrapper-level suppression (preexec, resize repaint pending, insertion lock …).
-    pub suppress: bool,
+    pub(crate) suppress: bool,
     /// Non-full scroll region active (tracked by the wrapper; alacritty keeps it private).
-    pub scroll_region: bool,
+    pub(crate) scroll_region: bool,
 }
 
-pub struct Renderer {
+pub(crate) struct OverlayRenderer {
     theme: Theme,
     truecolor: bool,
     /// Restores every span the last frame covered (computed from the model at draw time).
@@ -91,10 +91,10 @@ impl Run {
     }
 }
 
-impl Renderer {
+impl OverlayRenderer {
     /// `truecolor` = `COLORTERM ∈ {truecolor, 24bit}` or `WT_SESSION` set.
-    pub fn new(theme: Theme, truecolor: bool) -> Renderer {
-        Renderer {
+    pub(crate) fn new(theme: Theme, truecolor: bool) -> OverlayRenderer {
+        OverlayRenderer {
             theme,
             truecolor,
             clear: Vec::new(),
@@ -105,24 +105,24 @@ impl Renderer {
     }
 
     /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); ASCII when `Off`.
-    pub fn with_images(mut self, g: GraphicsSupport) -> Renderer {
+    pub(crate) fn with_images(mut self, g: GraphicsSupport) -> OverlayRenderer {
         self.images = g;
         self
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub(crate) fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
         self.last.clear();
     }
 
     /// Bytes restoring every cell span the last frame covered; empties the cache (SPEC §7.5.3).
-    pub fn take_clear(&mut self) -> Vec<u8> {
+    pub(crate) fn take_clear(&mut self) -> Vec<u8> {
         self.last.clear();
         std::mem::take(&mut self.clear)
     }
 
     /// Forget the cached clear without emitting it (after resize: the terminal reflowed the old frame).
-    pub fn drop_clear(&mut self) {
+    pub(crate) fn drop_clear(&mut self) {
         self.clear.clear();
         self.last.clear();
     }
@@ -131,7 +131,7 @@ impl Renderer {
     /// matching clear for the next `take_clear`. After PTY output call `take_clear` first (the screen then equals
     /// the model); for state-only changes call `frame` alone: a still-drawn frame is cleared in the same bytes,
     /// or nothing is emitted when the new frame is identical.
-    pub fn frame(&mut self, model: &Model, menu: &Menu, input: &FrameInput) -> Vec<u8> {
+    pub(crate) fn frame(&mut self, model: &Model, menu: &Menu, input: &FrameInput) -> Vec<u8> {
         let Some((frame, clear, transmit)) = self.compose(model, menu, input) else {
             return self.take_clear();
         };
@@ -151,7 +151,7 @@ impl Renderer {
 
     /// Full repaint of the model (after resize, SPEC §7.6). Row by row with EL 2: ED 2 would push the screen into
     /// the scrollback on many terminals (alacritty, VTE, kitty), one copy per repaint.
-    pub fn full_repaint(&mut self, model: &Model) -> Vec<u8> {
+    pub(crate) fn full_repaint(&mut self, model: &Model) -> Vec<u8> {
         self.drop_clear();
         let grid = model.grid();
         let mut s = String::from(HEAD);
@@ -706,7 +706,7 @@ mod tests {
         truecolor: bool,
     ) -> String {
         let a = model(cols, rows, &[output]);
-        let mut r = Renderer::new(Theme::dark(), truecolor);
+        let mut r = OverlayRenderer::new(Theme::dark(), truecolor);
         let frame = r.frame(&a, m, inp);
         assert!(
             frame.starts_with(HEAD.as_bytes()) && frame.ends_with(b"\x1b[?2026l"),
@@ -811,7 +811,7 @@ mod tests {
         m.on_completion(c, &s, Instant::now());
         assert!(m.shown(&s) && !m.intercepting(&s));
         let a = model(40, 10, &[b"$ c"]);
-        let mut r = Renderer::new(Theme::light(), true);
+        let mut r = OverlayRenderer::new(Theme::light(), true);
         let f = String::from_utf8(r.frame(&a, &m, &input(&s, None))).unwrap();
         assert!(
             f.contains("path: ") && !f.contains('⠸'),
@@ -834,7 +834,7 @@ mod tests {
         let s = Settings::default();
         let m = menu(subs(), &s);
         let a = model(40, 12, &[b"$ c"]);
-        let mut r = Renderer::new(Theme::dark(), true);
+        let mut r = OverlayRenderer::new(Theme::dark(), true);
         let f1 = r.frame(&a, &m, &input(&s, None));
         assert!(!f1.is_empty());
         assert!(
@@ -884,7 +884,7 @@ mod tests {
         .concat();
         let a = model(40, 12, &[&out]);
         assert!(a.grid().cursor.input_needs_wrap);
-        let mut r = Renderer::new(Theme::dark(), true);
+        let mut r = OverlayRenderer::new(Theme::dark(), true);
         let rep = r.full_repaint(&a);
         let b = model(
             40,
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn row_contents() {
         let s = settings(r#"{"autocomplete.width": 20}"#);
-        let r = Renderer::new(Theme::dark(), true);
+        let r = OverlayRenderer::new(Theme::dark(), true);
         let mut it = item("checkout-a-very-long-name", SuggestionKind::Subcommand, "ch");
         it = it.with_args_hint("<branch>".into());
         let (row, _, _) = r.list_row(&it, false, 20);
@@ -940,7 +940,7 @@ mod tests {
         let m = menu(subs(), &s);
         let base = b"$ git c".to_vec();
         let a = model(40, 12, &[&base]);
-        let mut r = Renderer::new(Theme::dark(), true).with_images(GraphicsSupport::Direct);
+        let mut r = OverlayRenderer::new(Theme::dark(), true).with_images(GraphicsSupport::Direct);
         // First frame sends each icon once, then places one image per row, under the text.
         let first = r.frame(&a, &m, &input(&s, None));
         let text = String::from_utf8_lossy(&first).into_owned();
@@ -966,7 +966,7 @@ mod tests {
         let m = menu(subs(), &s);
         let base = b"$ git c".to_vec();
         let a = model(40, 12, &[&base]);
-        let mut r = Renderer::new(Theme::dark(), true).with_images(GraphicsSupport::Tmux);
+        let mut r = OverlayRenderer::new(Theme::dark(), true).with_images(GraphicsSupport::Tmux);
         // Images go through tmux's passthrough once; each slot is two placeholder cells, no placement.
         let first = r.frame(&a, &m, &input(&s, None));
         let text = String::from_utf8_lossy(&first).into_owned();
@@ -1006,7 +1006,7 @@ mod tests {
     }
 
     /// Draws `frames` one after the other and hashes every frame, then every clear (taken after each frame).
-    fn overlay_hashes(r: &mut Renderer, a: &Model, m: &Menu, frames: &[FrameInput]) -> (u64, u64) {
+    fn overlay_hashes(r: &mut OverlayRenderer, a: &Model, m: &Menu, frames: &[FrameInput]) -> (u64, u64) {
         let (mut drawn, mut cleared) = (Vec::new(), Vec::new());
         for inp in frames {
             drawn.extend(r.frame(a, m, inp));
@@ -1044,11 +1044,11 @@ mod tests {
 
         // Below the cursor, wide characters at the edges of the span, truecolor, first row selected.
         let (a, m) = (model(40, 12, &[&below]), menu(subs(), &s));
-        let mut r = Renderer::new(Theme::dark(), true);
+        let mut r = OverlayRenderer::new(Theme::dark(), true);
         got.push(("below", overlay_hashes(&mut r, &a, &m, &[input(&s, None)])));
 
         // The light theme on a 256-colour terminal.
-        let mut r = Renderer::new(Theme::light(), false);
+        let mut r = OverlayRenderer::new(Theme::light(), false);
         got.push((
             "light_256",
             overlay_hashes(&mut r, &a, &m, &[input(&s, None)]),
@@ -1059,7 +1059,7 @@ mod tests {
         let mut m = menu(subs(), &tall);
         m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &tall);
         m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &tall);
-        let mut r = Renderer::new(Theme::dark(), true);
+        let mut r = OverlayRenderer::new(Theme::dark(), true);
         got.push((
             "scrolled",
             overlay_hashes(&mut r, &a, &m, &[input(&tall, None)]),
@@ -1073,7 +1073,7 @@ mod tests {
         let mut out = String::from_utf8(screen("")).unwrap();
         out += "\r\n\r\n\r\n\r\n\r\n$ ec          \x1b[36m[rprompt]\x1b[0m\x1b[14;5H";
         let a = model(60, 14, &[out.as_bytes()]);
-        let mut r = Renderer::new(Theme::dark(), true);
+        let mut r = OverlayRenderer::new(Theme::dark(), true);
         let ghost = input(&always, Some("ho hello\tworld and more"));
         got.push((
             "above_ghost_popout",
@@ -1084,7 +1084,7 @@ mod tests {
         let hint = Settings::default();
         let m = menu(Vec::new(), &hint);
         let a = model(40, 10, &[format!("{}$ c", " ".repeat(30)).as_bytes()]);
-        let mut r = Renderer::new(custom(), true);
+        let mut r = OverlayRenderer::new(custom(), true);
         let wide = input(&hint, Some("中文中文中文"));
         got.push((
             "arg_hint_wide_ghost",
@@ -1095,7 +1095,7 @@ mod tests {
         let mut m = menu(subs(), &s);
         m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &s);
         let a = model(40, 12, &[&below]);
-        let mut r = Renderer::new(custom(), true);
+        let mut r = OverlayRenderer::new(custom(), true);
         got.push((
             "custom_base16",
             overlay_hashes(&mut r, &a, &m, &[input(&s, None)]),
@@ -1108,7 +1108,7 @@ mod tests {
             ("icons_direct", GraphicsSupport::Direct),
             ("icons_tmux", GraphicsSupport::Tmux),
         ] {
-            let mut r = Renderer::new(Theme::dark(), true).with_images(g);
+            let mut r = OverlayRenderer::new(Theme::dark(), true).with_images(g);
             let frames = [input(&s, None), input(&s, Some("x"))];
             got.push((name, overlay_hashes(&mut r, &a, &m, &frames)));
         }
@@ -1122,14 +1122,14 @@ mod tests {
         };
         let m = menu(rows(), &s);
         let a = model(40, 12, &[b"$ git c"]);
-        let mut r = Renderer::new(custom(), true);
+        let mut r = OverlayRenderer::new(custom(), true);
         got.push((
             "long_description_bar",
             overlay_hashes(&mut r, &a, &m, &[input(&s, None)]),
         ));
         let m = menu(rows(), &always);
         let a = model(60, 12, &[b"$ git c"]);
-        let mut r = Renderer::new(custom(), true);
+        let mut r = OverlayRenderer::new(custom(), true);
         got.push((
             "long_description_popout",
             overlay_hashes(&mut r, &a, &m, &[input(&always, None)]),

@@ -14,7 +14,7 @@ use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeRepository;
-use crate::terminal_session::infrastructure::adapters::overlay_renderer::{FrameInput, Renderer};
+use crate::terminal_session::infrastructure::adapters::overlay_renderer::{FrameInput, OverlayRenderer};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
 };
@@ -342,7 +342,7 @@ struct Session {
     term: Model,
     tracker: Tracker,
     menu: Menu,
-    renderer: Renderer,
+    renderer: OverlayRenderer,
     /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
     themes: Rc<dyn ThemeRepository>,
     keymap: Keymap,
@@ -455,7 +455,7 @@ impl Session {
         ) || std::env::var_os("WT_SESSION").is_some();
         let themes: Rc<dyn ThemeRepository> =
             Rc::new(FileThemeRepository::new(data_directory_from_env()));
-        let renderer = Renderer::new(resolve_theme(&settings, terminal_bg, &*themes), truecolor)
+        let renderer = OverlayRenderer::new(resolve_theme(&settings, terminal_bg, &*themes), truecolor)
             .with_images(kitty_graphics::detect());
         let (menu, keymap) = (Menu::new(), Keymap::from_settings(&settings));
         let (tx, rx) = mpsc::channel();
@@ -985,7 +985,7 @@ impl Session {
     }
 
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
-    /// ponytail: mirrors render.rs `compose`'s guards; its no-room-for-the-menu case (3-row terminal) is not covered.
+    /// ponytail: mirrors overlay_renderer.rs `compose`'s guards; its no-room-for-the-menu case (3-row terminal) is not covered.
     fn drawable(&self) -> bool {
         let g = self.term.grid();
         !self.suppressed()
@@ -1802,7 +1802,7 @@ mod tests {
             term: Term::new(Config::default(), &TermSize::new(80, 24), VoidListener),
             tracker,
             menu: Menu::new(),
-            renderer: Renderer::new(Theme::dark(), false),
+            renderer: OverlayRenderer::new(Theme::dark(), false),
             themes: Rc::new(InMemoryThemeRepository::default()),
             keymap: Keymap::from_settings(&settings),
             decoder: StdinKeyDecoder::default(),

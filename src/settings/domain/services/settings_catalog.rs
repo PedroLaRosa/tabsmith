@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(read, 7.0);
     }
 
-    /// render.rs: `f64("autocomplete.width", 40.0)`.
+    /// overlay_renderer.rs (`menu_patches`): `f64("autocomplete.width", 40.0)`.
     #[test]
     fn should_default_the_menu_width_to_40_columns() {
         let settings = Settings::default();
