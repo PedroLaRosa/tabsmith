@@ -6,6 +6,7 @@ use crate::dropdown::domain::services::text_fitting::{clean, cw, fit, width, wra
 use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::dropdown::domain::value_objects::icon_id::{self, IconId};
 use crate::dropdown::domain::value_objects::rgb::Rgb;
+use crate::dropdown::domain::value_objects::theme::{Theme, ThemeParts};
 use crate::terminal_session::infrastructure::adapters::{icon_assets, kitty_graphics};
 use crate::dropdown::domain::entities::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::{AUTOCOMPLETE_THEME, AUTOCOMPLETE_WIDTH};
@@ -25,19 +26,6 @@ use std::fmt::Write as _;
 use std::ops::Range;
 use std::time::Instant;
 
-/// Eight theme colours as RGB (SPEC §7.7).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Theme {
-    pub main_bg: (u8, u8, u8),
-    pub main_text: (u8, u8, u8),
-    pub matching_bg: (u8, u8, u8),
-    pub selected_bg: (u8, u8, u8),
-    pub selected_text: (u8, u8, u8),
-    pub selected_matching_bg: (u8, u8, u8),
-    pub description_text: (u8, u8, u8),
-    pub description_border: (u8, u8, u8),
-}
-
 /// base16 filler for custom themes (`themes.ts:46-83`, dark variant).
 const SHADES: [&str; 8] = [
     "#181818", "#282828", "#383838", "#585858", "#b8b8b8", "#d8d8d8", "#e8e8e8", "#f8f8f8",
@@ -46,35 +34,12 @@ const ACCENTS: [&str; 8] = [
     "#ab4642", "#dc9656", "#f7ca88", "#a1b56c", "#86c1b9", "#7cafc2", "#ba8baf", "#a16946",
 ];
 
+// SHIM (R13): the custom-theme branch (environment, file system, serde) has no home until ThemeRepository
+// exists. An inherent impl of the dropdown Theme, built through Theme::new and read through the accessors.
+// Step 8.5d deletes it with SHADES and ACCENTS.
 impl Theme {
-    pub fn dark() -> Theme {
-        Theme {
-            main_bg: (48, 48, 48),
-            main_text: (180, 180, 180),
-            matching_bg: (95, 89, 56),
-            selected_bg: (30, 90, 199),
-            selected_text: (253, 253, 253),
-            selected_matching_bg: (106, 142, 218),
-            description_text: (180, 180, 180),
-            description_border: (65, 65, 65),
-        }
-    }
-
-    pub fn light() -> Theme {
-        Theme {
-            main_bg: (254, 254, 254),
-            main_text: (7, 7, 7),
-            matching_bg: (255, 239, 152),
-            selected_bg: (41, 105, 218),
-            selected_text: (253, 253, 253),
-            selected_matching_bg: (106, 142, 218),
-            description_text: (7, 7, 7),
-            description_border: (199, 199, 199),
-        }
-    }
-
     /// From `autocomplete.theme` (dark/light/system/custom file). `terminal_bg` = OSC 11 reply (for `system`).
-    pub fn from_settings(settings: &Settings, terminal_bg: Option<(u8, u8, u8)>) -> Theme {
+    pub(crate) fn from_settings(settings: &Settings, terminal_bg: Option<(u8, u8, u8)>) -> Theme {
         match settings.string(AUTOCOMPLETE_THEME).unwrap_or_default() {
             "" | "dark" => Theme::dark(),
             "light" => Theme::light(),
@@ -97,29 +62,29 @@ impl Theme {
 
     /// Custom theme file (SPEC §7.7): `version:"1.0"` + `theme{}`, else base16 shades/accents. Missing or
     /// unparsable colours come from dark / the dark filler.
-    pub fn from_json(v: &Value) -> Theme {
+    pub(crate) fn from_json(v: &Value) -> Theme {
         let col = |p: &str| v.pointer(p).and_then(Value::as_str).and_then(parse_color);
         let d = Theme::dark();
         if v.get("version").and_then(Value::as_str) == Some("1.0")
             && v.get("theme").is_some_and(Value::is_object)
         {
-            return Theme {
-                main_bg: col("/theme/backgroundColor").unwrap_or(d.main_bg),
-                main_text: col("/theme/textColor").unwrap_or(d.main_text),
-                matching_bg: col("/theme/matchBackgroundColor").unwrap_or(d.matching_bg),
-                selected_bg: col("/theme/selection/backgroundColor").unwrap_or(d.selected_bg),
-                selected_text: col("/theme/selection/textColor").unwrap_or(d.selected_text),
+            return Theme::new(ThemeParts {
+                main_bg: col("/theme/backgroundColor").unwrap_or(d.main_bg()),
+                main_text: col("/theme/textColor").unwrap_or(d.main_text()),
+                matching_bg: col("/theme/matchBackgroundColor").unwrap_or(d.matching_bg()),
+                selected_bg: col("/theme/selection/backgroundColor").unwrap_or(d.selected_bg()),
+                selected_text: col("/theme/selection/textColor").unwrap_or(d.selected_text()),
                 selected_matching_bg: col("/theme/selection/matchBackgroundColor")
-                    .unwrap_or(d.selected_matching_bg),
-                description_text: col("/theme/description/textColor").unwrap_or(d.description_text),
+                    .unwrap_or(d.selected_matching_bg()),
+                description_text: col("/theme/description/textColor").unwrap_or(d.description_text()),
                 description_border: col("/theme/description/borderColor")
-                    .unwrap_or(d.description_border),
-            };
+                    .unwrap_or(d.description_border()),
+            });
         }
         let filler = |list: &[&str; 8], i: usize| parse_color(list[i]).unwrap_or_default();
         let shade = |i: usize| col(&format!("/shade{i}")).unwrap_or_else(|| filler(&SHADES, i));
         let accent = |i: usize| col(&format!("/accent{i}")).unwrap_or_else(|| filler(&ACCENTS, i));
-        Theme {
+        Theme::new(ThemeParts {
             main_bg: shade(0),
             main_text: shade(6),
             matching_bg: shade(1),
@@ -128,7 +93,7 @@ impl Theme {
             selected_matching_bg: accent(6),
             description_text: shade(5),
             description_border: shade(1),
-        }
+        })
     }
 }
 
@@ -394,7 +359,7 @@ impl Renderer {
         };
         if let Some(px) = pop_x {
             // ponytail: no spinner while the pop-out replaces the description bar.
-            let pad = self.pen(self.theme.description_text, self.theme.main_bg, "");
+            let pad = self.pen(self.theme.description_text(), self.theme.main_bg(), "");
             for (i, s) in self
                 .popout_rows(menu, l.n + 1, &pad)
                 .into_iter()
@@ -443,9 +408,9 @@ impl Renderer {
     fn list_row(&self, it: &Suggestion, selected: bool, w: usize) -> (String, String, Option<IconId>) {
         let t = &self.theme;
         let (fg, bg, mbg) = if selected {
-            (t.selected_text, t.selected_bg, t.selected_matching_bg)
+            (t.selected_text(), t.selected_bg(), t.selected_matching_bg())
         } else {
-            (t.main_text, t.main_bg, t.matching_bg)
+            (t.main_text(), t.main_bg(), t.matching_bg())
         };
         let (base, hl) = (self.pen(fg, bg, ""), self.pen(fg, mbg, ""));
         let mut r = Run::default();
@@ -493,14 +458,14 @@ impl Renderer {
     /// right-aligned spinner (SPEC §7.4.2).
     fn desc_row(&self, menu: &Menu, w: usize, spin: Option<char>) -> (String, String) {
         let t = &self.theme;
-        let base = self.pen(t.description_text, t.main_bg, "");
+        let base = self.pen(t.description_text(), t.main_bg(), "");
         let (name, desc) = describe(menu);
         let end = w.saturating_sub(if spin.is_some() { 2 } else { 1 });
         let mut r = Run::default();
         r.put(&base, " ");
         if name.is_empty() && desc.is_empty() {
             r.put(
-                &self.pen((140, 140, 140), t.main_bg, ""),
+                &self.pen((140, 140, 140), t.main_bg(), ""),
                 &fit("No description", end.saturating_sub(r.w)),
             );
         } else {
@@ -511,12 +476,12 @@ impl Renderer {
                     format!("{name}: ")
                 };
                 r.put(
-                    &self.pen(t.description_text, t.main_bg, ";1"),
+                    &self.pen(t.description_text(), t.main_bg(), ";1"),
                     &fit(&label, end.saturating_sub(r.w)),
                 );
             }
             r.put(
-                &self.pen(t.description_text, t.main_bg, ";3"),
+                &self.pen(t.description_text(), t.main_bg(), ";3"),
                 &fit(&desc, end.saturating_sub(r.w)),
             );
         }
@@ -1264,20 +1229,20 @@ mod tests {
         )
         .unwrap();
         let t = Theme::from_json(&v1);
-        assert_eq!((t.main_bg, t.selected_bg), ((0, 0, 0), (1, 2, 3)));
+        assert_eq!((t.main_bg(), t.selected_bg()), ((0, 0, 0), (1, 2, 3)));
         assert_eq!(
-            (t.main_text, t.description_text),
-            (Theme::dark().main_text, Theme::dark().description_text)
+            (t.main_text(), t.description_text()),
+            (Theme::dark().main_text(), Theme::dark().description_text())
         );
         let b16: Value =
             serde_json::from_str(r##"{"shade0":"#101010","accent6":"#123456"}"##).unwrap();
         let t = Theme::from_json(&b16);
         assert_eq!(
             (
-                t.main_bg,
-                t.matching_bg,
-                t.selected_matching_bg,
-                t.main_text
+                t.main_bg(),
+                t.matching_bg(),
+                t.selected_matching_bg(),
+                t.main_text()
             ),
             ((16, 16, 16), (40, 40, 40), (18, 52, 86), (232, 232, 232))
         );
@@ -1305,14 +1270,14 @@ mod tests {
     /// selected_matching_bg, description_text, description_border.
     fn roles(t: &Theme) -> [Rgb; 8] {
         [
-            t.main_bg,
-            t.main_text,
-            t.matching_bg,
-            t.selected_bg,
-            t.selected_text,
-            t.selected_matching_bg,
-            t.description_text,
-            t.description_border,
+            t.main_bg(),
+            t.main_text(),
+            t.matching_bg(),
+            t.selected_bg(),
+            t.selected_text(),
+            t.selected_matching_bg(),
+            t.description_text(),
+            t.description_border(),
         ]
     }
 

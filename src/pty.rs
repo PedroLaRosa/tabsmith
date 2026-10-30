@@ -11,7 +11,8 @@ use crate::dropdown::domain::value_objects::modifiers::Modifiers;
 use crate::shared::infrastructure::logger;
 use crate::dropdown::domain::entities::menu::Menu;
 use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
-use crate::render::{FrameInput, Renderer, Theme};
+use crate::dropdown::domain::value_objects::theme::Theme;
+use crate::render::{FrameInput, Renderer};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
 };
