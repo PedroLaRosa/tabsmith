@@ -66,9 +66,9 @@ impl Keymap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::completion::domain::test_fixtures::settings;
     use crate::dropdown::domain::value_objects::key_code::KeyCode;
     use crate::dropdown::domain::value_objects::modifiers::Modifiers;
-    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     const NONE: Modifiers = Modifiers::none();
     const CTRL: Modifiers = NONE.with_ctrl(true);
@@ -77,13 +77,6 @@ mod tests {
 
     fn k(code: KeyCode, mods: Modifiers) -> Key {
         Key::new(code, mods)
-    }
-
-    fn settings(json: &str) -> Settings {
-        match serde_json::from_str(json).unwrap() {
-            serde_json::Value::Object(m) => settings_from_json(m),
-            _ => unreachable!(),
-        }
     }
 
     #[test]

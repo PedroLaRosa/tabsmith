@@ -1,6 +1,6 @@
 use crate::dropdown::domain::value_objects::icon_id::IconId;
 
-/// The icon slot of a row: `text` is two columns wide for every row kind (a spec badge is stored as given, P8-T33); `image` (kitty only) covers it, under the text.
+/// The icon slot of a row: `text` is two columns wide for every row kind (a spec badge is stored as given); `image` (kitty only) covers it, under the text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IconSlot {
     text: String,
@@ -33,14 +33,11 @@ mod tests {
 
     #[test]
     fn should_hold_the_text_image_and_badge_of_an_icon_slot() {
-        // Arrange
         let icon = IconId::Tinted(0x2e, 0xcc, 0x71);
 
-        // Act
         let badge = IconSlot::new("ab".to_string(), Some(icon), true);
         let plain = IconSlot::new("  ".to_string(), None, false);
 
-        // Assert
         assert_eq!(
             (badge.text(), badge.image(), badge.is_badge()),
             ("ab", Some(icon), true)

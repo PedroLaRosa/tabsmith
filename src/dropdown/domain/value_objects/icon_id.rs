@@ -74,7 +74,6 @@ mod tests {
     /// The ids `slot()` gave at the phase 8 start: a PNG's position plus one (git 23, option 34, template 39), the top byte set for a tint.
     #[test]
     fn should_number_png_icons_from_one_and_tinted_icons_with_the_top_byte_set() {
-        // Arrange
         let icons = [
             IconId::Png(0),
             IconId::Png(38),
@@ -83,10 +82,8 @@ mod tests {
             IconId::Tinted(0x2e, 0xcc, 0x71),
         ];
 
-        // Act
         let values = icons.map(IconId::value);
 
-        // Assert
         assert_eq!(values, [1, 39, 34, 23, 0x012e_cc71]);
     }
 }

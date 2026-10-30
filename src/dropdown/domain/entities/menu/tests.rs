@@ -534,6 +534,19 @@ fn execute_and_record() {
 }
 
 #[test]
+fn should_toggle_the_description_popout_off_again() {
+    let s = Settings::default();
+    let mut m = typed(&s);
+
+    m.handle(KeyAction::ToggleDescription, &s);
+    let after_first_toggle = m.popout(&s);
+    m.handle(KeyAction::ToggleDescription, &s);
+    let after_second_toggle = m.popout(&s);
+
+    assert_eq!((after_first_toggle, after_second_toggle), (true, false));
+}
+
+#[test]
 fn should_insert_a_lone_special_row_in_full() {
     // One row decides before its kind is looked at: a lone special row (or `↪`) is inserted whole.
     let mut lone = with(vec![item("<path>", SuggestionKind::Special, "")]);
