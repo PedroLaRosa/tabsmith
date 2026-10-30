@@ -1671,8 +1671,8 @@ the briefs, the notes win):
   deleted, not committed); the two late `resolve_theme` sites of `pty.rs` (OSC 11 reply, settings reload) have no
   automated test.
 - **History**: no Phase 8 subject is over 72 characters, and every commit has the Sonnet 5.5 trailer
-  (`git log --format='%h %s' phase8-start..HEAD`: 51 commits, counting the research hand-over, the run hand-offs and
-  this close's three). Every message went through `git commit -F`; none was rewritten.
+  (`git log --format='%h %s' phase8-start..HEAD`: 49 commits up to the registration, counting the research hand-over and the run
+  hand-offs, plus the docs commits of this close). Every message went through `git commit -F`; none was rewritten.
 - **Manual smoke pending** (the user's, after the phase; section 8): with `TABSMITH_HOME=$(mktemp -d) cargo run -- debug
   shell zsh` (and bash, fish): (1) `git ch` shows the menu; (2) Tab inserts and branches appear, a shared prefix
   inserts; (3) Esc hides it; (5) a prompt on the bottom row draws the menu above; (6) a resize leaves no artefacts;

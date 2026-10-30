@@ -116,7 +116,7 @@ identical; testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 168, NEW 8
 MISSING 0, DUPLICATE 0, CHANGED 26, NEW 105 (99 `should_` names plus six D6 split names), PATH-ONLY 10; `theme-diff.sh`,
 `inline-diff.sh`, `integrations-diff.sh` and `precmd-diff.sh` empty against the baseline binary;
 `debug_shell_survives_closed_terminal` passes; `cargo check --locked --no-default-features --all-targets` passes; the architecture
-test passes with `dropdown` registered (55 tests). 49 commits since `phase8-start` at `da2f950` (51 with the two docs commits), none with a subject over 72 characters,
+test passes with `dropdown` registered (55 tests). 49 commits since `phase8-start` at `da2f950` (plus the docs commits of this close), none with a subject over 72 characters,
 all with the Sonnet 5.5 trailer. The orchestrator's own verification of run 3 (`verify-p8.sh run3`) is still to be done.
 
 Phase 8 runs: run 1 `cfc5f80..73bf7de`, run 2 `73bf7de..5a19bda` (plus the hand-off `98ad1dd`), run 3 `a6cd112..1bbe27b`, registration
