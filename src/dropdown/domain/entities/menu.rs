@@ -113,7 +113,8 @@ impl Menu {
                         MenuVisibility::HiddenUntilKeypress
                     }
                 }
-                v => v,
+                MenuVisibility::Visible => MenuVisibility::Visible,
+                MenuVisibility::HiddenUntilShown => MenuVisibility::HiddenUntilShown,
             };
             if settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB) {
                 self.vis = orig;
@@ -227,12 +228,21 @@ impl Menu {
                 self.history_mode = !self.history_mode;
                 vec![MenuEffect::Rerequest]
             }
-            KeyAction::ToggleDescription | KeyAction::ShowDescription | KeyAction::HideDescription => {
+            KeyAction::ToggleDescription => {
                 if !always_desc {
-                    self.popout = match action {
-                        KeyAction::ToggleDescription => !self.popout,
-                        a => a == KeyAction::ShowDescription,
-                    };
+                    self.popout = !self.popout;
+                }
+                Vec::new()
+            }
+            KeyAction::ShowDescription => {
+                if !always_desc {
+                    self.popout = true;
+                }
+                Vec::new()
+            }
+            KeyAction::HideDescription => {
+                if !always_desc {
+                    self.popout = false;
                 }
                 Vec::new()
             }
