@@ -253,15 +253,15 @@ mod tests {
     fn should_save_the_name_as_typed() {
         let settings = saved_settings();
 
-        select(
+        let (result, _) = select(
             &settings,
             themes().with_theme("My Theme", by("Ann")),
             "My Theme",
         );
 
         assert_eq!(
-            saved_theme(&settings),
-            Some(SettingValue::Text("My Theme".to_string()))
+            (result.is_ok(), saved_theme(&settings)),
+            (true, Some(SettingValue::Text("My Theme".to_string())))
         );
     }
 
