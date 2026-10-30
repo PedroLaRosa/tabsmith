@@ -2,7 +2,9 @@
 //! on that thread; the server owns the inbox instance and dispatches each `EngineMessage` to the completion use cases
 //! and the legacy ghost text block (the engine-server event table, plan §4). Only the latest request is served; while
 //! generators run, a request is replied again whenever one of its generators finishes (phase `Generators`).
-use crate::inline::{self, GhostCache, Source};
+use crate::ghost_text::domain::services::ghost_text_source_resolver;
+use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
+use crate::inline::{self, GhostCache};
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::completion::application::completion_notice::CompletionNotice;
@@ -204,9 +206,9 @@ impl EngineServer {
         }
         let history = || inline::history_ghost(&self.history.recent(), result.buffer());
         let specs = || inline::spec_ghost(result.suggestions());
-        match inline::source(self.session.settings()) {
-            Ok(Source::Specs) => specs(),
-            Ok(Source::History) | Ok(Source::Profile(_)) => history(),
+        match ghost_text_source_resolver::source(self.session.settings()) {
+            Ok(GhostTextSource::Specs) => specs(),
+            Ok(GhostTextSource::History) | Ok(GhostTextSource::Profile(_)) => history(),
             _ => history().or_else(specs),
         }
     }
@@ -214,7 +216,7 @@ impl EngineServer {
     /// LLM ghost text (SPEC §8.4).
     fn request_llm_ghost_text(&mut self, req: u64, buffer: String, cwd: PathBuf, shell: Shell) {
         let tx = self.replies.clone();
-        let Ok(Source::Profile(profile)) = inline::source(self.session.settings()) else {
+        let Ok(GhostTextSource::Profile(profile)) = ghost_text_source_resolver::source(self.session.settings()) else {
             let _ = tx.send(Msg::Ghost { req, text: None });
             return;
         };

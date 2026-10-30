@@ -1,6 +1,7 @@
 //! `tabsmith _ pty`: the PTY wrapper session (SPEC §4.3–4.5, §7.2.4, §7.3, §7.6, §8).
 //! OWNER: wrapper agent.
 use crate::ghost_text::domain::value_objects::ghost_text::GhostText;
+use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
 use crate::keys::{self, Action, Binding, Key, KeyCode, Keymap, Mods};
 use crate::shared::infrastructure::logger;
 use crate::menu::{Effect, Menu};
@@ -895,8 +896,8 @@ impl Session {
     fn llm_enabled(&self) -> bool {
         self.settings.bool(INLINE_ENABLED)
             && matches!(
-                crate::inline::source(&self.settings),
-                Ok(crate::inline::Source::Profile(_))
+                crate::ghost_text::domain::services::ghost_text_source_resolver::source(&self.settings),
+                Ok(GhostTextSource::Profile(_))
             )
     }
 

@@ -1,8 +1,9 @@
 //! Small user-facing commands: theme, inline, diagnostic, debug (SPEC §2.4–2.5, §2.10).
 //! OWNER: cli agent.
-use crate::inline::{Profile, Provider, BUILTIN_SOURCES};
+use crate::ghost_text::domain::services::ghost_text_source_resolver;
+use crate::ghost_text::domain::value_objects::ghost_text_source::BUILTIN_SOURCES;
+use crate::ghost_text::domain::value_objects::llm_profile::LlmProfile;
 use crate::pty::CompletionEngineStarter;
-use crate::settings::domain::value_objects::settings::Settings;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_THEME, INLINE_ENABLED, INLINE_SOURCE,
@@ -220,8 +221,8 @@ pub fn inline(cmd: InlineCmd) -> Result<i32> {
             print!(
                 "{}",
                 render_sources(
-                    selected_source(&s),
-                    &crate::inline::profiles(&s),
+                    ghost_text_source_resolver::selected_source(&s),
+                    &ghost_text_source_resolver::profiles(&s),
                     format,
                     color
                 )
@@ -250,22 +251,11 @@ fn set_inline_enabled(on: bool, color: bool) -> Result<()> {
     Ok(())
 }
 
-fn selected_source(s: &Settings) -> &str {
-    s.string(INLINE_SOURCE).unwrap_or_default()
-}
-
-fn provider_name(p: Provider) -> &'static str {
-    match p {
-        Provider::OpenAi => "openai",
-        Provider::Anthropic => "anthropic",
-    }
-}
-
 fn set_customization(name: Option<String>, color: bool) -> Result<()> {
     let repository = settings_repository();
     let settings = repository.load()?;
     // Only valid profiles can be selected (an invalid one would only make doctor fail).
-    let profiles: Vec<(String, Profile)> = crate::inline::profiles(&settings)
+    let profiles: Vec<(String, LlmProfile)> = ghost_text_source_resolver::profiles(&settings)
         .into_iter()
         .filter_map(|(n, p)| Some((n, p.ok()?)))
         .collect();
@@ -290,7 +280,7 @@ fn set_customization(name: Option<String>, color: bool) -> Result<()> {
 }
 
 /// Numbered prompt; `Ok(None)` = "None" picked. Non-tty or bad input → error.
-fn choose_source(profiles: &[(String, Profile)]) -> Result<Option<String>> {
+fn choose_source(profiles: &[(String, LlmProfile)]) -> Result<Option<String>> {
     if !std::io::stdin().is_terminal() {
         bail!("No customization selected");
     }
@@ -301,7 +291,7 @@ fn choose_source(profiles: &[(String, Profile)]) -> Result<Option<String>> {
     rows.extend(profiles.iter().map(|(n, p)| {
         (
             n.clone(),
-            format!("{} {}", provider_name(p.provider), p.model),
+            format!("{} {}", p.provider().name(), p.model()),
         )
     }));
     for (i, (n, d)) in rows.iter().enumerate() {
@@ -322,7 +312,7 @@ fn choose_source(profiles: &[(String, Profile)]) -> Result<Option<String>> {
 /// `inline show-customizations` output (with trailing newline).
 fn render_sources(
     selected: &str,
-    profiles: &[(String, std::result::Result<Profile, String>)],
+    profiles: &[(String, std::result::Result<LlmProfile, String>)],
     format: OutputFormat,
     color: bool,
 ) -> String {
@@ -334,7 +324,7 @@ fn render_sources(
         let mut out: String = BUILTIN_SOURCES.iter().map(|(n, d)| block(n, d)).collect();
         for (n, p) in profiles {
             out += &match p {
-                Ok(p) => block(n, &format!("{} {}", provider_name(p.provider), p.model)),
+                Ok(p) => block(n, &format!("{} {}", p.provider().name(), p.model())),
                 Err(reason) => format!("{} (invalid: {reason})\n\n", bold(n, color)),
             };
         }
@@ -350,10 +340,10 @@ fn render_sources(
         let profiles = profiles.iter().map(|(n, p)| match p {
             Ok(p) => json!({
                 "name": n, "kind": "profile",
-                "description": format!("{} {}", provider_name(p.provider), p.model),
+                "description": format!("{} {}", p.provider().name(), p.model()),
                 "selected": n == selected,
-                "provider": provider_name(p.provider), "model": p.model,
-                "base_url": p.base_url, "api_key_env": p.api_key_env,
+                "provider": p.provider().name(), "model": p.model(),
+                "base_url": p.base_url(), "api_key_env": p.api_key_env(),
             }),
             Err(reason) => json!({
                 "name": n, "kind": "profile", "description": format!("invalid: {reason}"), "selected": n == selected,
@@ -652,6 +642,8 @@ fn debug_logs() -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ghost_text::domain::value_objects::llm_profile::LlmProfileParts;
+    use crate::ghost_text::domain::value_objects::llm_provider::LlmProvider;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
     #[test]
@@ -685,16 +677,16 @@ mod tests {
         assert!(parse_theme("not json").is_err());
     }
 
-    fn profile(name: &str) -> Profile {
-        Profile {
+    fn profile(name: &str) -> LlmProfile {
+        LlmProfile::new(LlmProfileParts {
             name: name.into(),
-            provider: Provider::Anthropic,
+            provider: LlmProvider::Anthropic,
             model: "claude-opus-5-5".into(),
             base_url: "https://api.anthropic.com".into(),
             api_key_env: "ANTHROPIC_API_KEY".into(),
             max_tokens: 1024,
             effort: None,
-        }
+        })
     }
 
     #[test]

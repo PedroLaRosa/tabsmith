@@ -611,19 +611,19 @@ fn session_kind(sid: Option<&str>, parent: Option<&str>, tabsmith_shell: Option<
 
 /// The `Inline` check; `env_set(name)` = the variable is set and non-empty.
 fn inline_outcome<'a>(settings: &Settings, env_set: impl Fn(&str) -> bool) -> Outcome<'a> {
-    use crate::inline::Source;
+    use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
     if !settings.bool(INLINE_ENABLED) {
         return Outcome::Warn(
             "Inline is disabled, to re-enable run: tabsmith inline enable".into(),
         );
     }
-    match crate::inline::source(settings) {
+    match crate::ghost_text::domain::services::ghost_text_source_resolver::source(settings) {
         Err(_) => err(format!(
             "Inline source '{}' is not a valid profile",
             settings.string(INLINE_SOURCE).unwrap_or_default()
         )),
-        Ok(Source::Profile(p)) if !is_local(&p.base_url) && !env_set(&p.api_key_env) => {
-            err(format!("{} is not set", p.api_key_env))
+        Ok(GhostTextSource::Profile(p)) if !is_local(p.base_url()) && !env_set(p.api_key_env()) => {
+            err(format!("{} is not set", p.api_key_env()))
         }
         Ok(_) => Outcome::Ok,
     }

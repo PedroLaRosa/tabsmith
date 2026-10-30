@@ -1,9 +1,8 @@
 //! Inline ghost text: local sources, LLM profiles/clients, completion cache, validation (SPEC §8,
 //! §3.5, §6.11). OWNER: inline agent. Used by the engine (sources, LLM worker), the CLI (`inline` command) and
 //! doctor (profile checks).
-use crate::settings::domain::services::settings_catalog::INLINE_SOURCE;
-use crate::settings::domain::value_objects::setting_value::SettingValue;
-use crate::settings::domain::value_objects::settings::Settings;
+use crate::ghost_text::domain::value_objects::llm_profile::LlmProfile;
+use crate::ghost_text::domain::value_objects::llm_provider::LlmProvider;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;
@@ -14,113 +13,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Provider {
-    OpenAi,
-    Anthropic,
-}
-
-/// A user-defined LLM profile `inline.profiles.<name>` (SPEC §3.3).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Profile {
-    pub name: String,
-    pub provider: Provider,
-    pub model: String,
-    pub base_url: String,
-    pub api_key_env: String,
-    pub max_tokens: u32,
-    pub effort: Option<String>,
-}
-
-/// The selected inline source (`inline.source`, default `history+specs`).
-#[derive(Clone, Debug, PartialEq)]
-pub enum Source {
-    History,
-    Specs,
-    HistoryAndSpecs,
-    Profile(Profile),
-}
-
-/// Built-in source names with descriptions, in display order.
-pub const BUILTIN_SOURCES: [(&str, &str); 3] = [
-    ("history+specs", "Local history, then completion specs"),
-    ("history", "Local history only"),
-    ("specs", "Completion specs only"),
-];
-
-const PROFILES_PREFIX: &str = "inline.profiles.";
-
-/// Every `inline.profiles.*` entry, parsed (`Err(reason)` for invalid objects), sorted by name.
-pub fn profiles(settings: &Settings) -> Vec<(String, Result<Profile, String>)> {
-    let mut v: Vec<_> = settings
-        .with_prefix(PROFILES_PREFIX)
-        .map(|(n, val)| (n.to_string(), parse_profile(n, val)))
-        .collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0));
-    v
-}
-
-/// Resolve `inline.source` (unset → HistoryAndSpecs). `Err` when it names a missing/invalid profile.
-pub fn source(settings: &Settings) -> Result<Source, String> {
-    match settings.string(INLINE_SOURCE).unwrap_or_default() {
-        "history+specs" => Ok(Source::HistoryAndSpecs),
-        "history" => Ok(Source::History),
-        "specs" => Ok(Source::Specs),
-        name => match settings.get(&format!("{PROFILES_PREFIX}{name}")) {
-            None => Err(format!("profile '{name}' not found")),
-            Some(v) => parse_profile(name, v)
-                .map(Source::Profile)
-                .map_err(|e| format!("profile '{name}' is invalid: {e}")),
-        },
-    }
-}
-
-/// One profile object with per-provider defaults (SPEC §3.3).
-fn parse_profile(name: &str, v: &SettingValue) -> Result<Profile, String> {
-    if BUILTIN_SOURCES.iter().any(|(b, _)| *b == name) {
-        return Err(format!("'{name}' is a reserved source name"));
-    }
-    let o = v.as_object().ok_or("not a JSON object")?;
-    let s = |k: &str| match o.get(k) {
-        None | Some(SettingValue::Null) => Ok(None),
-        Some(SettingValue::Text(s)) => Ok(Some(s.clone())),
-        Some(_) => Err(format!("{k} must be a string")),
-    };
-    let provider = match s("provider")?.as_deref() {
-        Some("openai") => Provider::OpenAi,
-        Some("anthropic") => Provider::Anthropic,
-        Some(p) => {
-            return Err(format!(
-                "unknown provider '{p}' (expected openai or anthropic)"
-            ))
-        }
-        None => return Err("missing provider".into()),
-    };
-    let model = s("model")?
-        .filter(|m| !m.is_empty())
-        .ok_or("missing model")?;
-    let (base_url, api_key_env, max_tokens) = match provider {
-        Provider::OpenAi => ("https://api.openai.com/v1", "OPENAI_API_KEY", 64),
-        Provider::Anthropic => ("https://api.anthropic.com", "ANTHROPIC_API_KEY", 1024),
-    };
-    let max_tokens = match o.get("max_tokens") {
-        None | Some(SettingValue::Null) => max_tokens,
-        Some(n) => n
-            .as_u64()
-            .filter(|n| (1..=u32::MAX as u64).contains(n))
-            .ok_or("max_tokens must be a positive integer")? as u32,
-    };
-    Ok(Profile {
-        name: name.to_string(),
-        provider,
-        model,
-        base_url: s("base_url")?.unwrap_or_else(|| base_url.into()),
-        api_key_env: s("api_key_env")?.unwrap_or_else(|| api_key_env.into()),
-        max_tokens,
-        effort: s("effort")?,
-    })
-}
 
 /// History source (SPEC §6.11): newest successful entry extending `buffer` → the remaining suffix.
 pub fn history_ghost(history: &[HistoryEntry], buffer: &str) -> Option<String> {
@@ -202,7 +94,7 @@ pub fn llm_history(entries: &[HistoryEntry], count: usize) -> Vec<HistoryEntry> 
 /// Blocking LLM request (worker thread): prompt with privacy filter, HTTP, cleaning, validation (SPEC §8.5).
 /// `None` on any error (logged) or when nothing should be suggested. `history` = `llm_history(..)` snapshot.
 pub fn llm_complete(
-    profile: &Profile,
+    profile: &LlmProfile,
     buffer: &str,
     cwd: &Path,
     shell: Shell,
@@ -217,10 +109,10 @@ pub fn llm_complete(
         cwd.display()
     );
     let key = env
-        .get(&profile.api_key_env)
+        .get(profile.api_key_env())
         .filter(|k| !k.is_empty())
         .cloned()
-        .or_else(|| std::env::var(&profile.api_key_env).ok())
+        .or_else(|| std::env::var(profile.api_key_env()).ok())
         .unwrap_or_default();
     let (url, headers, body) = build_request(profile, &user, &key);
     let agent = ureq::Agent::config_builder()
@@ -239,12 +131,12 @@ pub fn llm_complete(
         Err(e) => {
             logger::warn(&format!(
                 "inline: profile '{}' request to {url} failed: {e}",
-                profile.name
+                profile.name()
             ));
             return None;
         }
     };
-    let completion = clean(&parse_response(profile.provider, &resp)?, buffer)?;
+    let completion = clean(&parse_response(profile.provider(), &resp)?, buffer)?;
     let full = format!("{buffer}{completion}");
     validate(&full, cwd, env).then_some(completion)
 }
@@ -308,36 +200,36 @@ fn history_prompt(history: &[HistoryEntry], buffer: &str) -> Option<String> {
 
 /// URL, headers and JSON body for one request (SPEC §8.5). Auth header omitted when `key` is empty.
 fn build_request(
-    profile: &Profile,
+    profile: &LlmProfile,
     user: &str,
     key: &str,
 ) -> (String, Vec<(&'static str, String)>, Value) {
-    let base = profile.base_url.trim_end_matches('/');
+    let base = profile.base_url().trim_end_matches('/');
     let mut headers = Vec::new();
-    match profile.provider {
-        Provider::OpenAi => {
+    match profile.provider() {
+        LlmProvider::OpenAi => {
             if !key.is_empty() {
                 headers.push(("authorization", format!("Bearer {key}")));
             }
             let body = json!({
-                "model": profile.model,
-                "max_tokens": profile.max_tokens,
+                "model": profile.model(),
+                "max_tokens": profile.max_tokens(),
                 "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
             });
             (format!("{base}/chat/completions"), headers, body)
         }
-        Provider::Anthropic => {
+        LlmProvider::Anthropic => {
             if !key.is_empty() {
                 headers.push(("x-api-key", key.to_string()));
             }
             headers.push(("anthropic-version", "2026-10-21".to_string()));
             let mut body = json!({
-                "model": profile.model,
-                "max_tokens": profile.max_tokens,
+                "model": profile.model(),
+                "max_tokens": profile.max_tokens(),
                 "system": SYSTEM,
                 "messages": [{"role": "user", "content": user}],
             });
-            if let Some(effort) = &profile.effort {
+            if let Some(effort) = profile.effort() {
                 body["output_config"] = json!({ "effort": effort });
             }
             (format!("{base}/v1/messages"), headers, body)
@@ -346,12 +238,12 @@ fn build_request(
 }
 
 /// Raw model text from a response body; `None` on refusal or unexpected shape.
-fn parse_response(provider: Provider, body: &Value) -> Option<String> {
+fn parse_response(provider: LlmProvider, body: &Value) -> Option<String> {
     match provider {
-        Provider::OpenAi => body["choices"][0]["message"]["content"]
+        LlmProvider::OpenAi => body["choices"][0]["message"]["content"]
             .as_str()
             .map(String::from),
-        Provider::Anthropic => {
+        LlmProvider::Anthropic => {
             if body["stop_reason"] == "refusal" {
                 return None;
             }
@@ -508,9 +400,9 @@ mod tests {
     use super::*;
     use crate::completion::domain::value_objects::insertion::{Insertion, InsertionParts};
     use crate::completion::domain::value_objects::suggestion::SuggestionParts;
+    use crate::ghost_text::domain::value_objects::llm_profile::LlmProfileParts;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
     fn entry(cmd: &str, exit: Option<i32>) -> HistoryEntry {
         HistoryEntry::new(HistoryEntryPrimitives {
@@ -521,12 +413,8 @@ mod tests {
         })
     }
 
-    fn settings(v: Value) -> Settings {
-        settings_from_json(v.as_object().unwrap().clone())
-    }
-
-    fn profile(provider: Provider, effort: Option<&str>) -> Profile {
-        Profile {
+    fn profile(provider: LlmProvider, effort: Option<&str>) -> LlmProfile {
+        LlmProfile::new(LlmProfileParts {
             name: "p".into(),
             provider,
             model: "m".into(),
@@ -534,7 +422,7 @@ mod tests {
             api_key_env: "K".into(),
             max_tokens: 7,
             effort: effort.map(String::from),
-        }
+        })
     }
 
     #[test]
@@ -662,18 +550,18 @@ mod tests {
 
     #[test]
     fn request_bodies() {
-        let (url, headers, body) = build_request(&profile(Provider::OpenAi, None), "U", "k");
+        let (url, headers, body) = build_request(&profile(LlmProvider::OpenAi, None), "U", "k");
         assert_eq!(url, "http://x/chat/completions");
         assert_eq!(headers, [("authorization", "Bearer k".to_string())]);
         assert_eq!(
             body.to_string(),
             json!({"max_tokens": 7, "messages": [{"content": SYSTEM, "role": "system"}, {"content": "U", "role": "user"}], "model": "m"}).to_string()
         );
-        assert!(build_request(&profile(Provider::OpenAi, None), "U", "")
+        assert!(build_request(&profile(LlmProvider::OpenAi, None), "U", "")
             .1
             .is_empty());
 
-        let (url, headers, body) = build_request(&profile(Provider::Anthropic, None), "U", "k");
+        let (url, headers, body) = build_request(&profile(LlmProvider::Anthropic, None), "U", "k");
         assert_eq!(url, "http://x/v1/messages");
         assert_eq!(
             headers,
@@ -686,11 +574,11 @@ mod tests {
             body,
             json!({"model": "m", "max_tokens": 7, "system": SYSTEM, "messages": [{"role": "user", "content": "U"}]})
         );
-        let (_, _, body) = build_request(&profile(Provider::Anthropic, Some("low")), "U", "k");
+        let (_, _, body) = build_request(&profile(LlmProvider::Anthropic, Some("low")), "U", "k");
         assert_eq!(body["output_config"], json!({"effort": "low"}));
         for b in [
             body,
-            build_request(&profile(Provider::OpenAi, Some("low")), "U", "k").2,
+            build_request(&profile(LlmProvider::OpenAi, Some("low")), "U", "k").2,
         ] {
             let s = b.to_string();
             assert!(
@@ -704,22 +592,22 @@ mod tests {
     fn response_parsing() {
         let openai = json!({"choices": [{"message": {"role": "assistant", "content": "tus"}}]});
         assert_eq!(
-            parse_response(Provider::OpenAi, &openai).as_deref(),
+            parse_response(LlmProvider::OpenAi, &openai).as_deref(),
             Some("tus")
         );
         let refused = json!({"choices": [{"message": {"content": null, "refusal": "no"}}]});
-        assert_eq!(parse_response(Provider::OpenAi, &refused), None);
+        assert_eq!(parse_response(LlmProvider::OpenAi, &refused), None);
         let anthropic = json!({"stop_reason": "end_turn", "content": [
             {"type": "thinking", "thinking": "hmm", "signature": "s"},
             {"type": "text", "text": "tu"}, {"type": "text", "text": "s"}]});
         assert_eq!(
-            parse_response(Provider::Anthropic, &anthropic).as_deref(),
+            parse_response(LlmProvider::Anthropic, &anthropic).as_deref(),
             Some("tus")
         );
         let refusal = json!({"stop_reason": "refusal", "content": [{"type": "text", "text": "x"}]});
-        assert_eq!(parse_response(Provider::Anthropic, &refusal), None);
+        assert_eq!(parse_response(LlmProvider::Anthropic, &refusal), None);
         assert_eq!(
-            parse_response(Provider::Anthropic, &json!({"error": {}})),
+            parse_response(LlmProvider::Anthropic, &json!({"error": {}})),
             None
         );
     }
@@ -851,83 +739,5 @@ mod tests {
             Some("author=")
         );
         assert_eq!(spec_ghost(&[with_back("author= ", 2)]), None);
-    }
-
-    #[test]
-    fn profiles_and_source() {
-        let s = settings(json!({
-            "inline.source": "claude",
-            "inline.profiles.claude": {"provider": "anthropic", "model": "claude-opus-5-5", "effort": "low"},
-            "inline.profiles.local": {"provider": "openai", "model": "llama", "base_url": "http://localhost:11434/v1",
-                                      "max_tokens": 32, "api_key_env": "NONE"},
-            "inline.profiles.bad": {"provider": "gemini", "model": "x"},
-            "inline.profiles.nomodel": {"provider": "openai"},
-            "inline.profiles.str": "openai",
-            "inline.profiles.history": {"provider": "openai", "model": "x"},
-            "inline.profiles.tokens": {"provider": "openai", "model": "x", "max_tokens": 0},
-            "inline.profiles.url": {"provider": "openai", "model": "x", "base_url": 1},
-        }));
-        let p = profiles(&s);
-        let names: Vec<_> = p.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(
-            names,
-            ["bad", "claude", "history", "local", "nomodel", "str", "tokens", "url"]
-        );
-        let get = |n: &str| p.iter().find(|(k, _)| k == n).unwrap().1.clone();
-        let claude = get("claude").unwrap();
-        assert_eq!(
-            claude,
-            Profile {
-                name: "claude".into(),
-                provider: Provider::Anthropic,
-                model: "claude-opus-5-5".into(),
-                base_url: "https://api.anthropic.com".into(),
-                api_key_env: "ANTHROPIC_API_KEY".into(),
-                max_tokens: 1024,
-                effort: Some("low".into()),
-            }
-        );
-        let local = get("local").unwrap();
-        assert_eq!(
-            (
-                local.base_url.as_str(),
-                local.api_key_env.as_str(),
-                local.max_tokens
-            ),
-            ("http://localhost:11434/v1", "NONE", 32)
-        );
-        assert!(get("bad").unwrap_err().contains("gemini"));
-        assert_eq!(get("nomodel").unwrap_err(), "missing model");
-        assert_eq!(get("str").unwrap_err(), "not a JSON object");
-        assert!(get("history").unwrap_err().contains("reserved"));
-        assert!(get("tokens").unwrap_err().contains("max_tokens"));
-        assert_eq!(get("url").unwrap_err(), "base_url must be a string");
-
-        assert_eq!(source(&s), Ok(Source::Profile(claude)));
-        let openai = settings(
-            json!({"inline.source": "o", "inline.profiles.o": {"provider": "openai", "model": "g"}}),
-        );
-        let Ok(Source::Profile(o)) = source(&openai) else {
-            panic!()
-        };
-        assert_eq!(
-            (o.base_url.as_str(), o.api_key_env.as_str(), o.max_tokens),
-            ("https://api.openai.com/v1", "OPENAI_API_KEY", 64)
-        );
-        assert_eq!(source(&settings(json!({}))), Ok(Source::HistoryAndSpecs));
-        assert_eq!(
-            source(&settings(json!({"inline.source": "history"}))),
-            Ok(Source::History)
-        );
-        assert_eq!(
-            source(&settings(json!({"inline.source": "specs"}))),
-            Ok(Source::Specs)
-        );
-        assert!(source(&settings(json!({"inline.source": "nope"})))
-            .unwrap_err()
-            .contains("not found"));
-        let bad =
-            settings(json!({"inline.source": "b", "inline.profiles.b": {"provider": "openai"}}));
-        assert!(source(&bad).unwrap_err().contains("invalid"));
     }
 }
