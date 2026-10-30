@@ -5,6 +5,7 @@
 use crate::ghost_text::domain::entities::ghost_text_cache::GhostTextCache;
 use crate::ghost_text::domain::services::ghost_text_source_resolver;
 use crate::ghost_text::domain::services::history_ghost_text::history_ghost;
+use crate::ghost_text::domain::services::llm_prompt_builder;
 use crate::ghost_text::domain::services::spec_ghost_text::spec_ghost;
 use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
 use crate::inline;
@@ -257,7 +258,7 @@ impl EngineServer {
 
 /// The history an LLM request may send: the last `inline.historyCount` (49) usable entries (SPEC §8.5).
 fn llm_history(settings: &Settings, entries: &[HistoryEntry]) -> Vec<HistoryEntry> {
-    inline::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
+    llm_prompt_builder::llm_history(entries, settings.i64(INLINE_HISTORY_COUNT).max(0) as usize)
 }
 
 #[cfg(test)]

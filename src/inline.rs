@@ -1,7 +1,9 @@
 //! Inline ghost text: local sources, LLM profiles/clients, completion cache, validation (SPEC §8,
 //! §3.5, §6.11). OWNER: inline agent. Used by the engine (sources, LLM worker), the CLI (`inline` command) and
 //! doctor (profile checks).
+use crate::ghost_text::domain::services::llm_prompt_builder::llm_prompt;
 use crate::ghost_text::domain::value_objects::llm_profile::LlmProfile;
+use crate::ghost_text::domain::value_objects::llm_prompt::LlmPrompt;
 use crate::ghost_text::domain::value_objects::llm_provider::LlmProvider;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
@@ -11,20 +13,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-
-/// Snapshot for an LLM worker: the last `count` (`inline.historyCount`) entries with an exit code that pass the
-/// privacy filter, oldest → newest.
-pub fn llm_history(entries: &[HistoryEntry], count: usize) -> Vec<HistoryEntry> {
-    let mut v: Vec<HistoryEntry> = entries
-        .iter()
-        .rev()
-        .filter(|e| usable(e))
-        .take(count)
-        .cloned()
-        .collect();
-    v.reverse();
-    v
-}
 
 /// Blocking LLM request (worker thread): prompt with privacy filter, HTTP, cleaning, validation (SPEC §8.5).
 /// `None` on any error (logged) or when nothing should be suggested. `history` = `llm_history(..)` snapshot.
@@ -36,20 +24,14 @@ pub fn llm_complete(
     history: &[HistoryEntry],
     env: &HashMap<String, String>,
 ) -> Option<String> {
-    let prompt = history_prompt(history, buffer)?;
-    let user = format!(
-        "OS: {}\nShell: {}\nCWD: {}\n\n{prompt}",
-        std::env::consts::OS,
-        shell.name(),
-        cwd.display()
-    );
+    let prompt = llm_prompt(history, buffer, cwd, shell)?;
     let key = env
         .get(profile.api_key_env())
         .filter(|k| !k.is_empty())
         .cloned()
         .or_else(|| std::env::var(profile.api_key_env()).ok())
         .unwrap_or_default();
-    let (url, headers, body) = build_request(profile, &user, &key);
+    let (url, headers, body) = build_request(profile, &prompt, &key);
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(5)))
         .build()
@@ -76,67 +58,10 @@ pub fn llm_complete(
     validate(&full, cwd, env).then_some(completion)
 }
 
-const SYSTEM: &str = "You complete shell commands. The user message shows the user's recent shell history in \
-`history` format; the last numbered line is the command being typed. Reply with ONLY the characters that should be \
-appended to that last line to complete it: one line, no explanation, no quotes, no code fences. If unsure, reply \
-with nothing.";
-
-const PROMPT_MAX_BYTES: usize = 10_240;
-const PRIVATE_WORDS: [&str; 8] = [
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "authorization:",
-    "bearer ",
-];
-
-fn is_private(s: &str) -> bool {
-    let s = s.to_lowercase();
-    PRIVATE_WORDS.iter().any(|w| s.contains(w))
-}
-
-fn usable(e: &HistoryEntry) -> bool {
-    e.exit_code().is_some() && !is_private(e.command())
-}
-
-/// History-style prompt (SPEC §8.5): usable entries then the buffer, numbered from 1, oldest dropped until
-/// ≤ 10 240 bytes. `None` when the buffer is private or alone too long.
-fn history_prompt(history: &[HistoryEntry], buffer: &str) -> Option<String> {
-    if is_private(buffer) {
-        return None;
-    }
-    let mut lines: Vec<&str> = history
-        .iter()
-        .filter(|e| usable(e))
-        .map(|e| e.command())
-        .collect();
-    lines.push(buffer);
-    // Every line costs `{:>5}  ` + "\n" = 8 bytes (numbers < 100 000), so drop by arithmetic, then format once.
-    let cost = |c: &str| c.len() + 8;
-    let mut total = lines.iter().map(|c| cost(c)).sum::<usize>() - 1;
-    let mut skip = 0;
-    while total > PROMPT_MAX_BYTES {
-        if skip + 1 == lines.len() {
-            return None;
-        }
-        total -= cost(lines[skip]);
-        skip += 1;
-    }
-    let numbered: Vec<String> = lines[skip..]
-        .iter()
-        .enumerate()
-        .map(|(i, c)| format!("{:>5}  {c}", i + 1))
-        .collect();
-    Some(numbered.join("\n"))
-}
-
 /// URL, headers and JSON body for one request (SPEC §8.5). Auth header omitted when `key` is empty.
 fn build_request(
     profile: &LlmProfile,
-    user: &str,
+    prompt: &LlmPrompt,
     key: &str,
 ) -> (String, Vec<(&'static str, String)>, Value) {
     let base = profile.base_url().trim_end_matches('/');
@@ -149,7 +74,7 @@ fn build_request(
             let body = json!({
                 "model": profile.model(),
                 "max_tokens": profile.max_tokens(),
-                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
+                "messages": [{"role": "system", "content": prompt.system()}, {"role": "user", "content": prompt.user()}],
             });
             (format!("{base}/chat/completions"), headers, body)
         }
@@ -161,8 +86,8 @@ fn build_request(
             let mut body = json!({
                 "model": profile.model(),
                 "max_tokens": profile.max_tokens(),
-                "system": SYSTEM,
-                "messages": [{"role": "user", "content": user}],
+                "system": prompt.system(),
+                "messages": [{"role": "user", "content": prompt.user()}],
             });
             if let Some(effort) = profile.effort() {
                 body["output_config"] = json!({ "effort": effort });
@@ -334,16 +259,11 @@ fn expand(arg: &str, env: &HashMap<String, String>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::ghost_text::domain::value_objects::llm_profile::LlmProfileParts;
-    use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
+    use crate::ghost_text::domain::services::llm_prompt_builder::SYSTEM;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
 
-    fn entry(cmd: &str, exit: Option<i32>) -> HistoryEntry {
-        HistoryEntry::new(HistoryEntryPrimitives {
-            command: cmd.into(),
-            shell: "zsh".into(),
-            exit_code: exit,
-            ..Default::default()
-        })
+    fn prompt(user: &str) -> LlmPrompt {
+        LlmPrompt::new(SYSTEM.into(), user.into())
     }
 
     fn profile(provider: LlmProvider, effort: Option<&str>) -> LlmProfile {
@@ -356,59 +276,6 @@ mod tests {
             max_tokens: 7,
             effort: effort.map(String::from),
         })
-    }
-
-    #[test]
-    fn prompt_numbering_and_filters() {
-        let h = [
-            entry("echo hello", Some(0)),
-            entry("never finished", None),
-            entry("export API_KEY=1", Some(0)),
-            entry("curl -H 'Authorization: x'", Some(0)),
-            entry("echo world", Some(1)),
-        ];
-        assert_eq!(
-            history_prompt(&h, "echo ").unwrap(),
-            "    1  echo hello\n    2  echo world\n    3  echo "
-        );
-        assert_eq!(history_prompt(&h, "mysql --password=x"), None);
-        assert_eq!(history_prompt(&[], "ls").unwrap(), "    1  ls");
-    }
-
-    #[test]
-    fn prompt_truncation() {
-        let big = "a".repeat(3000);
-        let h: Vec<_> = (0..5)
-            .map(|i| entry(&format!("{i}{big}"), Some(0)))
-            .collect();
-        let p = history_prompt(&h, "ls").unwrap();
-        assert!(p.len() <= PROMPT_MAX_BYTES, "{}", p.len());
-        // 3 history lines (3008 bytes each incl. prefix) + buffer fit; the oldest two are dropped.
-        assert!(p.starts_with("    1  2aaa"));
-        assert!(p.ends_with("\n    4  ls"));
-        // Exactly at the limit is kept.
-        let exact = "b".repeat(PROMPT_MAX_BYTES - 7);
-        assert_eq!(
-            history_prompt(&[entry("x", Some(0))], &exact)
-                .unwrap()
-                .len(),
-            PROMPT_MAX_BYTES
-        );
-        assert_eq!(history_prompt(&[], &"c".repeat(PROMPT_MAX_BYTES)), None);
-    }
-
-    #[test]
-    fn llm_history_snapshot() {
-        let h = [
-            entry("a", Some(0)),
-            entry("b", None),
-            entry("c token", Some(0)),
-            entry("d", Some(2)),
-            entry("e", Some(0)),
-        ];
-        let cmds: Vec<_> = llm_history(&h, 2).into_iter().map(|e| e.command().to_string()).collect();
-        assert_eq!(cmds, ["d", "e"]);
-        assert_eq!(llm_history(&h, 49).len(), 3);
     }
 
     #[test]
@@ -445,18 +312,18 @@ mod tests {
 
     #[test]
     fn request_bodies() {
-        let (url, headers, body) = build_request(&profile(LlmProvider::OpenAi, None), "U", "k");
+        let (url, headers, body) = build_request(&profile(LlmProvider::OpenAi, None), &prompt("U"), "k");
         assert_eq!(url, "http://x/chat/completions");
         assert_eq!(headers, [("authorization", "Bearer k".to_string())]);
         assert_eq!(
             body.to_string(),
             json!({"max_tokens": 7, "messages": [{"content": SYSTEM, "role": "system"}, {"content": "U", "role": "user"}], "model": "m"}).to_string()
         );
-        assert!(build_request(&profile(LlmProvider::OpenAi, None), "U", "")
+        assert!(build_request(&profile(LlmProvider::OpenAi, None), &prompt("U"), "")
             .1
             .is_empty());
 
-        let (url, headers, body) = build_request(&profile(LlmProvider::Anthropic, None), "U", "k");
+        let (url, headers, body) = build_request(&profile(LlmProvider::Anthropic, None), &prompt("U"), "k");
         assert_eq!(url, "http://x/v1/messages");
         assert_eq!(
             headers,
@@ -469,11 +336,11 @@ mod tests {
             body,
             json!({"model": "m", "max_tokens": 7, "system": SYSTEM, "messages": [{"role": "user", "content": "U"}]})
         );
-        let (_, _, body) = build_request(&profile(LlmProvider::Anthropic, Some("low")), "U", "k");
+        let (_, _, body) = build_request(&profile(LlmProvider::Anthropic, Some("low")), &prompt("U"), "k");
         assert_eq!(body["output_config"], json!({"effort": "low"}));
         for b in [
             body,
-            build_request(&profile(LlmProvider::OpenAi, Some("low")), "U", "k").2,
+            build_request(&profile(LlmProvider::OpenAi, Some("low")), &prompt("U"), "k").2,
         ] {
             let s = b.to_string();
             assert!(
