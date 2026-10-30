@@ -11,7 +11,7 @@ macro_rules! pngs {
 }
 
 /// Row icon names plus the local-only `database`, `file`, `folder` and `symlink`. Order = image ids (1-based).
-pub(crate) const PNGS: &[(&str, &[u8])] = pngs![
+const PNGS: &[(&str, &[u8])] = pngs![
     "alert",
     "android",
     "apple",
@@ -57,7 +57,7 @@ pub(crate) const PNGS: &[(&str, &[u8])] = pngs![
 ];
 
 /// `template.png` as RGBA8 (32×32), tinted per badge colour.
-pub(crate) const TEMPLATE_RGBA: &[u8] = include_bytes!("../../../../assets/icons/template.rgba");
+const TEMPLATE_RGBA: &[u8] = include_bytes!("../../../../assets/icons/template.rgba");
 
 /// The kitty image of an icon: its embedded PNG, or the template tinted with its colour (made when it is sent).
 pub(crate) fn kitty_image(icon: IconId) -> KittyImage {
@@ -96,13 +96,23 @@ mod tests {
     #[test]
     fn should_embed_the_png_assets_in_the_order_of_the_icon_ids() {
         let manifest = env!("CARGO_MANIFEST_DIR");
+        let on_disk: Vec<(&str, Vec<u8>)> = ICON_NAMES
+            .iter()
+            .map(|name| {
+                let file = std::fs::read(format!("{manifest}/assets/icons/{name}.png")).unwrap();
+                (*name, file)
+            })
+            .collect();
 
-        assert_eq!(PNGS.len(), ICON_NAMES.len());
-        for (index, name) in ICON_NAMES.iter().enumerate() {
-            let file = std::fs::read(format!("{manifest}/assets/icons/{name}.png")).unwrap();
-            assert_eq!(PNGS[index].0, *name);
-            assert_eq!(PNGS[index].1, file.as_slice(), "{name}");
-        }
+        let embedded: Vec<(&str, Vec<u8>)> = PNGS
+            .iter()
+            .map(|(name, bytes)| (*name, bytes.to_vec()))
+            .collect();
+
+        assert!(
+            embedded == on_disk,
+            "the embedded PNGs differ from assets/icons/<name>.png in ICON_NAMES order"
+        );
     }
 
     #[test]
@@ -122,15 +132,15 @@ mod tests {
     #[test]
     fn should_transmit_a_tinted_icon_as_32_by_32_rgba() {
         let tint = IconId::Tinted(0x34, 0x98, 0xdb);
-
-        let sent = transmit(&kitty_image(tint), GraphicsSupport::Direct);
-
         let first_chunk = format!("\x1b_Ga=t,i={},f=32,s=32,v=32,q=2,m=1;", tint.value());
-        assert!(sent.starts_with(&first_chunk), "{}", &sent[..40]);
         let expected = KittyImage {
             id: tint.value(),
             src: KittyPixels::Rgba(tinted(0x34, 0x98, 0xdb)),
         };
+
+        let sent = transmit(&kitty_image(tint), GraphicsSupport::Direct);
+
+        assert!(sent.starts_with(&first_chunk), "{}", &sent[..40]);
         assert_eq!(sent, transmit(&expected, GraphicsSupport::Direct));
     }
 
