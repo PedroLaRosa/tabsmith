@@ -1,5 +1,6 @@
 //! `tabsmith _ pty`: the PTY wrapper session (SPEC §4.3–4.5, §7.2.4, §7.3, §7.6, §8).
 //! OWNER: wrapper agent.
+use crate::ghost_text::domain::value_objects::ghost_text::GhostText;
 use crate::keys::{self, Action, Binding, Key, KeyCode, Keymap, Mods};
 use crate::shared::infrastructure::logger;
 use crate::menu::{Effect, Menu};
@@ -203,22 +204,6 @@ fn ghost_key(k: &Key) -> Option<bool> {
     }
 }
 
-/// Leading whitespace + the next run of non-whitespace chars.
-fn next_word(g: &str) -> &str {
-    let start = g.len() - g.trim_start().len();
-    let end = g[start..]
-        .find(char::is_whitespace)
-        .map_or(g.len(), |i| start + i);
-    &g[..end]
-}
-
-/// What is left of ghost `g` (computed for buffer `base`) once `buffer` is typed. Never with control characters:
-/// accepting writes the text to the shell, where a CR (e.g. from an LLM reply) would run commands.
-fn ghost_rest(buffer: &str, base: &str, g: &str) -> Option<String> {
-    let rest = g.strip_prefix(buffer.strip_prefix(base)?)?;
-    (!rest.is_empty() && !rest.chars().any(char::is_control)).then(|| rest.to_string())
-}
-
 /// Keys typed ahead that the extracted buffer `new` does not show yet. `base` = the buffer they were typed after
 /// (the pending insertion's result while locked); `in_flight` = that insertion is not echoed yet.
 fn unechoed_after(
@@ -384,9 +369,9 @@ struct Session {
     held_at: Option<Instant>,
     /// A prompt redraw is in progress (see `REDRAW_GRACE`).
     redraw_until: Option<Instant>,
-    /// Ghost candidates as (buffer they were computed for, text): local (engine) and LLM.
-    ghost: Option<(String, String)>,
-    llm: Option<(String, String)>,
+    /// Ghost candidates (`GhostText`: the buffer each was computed for and its text): local (engine) and LLM.
+    ghost: Option<GhostText>,
+    llm: Option<GhostText>,
     llm_req: u64,
     llm_at: Option<Instant>,
     /// The startup probe timed out: drop its late reply from stdin until then.
@@ -693,7 +678,7 @@ impl Session {
                     if req == s.req && req == s.llm_req {
                         s.llm = text
                             .zip(s.sent.as_ref().map(|x| x.0.clone()))
-                            .map(|(t, b)| (b, t));
+                            .map(|(t, b)| GhostText::new(b, t));
                         s.redraw();
                     }
                 });
@@ -887,7 +872,7 @@ impl Session {
             self.echo_pending = None;
         }
         if c.phase() == CompletionPhase::Parse || c.ghost().is_some() {
-            self.ghost = c.ghost().map(String::from).map(|g| (c.buffer().to_string(), g));
+            self.ghost = c.ghost().map(String::from).map(|g| GhostText::new(c.buffer().to_string(), g));
         }
         // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
         // command) too: the inline source depends on the buffer only. A mid-word cursor fails the length check.
@@ -933,7 +918,7 @@ impl Session {
         [&self.ghost, &self.llm]
             .into_iter()
             .flatten()
-            .find_map(|(b, g)| ghost_rest(&buffer, b, g))
+            .find_map(|g| g.rest_after(&buffer))
     }
 
     /// The buffer once the shell echoed everything already sent: the pending insertion's result (else the extracted
@@ -1098,7 +1083,7 @@ impl Session {
                 _ => {
                     match ghost {
                         Some((full, g)) => {
-                            let g = if full { g.as_str() } else { next_word(&g) };
+                            let g = if full { g.as_str() } else { GhostText::next_word(&g) };
                             fwd.extend_from_slice(g.as_bytes());
                             self.unechoed.push_str(g);
                             self.ghost = None;
@@ -1690,7 +1675,7 @@ mod tests {
     }
 
     #[test]
-    fn ghost_keys_and_words() {
+    fn ghost_keys_and_words_keys() {
         let k = |code, mods| Key { code, mods };
         let ctrl = Mods {
             ctrl: true,
@@ -1705,27 +1690,6 @@ mod tests {
         assert_eq!(ghost_key(&k(KeyCode::Char('f'), alt)), Some(false));
         assert_eq!(ghost_key(&k(KeyCode::Right, ctrl)), Some(false));
         assert_eq!(ghost_key(&k(KeyCode::Tab, Mods::default())), None);
-        assert_eq!(next_word(" -la /tmp"), " -la");
-        assert_eq!(next_word("ho hi"), "ho");
-        assert_eq!(next_word("x"), "x");
-    }
-
-    #[test]
-    fn ghost_with_control_chars_is_never_shown_or_accepted() {
-        // An LLM reply with bare CRs would run `touch /x` when accepted.
-        assert_eq!(
-            ghost_rest("git sta", "git sta", "tus\rtouch /x\recho"),
-            None
-        );
-        assert_eq!(ghost_rest("git sta", "git st", "atus\x1b[2J"), None);
-        assert_eq!(ghost_rest("git sta", "git st", "atus\u{9b}31m"), None);
-        assert_eq!(ghost_rest("git sta", "git st", "atus\x7f"), None);
-        assert_eq!(ghost_rest("echo", "echo", " a\nb"), None);
-        assert_eq!(
-            ghost_rest("git sta", "git st", "atus -s"),
-            Some("tus -s".into())
-        );
-        assert_eq!(ghost_rest("ls", "git", "x"), None);
     }
 
     #[test]
