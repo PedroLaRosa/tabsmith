@@ -173,9 +173,14 @@ fn should_check_the_pre_script_after_its_line_and_before_the_post_line() {
     let zshrc = zshrc();
     bed.dotfiles.write(zshrc.path(), &format!("{}\n", source_line(&zshrc, IntegrationPhase::Pre))).unwrap();
 
+    let pre_script = zshrc.script(&paths(), IntegrationPhase::Pre);
+
     let checked = bed.installer.check(&paths(), &zshrc);
 
-    assert_eq!(checked.unwrap_err().to_string(), "File does not exist: /home/u/.tabsmith/shell/zshrc.pre.zsh");
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        format!("File does not exist: {}", pre_script.path().display())
+    );
 }
 
 #[test]
@@ -223,7 +228,8 @@ fn should_find_a_script_file_holding_anything_else_improperly_installed() {
     assert_eq!(
         checked.unwrap_err().to_string(),
         format!(
-            "Improper integration installation: /home/u/.tabsmith/shell/zshrc.pre.zsh should contain:\n{}",
+            "Improper integration installation: {} should contain:\n{}",
+            pre_script.path().display(),
             pre_script.contents()
         )
     );
@@ -607,6 +613,11 @@ fn failure(kind: &'static str, subject: &str, reason: &str) -> (&'static str, St
     (kind, subject.to_string(), reason.to_string())
 }
 
+/// The permission error of `file` joined under the home as the catalog joins it (`/home/u\.zshrc` on Windows).
+fn permission_denied_under_home(file: &str) -> String {
+    format!("Permission denied: {}", Path::new("/home/u").join(file).display())
+}
+
 #[test]
 fn should_run_the_operation_on_every_picked_integration_past_its_failures_and_report_each() {
     let bed = test_bed();
@@ -622,8 +633,8 @@ fn should_run_the_operation_on_every_picked_integration_past_its_failures_and_re
         (
             vec![PathBuf::from("/home/u/.zshrc"), PathBuf::from("/home/u/.zprofile")],
             vec![
-                failure("operation", "zsh pre post into .zshrc", "Permission denied: /home/u/.zshrc"),
-                failure("operation", "zsh pre post into .zprofile", "Permission denied: /home/u/.zprofile"),
+                failure("operation", "zsh pre post into .zshrc", &permission_denied_under_home(".zshrc")),
+                failure("operation", "zsh pre post into .zprofile", &permission_denied_under_home(".zprofile")),
             ]
         )
     );
