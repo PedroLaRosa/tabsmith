@@ -14,4 +14,6 @@ pub(crate) mod menu_visibility;
 pub(crate) mod modifiers;
 pub(crate) mod rgb;
 pub(crate) mod theme;
+pub(crate) mod theme_author;
 pub(crate) mod theme_choice;
+pub(crate) mod theme_definition;
