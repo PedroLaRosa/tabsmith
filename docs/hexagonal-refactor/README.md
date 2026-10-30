@@ -16,7 +16,7 @@ implementation session needs that the plan does not.
 | 5 specs | done, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5) | `1a466e2..d7079b9` (tag `phase5-start` at `1a466e2`), see [`phase-5-specs.md`](phase-5-specs.md) |
 | 6 completion | done, run in six chunks (6.0a-6.2b; 6.3a-e; 6.2c-f and 6.6a; 6.4a-d; 6.4e-f and 6.5a-b; 6.5c, 6.4g, 6.6b and 6.7) | `c38596c..7f48161`, registration at `f3fc30a` (tag `phase6-start` at `c38596c`, whose `src/` equals `ff2db5a`), see [`phase-6-completion.md`](phase-6-completion.md) |
 | 7 ghost_text | done, run in three chunks (7.0-7.4, 7.5-7.7, 7.8-7.10) | `c38dc4b..ab50884`, registration at `353faaa` (tag `phase7-start` at `eef4c88`, whose `src/` equals `7f48161`), see [`phase-7-ghost-text.md`](phase-7-ghost-text.md) |
-| 8 dropdown | prepared (research, 19 step briefs in three runs; branch `refactor/hexagonal-dropdown-terminal-session`, tag `phase8-start` at `7aafcef`), see [`phase-8-dropdown.md`](phase-8-dropdown.md) | |
+| 8 dropdown | in progress: runs 1-2 done (`cfc5f80..5a19bda`; run 2 not yet re-verified), run 3 (8.3a-8.7) next; branch `refactor/hexagonal-dropdown-terminal-session`, tag `phase8-start` at `7aafcef`; see [`handoff.md`](handoff.md) and [`phase-8-dropdown.md`](phase-8-dropdown.md) | |
 | 9-11 | not started | |
 
 At `353faaa` (the registration; the docs commit that follows changes no code), `scripts/hexagonal-refactor/gate.sh`
