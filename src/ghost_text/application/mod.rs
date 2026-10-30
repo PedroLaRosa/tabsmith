@@ -1,3 +1,7 @@
 pub(crate) mod clear_ghost_text_cache_use_case;
+pub(crate) mod llm_ghost_text_answer;
+pub(crate) mod llm_ghost_text_job;
+pub(crate) mod llm_ghost_text_request;
 pub(crate) mod ports;
+pub(crate) mod request_llm_ghost_text_use_case;
 pub(crate) mod suggest_local_ghost_text_use_case;
