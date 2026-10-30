@@ -5,27 +5,27 @@ use crate::dropdown::domain::value_objects::menu_side::MenuSide;
 pub(crate) struct MenuLayout {
     side: MenuSide,
     /// List rows (0 in argument-hint mode).
-    n: usize,
+    rows: usize,
     list_top: usize,
     desc_row: usize,
     x0: usize,
-    w: usize,
+    width: usize,
 }
 
 /// What a `MenuLayout` is built from: named fields, so two row numbers cannot be swapped.
 pub(crate) struct MenuLayoutParts {
     pub(crate) side: MenuSide,
-    pub(crate) n: usize,
+    pub(crate) rows: usize,
     pub(crate) list_top: usize,
     pub(crate) desc_row: usize,
     pub(crate) x0: usize,
-    pub(crate) w: usize,
+    pub(crate) width: usize,
 }
 
 impl MenuLayout {
     pub(crate) fn new(parts: MenuLayoutParts) -> Self {
-        let MenuLayoutParts { side, n, list_top, desc_row, x0, w } = parts;
-        Self { side, n, list_top, desc_row, x0, w }
+        let MenuLayoutParts { side, rows, list_top, desc_row, x0, width } = parts;
+        Self { side, rows, list_top, desc_row, x0, width }
     }
 
     #[cfg(test)]
@@ -33,8 +33,8 @@ impl MenuLayout {
         self.side
     }
 
-    pub(crate) fn n(&self) -> usize {
-        self.n
+    pub(crate) fn rows(&self) -> usize {
+        self.rows
     }
 
     pub(crate) fn list_top(&self) -> usize {
@@ -49,7 +49,7 @@ impl MenuLayout {
         self.x0
     }
 
-    pub(crate) fn w(&self) -> usize {
-        self.w
+    pub(crate) fn width(&self) -> usize {
+        self.width
     }
 }

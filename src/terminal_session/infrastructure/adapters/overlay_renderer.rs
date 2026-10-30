@@ -264,16 +264,16 @@ impl OverlayRenderer {
         };
         // Keep the selection inside the (possibly shrunk) window.
         let mut top = menu.scroll_top().min(sel);
-        if sel >= top + l.n() {
-            top = sel + 1 - l.n();
+        if sel >= top + l.rows() {
+            top = sel + 1 - l.rows();
         }
-        top = top.min(items.len() - l.n());
-        for (i, idx) in (top..top + l.n()).enumerate() {
-            let (s, pad, img) = self.list_row(&items[idx], idx == sel, l.w());
+        top = top.min(items.len() - l.rows());
+        for (i, idx) in (top..top + l.rows()).enumerate() {
+            let (s, pad, img) = self.list_row(&items[idx], idx == sel, l.width());
             out.push(Patch {
                 row: l.list_top() + i,
                 x: l.x0(),
-                w: l.w(),
+                w: l.width(),
                 s,
                 pad,
                 img,
@@ -281,7 +281,7 @@ impl OverlayRenderer {
         }
         let pop_x = match () {
             _ if items.is_empty() || !menu.popout(s) => None,
-            _ if l.x0() + l.w() + POP_W <= size.1 => Some(l.x0() + l.w()),
+            _ if l.x0() + l.width() + POP_W <= size.1 => Some(l.x0() + l.width()),
             _ if l.x0() >= POP_W => Some(l.x0() - POP_W),
             _ => None,
         };
@@ -289,7 +289,7 @@ impl OverlayRenderer {
             // ponytail: no spinner while the pop-out replaces the description bar.
             let pad = self.pen(self.theme.description_text(), self.theme.main_bg(), "");
             for (i, s) in self
-                .popout_rows(menu, l.n() + 1, &pad)
+                .popout_rows(menu, l.rows() + 1, &pad)
                 .into_iter()
                 .enumerate()
             {
@@ -306,11 +306,11 @@ impl OverlayRenderer {
             let spin = menu
                 .loading(Instant::now())
                 .then(|| SPINNER[input.spinner % SPINNER.len()]);
-            let (s, pad) = self.desc_row(menu, l.w(), spin);
+            let (s, pad) = self.desc_row(menu, l.width(), spin);
             out.push(Patch {
                 row: l.desc_row(),
                 x: l.x0(),
-                w: l.w(),
+                w: l.width(),
                 s,
                 pad,
                 img: None,

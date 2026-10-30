@@ -1686,10 +1686,10 @@ the briefs, the notes win):
   Phase 8 does not touch.
 - **Hand-offs** (details in the research's "Hand-off notes for Phase 9"):
   - Phase 9: `pty.rs` now imports, from dropdown, `Key`, `KeyAction`, `KeyBinding`, `KeyCode`, `Keymap`, `Modifiers`,
-    `MenuEffect`, `Theme`, `Menu`, `ThemeRepository`, `resolve_theme` and `FileThemeRepository`, and from
+    `MenuEffect`, `Menu`, `ThemeRepository`, `resolve_theme` and `FileThemeRepository`, and from
     `terminal_session`'s adapters `StdinKeyDecoder`, `FrameInput`, `OverlayRenderer` and `kitty_graphics::detect`; its
     fields are `keymap`, `decoder`, `renderer` and `themes: Rc<dyn ThemeRepository>` (built in `Session::start`;
-    `InMemoryThemeRepository` in the test `Session`). `KeyRouter` takes `ghost_key`, `is_ctrl`, `note_forwarded`'s key
+    `InMemoryThemeRepository` and `Theme` in the test `Session`). `KeyRouter` takes `ghost_key`, `is_ctrl`, `note_forwarded`'s key
     rule and the `on_keys` arms with explicit D8 arms over `Option<KeyBinding>` in the guard order of P8-T10;
     `StdinKeyDecoder` becomes a port or a domain service and the session owns it (the held raw bytes replay through
     `on_keys` from three non-stdin use cases, so decode once per chunk); `HandleKeystrokesUseCase` interprets

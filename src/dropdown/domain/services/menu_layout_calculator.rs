@@ -36,11 +36,11 @@ pub(crate) fn layout(
     };
     Some(MenuLayout::new(MenuLayoutParts {
         side,
-        n,
+        rows: n,
         list_top,
         desc_row,
         x0,
-        w,
+        width: w,
     }))
 }
 
@@ -56,11 +56,11 @@ mod tests {
             l,
             MenuLayout::new(MenuLayoutParts {
                 side: MenuSide::Below,
-                n: 5,
+                rows: 5,
                 list_top: 3,
                 desc_row: 8,
                 x0: 6,
-                w: 20
+                width: 20
             })
         );
         let l = layout((24, 40), (22, 10), 9, 7, 20, 0).unwrap();
@@ -68,11 +68,11 @@ mod tests {
             l,
             MenuLayout::new(MenuLayoutParts {
                 side: MenuSide::Above,
-                n: 7,
+                rows: 7,
                 list_top: 14,
                 desc_row: 21,
                 x0: 6,
-                w: 20
+                width: 20
             })
         );
         // Neither side fits: shrink on the bigger side (above here).
@@ -81,23 +81,23 @@ mod tests {
             l,
             MenuLayout::new(MenuLayoutParts {
                 side: MenuSide::Above,
-                n: 4,
+                rows: 4,
                 list_top: 0,
                 desc_row: 4,
                 x0: 6,
-                w: 20
+                width: 20
             })
         );
         let l = layout((10, 40), (4, 10), 9, 7, 20, 0).unwrap();
         assert_eq!(
-            (l.side(), l.n(), l.list_top(), l.desc_row()),
+            (l.side(), l.rows(), l.list_top(), l.desc_row()),
             (MenuSide::Below, 4, 5, 9)
         );
         // No room for one row + description: hide. Argument hint needs one row.
         assert_eq!(layout((3, 40), (1, 10), 3, 7, 20, 0), None);
         let l = layout((3, 40), (1, 10), 0, 7, 20, 0).unwrap();
         assert_eq!(
-            (l.side(), l.n(), l.list_top(), l.desc_row()),
+            (l.side(), l.rows(), l.list_top(), l.desc_row()),
             (MenuSide::Below, 0, 2, 2)
         );
         let l = layout((3, 40), (2, 10), 0, 7, 20, 0).unwrap();
@@ -112,11 +112,11 @@ mod tests {
             l,
             MenuLayout::new(MenuLayoutParts {
                 side: MenuSide::Below,
-                n: 3,
+                rows: 3,
                 list_top: 3,
                 desc_row: 6,
                 x0: 0,
-                w: 30
+                width: 30
             })
         );
     }
