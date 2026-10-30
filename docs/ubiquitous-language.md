@@ -166,6 +166,8 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `LlmGhostTextJob` | Application type | The worker half of an LLM request: prompt, provider call, clean, cd check, cache insert. | the `llm` worker closure + `llm_complete` |
 
 ## dropdown
+Not in the table: the `*Parts` structs (`ThemeParts`, `MenuLayoutParts`, `FigPaletteParts`, `Base16PaletteParts`: named fields for a constructor that would otherwise take many parameters), `InMemoryThemeRepository` (the `ThemeRepository` double), `DropdownModule` (what bootstrap wires), `ThemeFileError` (the strict parser's error, an adapter error), and `icon_assets` / `kitty_graphics` (terminal_session adapters, below).
+
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
 | `Menu` | Aggregate | Dropdown state: visibility, suggestions, selection, scroll, history mode, pop-out. | `menu::Menu` |
@@ -173,13 +175,32 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `MenuEffect` | VO | Insert, Write, Bell, Rerequest, ToggleFuzzy. | `Effect` |
 | `Key` / `KeyCode` / `Modifiers` | VO | A decoded keystroke. | `keys::{Key, KeyCode, Mods}` |
 | `KeyAction` / `KeyBinding` / `Keymap` | VO | What a keystroke does; default + user bindings. | `Action`, `Binding`, `Keymap` |
-| `Theme` / `Rgb` / `ThemeChoice` / `ThemeDefinition` | VO | Dropdown colours; dark/light/system/custom choice; parsed custom theme. | `render::Theme`, `cli::ThemeFile` |
+| `KeystrokeParser` | Domain service | Parses `ctrl+k`, `shift+tab`, `+`, `f12` into a `Key`; `normalize` makes ctrl and alt letters case-insensitive. | `parse_keystroke`, `normalize` |
+| `CommonPrefix` / `CommonPrefixOutcome` | Domain service / VO | The longest prefix the visible suggestions share and what inserting it does (fail, insert the selected row, insert a prefix). | `Menu::common_prefix` decision, `matching_type` |
+| `Theme` | VO | The eight colours the overlay draws with (private fields, accessors). | `render::Theme` |
+| `Rgb` | VO (alias of a tuple) | `(u8, u8, u8)`. | `render::Rgb` |
+| `ThemeChoice` | VO | dark, light, system or a custom name; the three built-in names. | `BUILTIN_THEMES`, the `from_settings` match |
+| `ThemeDefinition` / `ThemeAuthor` | VO | The strictly parsed custom theme file: its author, for the `theme NAME` banner. | `cli::{ThemeFile, ThemeAuthor}` |
+| `ThemePalette` | VO | The colour roles a custom theme file gives (Fig `version "1.0"` or base16), each possibly missing; `theme()` fills the gaps from dark or the dark filler. | `Theme::from_json` rules |
+| `ThemeRepository` (`FileThemeRepository`) | Repository | The themes folder: its path, the strict read of a theme file, the lenient read for drawing, the listing. Every read failure of the lenient path is "no theme". | `data_directory_from_env().themes_dir()` + `read_to_string` in `render` and `cli` |
+| `ThemeResolver` | Domain service | Which `Theme` `autocomplete.theme` and the terminal background give (the repository is asked only for a custom name). | `Theme::from_settings` |
+| `ThemeSelection` / `CurrentTheme` | DTO | What `theme NAME` announces (a custom definition or a built-in) / what `theme` prints (a name or a non-text value). | the `theme` command's locals |
+| `ColorParser` / `TextFitting` | Domain service | `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()` and the xterm-256 downgrade / terminal-width `clean`, `fit`, `wrap`. | `parse_color`, `xterm256` / `clean`, `cw`, `width`, `fit`, `wrap` |
 | `MenuLayout` / `MenuSide` | VO | Geometry: above or below, rows, x0, width. | `render::{Layout, Side}` |
-| `IconSlot` / `IconId` / `GraphicsSupport` | VO | Two-column icon cell; which icon; kitty / tmux / off. | `icons::{Slot, Image, Graphics}` |
+| `MenuLayoutCalculator` / `MenuDescriber` | Domain service | Above or below, rows, x0 and width of the menu / the bold label and description the description bar and pop-out show. | `render::layout` / `render::describe` |
+| `IconSlot` / `IconId` / `GraphicsSupport` | VO | Icon cell (two columns for every row kind; a spec badge is stored as given); which icon; kitty / tmux / off. | `icons::{Slot, Image, Graphics}` |
+| `IconResolver` | Domain service | The icon cell and icon id for a suggestion under a graphics mode (emoji, `fig://` icons, type defaults). | `icons::{slot, spec_image, type_image, ascii_slot, wide_emoji}` |
+| `DropdownError` | Domain error | Settings (printed as itself), data directory, invalid theme file, theme not found. | the `bail!`s of `cli::theme` |
 
 ## terminal_session
+Not in the table: `icon_assets` (the embedded PNGs and the template RGBA; `tinted`, `kitty_image`) and `kitty_graphics` (the transmit/place bytes, `CLEAR_PLACEMENTS`, `detect`), adapters in `infrastructure/adapters/`.
+
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
+| `KeyEvent` | VO | A decoded `Key` with the byte range of the stdin chunk it came from; every byte of a chunk belongs to exactly one event. | `keys::KeyEvent` |
+| `StdinKeyDecoder` | Adapter | Decodes stdin bytes (UTF-8, `ESC`, SS3, CSI, bracketed paste) into `KeyEvent`s; keeps only the paste state between chunks. | `keys::Decoder`, `decode*` |
+| `OverlayRenderer` / `FrameInput` | Adapter / DTO | Draws the menu, description and ghost over the alacritty model as bytes, and the clear that restores the cells; the per-frame inputs (`FrameInput` stays in the renderer's file until Phase 9). | `render::{Renderer, FrameInput}` |
+| `KittyImage` / `KittyPixels` | Adapter type | The id and the PNG or RGBA bytes of one icon, as the kitty graphics protocol transmits them. | `icons::{Image, Source}` |
 | `TerminalSession` | Aggregate | The wrapper's view of the running shell: request counter, menu, insertion lock, echo hold, ghost, timers, exit state. | `pty::Session` (minus plumbing) |
 | `SessionId` | VO | Session identifier shared with the shell scripts: the `TABSMITH_SESSION_ID` the wrapper exports and the `run/<id>.json` file name. Valid when non-empty and made only of ASCII letters, digits, `-` and `_`, exactly what `_ pre-cmd` accepts; not narrowed to the hex ids the wrapper generates (D1). | `session_id()` + the `_ pre-cmd` id filter |
 | `SessionContext` | Entity | The env (UTF-8 entries only) and alias text a shell last reported through `_ pre-cmd`, stamped with the report time in ms. Identity `SessionId` (the file name, not a field of the file). An empty env means 'use the wrapper's env'; an empty alias text means no aliases. | `types::SessionCtx` |
@@ -225,3 +246,4 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | profile | pwsh `$PROFILE` (the pwsh dotfile, carried by `IntegrationPaths`) · `LlmProfile` |
 | script | `IntegrationScript` (files tabsmith writes) · `InitScript` / `InitScriptTemplates` (what `init` prints) · `GeneratorScript` (spec) |
 | version | the bundle version (`assets/SPECS_VERSION`, `specs/<version>`) · the CLI version (`SemanticVersion`) · the diff version (a key of a diff-versioned spec's `versions`) |
+| theme file | `ThemeDefinition` (the strict read: its author, for the `theme NAME` banner) · `ThemePalette` (the lenient read: its colour roles, for drawing) |

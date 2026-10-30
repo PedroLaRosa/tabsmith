@@ -16,19 +16,17 @@ implementation session needs that the plan does not.
 | 5 specs | done, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5) | `1a466e2..d7079b9` (tag `phase5-start` at `1a466e2`), see [`phase-5-specs.md`](phase-5-specs.md) |
 | 6 completion | done, run in six chunks (6.0a-6.2b; 6.3a-e; 6.2c-f and 6.6a; 6.4a-d; 6.4e-f and 6.5a-b; 6.5c, 6.4g, 6.6b and 6.7) | `c38596c..7f48161`, registration at `f3fc30a` (tag `phase6-start` at `c38596c`, whose `src/` equals `ff2db5a`), see [`phase-6-completion.md`](phase-6-completion.md) |
 | 7 ghost_text | done, run in three chunks (7.0-7.4, 7.5-7.7, 7.8-7.10) | `c38dc4b..ab50884`, registration at `353faaa` (tag `phase7-start` at `eef4c88`, whose `src/` equals `7f48161`), see [`phase-7-ghost-text.md`](phase-7-ghost-text.md) |
-| 8 dropdown | in progress: runs 1-2 done (`cfc5f80..5a19bda`; run 2 not yet re-verified), run 3 (8.3a-8.7) next; branch `refactor/hexagonal-dropdown-terminal-session`, tag `phase8-start` at `7aafcef`; see [`handoff.md`](handoff.md) and [`phase-8-dropdown.md`](phase-8-dropdown.md) | |
+| 8 dropdown | done, run in three chunks (8.0a-8.2c and 8.4a; 8.4b; 8.3a-8.7) | `bb7c6b7..1bbe27b`, registration at `da2f950` (tag `phase8-start` at `7aafcef`), see [`phase-8-dropdown.md`](phase-8-dropdown.md) |
 | 9-11 | not started | |
 
-At `353faaa` (the registration; the docs commit that follows changes no code), `scripts/hexagonal-refactor/gate.sh`
-passes. `cargo test` has 986 passed, 0 failed, 1 ignored (the baseline was 283). clippy shows 3 warnings (baseline 3).
-The 131-command golden CLI capture is byte-identical to the baseline. The test lock has 0 baseline tests missing. 154
-baseline tests are CHANGED, each one a reviewed restructuring (5 against the `phase7-start` tag, each in Phase 7's
-"Test moves" table: `cd_validation`, `ghost_keys_and_words`, `ghost_with_control_chars_is_never_shown_or_accepted`,
-`profiles_and_source` and `request_bodies`; `cd_validation` was already CHANGED against `ef807c1`, so the count is 150
-plus four). Against `phase7-start` there are 43 NEW names, 0 missing and 0 DUPLICATE; against `ef807c1` too.
-`inline-diff.sh`, `integrations-diff.sh` and `precmd-diff.sh` are empty against the baseline binary.
-`REGISTERED_MODULES` = `completion`, `ghost_text`, `history`, `settings`, `shared`, `shell_integration`, `specs`
-(terminal_session waits for Phase 9).
+At `da2f950` (the registration; the docs commits that follow change no code), `scripts/hexagonal-refactor/gate.sh`
+passes. `cargo test` has 1091 passed, 0 failed, 1 ignored (the baseline was 283). clippy shows 3 warnings (baseline 3).
+The 131-command golden CLI capture is byte-identical to the baseline. The test lock against `ef807c1` has 0 baseline
+tests missing, 0 DUPLICATE, 168 CHANGED (each one a reviewed restructuring) and 809 NEW names. Against `phase8-start`:
+0 missing, 0 DUPLICATE, 26 CHANGED (each in Phase 8's "Test moves" table), 105 NEW names (99 `should_` names and six D6
+split names) and 10 PATH-ONLY. `theme-diff.sh`, `inline-diff.sh`, `integrations-diff.sh` and `precmd-diff.sh` are empty
+against the baseline binary. `REGISTERED_MODULES` = `completion`, `dropdown`, `ghost_text`, `history`, `settings`,
+`shared`, `shell_integration`, `specs` (terminal_session waits for Phase 9).
 
 ## Files here
 
@@ -93,6 +91,11 @@ Run everything from the repo root. Output goes to `target/hexagonal-refactor/` (
   `set-customization` by name and through the numbered chooser on a pty, a non-bool `inline.enabled`, and every inline
   command over a corrupted `settings.json`, without a home and with only `TABSMITH_SETTINGS_PATH`. Diff it the same
   way as the two above; the diff must be empty.
+- `theme-diff.sh <binary>` (Phase 8): a scrubbed transcript of what the golden capture never shows of `tabsmith theme`:
+  the listing over every kind of file and folder, `--folder`, valid custom themes (the banner and the saved
+  `settings.json`), every `invalid theme file` text of the strict parser, built-in names against theme files of the same
+  name, every `settings.json` state, the save-after-banner failure, the display of non-string values, the bold escapes on
+  a pty and the clap conflicts. Diff it the same way as the three above; the diff must be empty.
 
 ## Lessons from Phases 1-2
 

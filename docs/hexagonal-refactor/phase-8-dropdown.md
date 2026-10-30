@@ -1,9 +1,10 @@
 # Phase 8 (dropdown): preparation
 
-Status: **prepared, not started.** Prepared against `7aafcef` (tag `phase8-start`; the end of Phase 7 plus the CI-only
-commits of PR #2, so `src/` is the Phase 7 end state; gate green there: 986 passed, 0 failed, 1 ignored
-(`all_bundle_modules`), clippy 3 warnings (budget 3, all used), golden identical, testlock against `ef807c1`
-MISSING 0).
+Status: **done** at `da2f950` (`bb7c6b7..1bbe27b` plus the registration; tag `phase8-start` at `7aafcef`; gate green: 1091
+passed, 0 failed, 1 ignored). The decisions it took and their deviations are in the plan's section 9 "Phase 8 notes";
+where they differ from the briefs below, the notes win. It was prepared against `7aafcef`, the end of Phase 7 plus PR
+#2's CI-only commits (gate green there: 986 passed, 0 failed, 1 ignored (`all_bundle_modules`), clippy 3 warnings
+(budget 3, all used), golden identical, testlock against `ef807c1` MISSING 0).
 
 **How it was researched.** Seven read-only researchers read `7aafcef` and wrote notes under
 `target/hexagonal-refactor/p89/` (git-ignored; this file is the merge and wins where they differ):

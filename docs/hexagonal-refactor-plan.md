@@ -1,7 +1,8 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2, 3, 4, 5, 6 and 7 are done on branch `refactor/hexagonal-architecture` (gate green at
-`353faaa`). Phase 8 is next. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6 and 7 research are in
+Status: Phases 0, 1, 2, 3, 4, 5, 6, 7 and 8 are done (gate green at `da2f950`). Phases 0-7 ran on branch
+`refactor/hexagonal-architecture`, Phase 8 on `refactor/hexagonal-dropdown-terminal-session`. Phase 9 is next. Working
+notes, tools, the per-file source map and the Phase 3, 4, 5, 6, 7 and 8 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -417,21 +418,29 @@ infrastructure/cli/inline_command.rs      ← InlineCmd, inline, render_sources,
 
 ### dropdown
 ```
-domain/entities/menu.rs                   ← menu::Menu (Instant passed in, never read inside)
-domain/value_objects/{menu_visibility, menu_effect, key, key_action, key_binding, keymap, theme, rgb,
-                      theme_choice, theme_definition, menu_layout, icon_slot, icon_id, graphics_support}.rs
-domain/services/{common_prefix ← menu, keystroke_parser ← parse_keystroke/normalize,
-                 menu_layout_calculator ← render::layout, color_parser ← parse_color/xterm256,
-                 theme_resolver ← Theme::from_settings rules (dark/light/system luma/custom),
-                 icon_resolver ← icons::{slot, spec_image, type_image, ascii_slot, wide_emoji, tint maths},
+domain/entities/menu.rs                   ← menu::Menu (Instant passed in, never read inside; max_rows stays here;
+                                            the tests are in menu/tests.rs)
+domain/value_objects/{menu_visibility, menu_effect, key, key_code, modifiers, key_action, key_binding, keymap,
+                      common_prefix_outcome, theme (ThemeParts), rgb (a tuple alias), theme_choice, theme_definition,
+                      theme_author, theme_palette (FigPaletteParts, Base16PaletteParts), menu_layout (MenuLayoutParts),
+                      menu_side, icon_slot, icon_id (holds ICON_NAMES, placeholders, color), graphics_support}.rs
+domain/services/{common_prefix, keystroke_parser ← parse_keystroke/normalize (two free functions),
+                 menu_layout_calculator ← render::layout, menu_describer ← render::describe,
+                 color_parser ← parse_color/xterm256,
+                 theme_resolver ← Theme::from_settings rules (resolve_theme: dark/light/system luma/custom; takes the
+                 ThemeRepository trait object),
+                 icon_resolver ← icons::{slot, spec_image, type_image, ascii_slot, wide_emoji},
                  text_fitting ← render::{clean, cw, width, fit, wrap}}.rs
-domain/repositories/theme_repository.rs   trait {find, list} + InMemory
+domain/repositories/theme_repository.rs   trait {folder, find, list, find_palette} + InMemoryThemeRepository
 domain/dropdown_error.rs
 application/{select_theme, list_themes, show_theme}_use_case.rs
+application/{theme_selection, current_theme}.rs (DTOs)
 infrastructure/dropdown_module.rs
-infrastructure/adapters/file_theme_repository.rs + theme_json_mapper.rs ← cli::{parse_theme, ThemeFile, ThemeAuthor},
-                                           render::Theme::from_json (one parser, not two)
-infrastructure/cli/theme_command.rs       ← ThemeArgs, theme, theme_banner, BUILTIN_THEMES (deduped with ThemeChoice)
+infrastructure/adapters/{file_theme_repository,
+                         theme_json_mapper ← cli::{parse_theme, ThemeFile, ThemeAuthor} (the strict entry) and
+                                             render::Theme::from_json (the lenient entry): two entry points, not one parser,
+                         theme_file_error ← ThemeFileError, the strict entry's error}.rs
+infrastructure/cli/theme_command.rs       ← ThemeArgs, theme, theme_banner, BUILTIN_THEMES (the names live in ThemeChoice)
 ```
 
 ### terminal_session
@@ -439,7 +448,7 @@ infrastructure/cli/theme_command.rs       ← ThemeArgs, theme, theme_banner, BU
 domain/entities/{terminal_session (aggregate), marker_splitter ← Splitter, marker_tracker ← Tracker state +
                  on_marker/end_prompt/new_cmd/pre_exec/flush_deferred (cursor column in, ShellEvents +
                  ScreenCommands out), insertion_lock, echo_hold, session_context ← SessionCtx}.rs
-domain/value_objects/{session_id, shell_marker, output_piece, shell_event, edit_buffer, shell_suggestion_color,
+domain/value_objects/{session_id, key_event (built in Phase 8), shell_marker, output_piece, shell_event, edit_buffer, shell_suggestion_color,
                       screen_command, screen_state, key_route, wrapped_shell_command, terminal_background}.rs
 domain/services/{insertion_reconciler ← insertion_bytes/expected_buffer/unechoed_after, key_router ← on_keys
                  1046-1110, render_guard ← suppressed/drawable, session_deadlines ← next_deadline}.rs
@@ -457,9 +466,13 @@ infrastructure/pty/{session_runner ← run/start/run/step/guard/emit (event loop
                     platform_unix, platform_windows ← sys}.rs
 infrastructure/adapters/{alacritty_terminal_screen (implements TerminalScreen; owns Term = types::Model),
                          output_filter ← OutFilter, edit_buffer_extractor ← extract/strip_pwsh_prompts/cell colours,
-                         cell_tagger ← tag/mark_line_start, overlay_renderer ← render::Renderer + frame/restore code,
-                         kitty_graphics ← icons::{transmit, place, base64, tmux_graphics, detect},
-                         icon_assets ← PNGS/TEMPLATE_RGBA, stdin_key_decoder ← keys::Decoder/decode*,
+                         cell_tagger ← tag/mark_line_start,
+                         overlay_renderer ← render::Renderer + frame/restore code (built in Phase 8: OverlayRenderer;
+                         FrameInput stays in its file until 9.4),
+                         kitty_graphics ← icons::{transmit, place, base64, tmux_graphics, detect} (built in Phase 8:
+                         KittyImage and KittyPixels share the file, plus CLEAR_PLACEMENTS and detect),
+                         icon_assets ← PNGS/TEMPLATE_RGBA (built in Phase 8: also tinted and kitty_image),
+                         stdin_key_decoder ← keys::Decoder/decode* (built in Phase 8),
                          stdout_terminal_writer, pty_wrapped_shell,
                          file_session_context_repository ← SessionCtx::path/load, pre_cmd writer, prune_run_files,
                          + SessionContextRecord (serde)}.rs
@@ -704,7 +717,7 @@ in `ghost_text` (7.9), gate green (986 passed). The phase ran in 11 steps (`7.0`
 HTTP client, the split cd check and `inline.rs`'s deletion in 7.7 became deviations. See the Phase 7 notes in
 section 9.
 
-### Phase 8: dropdown
+### Phase 8: dropdown (done: [research](hexagonal-refactor/phase-8-dropdown.md))
 1. Move the keys VOs, `Keymap` and `KeystrokeParser` (`keys.rs` tests). The `Decoder` goes to
    `terminal_session/infrastructure/adapters/stdin_key_decoder.rs`.
 2. Move `Menu` with `MenuVisibility`, `MenuEffect` and `CommonPrefix`, and its 12 tests. `now` is passed in. The
@@ -720,7 +733,13 @@ section 9.
      which dropdown may not import (rule 3), so dropdown's infrastructure does that `SettingValue` to JSON conversion
      itself, with the same output.
 5. Move `Renderer`, the kitty graphics code and the icon assets to the terminal_session infrastructure adapters, with
-   the round-trip tests unchanged. Delete `keys.rs`, `menu.rs`, `render.rs` and `icons.rs`.
+   the round-trip tests unchanged. `keys.rs`, `menu.rs`, `icons.rs` and `render.rs` were deleted file by file with their
+   last items (8.1b, 8.2b, 8.4b, 8.6).
+
+Done at `da2f950`: `dropdown` registered in the architecture test, `keys.rs`, `menu.rs`, `icons.rs` and `render.rs`
+gone, the theme command in `dropdown` (8.5c), the renderer, the kitty graphics, the icon assets and the stdin decoder in
+`terminal_session`'s adapters, gate green (1091 passed). The phase ran in 19 steps (`8.0a` … `8.7`) in three runs. See
+the Phase 8 notes in section 9.
 
 ### Phase 9: terminal_session (the biggest phase; one commit per step)
 1. Pure domain from `tracker.rs`: `MarkerSplitter` (7 tests), `ShellMarker`, `OutputPiece`, `ShellEvent`, `EditBuffer`,
@@ -832,7 +851,11 @@ section 9.
     a capture taken in Phase 0.
 - **Manual smoke** (SPEC §10 checklist) after Phases 6, 9 and 11 (after Phase 7 the user runs item 4 plus the LLM
   fake-server check of [`phase-7-ghost-text.md`](hexagonal-refactor/phase-7-ghost-text.md), "Output-equivalence
-  guard"), with `TABSMITH_HOME=$(mktemp -d)`, using
+  guard"; after Phase 8 items 1-3, 5 and 6 plus a custom theme file, the `system` theme in a light terminal, icons in a
+  kitty, a ghostty and a tmux pane (the overlay has no golden coverage), a slow generator (the spinner after about 200 ms:
+  P8-S1) and the two `pty.rs` theme moments no test reaches (a settings reload with `tabsmith theme light` from a second
+  terminal, and a late OSC 11 reply with `system`: P8-S2), see [`phase-8-dropdown.md`](hexagonal-refactor/phase-8-dropdown.md),
+  "Manual smoke"), with `TABSMITH_HOME=$(mktemp -d)`, using
   `cargo run -- debug shell zsh` (and bash and fish):
   1. `git ch` shows the menu.
   2. Tab inserts and branches appear.
@@ -1522,3 +1545,164 @@ which cites the code behind each; the phase ran as 11 steps, `7.0` … `7.10`, i
     `GhostTextSource` (and `Err(_)`/`Ok(_)`) get explicit arms (D8).
   - Phase 11: `LEGACY_MODULES` keeps `inline`; `types::Msg::Ghost` dies with `Msg` in Phase 9; `cli::settings_repository()`
     stays for `theme` until Phase 8. `#![allow(dead_code)]` stays until then.
+
+Phase 8 notes (decisions R1-R30 and deviations 1-25 of [`phase-8-dropdown.md`](hexagonal-refactor/phase-8-dropdown.md),
+which cites the code behind each; the phase ran as 19 steps, `8.0a` … `8.7`, in three runs; where the notes differ from
+the briefs, the notes win):
+
+- **Guards first** (deviation 1): step 8.0a added `scripts/hexagonal-refactor/theme-diff.sh` (groups A-I: the listing over
+  every kind of file and folder, `--folder`, valid custom themes with the banner and the saved `settings.json`, every
+  `invalid theme file` text of the strict parser, built-in names against theme files of the same name, every
+  `settings.json` state, the save-after-banner failure, the display of non-string values, the bold escapes on a pty and the
+  clap conflicts) and three tests of the lenient theme read; 8.0b added the byte-hash tests as data (FNV-1a):
+  `should_render_every_icon_exactly_as_at_the_phase_8_start` (92 rows) and
+  `should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start` (10 scenarios), whose values no later step changed, and
+  seven keymap and menu characterisation tests. The local tag `phase8-start` (`7aafcef`) is the second `testlock.py`
+  baseline.
+- **Steps, runs and deletions** (deviation 2, 23, R1, R2, R22): the plan's five steps ran as 19 (`8.0a`, `8.0b`,
+  `8.1a-c`, `8.2a-c`, `8.3a-c`, `8.4a-b`, `8.5a-d`, `8.6`, `8.7`) in three runs: 8.0a-8.2c and 8.4a; 8.4b alone (one
+  commit by design: `slot()` stops returning bytes); 8.3a-8.7. `keys.rs`, `menu.rs`, `icons.rs` and `render.rs` went with
+  their last items (8.1b, 8.2b, 8.4b, 8.6), so step 5's last sentence was edited in place. The one temporary shim
+  (R13), `impl Theme { from_settings, from_json }` in `render.rs`, lived from 8.3b to 8.5d and went with its last
+  caller; no shim and no `pub(crate) use` remains.
+- **Keys** (deviations 3-6): `KeyEvent` is `terminal_session/domain/value_objects/key_event.rs`; the `Decoder` is
+  `StdinKeyDecoder`; `KeyCode` and `Modifiers` have their own files; `Mods`, `Action` and `Binding` took their glossary
+  names. The key value objects have private fields behind `const fn` builders and accessors (8.1c, after the verbatim
+  move). `keymap_defaults_and_overrides` was not D6-split: it stays whole in the decoder's tests (R5, O4).
+  `KeystrokeParser` is two free functions, `parse_keystroke` and `normalize`.
+- **Menu** (deviations 7-10): `Menu::on_completion` and `Menu::loading` take `now`; `pty.rs` passes `Instant::now()`
+  at both sites and the renderer still reads `Instant::now()` itself in `menu_patches` (R7, O2). `common_prefix` is a
+  service returning the new `CommonPrefixOutcome`; `Menu::common_prefix` only applies it. The catch-all arms of
+  `Menu::on_completion` and `handle` became explicit (D8). `item`, `comp` and `settings` moved to
+  `completion/domain/test_fixtures.rs` (`settings` with `#[cfg(test)]`); `max_rows` stays in `menu.rs`; `Menu::vis()` is
+  `#[cfg(test)]`; the 12 menu tests moved to `menu/tests.rs`.
+- **Theme** (deviations 11-16, 19): `Rgb` is a tuple alias. `Theme` has private fields behind eight accessors and a
+  `ThemeParts` constructor argument. `ThemeRepository` has four methods, `{folder, find, list, find_palette}`, and two
+  results: the strict `ThemeDefinition` (the author, for the banner) and the lenient `ThemePalette` (the colour roles),
+  so `theme_json_mapper.rs` has two entry points, `parse_theme_definition` and `theme_palette_from_json` /
+  `parse_theme_palette`: the strict and the lenient parser differ on about 16 inputs and were kept apart (D1); the
+  plan's "one parser, not two" was not followed. `ThemeChoice` shares only the built-in name list with the CLI;
+  `built_in("")` is none and `from_name("")` is dark. `resolve_theme` is a domain service that takes the
+  `ThemeRepository` trait object (the skill gives ports to use cases): the custom branch is its only reader of the theme
+  file and three call sites in `pty.rs` would otherwise carry the same glue, a precedent Phase 9 may turn into a use
+  case. The theme CLI has no use case for `--folder`; `ThemeSelection` and `CurrentTheme` are the DTOs, and
+  `ThemeSelection` holds domain value objects (`ThemeDefinition`, `ThemeChoice`), an exception like `SettingValue` and
+  Phase 7's `GhostTextSources`. `DropdownError` carries the settings error (printed as itself), the data directory, the
+  invalid theme file and theme-not-found texts. The `SettingValue` to JSON conversion of `theme` with no argument is
+  copied into `theme_command.rs` (the settings adapter is off limits to dropdown) and pinned by a parity test against the
+  adapter. `SelectThemeUseCase` announces the choice before it saves, as the legacy command printed the banner first.
+  `describe` became `MenuDescriber` (`menu_describer.rs`, deviation 16), `layout` stays `menu_layout_calculator::layout`
+  with `MenuLayout` and `MenuSide` value objects.
+- **Icons and the renderer** (deviations 17, 18, 24): icons cross the layers as ids: `IconId`, `IconSlot` and the
+  42-name `ICON_NAMES` are domain, `PNGS`, `TEMPLATE_RGBA`, `kitty_image` and `tinted` are in `icon_assets.rs`, and
+  `placeholders` and `color` in `icon_id.rs`; the byte types are `KittyImage` and `KittyPixels`. `tinted` now runs at
+  transmit time, once per colour per session (performance only, P8-T35). `FrameInput` stays in `overlay_renderer.rs` with
+  no clock field (O7). The renderer's test module stays inline: `overlay_renderer.rs` is 1147 lines, 551 of them tests,
+  a pure move over section 1's "about 500" that Phase 9.4 may slice when `FrameInput` moves.
+- **Files beyond section 4 and repointed comments** (deviations 20, 21): `key_code.rs`, `modifiers.rs`, `key_event.rs`,
+  `common_prefix_outcome.rs`, `menu_side.rs`, `menu_describer.rs`, `theme_palette.rs`, `theme_author.rs`,
+  `theme_selection.rs`, `current_theme.rs`, `entities/menu/tests.rs` and `infrastructure/adapters/theme_file_error.rs`
+  (`ThemeFileError` is `pub(crate)` because the strict entry returns it); `KittyImage` and `KittyPixels` share
+  `kitty_graphics.rs` as the adapter's own parameter types (precedent: `ShellArg` and `InitArgs` in `init_command.rs`).
+  The `autocomplete.*` doc comments of `settings_catalog.rs` name `dropdown/domain/entities/menu.rs`,
+  `overlay_renderer.rs` and `theme_resolver.rs`.
+- **A test-only edge** (deviation 25): the moved icon hash test and the renderer tests import `SuggestionKind` and
+  `completion::domain::test_fixtures::item`, an edge `terminal_session -> specs` and `completion` that section 2 does not
+  list; it sits under `#[cfg(test)]` (D2). Phase 9, when `terminal_session` registers, either allows test-only edges
+  explicitly or adds a section 2 edge check.
+- **Fitness rules** (deviation 22): `dropdown` is registered at `da2f950`, the end of the phase, by one line in
+  `REGISTERED_MODULES`; the architecture test passes (55 tests) with no rule weakened and no checker test touched.
+  `LEGACY_MODULES` keeps `icons keys menu render` whose files are gone (Phase 11 sweep), and `terminal_session` stays
+  unregistered until Phase 9, so its new adapters are not rule-checked yet (`stdin_key_decoder` has unpaired `[` in byte
+  literals to check then; P8-T49: the scanner reads string and char literals as code, but only an unpaired `{` or `}`
+  in one shifts the use-group tracking, and no moved domain file has one). Rule 3 never flags a legacy module reached
+  from infrastructure, a grouped `use crate::{` or anything under `terminal_session`, so the hand greps G1-G19 ran and
+  found nothing outside `#[cfg(test)]` code: a legacy module, `shell_integration`, `history`, `ghost_text`,
+  `terminal_session`, `diagnostics` or `bootstrap` under `src/dropdown`; a grouped `use crate::{`; a `pub(crate) use` in
+  `dropdown`, `terminal_session`, `pty.rs` and `cli.rs`; `anyhow` or `clap` outside `theme_command.rs` (and the tests of
+  `dropdown_error.rs`); `serde`, `serde_json` or `json!` outside `theme_json_mapper.rs`, `theme_command.rs` and test
+  modules; `print!` or `println!` outside `theme_command.rs`; `logger` or `alacritty_terminal`; `unicode_width` outside
+  `text_fitting.rs`; `crate::settings::infrastructure` outside the parity test of `theme_command.rs`; a `pub` field in
+  the domain outside the `*Parts` structs (`ThemeParts`, `MenuLayoutParts`, `FigPaletteParts`, `Base16PaletteParts`);
+  `std::fs`/`env`/`process`/`thread`/`net`, `SystemTime` or `Instant::now` in dropdown's domain and application;
+  `Theme::from_settings`, `Theme::from_json` or `crate::{keys,menu,render,icons}` anywhere; `SHADES` and `ACCENTS`
+  outside `theme_palette.rs`; a bare `keys.rs`, `menu.rs`, `render.rs` or `icons.rs` in a comment. `grep 'cfg(' src/dropdown`
+  shows only `#[cfg(test)]` and the `#[cfg(unix)]` of the chmod test in `file_theme_repository.rs`; `grep 'cfg!('` is
+  empty, and the diff of `src` against `phase8-start` adds and removes no `cfg(windows)`, `cfg(target_os)`,
+  `cfg(not(..))`, `cfg(all(..))` or `cfg!(`. `grep -rnE
+  'completion::application::(command_line_parser|generator_runner|test_fixtures)' src --exclude-dir=completion` is empty.
+  The legacy names that survive in prose are `KeyBinding::Action` (a variant) and doc-comment words ("Action id", "Slot of
+  a row", "Image ids", "Image covering", "Kitty graphics").
+- **Checks**: test totals at the end of the phase (`da2f950`, the registration; the closing commits change docs only):
+  1091 passed, 0 failed, 1 ignored (`all_bundle_modules`; 986 at `phase8-start`), clippy 3 warnings (budget 3, all used),
+  build warnings 0, golden identical, testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 168 (Phase 7's 154 plus
+  14), NEW 809, PATH-ONLY 23, against `phase8-start` MISSING 0, DUPLICATE 0, PATH-ONLY 10, NEW 105 (99 `should_` names
+  and the six split names `truncation_and_wrap_spinner`, `colours_and_themes_theme_json`,
+  `colours_and_themes_theme_choice`, `tmux_uses_placeholders_passthrough`, `theme_list_order_built_ins` and
+  `theme_file_parsing_banner`) and CHANGED 26, each a restructuring in the research's "Test moves" table:
+  `keystroke_grammar`, `decode_table`, `decode_multi_key_chunk`, `esc_not_last_and_double_esc`, `paste_across_chunks`,
+  `ghost_keys_and_words_keys` (8.1a/8.1c: `Mods {..}` and `Key {..}` literals to builders, field reads to accessors,
+  `Decoder` to `StdinKeyDecoder`), twelve menu tests (8.2a: the new `now: Instant` argument: `typing_and_space`,
+  `full_insertion_reopens_only_for_new_arg_or_retrigger`, `esc_hides_for_the_line`,
+  `backspace_into_previous_token_and_large_change`, `hidden_until_keypress_refreshes_items`,
+  `large_change_counts_skipped_requests`, `error_reset_and_loading`, `only_show_on_tab`,
+  `sticky_selection_across_recompute`, `common_prefix`, `execute_and_record`, `round_trip_arg_hint_spinner_and_wide_ghost`),
+  `colours_and_themes` and `truncation_and_wrap` (8.3a, D6 halves), `layout_decisions` (8.3c, `MenuLayout::new` and
+  accessors), `resolves_like_q`, `tmux_uses_placeholders`, `transmit_chunks` (8.4b: accessors, `ICON_NAMES`, `IconId`,
+  `KittyImage`, `KittyPixels`) and `theme_list_order`, `theme_file_parsing` (8.5c, D6 halves). The four diff scripts
+  (`theme-diff.sh`, `integrations-diff.sh`, `precmd-diff.sh`, `inline-diff.sh`) are empty against the baseline binary,
+  `debug_shell_survives_closed_terminal` (the only automated start-up of `pty::run`) passes,
+  `cargo check --locked --no-default-features --all-targets` passes, and the release `all_bundle_modules` run prints
+  `1 passed`. `integrations_zsh_powerlevel10k_prompt_wrapped` and
+  `specs::infrastructure::adapters::process_executor::tests::exec_status_output_and_timeout` are timing-flaky under the
+  gate's load: a lone failure is rerun alone with `--exact`, never skipped.
+- **Open questions, defaults applied** (O1-O8): private key fields (O1), the renderer reads `Instant::now()` itself and
+  Phase 9 adds `FrameInput.now` (O2), `tinted` stays in `icon_assets.rs` (O3), `keymap_defaults_and_overrides` kept whole
+  (O4), `Rc<dyn ThemeRepository>` in the session (O5), `Image` and `Source` renamed `KittyImage` and `KittyPixels` (O6),
+  `FrameInput` stays in `overlay_renderer.rs` (O7), the user is asked for the smoke once, after 8.7 (O8).
+- **Deviations the runs reported**: 8.3a's commit B body is longer than 72 characters (only subjects are limited);
+  8.3c left two long test lines of `menu_describer.rs` unformatted (`cargo fmt` is not used); 8.5a's commit E
+  (`7a81d7f`) alone has clippy 4 warnings (its test dropped a `must_use` result) and the next commit `5783c4b`
+  fixed it forward, so a bisect landing exactly on E sees a red gate; 8.5b added tests beyond the research list (a
+  non-UTF-8 theme file, no home, two banner cases, a module test) and its chmod test is unix-only (23 of 24 tests off
+  unix); `ThemeArgs` and `run_theme_command` have no unit test (precedent `run_inline_command`; `theme-diff.sh` guards
+  them); 8.5d added `parse_theme_palette` as a second lenient entry and ran a throwaway differential test between the
+  old and the new theme code (13 values, 14 names against 5 backgrounds, the default settings and no home: all equal;
+  deleted, not committed); the two late `resolve_theme` sites of `pty.rs` (OSC 11 reply, settings reload) have no
+  automated test.
+- **History**: no Phase 8 subject is over 72 characters, and every commit has the Sonnet 5.5 trailer
+  (`git log --format='%h %s' phase8-start..HEAD`: 49 commits including the research hand-over, the run hand-offs and
+  this close). Every message went through `git commit -F`; none was rewritten.
+- **Manual smoke pending** (the user's, after the phase; section 8): with `TABSMITH_HOME=$(mktemp -d) cargo run -- debug
+  shell zsh` (and bash, fish): (1) `git ch` shows the menu; (2) Tab inserts and branches appear, a shared prefix
+  inserts; (3) Esc hides it; (5) a prompt on the bottom row draws the menu above; (6) a resize leaves no artefacts;
+  icons in kitty or ghostty (direct placements) and in tmux with `allow-passthrough on` (placeholders);
+  `tabsmith theme light`, a custom theme file under `$TABSMITH_HOME/themes/` and the `system` theme in a light terminal
+  show the right colours; `tabsmith theme` with no argument prints the saved value; (P8-S1) a spec whose generator runs
+  `sleep 1` (saved as `$TABSMITH_HOME/specs/user/<name>.js`, SPEC section 6.3) shows the spinner on the description bar
+  after about 200 ms and drops it when the reply arrives; (P8-S2) with a session running, `tabsmith theme light` and back
+  to `dark` from a second terminal with the same `TABSMITH_HOME` recolours the menu, and with `system` in a terminal that
+  answers OSC 11 late the theme follows the late reply. These are not the plan's items 7 and 8 (`vim`, `exit`), which
+  Phase 8 does not touch.
+- **Hand-offs** (details in the research's "Hand-off notes for Phase 9"):
+  - Phase 9: `pty.rs` now imports, from dropdown, `Key`, `KeyAction`, `KeyBinding`, `KeyCode`, `Keymap`, `Modifiers`,
+    `MenuEffect`, `Theme`, `Menu`, `ThemeRepository`, `resolve_theme` and `FileThemeRepository`, and from
+    `terminal_session`'s adapters `StdinKeyDecoder`, `FrameInput`, `OverlayRenderer` and `kitty_graphics::detect`; its
+    fields are `keymap`, `decoder`, `renderer` and `themes: Rc<dyn ThemeRepository>` (built in `Session::start`;
+    `InMemoryThemeRepository` in the test `Session`). `KeyRouter` takes `ghost_key`, `is_ctrl`, `note_forwarded`'s key
+    rule and the `on_keys` arms with explicit D8 arms over `Option<KeyBinding>` in the guard order of P8-T10;
+    `StdinKeyDecoder` becomes a port or a domain service and the session owns it (the held raw bytes replay through
+    `on_keys` from three non-stdin use cases, so decode once per chunk); `HandleKeystrokesUseCase` interprets
+    `MenuEffect`. `Menu` takes `now` from `Clock::now_instant()`; `OverlayRenderer::menu_patches` and
+    `Session::on_completion` still read `Instant::now()`, so the screen adapter adds `now` to `FrameInput`. The
+    `TerminalScreen` port also needs `set_theme` (unconditional), `drop_clear` and `with_images(detect())`; ONE
+    `OverlayRenderer` per session. `DropdownModule::themes` is what bootstrap hands to `terminal_session`; the three
+    `resolve_theme` sites (start-up, late OSC 11, settings reload) become use cases; `Rc` holds only while the session
+    stays on one thread (O5). The renderer's one legacy import is `crate::types::Model`, retargeted when `Model` moves
+    (9.7). `tracker.rs` and `types.rs` are untouched by Phase 8.
+  - Phase 11: `LEGACY_MODULES` keeps `icons keys menu render`; `types::Model` lives to 9.7; the watch list (D7): `Menu::vis()`,
+    `show_on_tab`'s unused `settings` parameter, `MenuEffect::Insert.full`, the two dead-code fields `version` and
+    `theme` of the mapper's private `ThemeFile` (they validate), `Theme::description_border()` (read only by
+    `theme_palette.rs`), `KeyCode::F(0)`, the `Hash` derives, `MenuLayout::side()` (`#[cfg(test)]`), `IconId::Png(usize)`
+    unvalidated, and the setting-value-to-JSON copy in `theme_command.rs`; `cli::settings_repository()` is gone.
+    `#![allow(dead_code)]` stays until then.
