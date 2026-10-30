@@ -1,5 +1,7 @@
 pub(crate) mod clear_ghost_text_cache_use_case;
 pub(crate) mod get_inline_status_use_case;
+pub(crate) mod ghost_text_sources;
+pub(crate) mod list_ghost_text_sources_use_case;
 pub(crate) mod llm_ghost_text_answer;
 pub(crate) mod llm_ghost_text_job;
 pub(crate) mod llm_ghost_text_request;
