@@ -1022,4 +1022,85 @@ pub(crate) mod tests {
             "toggle is a no-op with alwaysShowDescription"
         );
     }
+
+    #[test]
+    fn should_insert_a_lone_special_row_in_full() {
+        // One row decides before its kind is looked at: a lone special row (or `↪`) is inserted whole.
+        let mut lone = with(vec![item("<path>", SuggestionKind::Special, "")]);
+        let mut lone_auto = with(vec![item("↪", SuggestionKind::AutoExecute, "")]);
+        let mut two = with(vec![
+            item("<path>", SuggestionKind::Special, ""),
+            item("<dir>", SuggestionKind::Special, ""),
+        ]);
+
+        let fx = prefix_fx(&mut lone);
+        let fx_auto = prefix_fx(&mut lone_auto);
+        let fx_two = prefix_fx(&mut two);
+
+        assert!(matches!(
+            &fx[..],
+            [Effect::Insert { ins, full: true, record: Some((_, name)) }] if ins.text() == "<path>" && name == "<path>"
+        ));
+        assert_eq!(lone.vis(), Vis::HiddenByInsertion);
+        assert!(matches!(
+            &fx_auto[..],
+            [Effect::Insert {
+                full: true,
+                record: None,
+                ..
+            }]
+        ));
+        assert_eq!(
+            fx_two,
+            vec![Effect::Bell],
+            "two special rows share no prefix to type"
+        );
+    }
+
+    #[test]
+    fn should_not_insert_an_auto_execute_row_in_full_on_a_shared_prefix() {
+        // A row that matches nothing else of its kind (one match) and a prefix equal to the whole insertion
+        // (`foo` of `foobar`, `foobaz`) both insert in full for a normal row and ring the bell for an auto-execute one.
+        let auto = |name: &str| {
+            item(name, SuggestionKind::AutoExecute, "")
+                .with_original_kind(Some(SuggestionKind::Arg))
+        };
+        let mut single = with(vec![auto("↪"), item("foo", SuggestionKind::Arg, "")]);
+        let mut single_plain = with(vec![
+            item("foo", SuggestionKind::Arg, ""),
+            item("--bar", SuggestionKind::Option, ""),
+        ]);
+        let mut whole = with(vec![
+            auto("foo"),
+            item("foobar", SuggestionKind::Arg, ""),
+            item("foobaz", SuggestionKind::Arg, ""),
+        ]);
+        let mut whole_plain = with(vec![
+            item("foo", SuggestionKind::Arg, ""),
+            item("foobar", SuggestionKind::Arg, ""),
+            item("foobaz", SuggestionKind::Arg, ""),
+        ]);
+
+        let fx_single = prefix_fx(&mut single);
+        let fx_single_plain = prefix_fx(&mut single_plain);
+        let fx_whole = prefix_fx(&mut whole);
+        let fx_whole_plain = prefix_fx(&mut whole_plain);
+
+        assert_eq!(fx_single, vec![Effect::Bell]);
+        assert_eq!(fx_whole, vec![Effect::Bell]);
+        assert_eq!(
+            single.vis(),
+            Vis::Visible,
+            "a failure leaves the menu untouched"
+        );
+        assert!(!single.just_inserted && !whole.just_inserted);
+        assert!(matches!(
+            &fx_single_plain[..],
+            [Effect::Insert { full: true, .. }]
+        ));
+        assert!(matches!(
+            &fx_whole_plain[..],
+            [Effect::Insert { full: true, .. }]
+        ));
+    }
 }

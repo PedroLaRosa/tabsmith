@@ -714,4 +714,164 @@ mod tests {
             Some(Binding::Action(Action::NavigateDown))
         );
     }
+
+    #[test]
+    fn should_let_the_lexicographically_last_user_binding_win() {
+        // `control+x` < `ctrl+x` and `alt+K` < `alt+k` in byte order; each pair normalises to one key.
+        // The text lists the later name first, so the file order is not what decides.
+        let km = Keymap::from_settings(&settings(
+            r#"{"autocomplete.keybindings.ctrl+x": "navigateDown",
+                "autocomplete.keybindings.control+x": "navigateUp",
+                "autocomplete.keybindings.alt+k": "showAutocomplete",
+                "autocomplete.keybindings.alt+K": "hideAutocomplete"}"#,
+        ));
+
+        let ctrl_x = km.lookup(&k(KeyCode::Char('x'), CTRL));
+        let alt_k = km.lookup(&k(KeyCode::Char('k'), ALT));
+
+        assert_eq!(ctrl_x, Some(Binding::Action(Action::NavigateDown)));
+        assert_eq!(alt_k, Some(Binding::Action(Action::ShowAutocomplete)));
+    }
+
+    #[test]
+    fn should_parse_the_plus_key_and_reject_a_keystroke_without_a_key() {
+        use KeyCode::*;
+
+        let plus = ["+", "++", "+x", "ctrl++"].map(parse_keystroke);
+        let no_key = ["a+", "ctrl+", "", "f256"].map(parse_keystroke);
+        let digits = ["f0", "f01", "f99"].map(parse_keystroke);
+
+        // `+` alone, doubled or after a modifier is the plus key; `+x` is a plain x (the empty modifier is ignored).
+        assert_eq!(
+            plus,
+            [
+                Some(k(Char('+'), NONE)),
+                Some(k(Char('+'), NONE)),
+                Some(k(Char('x'), NONE)),
+                Some(k(Char('+'), CTRL)),
+            ]
+        );
+        assert_eq!(no_key, [None, None, None, None]);
+        assert_eq!(
+            digits,
+            [
+                Some(k(F(0), NONE)),
+                Some(k(F(1), NONE)),
+                Some(k(F(99), NONE))
+            ]
+        );
+    }
+
+    #[test]
+    fn should_ignore_an_unknown_modifier_and_bind_the_plain_key() {
+        use KeyCode::*;
+        // `Ctrl` is miscased, so the keystroke is the plain `k`; key names are case-sensitive, so `Enter` is no key.
+        let km = Keymap::from_settings(&settings(
+            r#"{"autocomplete.keybindings.Ctrl+k": "navigateDown",
+                "autocomplete.keybindings.Enter": "execute"}"#,
+        ));
+
+        let miscased = parse_keystroke("Ctrl+k");
+        let unknown_name = parse_keystroke("Enter");
+        let plain_k = km.lookup(&k(Char('k'), NONE));
+        let ctrl_k = km.lookup(&k(Char('k'), CTRL));
+        let enter = km.lookup(&k(Enter, NONE));
+
+        assert_eq!(miscased, Some(k(Char('k'), NONE)));
+        assert_eq!(unknown_name, None);
+        assert_eq!(plain_k, Some(Binding::Action(Action::NavigateDown)));
+        assert_eq!(
+            ctrl_k,
+            Some(Binding::Action(Action::ToggleDescription)),
+            "the real ctrl+k default is untouched"
+        );
+        assert_eq!(
+            enter,
+            Some(Binding::Action(Action::InsertSelected)),
+            "the dropped override leaves the default"
+        );
+    }
+
+    #[test]
+    fn should_read_the_select_suggestion_number_as_a_u8() {
+        let ids = [
+            "selectSuggestion+5",
+            "selectSuggestion05",
+            "autocomplete.selectSuggestion3",
+            "selectSuggestion10",
+            "selectSuggestion11",
+            "selectSuggestion256",
+            "selectSuggestion-1",
+            "selectSuggestion",
+            "autocomplete.autocomplete.insertSelected",
+        ]
+        .map(Action::from_id);
+
+        assert_eq!(
+            ids,
+            [
+                Some(Action::SelectSuggestion(5)),
+                Some(Action::SelectSuggestion(5)),
+                Some(Action::SelectSuggestion(3)),
+                Some(Action::SelectSuggestion(10)),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn should_lowercase_only_ctrl_and_alt_letters_when_binding_and_looking_up() {
+        use KeyCode::*;
+        let km = Keymap::from_settings(&settings(
+            r#"{"autocomplete.keybindings.f5": "autocomplete.ignore",
+                "autocomplete.keybindings.f6": "ignore",
+                "autocomplete.keybindings.f7": true}"#,
+        ));
+
+        let ctrl = normalize(k(Char('K'), CTRL));
+        let alt = normalize(k(Char('K'), ALT));
+        let untouched = [
+            k(Char('K'), NONE),
+            k(Char('K'), SHIFT),
+            k(Char('1'), CTRL),
+            k(Char('É'), ALT),
+            k(Up, CTRL),
+        ]
+        .map(normalize);
+        let ctrl_shift_k = parse_keystroke("ctrl+shift+k").map(normalize);
+        let upper_ctrl_k = km.lookup(&k(Char('K'), CTRL));
+        let upper_plain_k = km.lookup(&k(Char('K'), NONE));
+
+        assert_eq!(ctrl, k(Char('k'), CTRL));
+        assert_eq!(alt, k(Char('k'), ALT));
+        assert_eq!(
+            untouched,
+            [
+                k(Char('K'), NONE),
+                k(Char('K'), SHIFT),
+                k(Char('1'), CTRL),
+                k(Char('É'), ALT),
+                k(Up, CTRL)
+            ]
+        );
+        assert_eq!(ctrl_shift_k, Some(k(Char('k'), CTRL)));
+        assert_eq!(
+            upper_ctrl_k,
+            Some(Binding::Action(Action::ToggleDescription)),
+            "ctrl+K finds the ctrl+k default"
+        );
+        assert_eq!(upper_plain_k, None);
+        // The id is compared before `autocomplete.` is stripped, so this is an unknown action, not `ignore`.
+        assert_eq!(km.lookup(&k(F(5), NONE)), Some(Binding::Unknown));
+        assert_eq!(km.lookup(&k(F(6), NONE)), Some(Binding::Ignore));
+        assert_eq!(
+            km.lookup(&k(F(7), NONE)),
+            None,
+            "a value that is not text is skipped"
+        );
+    }
 }
