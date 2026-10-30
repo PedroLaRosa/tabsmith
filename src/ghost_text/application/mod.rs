@@ -7,5 +7,6 @@ pub(crate) mod llm_ghost_text_job;
 pub(crate) mod llm_ghost_text_request;
 pub(crate) mod ports;
 pub(crate) mod request_llm_ghost_text_use_case;
+pub(crate) mod select_ghost_text_source_use_case;
 pub(crate) mod set_inline_enabled_use_case;
 pub(crate) mod suggest_local_ghost_text_use_case;
