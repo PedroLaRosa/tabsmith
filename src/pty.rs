@@ -8,7 +8,6 @@ use crate::dropdown::domain::value_objects::key_binding::KeyBinding;
 use crate::dropdown::domain::value_objects::key_code::KeyCode;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
 use crate::dropdown::domain::value_objects::modifiers::Modifiers;
-use crate::keys;
 use crate::shared::infrastructure::logger;
 use crate::menu::{Effect, Menu};
 use crate::render::{FrameInput, Renderer, Theme};
@@ -25,6 +24,7 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
+use crate::terminal_session::infrastructure::adapters::stdin_key_decoder::StdinKeyDecoder;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
@@ -348,7 +348,7 @@ struct Session {
     renderer: Renderer,
     keymap: Keymap,
     /// Kept across stdin reads: a bracketed paste split over several reads stays one opaque unit (SPEC §7.2.1).
-    decoder: keys::Decoder,
+    decoder: StdinKeyDecoder,
     settings: Settings,
     settings_repository: Box<dyn SettingsRepository>,
     settings_mtime: Option<SystemTime>,
@@ -536,7 +536,7 @@ impl Session {
             menu,
             renderer,
             keymap,
-            decoder: keys::Decoder::default(),
+            decoder: StdinKeyDecoder::default(),
             settings_mtime: settings_repository.last_modified(),
             settings_repository,
             settings,
@@ -1077,7 +1077,7 @@ impl Session {
                 // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
                 self.held.extend_from_slice(&chunk[ev.bytes.start..]);
                 self.held_at = Some(Instant::now() + INSERT_LOCK);
-                self.decoder = keys::Decoder::default(); // held bytes start outside a paste and are decoded again
+                self.decoder = StdinKeyDecoder::default(); // held bytes start outside a paste and are decoded again
                 break;
             }
             let effects = match binding {
@@ -1798,7 +1798,7 @@ mod tests {
             menu: Menu::new(),
             renderer: Renderer::new(Theme::dark(), false),
             keymap: Keymap::from_settings(&settings),
-            decoder: keys::Decoder::default(),
+            decoder: StdinKeyDecoder::default(),
             settings,
             settings_repository: Box::new(InMemorySettingsRepository::default()),
             settings_mtime: None,

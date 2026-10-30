@@ -1,21 +1,14 @@
-//! Stdin key decoding, keystroke grammar and the keybinding table (SPEC §7.2.1–7.2.3).
-//! OWNER: ui agent. Used by the wrapper (pty.rs) to decide interception.
+//! Stdin key decoding (SPEC §7.2.1): UTF-8, `ESC`, SS3, CSI and bracketed paste become `KeyEvent`s.
 use crate::dropdown::domain::value_objects::key::Key;
 use crate::dropdown::domain::value_objects::key_code::KeyCode;
 use crate::dropdown::domain::value_objects::modifiers::Modifiers;
-use std::ops::Range;
-
-/// A decoded key and the byte range of the chunk it came from.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KeyEvent {
-    pub key: Key,
-    pub bytes: Range<usize>,
-}
+use crate::terminal_session::domain::value_objects::key_event::KeyEvent;
 
 /// Split a stdin chunk into keys (SPEC §7.2.1). Every byte belongs to exactly one event.
-/// Stateless: a paste longer than the chunk ends the chunk as `Paste`; use [`Decoder`] to carry it over.
-pub fn decode(chunk: &[u8]) -> Vec<KeyEvent> {
-    Decoder::default().decode(chunk)
+/// Stateless: a paste longer than the chunk ends the chunk as `Paste`; use [`StdinKeyDecoder`] to carry it over.
+#[cfg(test)]
+pub(crate) fn decode(chunk: &[u8]) -> Vec<KeyEvent> {
+    StdinKeyDecoder::default().decode(chunk)
 }
 
 const PASTE_START: &[u8] = b"\x1b[200~";
@@ -23,13 +16,13 @@ const PASTE_END: &[u8] = b"\x1b[201~";
 
 /// Stateful [`decode`]: a bracketed paste split across reads stays opaque (`Paste`) until `ESC[201~`.
 #[derive(Default)]
-pub struct Decoder {
+pub(crate) struct StdinKeyDecoder {
     /// Inside a paste: how many bytes of `ESC[201~` matched so far.
     paste: Option<usize>,
 }
 
-impl Decoder {
-    pub fn decode(&mut self, chunk: &[u8]) -> Vec<KeyEvent> {
+impl StdinKeyDecoder {
+    pub(crate) fn decode(&mut self, chunk: &[u8]) -> Vec<KeyEvent> {
         let mut out = Vec::new();
         let mut i = 0;
         while i < chunk.len() {
@@ -387,7 +380,7 @@ mod tests {
 
     #[test]
     fn paste_across_chunks() {
-        let mut d = Decoder::default();
+        let mut d = StdinKeyDecoder::default();
         let a = d.decode(b"q\x1b[200~line1\r");
         assert_eq!(
             a.iter().map(|e| e.key.code).collect::<Vec<_>>(),
