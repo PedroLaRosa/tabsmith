@@ -312,7 +312,7 @@ mod tests {
         assert_eq!(read, 40.0);
     }
 
-    /// engine.rs script_timeout: `f64(.., if cfg!(windows) { 20000.0 } else { 5000.0 })`.
+    /// completion generator_trigger_policy.rs script_timeout: `f64(.., if cfg!(windows) { 20000.0 } else { 5000.0 })`.
     #[test]
     fn should_default_the_engine_script_timeout_to_20000_ms_on_windows_and_5000_elsewhere() {
         let settings = Settings::default();
@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(read, if cfg!(windows) { 20000 } else { 5000 });
     }
 
-    /// engine.rs llm_history: `i64("inline.historyCount", 49)`.
+    /// engine_server.rs llm_history: `i64("inline.historyCount", 49)`.
     #[test]
     fn should_default_the_llm_history_to_49_lines() {
         let settings = Settings::default();
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(read, 300);
     }
 
-    /// cli.rs, doctor.rs, engine.rs and pty.rs: `bool("inline.enabled", true)`.
+    /// cli.rs, doctor.rs, engine_server.rs and pty.rs: `bool("inline.enabled", true)`.
     #[test]
     fn should_default_ghost_text_to_enabled() {
         let settings = Settings::default();
@@ -362,7 +362,7 @@ mod tests {
         assert!(read);
     }
 
-    /// engine.rs: `bool("autocomplete.insertSpaceAutomatically", true)`.
+    /// completion_result_builder.rs: `bool("autocomplete.insertSpaceAutomatically", true)`.
     #[test]
     fn should_default_to_inserting_a_space_automatically() {
         let settings = Settings::default();
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// engine.rs: `bool("autocomplete.fuzzySearch", false)`.
+    /// completion_session.rs: `bool("autocomplete.fuzzySearch", false)`.
     #[test]
     fn should_default_fuzzy_search_to_off() {
         let settings = Settings::default();
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// engine.rs: `bool("autocomplete.firstTokenCompletion", false)`.
+    /// complete_command_line_use_case.rs: `bool("autocomplete.firstTokenCompletion", false)`.
     #[test]
     fn should_default_first_token_completion_to_off() {
         let settings = Settings::default();
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// engine.rs: `bool("autocomplete.hideAutoExecuteSuggestion", false)`.
+    /// completion_result_builder.rs: `bool("autocomplete.hideAutoExecuteSuggestion", false)`.
     #[test]
     fn should_default_to_showing_auto_execute_suggestions() {
         let settings = Settings::default();
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// engine.rs, menu.rs and pty.rs: `bool("autocomplete.onlyShowOnTab", false)`.
+    /// completion_result_builder.rs, menu.rs and pty.rs: `bool("autocomplete.onlyShowOnTab", false)`.
     #[test]
     fn should_default_to_opening_the_menu_without_tab() {
         let settings = Settings::default();
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// engine.rs: `bool("autocomplete.immediatelyExecuteAfterSpace", false)`.
+    /// completion_result_builder.rs: `bool("autocomplete.immediatelyExecuteAfterSpace", false)`.
     #[test]
     fn should_default_to_no_execute_row_after_a_space() {
         let settings = Settings::default();
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// engine.rs: `bool("autocomplete.immediatelyRunDangerousCommands", false)`.
+    /// completion_result_builder.rs: `bool("autocomplete.immediatelyRunDangerousCommands", false)`.
     #[test]
     fn should_default_to_no_execute_row_for_dangerous_commands() {
         let settings = Settings::default();
@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// engine.rs: `bool("autocomplete.alwaysSuggestCurrentToken", false)`.
+    /// completion_result_builder.rs: `bool("autocomplete.alwaysSuggestCurrentToken", false)`.
     #[test]
     fn should_default_to_not_suggesting_the_current_token() {
         let settings = Settings::default();
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// engine.rs: `bool("autocomplete.preferVerboseSuggestions", false)`.
+    /// completion_result_builder.rs: `bool("autocomplete.preferVerboseSuggestions", false)`.
     #[test]
     fn should_default_to_short_suggestions() {
         let settings = Settings::default();
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(read, Some("history+specs"));
     }
 
-    /// engine.rs: `string("beta.history.mode").unwrap_or("off")`.
+    /// completion_result_builder.rs: `string("beta.history.mode").unwrap_or("off")`.
     #[test]
     fn should_default_the_dropdown_history_mode_to_off() {
         let settings = Settings::default();
@@ -572,8 +572,9 @@ mod tests {
         assert_eq!(read, Some("off"));
     }
 
-    /// engine.rs ranks by recency unless `string("autocomplete.sortMethod") == Some("alphabetical")`; an unset key
-    /// was `None` there and is `most recent` now, and both rank by recency.
+    /// completion_result_builder.rs ranks by recency unless
+    /// `string("autocomplete.sortMethod") == Some("alphabetical")`; an unset key was `None` there and is
+    /// `most recent` now, and both rank by recency.
     #[test]
     fn should_default_the_sort_method_to_most_recent() {
         let settings = Settings::default();
