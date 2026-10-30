@@ -886,7 +886,7 @@ impl Session {
         if c.is_loading() && self.spinner_at.is_none() {
             self.spinner_at = Some(Instant::now() + SPINNER_TICK);
         }
-        self.menu.on_completion(c, &self.settings);
+        self.menu.on_completion(c, &self.settings, Instant::now());
         self.redraw();
         self.release_held();
     }
@@ -1241,7 +1241,7 @@ impl Session {
             if self.menu.last().is_some_and(|c| c.is_loading()) {
                 self.spinner += 1;
                 self.spinner_at = Some(now + SPINNER_TICK);
-                redraw |= self.menu.loading();
+                redraw |= self.menu.loading(Instant::now());
             }
         }
         if now >= self.poll_at {

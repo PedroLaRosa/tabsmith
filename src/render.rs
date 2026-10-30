@@ -17,6 +17,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::ops::Range;
+use std::time::Instant;
 use unicode_width::UnicodeWidthChar;
 
 type Rgb = (u8, u8, u8);
@@ -452,7 +453,7 @@ impl Renderer {
             }
         } else {
             let spin = menu
-                .loading()
+                .loading(Instant::now())
                 .then(|| SPINNER[input.spinner % SPINNER.len()]);
             let (s, pad) = self.desc_row(menu, l.w, spin);
             out.push(Patch {
@@ -962,7 +963,7 @@ mod tests {
     /// Visible menu over `items` (typed query "c").
     fn menu(items: Vec<Suggestion>, s: &Settings) -> Menu {
         let mut m = Menu::new();
-        m.on_completion(comp("c", 1, items), s);
+        m.on_completion(comp("c", 1, items), s, Instant::now());
         assert!(m.shown(s));
         m
     }
@@ -1100,7 +1101,7 @@ mod tests {
         let mut c = comp("c", 1, vec![]);
         c = c.with_loading(true);
         let mut m = Menu::new();
-        m.on_completion(c, &s);
+        m.on_completion(c, &s, Instant::now());
         assert!(m.shown(&s) && !m.intercepting(&s));
         let a = model(40, 10, &[b"$ c"]);
         let mut r = Renderer::new(Theme::light(), true);

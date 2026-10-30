@@ -106,13 +106,13 @@ impl Menu {
     }
 
     /// Phase-Parse / phase-Generators reply for the latest request (SPEC §7.1). An error reply resets.
-    pub fn on_completion(&mut self, mut c: CompletionResult, settings: &Settings) {
+    pub fn on_completion(&mut self, mut c: CompletionResult, settings: &Settings, now: Instant) {
         if c.is_error() {
             return self.error_reset();
         }
         let items = c.take_suggestions();
         self.loading_since = if c.is_loading() {
-            self.loading_since.or_else(|| Some(Instant::now()))
+            self.loading_since.or(Some(now))
         } else {
             None
         };
@@ -323,9 +323,9 @@ impl Menu {
     }
 
     /// Some generator has been loading for > 200 ms (spinner).
-    pub fn loading(&self) -> bool {
+    pub fn loading(&self, now: Instant) -> bool {
         self.loading_since
-            .is_some_and(|t| t.elapsed() > Duration::from_millis(200))
+            .is_some_and(|t| now.duration_since(t) > Duration::from_millis(200))
     }
 
     fn navigate(&mut self, d: isize, hide_on_negative: bool, settings: &Settings) -> Vec<Effect> {
@@ -484,11 +484,11 @@ pub(crate) mod tests {
     /// Menu after typing `git c`, visible.
     fn typed(s: &Settings) -> Menu {
         let mut m = Menu::new();
-        m.on_completion(comp("g", 1, vec![]), s);
-        m.on_completion(comp("gi", 1, vec![]), s);
-        m.on_completion(comp("git", 1, vec![]), s);
-        m.on_completion(comp("git ", 2, subs("")), s);
-        m.on_completion(comp("git c", 2, subs("c")), s);
+        m.on_completion(comp("g", 1, vec![]), s, Instant::now());
+        m.on_completion(comp("gi", 1, vec![]), s, Instant::now());
+        m.on_completion(comp("git", 1, vec![]), s, Instant::now());
+        m.on_completion(comp("git ", 2, subs("")), s, Instant::now());
+        m.on_completion(comp("git c", 2, subs("c")), s, Instant::now());
         m
     }
 
@@ -497,13 +497,13 @@ pub(crate) mod tests {
         let s = Settings::default();
         let mut m = Menu::new();
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
-        m.on_completion(comp("g", 1, vec![]), &s);
+        m.on_completion(comp("g", 1, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::Visible);
         // Visible with an arg hint but no items: drawn, not intercepting.
         assert!(m.shown(&s) && !m.intercepting(&s));
-        m.on_completion(comp("gi", 1, vec![]), &s);
-        m.on_completion(comp("git", 1, vec![]), &s);
-        m.on_completion(comp("git ", 2, subs("")), &s);
+        m.on_completion(comp("gi", 1, vec![]), &s, Instant::now());
+        m.on_completion(comp("git", 1, vec![]), &s, Instant::now());
+        m.on_completion(comp("git ", 2, subs("")), &s, Instant::now());
         assert_eq!(m.vis(), Vis::Visible);
         assert_eq!(m.items().len(), 4);
         assert!(m.intercepting(&s));
@@ -533,6 +533,7 @@ pub(crate) mod tests {
         m.on_completion(
             comp("git checkout ", 3, vec![item("main", SuggestionKind::Arg, "")]),
             &s,
+            Instant::now(),
         );
         assert_eq!(
             m.vis(),
@@ -543,9 +544,9 @@ pub(crate) mod tests {
         // Flag without a new argument → hidden until the next key.
         let mut m = typed(&s);
         m.handle(KeyAction::InsertSelected, &s);
-        m.on_completion(comp("git checkout", 2, vec![]), &s);
+        m.on_completion(comp("git checkout", 2, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
-        m.on_completion(comp("git checkout2", 2, vec![]), &s);
+        m.on_completion(comp("git checkout2", 2, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::Visible);
 
         // Folder `src/` re-triggers its generator → visible.
@@ -557,11 +558,12 @@ pub(crate) mod tests {
                 vec![item("src/", SuggestionKind::Folder, "").with_generator(Some(GeneratorKey::from_raw(7)))],
             ),
             &s,
+            Instant::now(),
         );
         m.handle(KeyAction::InsertSelected, &s);
         let mut c = comp("git c src/", 5, vec![item("main.rs", SuggestionKind::File, "")]);
         c = c.with_triggered_generators(vec![GeneratorKey::from_raw(7)]);
-        m.on_completion(c, &s);
+        m.on_completion(c, &s, Instant::now());
         assert_eq!(m.vis(), Vis::Visible);
     }
 
@@ -571,8 +573,8 @@ pub(crate) mod tests {
         let mut m = typed(&s);
         assert!(m.handle(KeyAction::HideAutocomplete, &s).is_empty());
         assert_eq!(m.vis(), Vis::HiddenUntilShown);
-        m.on_completion(comp("git co", 2, subs("co")), &s);
-        m.on_completion(comp("git co ", 3, vec![item("x", SuggestionKind::Arg, "")]), &s);
+        m.on_completion(comp("git co", 2, subs("co")), &s, Instant::now());
+        m.on_completion(comp("git co ", 3, vec![item("x", SuggestionKind::Arg, "")]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::HiddenUntilShown);
         assert!(!m.shown(&s));
         // Items are still recomputed (globally interceptable keys like showAutocomplete work).
@@ -590,19 +592,19 @@ pub(crate) mod tests {
         let s = Settings::default();
         let mut m = typed(&s);
         m.handle(KeyAction::HideAutocomplete, &s);
-        m.on_completion(comp("git ", 2, subs("")), &s);
-        m.on_completion(comp("git", 1, vec![]), &s);
+        m.on_completion(comp("git ", 2, subs("")), &s, Instant::now());
+        m.on_completion(comp("git", 1, vec![]), &s, Instant::now());
         assert_eq!(
             m.vis(),
             Vis::HiddenUntilKeypress,
             "backspace into the previous token overrides Esc"
         );
-        m.on_completion(comp("gi", 1, vec![]), &s);
+        m.on_completion(comp("gi", 1, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::Visible);
 
         // A paste is a large change.
         let mut m = typed(&s);
-        m.on_completion(comp("git commit -m 'x' --amend", 9, vec![]), &s);
+        m.on_completion(comp("git commit -m 'x' --amend", 9, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
         // The list is refreshed while hidden (nothing is drawn): show/toggle/Tab never act on stale items.
         assert!(!m.has_items());
@@ -613,13 +615,14 @@ pub(crate) mod tests {
         let s = settings(r#"{"autocomplete.onlyShowOnTab": true}"#);
         let mut m = typed(&s);
         for q in ["ch", "che", "chec"] {
-            m.on_completion(comp(&format!("git {q}"), 2, subs(q)), &s);
+            m.on_completion(comp(&format!("git {q}"), 2, subs(q)), &s, Instant::now());
         }
         assert_eq!(m.items().len(), 1);
         // Up recalls `echo hi`: a large change hides the menu; Tab must not type `kout` into it.
         m.on_completion(
             comp("echo hi", 3, vec![item("hi.txt", SuggestionKind::File, "hi")]),
             &s,
+            Instant::now(),
         );
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
         let fx = m.show_on_tab(&s);
@@ -634,19 +637,19 @@ pub(crate) mod tests {
         let s = Settings::default();
         let at = |req, buffer: &str, arg, items| comp(buffer, arg, items).with_request_id(req);
         let mut m = Menu::new();
-        m.on_completion(at(1, "g", 1, vec![]), &s);
-        m.on_completion(at(2, "gi", 1, vec![]), &s);
-        m.on_completion(at(3, "git", 1, vec![]), &s);
+        m.on_completion(at(1, "g", 1, vec![]), &s, Instant::now());
+        m.on_completion(at(2, "gi", 1, vec![]), &s, Instant::now());
+        m.on_completion(at(3, "git", 1, vec![]), &s, Instant::now());
         // The reply for `git ` (request 4) was skipped by the engine: two edits over two requests is typing.
-        m.on_completion(at(5, "git c", 2, subs("c")), &s);
+        m.on_completion(at(5, "git c", 2, subs("c")), &s, Instant::now());
         assert_eq!(m.vis(), Vis::Visible);
         // A paste is still large when a request was skipped before it.
-        m.on_completion(at(7, "git commit -m x", 3, vec![]), &s);
+        m.on_completion(at(7, "git commit -m x", 3, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
-        m.on_completion(at(8, "git commit -m x ", 3, vec![]), &s);
+        m.on_completion(at(8, "git commit -m x ", 3, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::Visible, "keypress");
         // Two requests, but `x ` → `zz` needs four edits (not prefix related): large.
-        m.on_completion(at(10, "git commit -m zz", 3, vec![]), &s);
+        m.on_completion(at(10, "git commit -m zz", 3, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
     }
 
@@ -656,39 +659,79 @@ pub(crate) mod tests {
         let mut m = typed(&s);
         m.handle(KeyAction::ToggleHistoryMode, &s);
         m.handle(KeyAction::ToggleDescription, &s);
-        m.on_completion(CompletionResult::error(9, "git c".into(), 5), &s);
+        m.on_completion(CompletionResult::error(9, "git c".into(), 5), &s, Instant::now());
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
         assert!(!m.has_items() && !m.history_mode() && m.last().is_none());
         assert!(m.popout(&s));
         let mut c = comp("g", 1, vec![]);
         c = c.with_loading(true);
-        m.on_completion(c, &s);
-        assert!(!m.loading(), "spinner only after 200 ms");
+        m.on_completion(c, &s, Instant::now());
+        assert!(!m.loading(Instant::now()), "spinner only after 200 ms");
         m.loading_since = Some(Instant::now() - Duration::from_millis(300));
-        assert!(m.loading());
-        m.on_completion(comp("gi", 1, vec![]), &s);
-        assert!(!m.loading());
+        assert!(m.loading(Instant::now()));
+        m.on_completion(comp("gi", 1, vec![]), &s, Instant::now());
+        assert!(!m.loading(Instant::now()));
+    }
+
+    #[test]
+    fn should_not_report_loading_at_exactly_200_ms_and_report_it_after() {
+        let s = Settings::default();
+        let t0 = Instant::now();
+        let mut m = Menu::new();
+        m.on_completion(comp("g", 1, vec![]).with_loading(true), &s, t0);
+
+        let at_the_limit = m.loading(t0 + Duration::from_millis(200));
+        let after_the_limit = m.loading(t0 + Duration::from_millis(201));
+
+        assert!(!at_the_limit);
+        assert!(after_the_limit);
+    }
+
+    #[test]
+    fn should_keep_the_first_loading_start_across_consecutive_loading_replies() {
+        let s = Settings::default();
+        let t0 = Instant::now();
+        let mut m = Menu::new();
+        m.on_completion(comp("g", 1, vec![]).with_loading(true), &s, t0);
+        let generators = comp("g", 1, vec![]).with_loading(true).with_phase(CompletionPhase::Generators);
+
+        m.on_completion(generators, &s, t0 + Duration::from_millis(150));
+
+        assert!(m.loading(t0 + Duration::from_millis(201)), "counted from the first reply, not the second");
+    }
+
+    #[test]
+    fn should_stop_loading_on_the_first_reply_that_is_not_loading() {
+        let s = Settings::default();
+        let t0 = Instant::now();
+        let mut m = Menu::new();
+        m.on_completion(comp("g", 1, vec![]).with_loading(true), &s, t0);
+
+        m.on_completion(comp("gi", 1, vec![]), &s, t0 + Duration::from_millis(100));
+
+        assert!(!m.loading(t0 + Duration::from_millis(300)));
     }
 
     #[test]
     fn only_show_on_tab() {
         let s = settings(r#"{"autocomplete.onlyShowOnTab": true}"#);
         let mut m = Menu::new();
-        m.on_completion(comp("g", 1, vec![]), &s);
+        m.on_completion(comp("g", 1, vec![]), &s, Instant::now());
         assert_eq!(m.vis(), Vis::HiddenUntilShown, "never auto-opens");
-        m.on_completion(comp("gi", 1, vec![]), &s);
-        m.on_completion(comp("git", 1, vec![]), &s);
-        m.on_completion(comp("git ", 2, subs("")), &s);
-        m.on_completion(comp("git c", 2, subs("c")), &s);
+        m.on_completion(comp("gi", 1, vec![]), &s, Instant::now());
+        m.on_completion(comp("git", 1, vec![]), &s, Instant::now());
+        m.on_completion(comp("git ", 2, subs("")), &s, Instant::now());
+        m.on_completion(comp("git c", 2, subs("c")), &s, Instant::now());
         assert_eq!(m.vis(), Vis::HiddenUntilShown);
         assert_eq!(m.items().len(), 4);
         assert!(m.show_on_tab(&s).is_empty());
         assert_eq!(m.vis(), Vis::Visible);
-        m.on_completion(comp("git co", 2, subs("co")), &s);
+        m.on_completion(comp("git co", 2, subs("co")), &s, Instant::now());
         assert_eq!(m.vis(), Vis::Visible, "stays open within the argument");
         m.on_completion(
             comp("git co ", 3, vec![item("main", SuggestionKind::Arg, "")]),
             &s,
+            Instant::now(),
         );
         assert_eq!(
             m.vis(),
@@ -741,17 +784,17 @@ pub(crate) mod tests {
                                             // Generator phase reply reorders the same items.
         let mut c = comp("git c", 2, subs("c").into_iter().rev().collect());
         c = c.with_phase(CompletionPhase::Generators);
-        m.on_completion(c, &s);
+        m.on_completion(c, &s, Instant::now());
         assert_eq!(m.items()[m.selected()].names()[0], "cherry-pick");
         // Item no longer listed → back to the top, not sticky.
-        m.on_completion(comp("git cl", 2, subs("cl")), &s);
+        m.on_completion(comp("git cl", 2, subs("cl")), &s, Instant::now());
         assert_eq!(m.selected(), 0);
-        m.on_completion(comp("git c", 2, subs("c")), &s);
+        m.on_completion(comp("git c", 2, subs("c")), &s, Instant::now());
         assert_eq!(m.selected(), 0, "not sticky after the reset");
         // Typing keeps the selection: the query-stripped insert text changes, the item does not.
-        m.on_completion(comp("git ch", 2, subs("ch")), &s);
+        m.on_completion(comp("git ch", 2, subs("ch")), &s, Instant::now());
         m.handle(KeyAction::NavigateDown, &s);
-        m.on_completion(comp("git che", 2, subs("che")), &s);
+        m.on_completion(comp("git che", 2, subs("che")), &s, Instant::now());
         assert_eq!(m.items()[m.selected()].names()[0], "cherry-pick");
     }
 
@@ -764,7 +807,7 @@ pub(crate) mod tests {
         let s = Settings::default();
         // checkout + cherry-pick → "che" → types "e" (query "ch" already typed), menu stays visible.
         let mut m = typed(&s);
-        m.on_completion(comp("git ch", 2, subs("ch")), &s);
+        m.on_completion(comp("git ch", 2, subs("ch")), &s, Instant::now());
         let fx = prefix_fx(&mut m);
         assert_eq!(
             fx,
@@ -796,7 +839,7 @@ pub(crate) mod tests {
         // No remaining prefix → bell; a single item → full insertion.
         let mut m = typed(&s);
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
-        m.on_completion(comp("git cl", 2, subs("cl")), &s);
+        m.on_completion(comp("git cl", 2, subs("cl")), &s, Instant::now());
         assert!(matches!(
             &prefix_fx(&mut m)[..],
             [Effect::Insert { full: true, .. }]
@@ -917,7 +960,7 @@ pub(crate) mod tests {
     /// Visible menu over `items` (one-char buffer: not a large change).
     fn with(items: Vec<Suggestion>) -> Menu {
         let mut m = Menu::new();
-        m.on_completion(comp("x", 1, items), &Settings::default());
+        m.on_completion(comp("x", 1, items), &Settings::default(), Instant::now());
         assert_eq!(m.vis(), Vis::Visible);
         m
     }
@@ -938,6 +981,7 @@ pub(crate) mod tests {
         m.on_completion(
             comp("git c ", 3, vec![item("↪", SuggestionKind::AutoExecute, "")]),
             &s,
+            Instant::now(),
         );
         assert!(matches!(
             &m.handle(KeyAction::InsertSelected, &s)[..],
