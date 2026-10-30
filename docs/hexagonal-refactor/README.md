@@ -14,16 +14,17 @@ implementation session needs that the plan does not.
 | 3 history | done | `a3953cf..f485ea7`, see [`phase-3-history.md`](phase-3-history.md) |
 | 4 shell_integration | done (also starts terminal_session's session context) | `6f38da1..ab7052b`, see [`phase-4-shell-integration.md`](phase-4-shell-integration.md) |
 | 5 specs | done, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5) | `1a466e2..d7079b9` (tag `phase5-start` at `1a466e2`), see [`phase-5-specs.md`](phase-5-specs.md) |
-| 6 completion | prepared, run in six chunks; tag `phase6-start` on the hand-over commit (`src/` = `ff2db5a`) | see [`phase-6-completion.md`](phase-6-completion.md) |
+| 6 completion | done, run in six chunks (6.0a-6.2b; 6.3a-e; 6.2c-f and 6.6a; 6.4a-d; 6.4e-f and 6.5a-b; 6.5c, 6.4g, 6.6b and 6.7) | `c38596c..f3fc30a` (tag `phase6-start` at `c38596c`, whose `src/` equals `ff2db5a`), see [`phase-6-completion.md`](phase-6-completion.md) |
 | 7-11 | not started | |
 
-At `d7079b9`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 851 passed, 0 failed, 1 ignored (the
+At `f3fc30a`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 943 passed, 0 failed, 1 ignored (the
 baseline was 283). clippy shows 3 warnings (baseline 3). The 131-command golden CLI capture is byte-identical to
-the baseline. The test lock has 0 baseline tests missing. 104 baseline tests are CHANGED, each one a reviewed
-restructuring (46 against the `phase5-start` tag, each in Phase 5's "Test moves" table, which has 0 missing too).
+the baseline. The test lock has 0 baseline tests missing. 150 baseline tests are CHANGED, each one a reviewed
+restructuring (65 against the `phase6-start` tag, each in Phase 6's "Test moves" table, which has 0 missing too; the
+table counts 66 because its `aborts_propagate` changed only an enum path, which testlock reports as PATH-ONLY).
 No test name is DUPLICATE, against either baseline.
-`REGISTERED_MODULES` = `history`, `settings`, `shared`, `shell_integration`, `specs` (terminal_session waits for
-Phase 9).
+`REGISTERED_MODULES` = `completion`, `history`, `settings`, `shared`, `shell_integration`, `specs` (terminal_session
+waits for Phase 9).
 
 ## Files here
 
@@ -36,9 +37,9 @@ Phase 9).
   - one skeptic per finding, who tries to refute it;
   - a fixer, then another review round, up to 3 rounds.
 - [`phase-6-completion.md`](phase-6-completion.md) and [`phase-6-completion.args.json`](phase-6-completion.args.json):
-  Phase 6 research (decisions Q1-Q33, the traps, test moves), the 28 step briefs (`6.0a` … `6.7`) and their review
-  notes, re-checked at `ff2db5a`; run in six chunks (6.0a-6.2b; 6.3a-e; 6.2c-f and 6.6a; 6.4a-d;
-  6.4e-f and 6.5a-b; 6.5c, 6.4g, 6.6b and 6.7).
+  Phase 6 research (decisions Q1-Q33, deviations 1-38, the traps, test moves), the 28 step briefs (`6.0a` … `6.7`)
+  and their review notes, re-checked at `ff2db5a`; it was run in six chunks (6.0a-6.2b; 6.3a-e; 6.2c-f and 6.6a;
+  6.4a-d; 6.4e-f and 6.5a-b; 6.5c, 6.4g, 6.6b and 6.7).
 - [`phase-5-specs.md`](phase-5-specs.md) and [`phase-5-specs.args.json`](phase-5-specs.args.json): Phase 5
   research (decisions P1-P18, deviations 1-26), the 17 step briefs (`5.1a` … `5.5`) and their review notes,
   re-checked at `0a0a74e`; it was run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5).

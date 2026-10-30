@@ -1,9 +1,13 @@
 # Phase 6 (completion): preparation
 
-Status: **prepared, not started; re-checked against `ff2db5a`, the end of Phase 5.** Phase 5 closed at `d7079b9`
-(gate green: 851 passed, 0 failed, 1 ignored, clippy 3 warnings, golden identical, testlock MISSING 0 and DUPLICATE
-0); `75b9334` (docs) and `ff2db5a` (comment-only, `parser.rs:1, 33`, `quickjs_spec_repository.rs:81`,
-`architecture_tests.rs:367-378`, `settings_catalog.rs:388`) followed it and change no behaviour.
+Status: **done** at `f3fc30a` (`c38596c..f3fc30a`, tag `phase6-start` at `c38596c`; gate green: 943 passed, 0 failed,
+1 ignored, clippy 3 warnings (budget 3), golden identical, testlock MISSING 0 and DUPLICATE 0, 65 CHANGED against
+`phase6-start`). The decisions it took and their deviations are in the plan's section 9 "Phase 6 notes"; where they
+differ from the briefs below, the notes win. It was prepared and re-checked against `ff2db5a`, the end of Phase 5.
+Phase 5 closed at `d7079b9` (gate green: 851 passed, 0 failed, 1 ignored, clippy 3 warnings, golden identical, testlock
+MISSING 0 and DUPLICATE 0); `75b9334` (docs) and `ff2db5a` (comment-only, `parser.rs:1, 33`,
+`quickjs_spec_repository.rs:81`, `architecture_tests.rs:367-378`, `settings_catalog.rs:388`) followed it and change no
+behaviour.
 
 How it was researched:
 - Six slice researchers read a frozen copy of `c2f0825` (taken before Phase 5 runs 4-5): **tokenizer** (`TOK`),

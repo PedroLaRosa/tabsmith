@@ -1,7 +1,7 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2, 3, 4 and 5 are done on branch `refactor/hexagonal-architecture` (gate green at `d7079b9`).
-Phase 6 is next. Working notes, tools, the per-file source map and the Phase 3, 4 and 5 research are in
+Status: Phases 0, 1, 2, 3, 4, 5 and 6 are done on branch `refactor/hexagonal-architecture` (gate green at
+`f3fc30a`). Phase 7 is next. Working notes, tools, the per-file source map and the Phase 3, 4, 5 and 6 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -289,9 +289,10 @@ domain/entities/subcommand.rs             ← spec::Subcommand (+ reindex, merge
 domain/value_objects/{spec_option, arg, generator, spec_suggestion, suggestion_kind, spec_location,
                       spec_function_ref, text_or_function, generator_trigger, generator_cache_policy,
                       generator_script, repeatability, filter_strategy, parser_directives, spec_load_directive,
-                      spec_index, semantic_version, spec_value, spec_lookup, generator_context, exec_request,
-                      process_output, task_id, task_outcome, spec_function_call, spec_function_kind,
-                      spec_function_result, script_resolution, custom_generator_result, template_suggestions}.rs
+                      spec_index, semantic_version, spec_value, spec_lookup, generator_context,
+                      exec_request (+ with_timeout(Option<u64>), Phase 6.4), process_output, task_id, task_outcome,
+                      spec_function_call, spec_function_kind, spec_function_result, script_resolution,
+                      custom_generator_result, template_suggestions}.rs
 domain/services/{spec_locator ← parser::spec_location + specs::resolve_in name rules and lookup order
                  (is_file predicate injected; the bin/console rule, but not "dotslash": the single-token dotslash
                  rule stays with the parser, then ParsePrefixCache),
@@ -307,7 +308,10 @@ application/install_spec_bundle_use_case.rs delegates to SpecBundle::install (th
 application/ports/spec_runtime.rs         typed task API: start(SpecFunctionCall, Option<&GeneratorContext>) -> TaskId,
                                           start_exec(ExecRequest, &GeneratorContext), start_sleep, wait(tasks, deadline)
                                           -> Result<Vec<Option<TaskOutcome>>, Interrupted>, forget, call,
-                                          apply_settings; + #[cfg(test)] InMemorySpecRuntime
+                                          read(&SpecValue, SpecFunctionKind, &GeneratorContext) -> SpecFunctionResult,
+                                          read_exec_stdout(&SpecValue) -> String (Phase 6.4; no resolve_script, a
+                                          script value is read as SpecFunctionKind::Script), apply_settings;
+                                          + #[cfg(test)] InMemorySpecRuntime (scripted outcomes from Phase 6.4)
 application/ports/{spec_bundle (+ #[cfg(test)] RecordingSpecBundle),
                    runtime_event_source (+ #[cfg(test)] ChannelRuntimeEventSource),
                    runtime_event, runtime_event_sink, runtime_event_poll, interrupted}.rs
@@ -337,41 +341,53 @@ infrastructure/adapters/
 
 ### completion
 ```
-domain/entities/{completion_session ← Engine state (Current, slots, runs, fuzzy, aliases, env, first-token cache),
-                 generator_slot ← Slot, generator_run ← Run/Step/Outcome + step transitions (engine 713-948)
-                 returning GeneratorCommand {StartCall, StartExec, StartSleep, Settle},
-                 generator_cache ← GenCache/Lookup, parse_prefix_cache ← ParseCaches,
-                 suggestion_recency ← Recency + merge (engine 79-91)}.rs
-domain/value_objects/{token, command_line, alias_table, token_annotation, parsed_command_line,
-                      suggestion_candidate, suggestion_query, filter_options, insertion_context, insertion,
-                      suggestion, argument_hint, completion_phase, completion_result, generator_key}.rs
+domain/entities/{completion_session ← Engine state (settings, wrapper and session env, aliases memo, recency, fuzzy
+                 toggle, parse-prefix cache, generator slots, runs and cache, served request, first-token cache),
+                 generator_slot ← Slot, generator_run ← Run + the pure step transitions (template list, script, exec
+                 stdout, custom result) returning GeneratorCommand {StartCall, StartExec, StartSleep, Settle},
+                 generator_cache ← GenCache (generic GeneratorCache<V>), parse_prefix_cache ← ParseCaches,
+                 suggestion_recency ← Recency (the newest-wins merge stays in the recency adapter)}.rs
+domain/value_objects/{token, command_line, alias_table, annotation_kind, token_annotation, parsed_command_line,
+                      suggestion_candidate, suggestion_query, filter_options, insertion_context, generator_slot_view,
+                      insertion, suggestion, argument_hint, completion_phase, completion_result, generator_key,
+                      cache_lookup, generator_step, generator_outcome, generator_command, served_request}.rs
 domain/services/
-  command_line_tokenizer.rs ← shell_parser.rs (whole; AST stays private; 16 tests in tests.rs sibling)
-  argv_parser.rs            ← parser 589-954 (State, ArgState, update…result)
-  suggestion_assembler.rs   ← assemble, static_options, short_name, option_chain
+  command_line_tokenizer.rs ← shell_parser.rs (whole, git mv; AST stays private; 16 tests in tests.rs sibling)
+  argv_parser.rs            ← parser's argv state machine (ArgvState + private ArgState, update…result)
+  suggestion_assembler.rs   ← assemble, static_options, short_name, option_chain (+ private cmp_first)
   history_suggestions.rs    ← history_rows, mix_history
   fuzzy_matcher.rs          ← fuzzysort
-  suggestion_filter.rs      ← filter, partial, prefix_score, auto_exec, same_row, after_sep, cmp_locale, cmp_first
-  suggestion_ranker.rs      ← update_priorities, dedupe, rank
-  insertion_composer.rs     ← insertion, name_match, is_var_ref, unquote, escape_* (uses shared ShellQuoting)
+  suggestion_filter.rs      ← filter, partial, prefix_score, auto_exec, cmp_locale
+  suggestion_ranker.rs      ← update_priorities, dedupe, rank (+ private same_row)
+  insertion_composer.rs     ← insertion, name_match, is_var_ref, unquote, escape_* (not merged into ShellQuoting)
   suggestion_finalizer.rs   ← to_item, highlight, args_hint
-  generator_trigger_policy.rs ← triggered, dir_changed, cache_key, is_path_template, script_timeout, debounce/budget
+  generator_trigger_policy.rs ← triggered, dir_changed, cache_key, is_path_template, script_timeout (f64), SYNC_CALL,
+                              effective_debounce, run_budget
   path_template.rs          ← shell_expand, inserted_directory, help_items
-  first_token_suggestions.rs ← first_token_items minus fs, is_root_spec, exe_name
-  completion_request_policy.rs ← compute's pure parts: mid-word guard, arg key, fuzzy strategy, prefix
-domain/repositories/recency_repository.rs trait + InMemory
-domain/completion_error.rs                ← ParseError (Aborted, NoSuggestions)
-domain/test_fixtures.rs (#[cfg(test)])    ← menu::tests::{comp, item, settings} builders (shared by dropdown/terminal tests)
-application/command_line_parser.rs        application service ← ParseCaches::parse, parse_prefix, substitute_alias,
-                                          apply_load_spec, generate_spec over SpecRepository + SpecRuntime
-                                          (parser/tests.rs → command_line_parser/tests.rs)
+  first_token_suggestions.rs ← first_token_items minus the PATH scan (takes the executables), is_root_spec
+  completion_request_policy.rs ← compute's pure parts: is_mid_word, uses_fuzzy_search, history_prefix, env_var
+                              (the argument key is generator_key::argument_key)
+  completion_result_builder.rs ← reply minus the ghost: build_completion_result
+domain/repositories/recency_repository.rs trait {load, save, flush} + #[cfg(test)] InMemoryRecencyRepository
+domain/completion_error.rs                ← ParseError (Aborted, NoSuggestions); Debug only, no Display
+domain/test_fixtures.rs (#[cfg(test)])    ← suggest's test helpers (pr_for, opts, sub, opt, arg, names, ctx); Phase 8
+                                          adds menu::tests::{comp, item}
+application/command_line_parser.rs        application service ← Parser/ParseCaches::{parse, parse_prefix,
+                                          substitute_alias, apply_load_spec, generate_spec} as a private ParsePass over
+                                          SpecRepository + SpecRuntime; reports a failed generateSpec as a
+                                          CompletionNotice (parser/tests.rs → command_line_parser/tests.rs, git mv)
+application/{parse_context, completion_notice (DTO), completion_request (DTO)}.rs
+application/generator_runner.rs           application service: starts, feeds and settles generator runs and executes
+                                          their GeneratorCommands; Rc-shared by the two generator use cases
 application/{complete_command_line, progress_generators, reset_generators, record_suggestion_insertion,
              apply_completion_settings, apply_session_context, toggle_fuzzy_search}_use_case.rs
-application/completion_request.rs (DTO)
-application/ports/{directory_lister ← list_dir, executable_catalog ← executables (PATH scan)}.rs
-infrastructure/completion_module.rs
-infrastructure/adapters/{fs_directory_lister, path_executable_catalog,
-                         state_file_recency_repository ← load_recency/save_recency + throttled saver thread}.rs
+application/test_fixtures.rs (#[cfg(test)]) the use-case harness over the InMemory doubles
+application/ports/{directory_lister ← list_dir (+ InMemoryDirectoryLister), executable_catalog ← executables (PATH
+                   scan) (+ FixedExecutableCatalog)}.rs
+infrastructure/completion_module.rs       CompletionModule {the seven use cases, recency} + build_completion_module
+infrastructure/adapters/{fs_directory_lister ← list_dir, path_executable_catalog ← the PATH scan + exe_name,
+                         state_file_recency_repository ← load_recency/save_recency + throttled saver thread
+                         + the newest-wins merge}.rs
 ```
 
 ### ghost_text
@@ -467,9 +483,13 @@ infrastructure/cli/{doctor_command, diagnostic_command ← diagnostic/diagnostic
 main.rs                    Cli::parse → logger init → bootstrap::run → exit code
 bootstrap/cli.rs           ← main.rs Cli/Command/InternalCmd + dispatch to module cli handlers; cli::completion,
                              version, cli::print_error
-bootstrap/engine_server.rs ← engine::spawn/run/handle + types::EngineMsg (renamed EngineMessage); owns the inbox
-                             (implements specs::RuntimeEventSource); dispatches events to use cases (table below)
+bootstrap/engine_server.rs ← engine.rs by git mv: spawn (builds the inbox, the runtime and the modules on the engine
+                             thread), EngineServer {run, the dispatch table below, send_reply, log_notice}, owns the
+                             inbox instance; the legacy ghost block until Phase 7
+bootstrap/engine_message.rs ← types::EngineMsg, renamed EngineMessage
+bootstrap/engine_inbox.rs  EngineInbox, the engine thread's one channel; implements specs::RuntimeEventSource
 bootstrap/channel_completion_engine.rs  implements terminal_session::CompletionEngine over Sender<EngineMessage>
+                             + start_completion_engine, the starter the pty receives
 bootstrap/bridges.rs       cross-module port implementations (section 2)
 ```
 
@@ -489,18 +509,19 @@ PTY session (`terminal_session/infrastructure/pty/session_runner.rs`). The drive
 | `Term` and loop end | `EndSessionUseCase` (engine shutdown, reap generator processes, remove session context) |
 | `_ pre-cmd` (separate process) | `ReportSessionContextUseCase` |
 
-Completion engine (`bootstrap/engine_server.rs`).
-| Event (today's `EngineMsg`) | Use cases, in order |
+Completion engine (`bootstrap/engine_server.rs`). Until Phase 7 replaces them, the `ghost_text::` steps are the legacy
+ghost block of `engine_server.rs` (`local_ghost_text`, `request_llm_ghost_text`, `clear_ghost_text_cache`).
+| Event (`EngineMessage`) | Use cases, in order |
 |---|---|
-| `Complete(request)` | `completion::CompleteCommandLine` → `ghost_text::SuggestLocalGhostText` → reply |
-| idle with generator tasks pending | `completion::ProgressGenerators` → reply if changed |
+| `Complete(request)` | `completion::CompleteCommandLine` → `ghost_text::SuggestLocalGhostText` → reply (error replies get the local ghost too) |
+| idle with generator tasks pending | `completion::ProgressGenerators` → `ghost_text::SuggestLocalGhostText` → reply if changed |
 | `CommandFinished(entry)` | `history::RecordCommand` → `ghost_text::ClearGhostTextCache` → `completion::ResetGenerators` |
 | `CommandEnded` | `ghost_text::ClearGhostTextCache` → `completion::ResetGenerators` |
 | `RecordInsert` | `completion::RecordSuggestionInsertion` |
 | `Llm` | `ghost_text::RequestLlmGhostText` (on a worker thread, as today) |
 | `Settings` / `Session` / `ToggleFuzzy` | `completion::ApplyCompletionSettings` / `ApplySessionContext` / `ToggleFuzzySearch` |
-| `Shutdown` | driver stops; the recency adapter flushes |
-| `ExecDone`, `Timer` | not events of the engine any more. They become `RuntimeEvent`s on the same channel, consumed by `QuickJsSpecRuntime` through `RuntimeEventSource`. `Timer` is never sent today and is deleted. |
+| `Shutdown` | driver stops (a `Complete` drained with it gets no reply); the recency adapter flushes |
+| `Runtime(event)` | not an event of the engine: `EngineInbox` hands it to `QuickJsSpecRuntime` through `RuntimeEventSource` (the old `ExecDone`; `Timer` was deleted in Phase 5) |
 
 ---
 
@@ -634,7 +655,7 @@ Done at `d7079b9`: `specs` registered in the architecture test, `spec.rs`, `spec
 (851 passed). The phase ran in 17 steps (`5.1a` … `5.5`); the typed `ExecRequest` of step 1 and the split of step 2
 became deviations. See the Phase 5 notes in section 9.
 
-### Phase 6: completion
+### Phase 6: completion (done: [research](hexagonal-refactor/phase-6-completion.md))
 1. Move the tokenizer and its VOs from `shell_parser.rs`, with its 16 tests.
 2. Build the pipeline VOs and services from `suggest.rs`, splitting its 23 tests across the services.
    - `list_dir` and `executables` sit behind the `DirectoryLister` and `ExecutableCatalog` ports; their 3 fs tests
@@ -655,6 +676,10 @@ became deviations. See the Phase 5 notes in section 9.
      from the raw `Sender<EngineMsg>` to the port.
 7. Delete `shell_parser.rs`, `suggest.rs`, `parser.rs`, `parser/tests.rs` and `engine.rs`.
 
+Done at `f3fc30a`: `completion` registered in the architecture test; `shell_parser.rs`, `parser.rs`, `parser/tests.rs`
+and `suggest.rs` gone, each with its last item, and `engine.rs` moved to `bootstrap/engine_server.rs` by `git mv`; gate
+green (943 passed). The phase ran in 28 steps (`6.0a` … `6.7`) in six runs. See the Phase 6 notes in section 9.
+
 ### Phase 7: ghost_text
 1. Domain: `GhostText`, with the accept rules and the tests `ghost_keys_and_words` and
    `ghost_with_control_chars_is_never_shown_or_accepted` moved from `pty.rs`. Also `LlmProfile` (from `SettingValue`),
@@ -666,7 +691,8 @@ became deviations. See the Phase 5 notes in section 9.
    - Move the `cli.rs` inline tests to `cli/inline_command.rs`.
    - The inline commands get the settings repository from bootstrap as a trait object (section 2). The legacy
      `cli.rs` builds a `JsonFileSettingsRepository` itself; importing it from a registered module breaks fitness rule 3.
-4. Switch the engine-server dispatch to ghost_text. Delete `inline.rs`.
+4. Replace the three legacy ghost touchpoints of `engine_server.rs` (`local_ghost_text`, `request_llm_ghost_text`,
+   `clear_ghost_text_cache`) with ghost_text's use cases. Delete `inline.rs`.
 
 ### Phase 8: dropdown
 1. Move the keys VOs, `Keymap` and `KeystrokeParser` (`keys.rs` tests). The `Decoder` goes to
@@ -731,8 +757,6 @@ became deviations. See the Phase 5 notes in section 9.
    flags, including:
    - `logger::trace`;
    - `pub` items that are only used locally.
-
-   The test-only `Parser::load_spec` is `#[cfg(test)]` since Phase 5 (D7) and goes with the parser in Phase 6.
 2. Register all 10 modules in the architecture test, with no exceptions left.
 3. Update `docs/SPEC.md`: §4.1 (module table → the new tree), §4.3 (message and type names) and §10 (test locations).
    The README needs no change.
@@ -1152,3 +1176,201 @@ which cites the code behind each; the phase ran as 17 steps, `5.1a` … `5.5`, a
     (`ctx.data_root()/specs/<version>/index.json` in `doctor::setup_checks`, where `ctx` is Phase 4's
     `IntegrationPaths`) and the fix's env-derived root stay as they are.
   - Phase 11: `EngineMsg::Timer` is already gone, and `Parser::load_spec` goes with the parser in Phase 6.
+
+Phase 6 notes (decisions Q1-Q33 and deviations 1-38 of
+[`phase-6-completion.md`](hexagonal-refactor/phase-6-completion.md), which cites the code behind each; the phase ran as
+28 steps, `6.0a` … `6.7`, in six runs, as its "Step briefs" planned):
+
+- **Order and deletions** (deviations 1, 2, 29): the tokenizer and the result rows (plan step 5's VOs, moved and made
+  private) came first (run 1), then the whole parser (run 2), the suggestion pipeline and the pty port (run 3), the
+  generator vocabulary, recency and the typed port (run 4), the session, the runner and the use cases (runs 5-6), and
+  the server and the close (run 6). Twelve engine-loop characterization tests (6.0a) came before any engine edit. Each
+  legacy file left with its last item, not in step 7 (Q21): `shell_parser.rs` by `git mv` to
+  `command_line_tokenizer.rs` (6.1a); `parser.rs` deleted and `parser/tests.rs` `git mv`'d to
+  `command_line_parser/tests.rs` (6.3e); `suggest.rs` deleted (6.4a; git's rename detection pairs it with
+  `generator_cache.rs`); `engine.rs` `git mv`'d to `bootstrap/engine_server.rs` (6.6b). The one intra-phase shim, 6.3d's
+  `Parser { parser, cache }` facade (a struct, not a re-export), went in 6.3e. `Parser::load_spec` went with its last
+  caller in 6.3d, not in Phase 11.
+- **Result rows and the request** (deviations 3-6): `AliasTable` is a type alias of the std map. `GeneratorKey` is a
+  newtype with `for_arg` (+ `#[cfg(test)] from_raw`); the argument key (`generator_key::argument_key`) shares its
+  hasher, so section 7 overrides section 4's old "policy ← arg key" line. `CompletionRequest` keeps `cwd: PathBuf` and
+  `shell: Shell`; the session stores a `ServedRequest` (a new VO, without the cwd), never the DTO. The rows,
+  `ParsedCommandLine` and `ServedRequest` are built from `…Parts` structs, never by a positional constructor (clippy's
+  `too_many_arguments`). 6.2b deleted the accessors nothing read (D7); test-only readers carry `#[cfg(test)]`
+  (`ParsedCommandLine::spec_name()`), and `CompletionResult::suggestions()` became production when the legacy
+  `local_ghost_text` first read it.
+- **Parser** (deviations 7-10, 33, 34): `CompletionError` (the old `ParseError`) has no Display; only its derived Debug
+  is printed. `ArgvState` and its API live in `argv_parser.rs`. `ParsePrefixCache` is owned by `CompletionSession` and
+  passed `&mut` to `CommandLineParser::parse`; `CommandLineParser::clear_caches(&self, cache)` forgets the loaded specs
+  first, then clears the cache keeping the first-token spec. `disableForCommands` stays in `SpecRepository::find`
+  (Phase 5 deviation 3, Q23). The parser test fixture keeps the name `Mock` and its `specs`/`fns`/`loads` fields, now
+  over the InMemory doubles, so no parser test body changed for it; `no()` stays a private fn of
+  `command_line_parser.rs`, and `ParsedCommandLine` keeps the accessor `completion()`. The parser's 5 s `TIMEOUT` and
+  `dev_mode` are private to `command_line_parser.rs`, apart from the repository's copies; both `script_timeout`s and
+  both generator-context builders stay (D1, Q7).
+- **Pipeline** (deviations 22, 23, 36): `after_sep` is in `suggestion_query.rs`, `same_row` private in the ranker,
+  `cmp_first` private in the assembler, `exe_name` and the PATH split in `PathExecutableCatalog` (so
+  `first_token_items` takes the executables), `SYNC_CALL` in the trigger policy, `SLICE` in the runner and
+  `FIRST_TOKEN_TTL` in the session; the escapes are not merged into `ShellQuoting`. `DirectoryLister` is synchronous
+  and `list_dir` moved whole into `FsDirectoryLister`; `first_token_sources` stays whole in
+  `path_executable_catalog.rs`'s tests, the catalog's output fed to the domain merge;
+  `empty_search_term_is_no_prefix_match` lives in `suggestion_filter.rs` until Phase 7.3; suggest.rs's function names
+  are kept (only types took glossary names). `domain/test_fixtures.rs` holds the pipeline helpers from 6.2d,
+  `application/test_fixtures.rs` the use-case harness.
+- **Generators** (deviations 11-13, 35, 37): `GeneratorRunner`, an application service `Rc`-shared by
+  `CompleteCommandLineUseCase` and `ProgressGeneratorsUseCase`, executes the `GeneratorCommand`s (the plan says "the
+  use case"). The commands keep the Phase 5 hand-off payloads (`StartCall(SpecFunctionCall, GeneratorContext)`,
+  `StartExec(ExecRequest, GeneratorContext)`, `StartSleep(u64)`, `Settle(GeneratorOutcome)`); nothing is boxed,
+  because clippy's `large_enum_variant` did not fire (O8). The runner keeps the cache protocol (`fetch`), the
+  directory listing and the port calls. Its private `start(run, command, step)` has an explicit arm per command (D8);
+  `script_input` sends a `StartExec` through `fetch` itself, so `start`'s `StartExec` arm (and `StartCall`/`StartSleep`
+  in the Exec step) is never reached today, and the debounce sleep goes through `start(StartSleep)`. `SpecRuntime`
+  gained `read` and `read_exec_stdout` only: no `resolve_script`/`ScriptValue` (Q9, amending Phase 5 deviation 9).
+  `GeneratorCache<V>` is generic: production holds `SpecValue`, and the moved `cache_ttl_swr_max_age` keeps `Value`
+  (test code, D2). `effective_debounce` (0 → 200 ms) and `run_budget` are extracted free functions of the trigger
+  policy, called where `update_slots` computed them, with plain `+`/`*` (never `saturating_*`); `update_slots`' list of
+  fired keys is `triggered_keys`, so it no longer shadows the policy's `triggered`. `CompletionSession` is a
+  field-access aggregate on purpose: about 37 moved accessors with no new logic, while the generator orchestration
+  (when to fire, the slots of a new argument, the superseded check, run order, the cache protocol) sits in the runner,
+  which drives the session through fine-grained accessors; `generator_cache_mut()` is the one escape hatch. This kept
+  the moves verbatim; it is not the end design (hand-off below).
+- **Recency** (deviation 14, O5): `SuggestionRecency` sits in `CompletionSession`, behind `RecencyRepository { load,
+  save, flush }`. `StateFileRecencyRepository` keeps the pending copy (set before the `saving` swap), the 1 s
+  `recency` thread and the newest-wins merge with the file another session wrote, so section 4's "Recency + merge"
+  stays in the adapter. The two recency tests moved with it, CHANGED only by `Recency` → `RecencyRecord`.
+- **Notices, use cases and the module** (deviations 15, 24-26, 28, 32): D5 goes through one `CompletionNotice`
+  callback (`&mut dyn FnMut`: `GenerateSpecFailed`, `GeneratorFailed`, `NoSuggestions`), called at the old moments;
+  `EngineServer::log_notice` logs each with its old text and level, with explicit arms. The lifecycle and
+  request-pipeline tests live at the use-case seam over the InMemory harness (the 12 lifecycle tests on
+  `ProgressGeneratorsUseCase` are arranged through `CompleteCommandLineUseCase`); `GeneratorRun` has 9 pure
+  transition tests, written after the lifecycle suite; there is no runner-level suite. D6 splits happen only across
+  modules: `spec_identity_survives_dev_reload_and_cache_clear` (specs/completion) and
+  `session_update_refreshes_first_token_items` (completion/bootstrap); `cache_ttl_swr_max_age` moved whole. The five
+  Phase 4 session-context tests kept their bodies; their helpers keep the engine-era names `engine_with_wrapper_env`
+  and `js` (O2). `CompletionModule` exposes the recency repository (the `HistoryModule` precedent); `spawn` loads it
+  before the env snapshot and flushes it after the loop; there is no `LoadSpecIndexUseCase`. Unit-struct use cases are
+  built as values, never with `::default()`. The harness builds one `GeneratorRunner` per `CompletionDoubles`, lazily
+  in a `OnceCell`, and hands it to both generator use cases as the module does; it builds a parser per
+  `complete_command_line()` call, because it never builds `ApplyCompletionSettingsUseCase`, the module's other parser
+  user.
+- **Engine server** (deviations 16-20, 30, 31): `send_reply`, the one `Msg::Completion` sender, adds the local ghost to
+  every reply (Parse, Generators, error); the use cases return `ghost: None` and `error()`'s ghost flag is gone, so the
+  event table's idle and `Complete` rows are amended (Q15). Until Phase 7.6 the legacy ghost/LLM code is one `impl
+  EngineServer` block marked `// legacy ghost text: Phase 7.6 replaces this block`; there is no `legacy_ghost_text.rs`
+  (Q14). `EngineMessage` and `EngineInbox` have their own files, `engine_message.rs` and `engine_inbox.rs` (one type
+  per file; section 4 and the Phase 5 hand-off put both in `engine_server.rs`, O3); the server still owns the inbox
+  instance. The pty receives a `CompletionEngineStarter` (`fn(Sender<Msg>, Settings) -> Rc<dyn CompletionEngine>`),
+  called where `engine::spawn` was, so no legacy → bootstrap edge appears in production; the test double
+  `RecordingCompletionEngine` forwards `CompletionEngineCall`s, named after the port methods, into a channel (Q12).
+  `spawn` builds on the engine thread, in order: inbox, runtime, `SharedDependencies::from_env()`, repository, index,
+  history module, completion module, recency, session (with the env snapshot), server (Q26).
+  `CommandLineParser::new` now runs inside `build_completion_module`, after the index and history loads; it does no
+  I/O, so the observable order is unchanged. `spawn`'s doc no longer claims the thread ends when the senders drop
+  (M5). `types::now_ms` has no engine caller left; it stays until Phase 11.
+- **Files beyond section 4** (deviation 21): domain `annotation_kind.rs`, `cache_lookup.rs`, `generator_step.rs`,
+  `generator_outcome.rs`, `generator_command.rs`, `generator_slot_view.rs`, `served_request.rs` and
+  `services/completion_result_builder.rs` (a domain service, Q24); application `completion_notice.rs`,
+  `parse_context.rs`, `generator_runner.rs` and `test_fixtures.rs`; bootstrap `engine_message.rs` and
+  `engine_inbox.rs`. Section 4 now lists the completion and bootstrap layouts as built.
+- **Test doubles outside completion** (deviation 27): `FixedClock::advance` (it moves only the `Instant`, not
+  `now_ms`), the scripted `InMemorySpecRuntime` (`completing`, `completing_execs`, `finishing_sleeps` (opt-in: plain
+  sleeps keep running, a 6.4c correction of the design), `interrupting`, `applied_settings` and, from 6.5c,
+  `exec_requests`) and `InMemorySpecRepository::forgets()`, each landed before its first consumer (the Phase 5
+  deviation 16 precedent). The runtime double's ceiling (its `ponytail:` note): one scripted outcome per function, one
+  for every exec and one for every sleep, each ready at the first wait. So the lifecycle suite pins outcomes and their
+  order, not slice timing, which only the 6.0a engine suite covers.
+- **Fitness rules**: `completion` is registered (`f3fc30a`) with no rule weakened and no completion code changed for
+  it; `LEGACY_MODULES` is untouched and keeps `engine`, `parser`, `shell_parser` and `suggest`, whose files are gone
+  (CON-T27). Rule 3's accepted ceilings (Phase 5 notes) gain one: a use case that names a sibling use case of its own
+  module passes (rule 3 reads only another module's). The hand check for it, every
+  `src/<module>/application/*_use_case.rs` above its `#[cfg(test)]` grepped for a `*UseCase`/`*_use_case` other than
+  its own, found none in the 24 files. These
+  greps also ran by hand at the end and found nothing outside `#[cfg(test)]` code: a legacy module under
+  `src/completion` or `src/terminal_session/application/ports` (the one hit is `empty_search_term_is_no_prefix_match`
+  calling `crate::inline::spec_ghost`, test code that Phase 7.3 moves; no grouped `use crate::{` exists there), a
+  module other than shared, settings, specs and history under `src/completion`, `anyhow` or `logger` in completion's
+  domain and application, a `pub(crate) use` under `src/completion`, and `crate::engine`, `crate::parser`,
+  `crate::suggest`, `crate::shell_parser` or `EngineMsg` anywhere (only rule 3's legacy-module test fixture string,
+  which stays byte-identical). From 6.6a every step also ran the fitness test on a copy with `terminal_session`
+  registered: silent.
+- **Checks**: the local tag `phase6-start` (`c38596c`, the hand-over docs commit; its `src/` equals `ff2db5a`) marks the
+  phase start for `testlock.py`: 65 tests are CHANGED against it, each a restructuring in the research's "Test moves"
+  table. That table counts 66: the 66th, `aborts_propagate`, changed only `ParseError::Aborted` →
+  `CompletionError::Aborted`, an enum path testlock's loose form strips, so testlock reports it PATH-ONLY. MISSING 0,
+  DUPLICATE 0, 92 NEW. No golden command reaches the engine; the guards were the unit tests, the 6.0a suite (20 runs at
+  every engine step), the two inbox tests (50 runs at 6.5c, 6.6b and the end), `debug_shell_survives_closed_terminal`
+  alone, `integrations-diff.sh` and `precmd-diff.sh` (empty at 6.4b and at the end), `cargo check --locked
+  --no-default-features --all-targets`, and the release `all_bundle_modules` run after 6.3e, 6.4c, 6.4d, 6.4f, 6.5c,
+  6.6b and 6.7. `integrations_zsh_powerlevel10k_prompt_wrapped` is pty-timing flaky under the gate's load: a lone
+  failure is rerun alone, never skipped.
+- **Open questions, defaults applied**: the rows went private in run 1 (O1); the five session tests kept their bodies
+  through engine-era helper names (O2); `EngineInbox` has its own file (O3); the pty switched to the port in run 3
+  (O4); the newest-wins merge stays in the adapter (O5); the user is asked for smoke items 1-2 after 6.4d and for the
+  whole section 8 smoke after 6.7 (O6); Phase 7 decides TC2's shape (O7); no `GeneratorCommand` payload is boxed
+  pre-emptively (O8).
+- **History**: two subjects are over 72 characters, `0d1ea43` (6.4a) and `87dc339` (6.4c), both 73; from run 5 on,
+  every step measured the subject before committing. `1f18684` (6.5a) is typed `test(completion)` but also rewrites
+  the production doc comment of `ApplyCompletionSettingsUseCase`, so `refactor(completion)` would have fit. Every
+  message went through `git commit -F`, and the RTK hook rewrote no subject. None was rewritten.
+- **The Phase 6 hand-offs of the Phase 4 and 5 notes, closed**:
+  - `CommandLineParser` is the `Parser` renamed (6.3d-6.3e) and `trait Host` is gone: the parser finds specs through
+    `SpecRepository::find` and calls spec functions through `SpecRuntime::call`. The parser tests' `Mock` runs over
+    `InMemorySpecRepository` + `InMemorySpecRuntime`; completion imports no `fig_spec_mapper`; `disableForCommands`
+    stays in the repository.
+  - The generator state machine left the JSON API in 6.4d. `GeneratorRun` returns the four `GeneratorCommand`s (6.4g),
+    and `GeneratorRunner`, not the use case, executes them (deviation 11). There is no `resolve_script` (Q9): a script
+    value is read with `read(.., SpecFunctionKind::Script, ..)`. The timeout is exactly `script_timeout(settings)`
+    `.max(generator).max(request)`, applied with `ExecRequest::with_timeout` (6.4c) after `ScriptResolution::Ready`
+    and before the exec starts; `cache_key_source` is still taken before it. The engine's JSON readings and its
+    `ExecInput`/`generator_context_json` imports went in 6.4d.
+  - `GeneratorCache<SpecValue>` stores raw pre-step values, and a malformed value still maps to `[]` (6.4a, 6.4d).
+  - `ApplyCompletionSettingsUseCase` runs the Settings arm's sequence, in order, on every Settings message (6.5a).
+  - The f64 `script_timeout` is in `GeneratorTriggerPolicy` (6.4a); the single-token dotslash/`bin/console` rule moved
+    with `ParseCaches::parse` into `CommandLineParser` and never reuses `spec_location`.
+  - `EngineInbox` and its two tests moved unchanged into their own file, `bootstrap/engine_inbox.rs`, not
+    `engine_server.rs` (6.6b, Q13); everything is still built inside the engine thread closure.
+  - The index build moved into `spawn` (6.5c) with the same log line and fallback, and the same `SharedDependencies`
+    builds the repository's `EmbeddedSpecBundle`.
+  - `ApplySessionContextUseCase` took the five Phase 4 session-context tests with byte-identical bodies (6.5a).
+    `session_update_refreshes_first_token_items` was D6-split: the completion half keeps the name, and
+    `session_update_refreshes_first_token_items_keeps_the_engine_running` sits in `engine_server.rs`'s tests.
+    `parser_over` stayed with the engine tests until 6.5c replaced it with `spec_repository_over`, when the engine
+    tests moved to `build_completion_module` (Q19). Phase 4's hand-off closes with it: `EngineMsg::Session { env,
+    alias }` is `EngineMessage::Session` in `bootstrap/engine_message.rs`, and the session env and alias live in
+    `CompletionSession`.
+  - `spec_identity_survives_dev_reload_and_cache_clear` was split in 6.3d (the repository half keeps the name in
+    `quickjs_spec_repository.rs`'s tests, the `_first_token` half is a parser test). `SpecIndex::completions()` (in
+    order) feeds the first-token suggestions, and `SpecLocation::cache_key()` builds the parser's prefix-cache key.
+- **Hand-offs** (details in the research's "Hand-off notes for later phases"):
+  - Phase 7: one `impl EngineServer` block of `src/bootstrap/engine_server.rs`, marked `// legacy ghost text: Phase 7.6
+    replaces this block`, holds `local_ghost_text(&self, result)`, `request_llm_ghost_text(&mut self, req, buffer,
+    cwd, shell)` (thread `llm`, warn `engine: llm worker: {e}`) and `clear_ghost_text_cache(&self)`; the free
+    `llm_history` follows it, the field is `ghost_cache: Arc<Mutex<inline::GhostCache>>`, and
+    `llm_history_honours_history_count` is in its tests. `send_reply` is the only `Msg::Completion` sender and calls
+    `local_ghost_text`; the CommandFinished/CommandEnded arm calls `record_command.execute` (Finished only), then
+    `clear_ghost_text_cache`, then `ResetGeneratorsUseCase`; the `Llm` arm calls `request_llm_ghost_text`. The twelve
+    6.0a tests run under `bootstrap::engine_server::tests` (14 tests with `llm_history_honours_history_count` and the D6
+    half), the two inbox tests under `bootstrap::engine_inbox::tests`. The other `crate::inline` users are `pty.rs`,
+    `doctor.rs`, `cli.rs` and the test `empty_search_term_is_no_prefix_match` in
+    `completion/domain/services/suggestion_filter.rs`, which imports `opts`/`ctx` from
+    `completion/domain/test_fixtures.rs`. Step 4 names the three touchpoints and the event table is amended. 7.0
+    creates `inline-diff.sh` (Q30); Q29 recommends `GhostTextError`; TC2 keeps `request_bodies`/`response_parsing`
+    whole; M1, M2 → 7.1, M6 → 7.4, M7 → 7.5, M8, M9 → 7.7. `ghost_text` is registered at the end of Phase 7; `inline`
+    stays in `LEGACY_MODULES`.
+  - Phase 8: `completion/domain/test_fixtures.rs` exists; `comp`/`item` join it, built through
+    `CompletionResultParts`/`SuggestionParts` (`settings(json)` only with `#[cfg(test)]` on each item, CON-T28). The
+    menu reads the rows through accessors and `take_suggestions()`, applies `with_execute()` on the clone, and
+    `GeneratorKey::from_raw` is test-only. `render::describe` goes to a dropdown domain service (Phase 5 P3).
+  - Phase 9: `terminal_session::CompletionEngine` + `RecordingCompletionEngine`/`CompletionEngineCall` are the port and
+    double the session use cases take as `Rc<dyn CompletionEngine>`. `CompletionEngineStarter` (`pty.rs`) dissolves
+    into the module wiring, but the engine must still start inside `Session::start`'s `catch_unwind` (ENG-E30), and
+    `debug_shell_command` receives the starter from bootstrap. The reply path is still `Sender<types::Msg>`
+    (`Completion(Box<CompletionResult>)`, `Ghost`). `EngineInbox::next_msg`'s doc still ends "`None` when all senders
+    are gone", which cannot happen (the inbox keeps its own sender, ENG-E6): reword it when the inbox is next touched.
+  - Later cleanup (Phase 11 or its own step): `CompletionSession` is a state bag on purpose (deviation 37): group the
+    slots, the runs and the generator cache behind one domain entity with intention-revealing methods, move the
+    runner's generator rules into it and retire `generator_cache_mut()`, under the 6.5c lifecycle suite and the 6.0a
+    suite. `GeneratorRun::new` and `CompleteCommandLineUseCase::new` are at clippy's 7-parameter limit, and the clippy
+    budget of 3 is all used.
+  - Phase 11: `types.rs` keeps `Msg`, `now_ms` (no engine caller), `now_secs` and `Model`. `LEGACY_MODULES` keeps every
+    deleted name.

@@ -105,9 +105,14 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 |---|---|---|---|
 | `Token` | VO | One shell word: unquoted text, raw text, byte span. | `shell_parser::Token` |
 | `CommandLine` | VO | The command under the cursor: tokens, text after alias expansion, original text. | `CommandInfo` |
-| `AliasTable` | VO | Alias name → expansion. | `parse_aliases` map |
+| `AliasTable` | VO (alias of the std map) | Alias name → expansion, a type alias of `HashMap<String, String>` filled by `parse_aliases`. | `parse_aliases` map |
 | `TokenAnnotation` / `AnnotationKind` | VO | How a token was consumed (subcommand, option, option arg, subcommand arg). | `Annotation`, `AnnKind` |
 | `ParsedCommandLine` | VO | Result of walking argv against a spec (current arg, search term, passed options, …). | `ParseResult` |
+| `CommandLineParser` | Application service | Parses a `CommandLine` against the specs found through `SpecRepository` and the spec functions run through `SpecRuntime`, using and filling the session's `ParsePrefixCache`; reports a failed generateSpec as a notice. | `parser::Parser`, `Host`, `JsHost`, `ParseCaches::parse*` |
+| `ParseContext` | Application input | What one parse needs from the request: cwd, settings, env, shell, the `SpecIndex`. | `ParseCtx` |
+| `ArgvState` | VO | Where the argv state machine stands after each token: the spec level, inherited persistent options, the argument being filled, what was passed. | `parser::State` + `ArgState` |
+| `CompletionError` | Domain error | Aborted (a newer request is waiting) or no suggestions (with the reason). Printed only through Debug. | `parser::ParseError` |
+| `CompletionNotice` | DTO | Something the completion code tells its caller to log, at the moment it happens: a failed generateSpec, a failed generator, no suggestions. | inline `logger` calls |
 | `SuggestionCandidate` | VO | A row inside the filter/rank pipeline. | `suggest::Sugg` |
 | `SuggestionQuery` | VO | How a row's query term is derived. | `Query` |
 | `FilterOptions` | VO | fuzzy, auto-execute rules, dangerous, current token. | `FilterOpts` |
@@ -117,14 +122,25 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `ArgumentHint` | VO | Name + description of the current arg. | `ArgInfo` |
 | `CompletionPhase` | VO | Parse (first reply) or Generators (follow-up). | `Phase` |
 | `CompletionResult` | VO | The reply for one request: suggestions, tokens, search term, loading, ghost, … | `types::Completion` |
-| `CompletionRequest` | DTO | Request id, buffer, cursor, cwd, shell name, history mode. | `types::Request` |
-| `GeneratorKey` | VO | Identity of a generator slot (arg identity + index). | `GenKey`, `gen_key` |
+| `CompletionRequest` | DTO | Request id, buffer, cursor, cwd (a path), shell (a `Shell`, not a name), history mode. | `types::Request` |
+| `ServedRequest` | VO | The request the session is serving: its id, buffer, shell, clamped cursor, parsed command line, argument key, fuzzy flag, queries, triggered generators, first-token candidates and history prefix. | `engine::Current` |
+| `CompletionRequestPolicy` | Domain service | Request-level rules: the mid-word guard, whether fuzzy search applies, the history prefix, the env lookup (case-insensitive on Windows). | parts of `Engine::compute` |
+| `CompletionResultBuilder` | Domain service | Builds the reply for a served request: assembled, mixed with history, ranked by recency, filtered and turned into rows. | `Engine::reply` |
+| `GeneratorKey` | VO | Identity of a generator slot (arg identity + index): a newtype built by `for_arg`; the argument key (`argument_key`) shares its hash. | `GenKey`, `gen_key` |
 | `GeneratorSlot` | Entity | A generator's current result for the current arg (loading, generation). | `engine::Slot` |
-| `GeneratorRun` / `GeneratorStep` | Entity / VO | One generator execution moving through Debounce → Script → Exec → PostProcess → Custom → Filter. | `engine::{Run, Step, Outcome}` |
+| `GeneratorSlotView` | VO | A generator slot as the assembler sees it: key, rows, loading, and the query its rows match. | `suggest::GenView` |
+| `GeneratorRun` / `GeneratorStep` | Entity / VO | One generator execution moving through Debounce → Script → Exec → PostProcess → Custom → Filter; each pure transition returns a `GeneratorCommand`. | `engine::{Run, Step}` |
+| `GeneratorOutcome` | VO | Where a generator run ended this time: still pending, done with rows, or failed with a text. | `engine::Outcome` |
+| `GeneratorCommand` | VO | What a generator run asks for next: start a spec function call or a process (each with its generator context), sleep, or settle with an outcome. | the start calls inside `engine::{begin, advance}` |
+| `GeneratorRunner` | Application service | Starts, feeds and settles generator runs through the spec runtime, the directory lister and the clock, for both generator use cases. | `Engine::{update_slots, begin, fetch, advance, pump}` |
+| `GeneratorTriggerPolicy` | Domain service | When a generator fires again (triggers, a changed directory, a debounce of 200 ms for 0), how long a run may take, the script-timeout floor, and the generator cache key. | `suggest::{triggered, dir_changed, cache_key}`, engine consts |
 | `GeneratorCache` / `CacheLookup` | Entity / VO | Generator results with fresh / stale / in-flight / miss lifecycle. | `GenCache`, `Lookup` |
-| `ParsePrefixCache` | Entity | Parse states memoised per prefix + generateSpec cache. | `ParseCaches` |
+| `ParsePrefixCache` | Entity | Parse states memoised per prefix + generateSpec cache, each cleared wholesale before it would pass 1000 entries; a settings change clears it but keeps the first-token spec. | `ParseCaches` |
 | `SuggestionRecency` | Entity | Command → suggestion name → last insertion time (ranking boost). | `engine::Recency` |
-| `CompletionSession` | Aggregate | Engine-thread state: current request, slots, runs, caches, fuzzy toggle, aliases, session env. | `Engine` fields |
+| `RecencyRepository` | Repository | Loads the suggestion recency, saves it (at most once a second, merged newest-wins with the file) and flushes a pending save at shutdown. | `load_recency`/`save_recency` + the engine's save thread |
+| `CompletionSession` | Aggregate | Engine-thread state: settings, the served request, slots, runs, the generator cache, the parse-prefix cache, the recency, the first-token cache, fuzzy toggle, aliases, session env. | `Engine` fields |
+| `DirectoryLister` | Port | Lists a directory for a path template: sorted, `../` last, control-char names dropped. | `suggest::list_dir` |
+| `ExecutableCatalog` | Port | The executables on `PATH`, directory by directory in `PATH` order, each sorted. | `suggest::executables` |
 
 ## ghost_text
 | Term | Kind | Meaning | Replaces |
@@ -166,6 +182,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `KeyRoute` | VO | Decision for one keystroke: forward, menu action, accept ghost, … | branches of `on_keys` |
 | `WrappedShellCommand` | VO | argv + env changes for the child shell. | `pty::argv` + env setup |
 | `TerminalBackground` | VO | Background colour reported by OSC 11 (for the `system` theme). | `terminal_bg` |
+| `CompletionEngine` | Port | What the terminal session asks of completion: complete, a finished or ended command, an inserted suggestion, an LLM ghost text, settings, the session context, the fuzzy toggle, shut down. Never fails. | `Sender<EngineMsg>` in `pty.rs` |
 
 ## diagnostics
 | Term | Kind | Meaning | Replaces |
@@ -189,8 +206,8 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | session | `TerminalSession` · `SessionContext` · `SessionId` · `CompletionSession` |
 | suggestion | `SpecSuggestion` (declared) · `SuggestionCandidate` (pipeline) · `Suggestion` (shown) |
 | completion | the module/feature · `CompletionResult` (one reply) |
-| host / pump | gone. `QuickJsSpecRuntime` replaces the js Host, which becomes its task registry; `SpecRepository` + `SpecRuntime` replace the parser `Host` trait. `EngineInbox` (engine.rs, then bootstrap) implements `RuntimeEventSource`. The pumps become `pty_reader`, `ProgressGeneratorsUseCase` and runtime internals. |
-| cache | `GeneratorCache`, `GhostTextCache`, `ParsePrefixCache`, first-token cache (in `CompletionSession`), spec cache and module cache (inside adapters), detected CLI version memo and in-flight version probes (inside `QuickJsSpecRepository`) |
+| host / pump | gone. `QuickJsSpecRuntime` replaces the js Host, which becomes its task registry; `SpecRepository` + `SpecRuntime` replace the parser `Host` trait. `EngineInbox` (`bootstrap/engine_inbox.rs`) implements `RuntimeEventSource`; the `EngineServer` reads `EngineMessage`s from it, which `ChannelCompletionEngine` sends for the pty. The pumps become `pty_reader`, `ProgressGeneratorsUseCase` + `GeneratorRunner`, and runtime internals. |
+| cache | `GeneratorCache`, `GhostTextCache`, `ParsePrefixCache` (in `CompletionSession`), first-token cache (in `CompletionSession`), spec cache and module cache (inside adapters), detected CLI version memo and in-flight version probes (inside `QuickJsSpecRepository`) |
 | profile | pwsh `$PROFILE` (the pwsh dotfile, carried by `IntegrationPaths`) · `LlmProfile` |
 | script | `IntegrationScript` (files tabsmith writes) · `InitScript` / `InitScriptTemplates` (what `init` prints) · `GeneratorScript` (spec) |
 | version | the bundle version (`assets/SPECS_VERSION`, `specs/<version>`) · the CLI version (`SemanticVersion`) · the diff version (a key of a diff-versioned spec's `versions`) |
