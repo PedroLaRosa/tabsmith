@@ -203,16 +203,15 @@ fn stop_when(done: impl Fn(&[Reply]) -> bool + Send + 'static) -> impl FnMut(&[R
     move |replies| if done(replies) { Then::Stop } else { Then::Wait }
 }
 
-/// Runs an engine over a real inbox, runtime and spec repository on this thread (QuickJS is !Send) and returns
-/// every reply it sent. It is sent `first` before it starts; a watcher thread asks `react` after each reply.
-/// After `Then::Stop` the watcher collects for `grace`, then shuts the engine down (after `SERVE_LIMIT` too).
-fn serve(
+/// Runs an engine over a real inbox, runtime and spec repository on this thread (QuickJS is !Send) and hands
+/// the reply receiver and a sender to the engine's inbox to `watch`, which runs on a watcher thread and returns
+/// what the test reads. It is sent `first` before the engine starts.
+fn run_engine<T: Send + 'static>(
     settings: Settings,
     history: Vec<HistoryEntry>,
     first: Vec<EngineMessage>,
-    grace: Duration,
-    mut react: impl FnMut(&[Reply]) -> Then + Send + 'static,
-) -> Vec<Reply> {
+    watch: impl FnOnce(mpsc::Receiver<Msg>, mpsc::Sender<EngineMessage>) -> T + Send + 'static,
+) -> T {
     let (to_engine, from_senders) = mpsc::channel();
     let inbox = Rc::new(EngineInbox::new(from_senders, to_engine.clone()));
     let runtime = Rc::new(QuickJsSpecRuntime::new(inbox.clone(), &settings).unwrap());
@@ -231,7 +230,22 @@ fn serve(
         to_engine.send(message).unwrap();
     }
     let to_engine = to_engine.clone();
-    let watcher = std::thread::spawn(move || {
+    let watcher = std::thread::spawn(move || watch(from_engine, to_engine));
+    engine.run(&runtime, &inbox);
+    watcher.join().unwrap()
+}
+
+/// Runs an engine over a real inbox, runtime and spec repository on this thread (QuickJS is !Send) and returns
+/// every reply it sent. It is sent `first` before it starts; a watcher thread asks `react` after each reply.
+/// After `Then::Stop` the watcher collects for `grace`, then shuts the engine down (after `SERVE_LIMIT` too).
+fn serve(
+    settings: Settings,
+    history: Vec<HistoryEntry>,
+    first: Vec<EngineMessage>,
+    grace: Duration,
+    mut react: impl FnMut(&[Reply]) -> Then + Send + 'static,
+) -> Vec<Reply> {
+    run_engine(settings, history, first, move |from_engine, to_engine| {
         let mut seen = Vec::new();
         let mut shutdown_at = Instant::now() + SERVE_LIMIT;
         let mut stopped = false;
@@ -267,10 +281,46 @@ fn serve(
                 Err(RecvTimeoutError::Disconnected) => return seen,
             }
         }
-    });
-    engine.run(&runtime, &inbox);
-    watcher.join().unwrap()
+    })
 }
+
+/// What a test reads of the LLM ghost texts an engine answered: `Msg::Ghost { req, text }` as `(req, text)`.
+type GhostReply = (u64, Option<String>);
+
+/// Like `serve`, for the LLM path: returns the completion replies and the ghost replies the engine sent, in
+/// order. The watcher shuts the engine down once `done` holds for the ghost replies (after `SERVE_LIMIT` too).
+fn serve_ghosts(
+    settings: Settings,
+    first: Vec<EngineMessage>,
+    done: impl Fn(&[GhostReply]) -> bool + Send + 'static,
+) -> (Vec<Reply>, Vec<GhostReply>) {
+    run_engine(settings, Vec::new(), first, move |from_engine, to_engine| {
+        let mut completions = Vec::new();
+        let mut ghosts = Vec::new();
+        let mut stop_at = Instant::now() + SERVE_LIMIT;
+        let mut stopped = false;
+        loop {
+            match from_engine.recv_timeout(stop_at.saturating_duration_since(Instant::now())) {
+                Ok(Msg::Completion(c)) => completions.push(observe(&c)),
+                Ok(Msg::Ghost { req, text }) => {
+                    ghosts.push((req, text));
+                    if !stopped && done(&ghosts) {
+                        stopped = true;
+                        let _ = to_engine.send(shutdown());
+                        stop_at = stop_at.min(Instant::now() + Duration::from_millis(100));
+                    }
+                }
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    let _ = to_engine.send(shutdown());
+                    return (completions, ghosts);
+                }
+                Err(RecvTimeoutError::Disconnected) => return (completions, ghosts),
+            }
+        }
+    })
+}
+
 
 #[test]
 fn should_reply_again_with_the_split_lines_of_a_script_generator() {
@@ -543,4 +593,33 @@ fn should_reply_an_error_without_ghost_text_for_a_cursor_inside_a_word() {
         replies,
         [Reply { request: 1, generators: false, error: true, cursor: 3, loading: false, rows: Vec::new(), ghost: None }]
     );
+}
+
+#[test]
+fn should_answer_an_llm_request_at_once_with_no_ghost_text_for_a_source_that_is_not_a_profile() {
+    let dir = TempDir::new("engine-llm-no-profile");
+    let request = EngineMessage::Llm { req: 7, buffer: "git sta".into(), cwd: dir.path().to_path_buf(), shell: Shell::Zsh };
+
+    let (completions, ghosts) = serve_ghosts(Settings::default(), vec![request], |ghosts| ghosts.len() == 1);
+
+    assert_eq!((completions, ghosts), (Vec::new(), vec![(7, None)]));
+}
+
+#[test]
+fn should_answer_an_llm_request_with_no_ghost_text_when_the_provider_cannot_be_reached() {
+    let dir = TempDir::new("engine-llm-unreachable");
+    let settings = settings_from_json(
+        json!({
+            "inline.source": "mock",
+            "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    let request = EngineMessage::Llm { req: 7, buffer: "zzzcmd foo".into(), cwd: dir.path().to_path_buf(), shell: Shell::Zsh };
+
+    let (_, ghosts) = serve_ghosts(settings, vec![request], |ghosts| ghosts.len() == 1);
+
+    assert_eq!(ghosts, [(7, None)]);
 }

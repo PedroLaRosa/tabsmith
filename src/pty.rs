@@ -2007,6 +2007,29 @@ mod tests {
     }
 
     #[test]
+    fn should_show_the_llm_ghost_text_of_the_current_request_behind_the_local_one() {
+        let (mut s, _) = session("{}");
+        prompt(&mut s, "git sta");
+        s.llm_req = s.req;
+        let llm_reply = |req, text: Option<&str>| Msg::Ghost { req, text: text.map(String::from) };
+
+        s.step(llm_reply(s.req, Some("tus")), &mut None);
+        let from_the_current_request = s.ghost_text(false);
+        s.step(llm_reply(s.req + 1, Some("x")), &mut None);
+        let after_another_request = s.ghost_text(false);
+        s.step(llm_reply(s.req, None), &mut None);
+        let after_an_empty_reply = s.ghost_text(false);
+        s.step(llm_reply(s.req, Some("tus")), &mut None);
+        reply(&mut s, Vec::new(), Some("sh"));
+        let with_a_local_ghost_text = s.ghost_text(false);
+
+        assert_eq!(
+            (from_the_current_request, after_another_request, after_an_empty_reply, with_a_local_ghost_text),
+            (Some("tus".to_string()), Some("tus".to_string()), None, Some("sh".to_string()))
+        );
+    }
+
+    #[test]
     fn late_probe_reply_is_not_typed() {
         let (mut s, pty) = session("{}");
         s.probe_until = Some(Instant::now() + LATE_PROBE);
