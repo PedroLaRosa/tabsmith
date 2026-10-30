@@ -154,11 +154,8 @@ pub(crate) fn filter(list: Vec<SuggestionCandidate>, search_term: &str, o: &Filt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::domain::test_fixtures::{arg, ctx, names, opts};
-    use crate::completion::domain::value_objects::suggestion::Suggestion;
+    use crate::completion::domain::test_fixtures::{arg, names, opts};
     use crate::completion::domain::value_objects::suggestion_query::SuggestionQuery;
-    use crate::shared::domain::value_objects::shell::Shell;
-    use crate::completion::domain::services::suggestion_finalizer::to_item;
 
     #[test]
     fn prefix_ladder() {
@@ -224,26 +221,6 @@ mod tests {
             names(&filter(vec![a, b, c], "ch", &opts())),
             ["chmod", "check", "CHeck"]
         );
-    }
-
-    #[test]
-    fn empty_search_term_is_no_prefix_match() {
-        // spec-ghost-on-empty-token: `git ` must not ghost the alphabetically first subcommand
-        let subs = || {
-            vec![
-                SuggestionCandidate::new("abort", SuggestionKind::Subcommand),
-                SuggestionCandidate::new("add", SuggestionKind::Subcommand),
-            ]
-        };
-        let ghost = |search: &str| {
-            let items: Vec<Suggestion> = filter(subs(), search, &opts())
-                .into_iter()
-                .map(|(s, p)| to_item(s, p, &ctx(search, search, Shell::Zsh)))
-                .collect();
-            crate::inline::spec_ghost(&items)
-        };
-        assert_eq!(ghost(""), None);
-        assert_eq!(ghost("ab").as_deref(), Some("ort"));
     }
 
     #[test]

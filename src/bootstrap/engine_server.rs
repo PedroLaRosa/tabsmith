@@ -2,9 +2,12 @@
 //! on that thread; the server owns the inbox instance and dispatches each `EngineMessage` to the completion use cases
 //! and the legacy ghost text block (the engine-server event table, plan §4). Only the latest request is served; while
 //! generators run, a request is replied again whenever one of its generators finishes (phase `Generators`).
+use crate::ghost_text::domain::entities::ghost_text_cache::GhostTextCache;
 use crate::ghost_text::domain::services::ghost_text_source_resolver;
+use crate::ghost_text::domain::services::history_ghost_text::history_ghost;
+use crate::ghost_text::domain::services::spec_ghost_text::spec_ghost;
 use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
-use crate::inline::{self, GhostCache};
+use crate::inline;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::completion::application::completion_notice::CompletionNotice;
@@ -89,7 +92,7 @@ struct EngineServer {
     completion: CompletionModule,
     record_command: RecordCommandUseCase,
     history: Rc<dyn HistoryRepository>,
-    ghost_cache: Arc<Mutex<GhostCache>>,
+    ghost_cache: Arc<Mutex<GhostTextCache>>,
 }
 
 impl EngineServer {
@@ -104,7 +107,7 @@ impl EngineServer {
             completion,
             record_command,
             history,
-            ghost_cache: Arc::new(Mutex::new(GhostCache::default())),
+            ghost_cache: Arc::new(Mutex::new(GhostTextCache::default())),
         }
     }
 
@@ -204,8 +207,8 @@ impl EngineServer {
         {
             return None;
         }
-        let history = || inline::history_ghost(&self.history.recent(), result.buffer());
-        let specs = || inline::spec_ghost(result.suggestions());
+        let history = || history_ghost(&self.history.recent(), result.buffer());
+        let specs = || spec_ghost(result.suggestions());
         match ghost_text_source_resolver::source(self.session.settings()) {
             Ok(GhostTextSource::Specs) => specs(),
             Ok(GhostTextSource::History) | Ok(GhostTextSource::Profile(_)) => history(),

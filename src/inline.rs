@@ -7,75 +7,10 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::infrastructure::logger;
 use crate::history::domain::entities::history_entry::HistoryEntry;
-use crate::completion::domain::value_objects::suggestion::Suggestion;
-use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-
-/// History source (SPEC §6.11): newest successful entry extending `buffer` → the remaining suffix.
-pub fn history_ghost(history: &[HistoryEntry], buffer: &str) -> Option<String> {
-    if buffer.is_empty() {
-        return None;
-    }
-    let newest = |ok_only: bool| {
-        history.iter().rev().find(|e| {
-            e.command().len() > buffer.len()
-                && e.command().starts_with(buffer)
-                && (!ok_only || e.exit_code() == Some(0))
-        })
-    };
-    newest(true)
-        .or_else(|| newest(false))
-        .map(|e| e.command()[buffer.len()..].to_string())
-}
-
-/// Specs source (SPEC §6.11): first non-auto-execute/history item with `delete == 0`, prefix match and non-empty
-/// text (trailing space trimmed).
-pub fn spec_ghost(items: &[Suggestion]) -> Option<String> {
-    items.iter().find_map(|i| {
-        let text = i.insert().text().strip_suffix(' ').unwrap_or(i.insert().text());
-        // accepting a ghost types its text and leaves the cursor at the end: rows that move it back are skipped
-        let ok = !matches!(i.kind(), SuggestionKind::AutoExecute | SuggestionKind::History)
-            && i.insert().delete() == 0
-            && i.insert().cursor_back() <= i.insert().text().len() - text.len()
-            && i.prefix_match()
-            && !text.is_empty();
-        ok.then(|| text.to_string())
-    })
-}
-
-/// LLM completion cache (SPEC §8.4), cleared on every new command.
-#[derive(Default)]
-pub struct GhostCache {
-    entries: Vec<(String, f64)>,
-}
-
-impl GhostCache {
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    /// Store full texts (`buffer + completion`); the first gets priority 0.0, others 1.0.
-    pub fn insert(&mut self, full_texts: &[String]) {
-        for (i, t) in full_texts.iter().enumerate() {
-            self.entries
-                .push((t.clone(), if i == 0 { 0.0 } else { 1.0 }));
-        }
-        // ponytail: linear scan instead of a radix trie, so keep it small (oldest dropped).
-        self.entries.drain(..self.entries.len().saturating_sub(50));
-    }
-
-    /// Lowest-priority cached text extending `buffer` (first inserted wins ties) → the remaining suffix.
-    pub fn lookup(&self, buffer: &str) -> Option<String> {
-        self.entries
-            .iter()
-            .filter(|(full, _)| full.len() > buffer.len() && full.starts_with(buffer))
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(full, _)| full[buffer.len()..].to_string())
-    }
-}
 
 /// Snapshot for an LLM worker: the last `count` (`inline.historyCount`) entries with an exit code that pass the
 /// privacy filter, oldest → newest.
@@ -398,8 +333,6 @@ fn expand(arg: &str, env: &HashMap<String, String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::domain::value_objects::insertion::{Insertion, InsertionParts};
-    use crate::completion::domain::value_objects::suggestion::SuggestionParts;
     use crate::ghost_text::domain::value_objects::llm_profile::LlmProfileParts;
     use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
@@ -423,44 +356,6 @@ mod tests {
             max_tokens: 7,
             effort: effort.map(String::from),
         })
-    }
-
-    #[test]
-    fn cache_lookup_vector() {
-        let mut c = GhostCache::default();
-        for (t, p) in [
-            ("echo hello, world", 0.5),
-            ("echo hello there", 1.0),
-            ("ls", 0.5),
-            ("ls -l", 1.0),
-            ("ls -al", 1.0),
-            ("cat -n", 0.5),
-            ("cat", 1.0),
-        ] {
-            c.entries.push((t.into(), p));
-        }
-        assert_eq!(c.lookup("e").as_deref(), Some("cho hello, world"));
-        assert_eq!(c.lookup("echo hello ").as_deref(), Some("there"));
-        assert_eq!(c.lookup("ls -a").as_deref(), Some("l"));
-        assert_eq!(c.lookup("cat -").as_deref(), Some("n"));
-        assert_eq!(c.lookup("other"), None);
-        assert_eq!(
-            c.lookup("ls -al"),
-            None,
-            "an exact match is not a completion"
-        );
-        c.clear();
-        assert_eq!(c.lookup("e"), None);
-    }
-
-    #[test]
-    fn cache_insert_priorities() {
-        let mut c = GhostCache::default();
-        c.insert(&["git status".into(), "git stash".into()]);
-        assert_eq!(c.lookup("git sta").as_deref(), Some("tus"));
-        assert_eq!(c.lookup("git stas").as_deref(), Some("h"));
-        c.insert(&(0..60).map(|i| format!("x{i}")).collect::<Vec<_>>());
-        assert_eq!(c.entries.len(), 50);
     }
 
     #[test]
@@ -658,86 +553,5 @@ mod tests {
         }
         assert!(!valid(&format!("cd {home}/file")));
         std::fs::remove_dir_all(&d).unwrap();
-    }
-
-    #[test]
-    fn history_ghost_rules() {
-        let h = [
-            entry("git status", Some(0)),
-            entry("git stash", Some(1)),
-            entry("git switch", None),
-        ];
-        assert_eq!(
-            history_ghost(&h, "git st").as_deref(),
-            Some("atus"),
-            "newest successful wins"
-        );
-        assert_eq!(
-            history_ghost(&h, "git sw").as_deref(),
-            Some("itch"),
-            "fallback: any"
-        );
-        assert_eq!(history_ghost(&h, "git status"), None);
-        assert_eq!(history_ghost(&h, ""), None);
-        assert_eq!(history_ghost(&h, "ls"), None);
-        let h2 = [entry("git stash", Some(0)), entry("git status", Some(0))];
-        assert_eq!(history_ghost(&h2, "git st").as_deref(), Some("atus"));
-    }
-
-    fn item(kind: SuggestionKind, delete: usize, text: &str, prefix: bool) -> Suggestion {
-        Suggestion::new(SuggestionParts {
-            names: vec!["n".into()],
-            display_name: None,
-            description: None,
-            kind,
-            original_kind: None,
-            priority: 50.0,
-            is_dangerous: false,
-            args_hint: String::new(),
-            highlight: Vec::new(),
-            query: String::new(),
-            insert: Insertion::new(InsertionParts {
-                delete,
-                text: text.into(),
-                cursor_back: 0,
-                execute: false,
-            }),
-            generator: None,
-            prefix_match: prefix,
-            template_type: None,
-            icon: None,
-        })
-    }
-
-    #[test]
-    fn spec_ghost_rules() {
-        let items = [
-            item(SuggestionKind::AutoExecute, 0, "x", true),
-            item(SuggestionKind::History, 0, "y", true),
-            item(SuggestionKind::Subcommand, 2, "checkout ", true),
-            item(SuggestionKind::Subcommand, 0, "erry-pick ", false),
-            item(SuggestionKind::Option, 0, " ", true),
-            item(SuggestionKind::Subcommand, 0, "eckout ", true),
-            item(SuggestionKind::Subcommand, 0, "erry ", true),
-        ];
-        assert_eq!(spec_ghost(&items).as_deref(), Some("eckout"));
-        assert_eq!(spec_ghost(&items[..5]), None);
-        assert_eq!(
-            spec_ghost(&[item(SuggestionKind::Arg, 0, "a  ", true)]).as_deref(),
-            Some("a ")
-        );
-        // spec-ghost-ignores-cursor: `commit -m '{cursor}'` would leave the cursor outside the quotes; `--out=`
-        // (cursor right after `=`, before the auto-space) is fine
-        let with_back = |text: &str, back| {
-            let i = item(SuggestionKind::Arg, 0, text, true);
-            let insert = i.insert().clone().with_cursor_back(back);
-            i.with_insertion(insert)
-        };
-        assert_eq!(spec_ghost(&[with_back("commit -m ''", 1)]), None);
-        assert_eq!(
-            spec_ghost(&[with_back("author= ", 1)]).as_deref(),
-            Some("author=")
-        );
-        assert_eq!(spec_ghost(&[with_back("author= ", 2)]), None);
     }
 }
