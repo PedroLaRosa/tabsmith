@@ -1,10 +1,11 @@
 # Phase 7 (ghost_text): preparation
 
-Status: **prepared, not started**; re-checked against `ff2db5a`, the end of Phase 5; re-check again at the end of
-Phase 6 (the DEFERRED items of `target/hexagonal-refactor/prep7/recheck.md`, listed below under "Re-check at
-`phase7-start`"). At `ff2db5a` the gate was green: 851 passed, 1 ignored (`all_bundle_modules`), clippy 3 warnings
-(budget 3), golden identical, testlock MISSING 0 and DUPLICATE 0. Phase 6 (completion) runs between `ff2db5a` and
-this phase; its end is this phase's start (`phase7-start`).
+Status: **done** at `353faaa` (`c38dc4b..ab50884` plus the registration; tag `phase7-start` at `eef4c88`; gate green:
+986 passed, 0 failed, 1 ignored). The decisions it took and their deviations are in the plan's section 9 "Phase 7
+notes"; where they differ from the briefs below, the notes win. It was prepared against `ff2db5a`, the end of Phase 5
+(gate green there: 851 passed, 1 ignored (`all_bundle_modules`), clippy 3 warnings (budget 3), golden identical,
+testlock MISSING 0 and DUPLICATE 0), and re-checked at `058bebd`, the end of Phase 6 (see "Re-check results at
+`058bebd`", the last section).
 
 **How it was researched.** On a frozen snapshot of `c2f0825` (the end of Phase 5 run 3,
 `target/hexagonal-refactor/prep6-tree`):

@@ -1,7 +1,7 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2, 3, 4, 5 and 6 are done on branch `refactor/hexagonal-architecture` (gate green at
-`f3fc30a`). Phase 7 is next. Working notes, tools, the per-file source map and the Phase 3, 4, 5 and 6 research are in
+Status: Phases 0, 1, 2, 3, 4, 5, 6 and 7 are done on branch `refactor/hexagonal-architecture` (gate green at
+`353faaa`). Phase 8 is next. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6 and 7 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -393,21 +393,26 @@ infrastructure/adapters/{fs_directory_lister ← list_dir, path_executable_catal
 ### ghost_text
 ```
 domain/entities/ghost_text_cache.rs       ← GhostCache
-domain/value_objects/{ghost_text ← pty ghost_key/next_word/ghost_rest, ghost_text_source ← Source + BUILTIN_SOURCES,
-                      llm_profile ← Profile + parse_profile (from SettingValue), llm_provider, llm_prompt}.rs
-domain/services/{history_ghost_text, spec_ghost_text, llm_prompt_builder ← llm_history/is_private/usable/
-                 history_prompt/SYSTEM/limits, llm_completion_cleaner ← clean, cd_target_validator ← validate/
-                 split_words/expand (dir probe injected), ghost_text_source_resolver ← profiles/source}.rs
+domain/value_objects/{ghost_text ← pty next_word/ghost_rest (ghost_key stays in pty.rs until Phase 9),
+                      ghost_text_source ← Source + BUILTIN_SOURCES,
+                      llm_profile ← Profile + parse_profile (from SettingValue), llm_provider ← Provider,
+                      llm_prompt (carries SYSTEM)}.rs
+domain/services/{ghost_text_source_resolver ← profiles/source/cli::selected_source, history_ghost_text,
+                 spec_ghost_text, llm_prompt_builder ← llm_history/is_private/usable/history_prompt/limits,
+                 llm_completion_cleaner ← clean, cd_target_validator ← the pure half of validate/split_words/
+                 expand}.rs
 domain/ghost_text_error.rs
 application/{suggest_local_ghost_text ← engine::ghost, request_llm_ghost_text ← engine::llm + llm_complete pipeline,
              clear_ghost_text_cache, set_inline_enabled, get_inline_status, select_ghost_text_source,
              list_ghost_text_sources}_use_case.rs
-application/ghost_text_sources.rs (DTO)
-application/ports/{llm_client.rs (+ ScriptedLlmClient), directory_probe.rs, source_chooser.rs ← choose_source}
-infrastructure/ghost_text_module.rs
-infrastructure/adapters/{openai_llm_client, anthropic_llm_client ← build_request/parse_response + ureq,
-                         fs_directory_probe, stdin_source_chooser}.rs
-infrastructure/cli/inline_command.rs      ← InlineCmd, inline, render_sources, provider_name, PROFILE_EXAMPLE
+application/{ghost_text_sources (DTO), llm_ghost_text_request (DTO), llm_ghost_text_answer (Immediate | Deferred),
+             llm_ghost_text_job ← the worker half of llm_complete + the probe-backed validate}.rs
+application/ports/{llm_client.rs (+ ScriptedLlmClient), directory_probe.rs (+ InMemoryDirectoryProbe),
+                   source_chooser.rs (+ FixedSourceChooser) ← choose_source}
+infrastructure/{ghost_text_module, inline_command_module}.rs
+infrastructure/adapters/{http_llm_client ← build_request/parse_response + ureq (both providers),
+                         fs_directory_probe, stdin_source_chooser ← choose_source}.rs
+infrastructure/cli/inline_command.rs      ← InlineCmd, inline, render_sources, PROFILE_EXAMPLE
 ```
 
 ### dropdown
@@ -485,7 +490,7 @@ bootstrap/cli.rs           ← main.rs Cli/Command/InternalCmd + dispatch to mod
                              version, cli::print_error
 bootstrap/engine_server.rs ← engine.rs by git mv: spawn (builds the inbox, the runtime and the modules on the engine
                              thread), EngineServer {run, the dispatch table below, send_reply, log_notice}, owns the
-                             inbox instance; the legacy ghost block until Phase 7
+                             inbox instance
 bootstrap/engine_message.rs ← types::EngineMsg, renamed EngineMessage
 bootstrap/engine_inbox.rs  EngineInbox, the engine thread's one channel; implements specs::RuntimeEventSource
 bootstrap/channel_completion_engine.rs  implements terminal_session::CompletionEngine over Sender<EngineMessage>
@@ -509,8 +514,8 @@ PTY session (`terminal_session/infrastructure/pty/session_runner.rs`). The drive
 | `Term` and loop end | `EndSessionUseCase` (engine shutdown, reap generator processes, remove session context) |
 | `_ pre-cmd` (separate process) | `ReportSessionContextUseCase` |
 
-Completion engine (`bootstrap/engine_server.rs`). Until Phase 7 replaces them, the `ghost_text::` steps are the legacy
-ghost block of `engine_server.rs` (`local_ghost_text`, `request_llm_ghost_text`, `clear_ghost_text_cache`).
+Completion engine (`bootstrap/engine_server.rs`). The `ghost_text::` steps are `ghost_text`'s use cases, held by
+`GhostTextModule`.
 | Event (`EngineMessage`) | Use cases, in order |
 |---|---|
 | `Complete(request)` | `completion::CompleteCommandLine` → `ghost_text::SuggestLocalGhostText` → reply (error replies get the local ghost too) |
@@ -518,7 +523,7 @@ ghost block of `engine_server.rs` (`local_ghost_text`, `request_llm_ghost_text`,
 | `CommandFinished(entry)` | `history::RecordCommand` → `ghost_text::ClearGhostTextCache` → `completion::ResetGenerators` |
 | `CommandEnded` | `ghost_text::ClearGhostTextCache` → `completion::ResetGenerators` |
 | `RecordInsert` | `completion::RecordSuggestionInsertion` |
-| `Llm` | `ghost_text::RequestLlmGhostText` (on a worker thread, as today) |
+| `Llm` | `ghost_text::RequestLlmGhostText` on the engine thread; a `Deferred` answer runs on an `llm` worker thread |
 | `Settings` / `Session` / `ToggleFuzzy` | `completion::ApplyCompletionSettings` / `ApplySessionContext` / `ToggleFuzzySearch` |
 | `Shutdown` | driver stops (a `Complete` drained with it gets no reply); the recency adapter flushes |
 | `Runtime(event)` | not an event of the engine: `EngineInbox` hands it to `QuickJsSpecRuntime` through `RuntimeEventSource` (the old `ExecDone`; `Timer` was deleted in Phase 5) |
@@ -680,7 +685,7 @@ Done at `f3fc30a`: `completion` registered in the architecture test; `shell_pars
 and `suggest.rs` gone, each with its last item, and `engine.rs` moved to `bootstrap/engine_server.rs` by `git mv`; gate
 green (943 passed). The phase ran in 28 steps (`6.0a` … `6.7`) in six runs. See the Phase 6 notes in section 9.
 
-### Phase 7: ghost_text
+### Phase 7: ghost_text (done: [research](hexagonal-refactor/phase-7-ghost-text.md))
 1. Domain: `GhostText`, with the accept rules and the tests `ghost_keys_and_words` and
    `ghost_with_control_chars_is_never_shown_or_accepted` moved from `pty.rs`. Also `LlmProfile` (from `SettingValue`),
    `LlmPrompt`, `GhostTextCache`, and the five services with their 11 pure tests.
@@ -693,6 +698,11 @@ green (943 passed). The phase ran in 28 steps (`6.0a` … `6.7`) in six runs. Se
      `cli.rs` builds a `JsonFileSettingsRepository` itself; importing it from a registered module breaks fitness rule 3.
 4. Replace the three legacy ghost touchpoints of `engine_server.rs` (`local_ghost_text`, `request_llm_ghost_text`,
    `clear_ghost_text_cache`) with ghost_text's use cases. Delete `inline.rs`.
+
+Done at `353faaa`: `ghost_text` registered in the architecture test, `inline.rs` deleted (in 7.7), the inline command
+in `ghost_text` (7.9), gate green (986 passed). The phase ran in 11 steps (`7.0` … `7.10`) in three runs; the single
+HTTP client, the split cd check and `inline.rs`'s deletion in 7.7 became deviations. See the Phase 7 notes in
+section 9.
 
 ### Phase 8: dropdown
 1. Move the keys VOs, `Keymap` and `KeystrokeParser` (`keys.rs` tests). The `Decoder` goes to
@@ -820,7 +830,9 @@ green (943 passed). The phase ran in 28 steps (`6.0a` … `6.7`) in six runs. Se
   - `TABSMITH_INIT_SNAPSHOT_TEST=1` `init` snapshots are unchanged (the existing snapshot test);
   - `tabsmith settings list --all` and `tabsmith inline show-customizations --format json` output is diffed against
     a capture taken in Phase 0.
-- **Manual smoke** (SPEC §10 checklist) after Phases 6, 9 and 11, with `TABSMITH_HOME=$(mktemp -d)`, using
+- **Manual smoke** (SPEC §10 checklist) after Phases 6, 9 and 11 (after Phase 7 the user runs item 4 plus the LLM
+  fake-server check of [`phase-7-ghost-text.md`](hexagonal-refactor/phase-7-ghost-text.md), "Output-equivalence
+  guard"), with `TABSMITH_HOME=$(mktemp -d)`, using
   `cargo run -- debug shell zsh` (and bash and fish):
   1. `git ch` shows the menu.
   2. Tab inserts and branches appear.
@@ -1383,3 +1395,128 @@ Phase 6 notes (decisions Q1-Q33 and deviations 1-38 of
     budget of 3 is all used.
   - Phase 11: `types.rs` keeps `Msg`, `now_ms` (no engine caller), `now_secs` and `Model`. `LEGACY_MODULES` keeps every
     deleted name.
+
+Phase 7 notes (decisions R1-R24 and deviations 1-18 of [`phase-7-ghost-text.md`](hexagonal-refactor/phase-7-ghost-text.md),
+which cites the code behind each; the phase ran as 11 steps, `7.0` … `7.10`, in three runs):
+
+- **Guards first** (deviation 1): step 7.0 added `scripts/hexagonal-refactor/inline-diff.sh`, two engine-server tests
+  of the `Llm` arm and one pty test of `Msg::Ghost`, before any code moved. `inline-diff.sh` prints a scrubbed
+  transcript of what the golden capture never shows of `tabsmith inline` and doctor's Inline check (valid and invalid
+  profiles, a selected profile, `set-customization` by name and through the numbered chooser on a pty, a non-bool
+  `inline.enabled`, a corrupted `settings.json`, no home). Diff it on the baseline binary against `target/debug/tabsmith`;
+  the diff is empty after every step, as are `integrations-diff.sh` and `precmd-diff.sh`. The local tag `phase7-start`
+  (`eef4c88`, the hand-over docs commit; its `src/` equals `7f48161`) is the second `testlock.py` baseline.
+- **The pty** (deviations 2 and 3): `ghost_key` stays in `pty.rs` because it takes dropdown key types, so
+  `ghost_keys_and_words` was D6-split: the `next_word` half keeps the name in `ghost_text.rs`, and
+  `ghost_keys_and_words_keys` stays in the pty. The pty already holds `Option<GhostText>`; `CompletionResult.ghost` and
+  `Msg::Ghost.text` stay text. `GhostText::new(computed_for, text)` takes the buffer first, the reverse of the old
+  tuple, so only the 7.0 pty test would catch a swapped call.
+- **Profiles and prompts** (deviations 4 and 5): `LlmProfile` is built by `from_setting` in production, with private
+  fields behind accessors; `LlmProfile::new(LlmProfileParts)` is `#[cfg(test)]`. The profile and source reasons stay
+  `String` texts (M8), so doctor and `inline show-customizations` print them as before. `LlmPrompt` carries `SYSTEM`,
+  so `build_request` reads it (the one CHANGED test `request_bodies`). The user text keeps the header
+  `OS/Shell/CWD`, then a blank line, then the numbered history (P7-T16).
+- **One HTTP client** (deviation 6): `HttpLlmClient` serves both providers, so section 4's `openai_llm_client.rs` and
+  `anthropic_llm_client.rs` were not created; `request_bodies` and `response_parsing` stay whole. It is the only
+  `ureq` and `logger` user in `ghost_text`, and its one warn (`inline: profile '{name}' request to {url} failed: {e}`)
+  is byte-identical.
+- **The cd check** (deviation 7): `cd_target` is a pure domain function (the two `cfg!(windows)` expressions stayed),
+  and the probe-backed `validate` lives in `LlmGhostTextJob`; `DirectoryProbe` also yields the fallback home, read
+  lazily and only for a `~` target the env does not resolve (P7-T25). `cd_validation` is CHANGED: it passes
+  `&FsDirectoryProbe`.
+- **Threads** (deviations 8 and 9): `RequestLlmGhostTextUseCase` returns `Immediate` or a `Deferred` job; the `llm`
+  thread, its warn `engine: llm worker: {e}` and the `Msg::Ghost` sends stay in `bootstrap/engine_server.rs`. The
+  ports are held as `Arc<dyn … + Send + Sync>` because the job crosses to that thread. One `Arc<Mutex<GhostTextCache>>`,
+  built by `GhostTextModule`, is shared by the request and clear use cases; the race where a late `insert` follows a
+  `clear` is kept as it was (D1).
+- **Local ghost on every reply** (deviation 10): `SuggestLocalGhostTextUseCase` takes `&CompletionResult` and runs for
+  every reply, error replies included, as Phase 6 amended the table. Its `_ =>` arm became explicit arms (D8).
+- **The inline command** (deviations 11-13): two module structs, `GhostTextModule` (engine thread, from the history)
+  and `InlineCommandModule` (CLI, from an `Rc<dyn SettingsRepository>` that `bootstrap/cli.rs` builds with the same
+  lazy `JsonFileSettingsRepository` the legacy `cli::settings_repository()` made, so fitness rule 3 holds).
+  `GhostTextError` wraps `SettingsError` and the chooser's io error transparently (the printed text is the wrapped
+  error's, `source()` continues with its cause). `GhostTextSources` holds `Result<LlmProfile, String>` rows, a DTO
+  exception like `SettingValue`. The use cases hold the chooser as `Rc<dyn SourceChooser>`, because `FixedSourceChooser`
+  keeps a `RefCell`. `NoCustomizationSelected` has no unit test (the design lists none); `inline-diff.sh` pins its
+  text. `GetInlineStatusUseCase` keeps the lenient bool read (M9, P7-T43).
+- **Placements and extra files** (deviations 14 and 15): `selected_source` sits in the resolver, `provider_name` is
+  `LlmProvider::name`, the `historyCount` wrapper is private in the request use case (`llm_history_honours_history_count`
+  moved path-only), `empty_search_term_is_no_prefix_match` moved to `spec_ghost_text.rs`. Files beyond section 4:
+  `llm_ghost_text_request.rs`, `llm_ghost_text_answer.rs`, `llm_ghost_text_job.rs`, `inline_command_module.rs` and
+  `http_llm_client.rs`.
+- **Fitness rules** (deviation 16): `ghost_text` is registered (`353faaa`) with no rule weakened and no ghost_text
+  code changed for it; `LEGACY_MODULES` keeps `inline`, whose file is gone (P7-T50), and the checker's synthetic
+  `ghost_text/...` sources are untouched. The rule-3 ceilings of the Phase 4-6 notes carry over; the hand greps ran
+  and found nothing outside `#[cfg(test)]` code: a legacy module, `shell_integration`, `dropdown`, `terminal_session`,
+  `diagnostics` or `bootstrap` under `src/ghost_text`, a grouped `use crate::{`, a `pub(crate) use` in `ghost_text`,
+  `pty.rs`, `cli.rs` and `doctor.rs`, `anyhow` or `clap` outside `infrastructure/cli/inline_command.rs` (and the
+  tests of `ghost_text_error.rs`), `ureq` or `logger` outside `http_llm_client.rs`, `serde_json` or `json!` outside
+  `http_llm_client.rs`, `inline_command.rs` and test modules, `print!`/`println!` outside `inline_command.rs` and
+  `stdin_source_chooser.rs`, `crate::inline`, `GhostCache` or `fn ghost_rest` anywhere, a `Default` build of the unit
+  structs, an `Arc<dyn LlmClient|DirectoryProbe>` without `+ Send + Sync`, and a `pub(crate)` field in the domain
+  outside `LlmProfileParts`. `grep 'cfg!(' src/ghost_text` shows exactly the two `cfg!(windows)` of
+  `cd_target_validator.rs`. `grep -rnE 'completion::application::(command_line_parser|generator_runner|test_fixtures)'
+  src --exclude-dir=completion` is empty.
+- **Eleven steps, `inline.rs` early** (deviation 17): the plan's four steps ran as 7.1-7.4 (domain), 7.5 (ports and
+  adapters), 7.6-7.9 (use cases, the engine switch, the inline command) and 7.10 (the close). `inline.rs` and
+  `mod inline;` went in 7.7, with the last item that used them, not at the end; no shim was needed. `cli.rs` lost its
+  inline section in 7.9 and its `//!` no longer names `inline`. The `main.rs` `mod` order is alphabetical by
+  convention only (fitness rules 6 and 7 check declarations, not order).
+- **Stale comments repointed** (deviation 18, RC8): the `inline.enabled`, `inline.source` and `inline.historyCount`
+  doc comments of `settings_catalog.rs` now name `get_inline_status_use_case.rs`, `doctor.rs`,
+  `suggest_local_ghost_text_use_case.rs` and `pty.rs`; `ghost_text_source_resolver.rs` and `doctor.rs`;
+  `request_llm_ghost_text_use_case.rs llm_history`. `grep -n 'inline\.rs\|engine\.rs\|engine_server\.rs\|cli\.rs'` over
+  that file is empty.
+- **Rechecks that changed a guard**: RC1, golden's inline coverage is 13 captures (plus 3 `doctor --all` and
+  `completion bash/zsh/fish`) and never a valid profile, so `inline-diff.sh` carries the rest; RC2, with stdout in a file
+  the chooser's prompt never reaches the pty, so the script queues the answer on the tty right after `Popen`; RC3, the
+  slice holds no `#[cfg(..)]` attribute, so the cfg check is the attribute grep per touched file plus the `cfg!(`
+  grep; RC4, the `serde_json` grep allows `http_llm_client.rs` and `inline_command.rs` (`render_sources` builds rows
+  with `json!`). Every code citation of the briefs was line-shifted by Phase 6 and was located by symbol.
+- **Checks**: test totals at the end of the phase (`353faaa`, the registration; the closing commit changes docs only):
+  986 passed, 0 failed, 1 ignored (`all_bundle_modules`; 943 at `phase7-start`), clippy 3 warnings (budget 3, all used),
+  golden identical, testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 154 (150 plus four: `cd_validation` was
+  already CHANGED against `ef807c1`), against `phase7-start` MISSING 0, DUPLICATE 0, CHANGED 5 (`cd_validation`,
+  `ghost_keys_and_words`, `ghost_with_control_chars_is_never_shown_or_accepted`, `profiles_and_source`,
+  `request_bodies`, each a restructuring in the research's "Test moves" table) and 43 NEW names, each defined once: the
+  42 of that table plus `should_not_resolve_a_tilde_target_when_neither_env_nor_fallback_know_the_home`, split in
+  run 1's review from the P7-T25 test. The guards were the unit tests, the 7.0 trio, the engine-server suite (20 runs
+  at each engine step), `debug_shell_survives_closed_terminal` alone, inline-diff, `integrations-diff.sh`, `precmd-diff.sh`,
+  `cargo check --locked --no-default-features --all-targets` and the release `all_bundle_modules` run.
+  `integrations_zsh_powerlevel10k_prompt_wrapped` is pty-timing flaky under the gate's load: a lone failure is rerun
+  alone, never skipped.
+- **Open questions, defaults applied**: one `HttpLlmClient` (O1), `LlmPrompt` carries `SYSTEM` (O2), two module structs
+  (O3), the `GhostTextError` wrapper (O4), the closed-port engine test kept (O5; it is the only automated run of the
+  `llm` thread), the pty's ghost tuples moved now (O6), `SuggestLocalGhostTextUseCase` takes `&CompletionResult` (O7),
+  the user is asked for the smoke once, after 7.10 (O8), and `ScriptedLlmClient` does not record the env (O9).
+- **Deviations the runs reported**: 7.8's `NoCustomizationSelected` is pinned by inline-diff, not a unit test. 7.9's
+  `InlineCommandModule` is built by bootstrap from an injected repository (deviation 11), and the data-directory env
+  is now read when bootstrap builds the module, before `stdout_tty()` in `run_inline_command` (it was read inside each
+  arm, after the tty check); both reads are side-effect free, so nothing observable changes (P7-T37).
+  `StdinSourceChooser`, and the Enable, Disable, Status, SetCustomization and ShowCustomizations arms of
+  `run_inline_command`, have no unit test of their own: golden, inline-diff and the pty groups cover them, and only
+  `render_sources` has one (`inline_show_customizations`, moved path-only).
+- **History**: no Phase 7 subject is over 72 characters (the longest are exactly 72). Every message went through
+  `git commit -F` with the Sonnet 5.5 trailer, and none was rewritten.
+- **Manual smoke pending** (the user's, after the phase; section 8): (1) plan section 8 item 4 on `debug shell zsh`
+  (`echo hi`, then `ec` shows `ho hi`, → accepts, Alt-f accepts one word); (2) `tabsmith settings inline.source
+  '"specs"'` makes `git ch` ghost a subcommand, `'"history"'` only history; (3) the LLM against a local fake server
+  (`phase-7-ghost-text.md`, "Output-equivalence guard"): with an `inline.profiles.fake` pointing at `127.0.0.1:8765`, `zzz sta`
+  shows the ghost `tus` after the debounce, and with the server stopped and `-vv`, `pty.log` shows the same
+  `inline: profile 'fake' request to … failed: …` line for the baseline and the new binary.
+- **Hand-offs** (details in the research's "Hand-off notes for later phases"):
+  - Phase 8: `Key`/`KeyCode`/`Mods` move; `pty.rs`'s `ghost_key` and `ghost_keys_and_words_keys` follow by path only.
+    Nothing in ghost_text names dropdown; the ghost reaches render as `&str` (`FrameInput.ghost`).
+  - Phase 9: `key_router` takes `ghost_key` and `ghost_keys_and_words_keys` (the "accept ghost" `KeyRoute`; whole
+    versus next word through `GhostText::next_word`). `TerminalSession` holds the local and LLM `Option<GhostText>`,
+    with `Session::ghost_text`'s guards (P7-T33) and the local-before-LLM order. `ApplyLlmGhostTextUseCase` replaces
+    the `Msg::Ghost` arm with P7-T32 intact (`req == s.req && req == s.llm_req`, keyed by the current `s.sent`
+    through the `zip`, `redraw` without `release_held`); `should_show_the_llm_ghost_text_of_the_current_request_behind_the_local_one`
+    pins it. `llm_enabled` = `settings.bool(INLINE_ENABLED) && matches!(source(..), Ok(GhostTextSource::Profile(_)))`;
+    the LLM debounce stays in `HandleTimerTick`; the request goes through `CompletionEngine::request_llm_ghost_text`,
+    which Phase 6's port still declares.
+  - Phase 10: doctor's `inline_outcome` and `is_local` read `ghost_text_source_resolver::source` and
+    `LlmProfile::{base_url(), api_key_env()}`; when they move into a domain service, the catch-all arms over
+    `GhostTextSource` (and `Err(_)`/`Ok(_)`) get explicit arms (D8).
+  - Phase 11: `LEGACY_MODULES` keeps `inline`; `types::Msg::Ghost` dies with `Msg` in Phase 9; `cli::settings_repository()`
+    stays for `theme` until Phase 8. `#![allow(dead_code)]` stays until then.

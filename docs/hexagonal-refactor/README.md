@@ -15,17 +15,19 @@ implementation session needs that the plan does not.
 | 4 shell_integration | done (also starts terminal_session's session context) | `6f38da1..ab7052b`, see [`phase-4-shell-integration.md`](phase-4-shell-integration.md) |
 | 5 specs | done, run in five chunks (5.1, 5.2, 5.3a-d, 5.3e-g, 5.4-5.5) | `1a466e2..d7079b9` (tag `phase5-start` at `1a466e2`), see [`phase-5-specs.md`](phase-5-specs.md) |
 | 6 completion | done, run in six chunks (6.0a-6.2b; 6.3a-e; 6.2c-f and 6.6a; 6.4a-d; 6.4e-f and 6.5a-b; 6.5c, 6.4g, 6.6b and 6.7) | `c38596c..7f48161`, registration at `f3fc30a` (tag `phase6-start` at `c38596c`, whose `src/` equals `ff2db5a`), see [`phase-6-completion.md`](phase-6-completion.md) |
-| 7 ghost_text | researched and re-checked at `058bebd`, not started; see [`phase-7-ghost-text.md`](phase-7-ghost-text.md) (tag `phase7-start`) | |
+| 7 ghost_text | done, run in three chunks (7.0-7.4, 7.5-7.7, 7.8-7.10) | `c38dc4b..ab50884`, registration at `353faaa` (tag `phase7-start` at `eef4c88`, whose `src/` equals `7f48161`), see [`phase-7-ghost-text.md`](phase-7-ghost-text.md) |
 | 8-11 | not started | |
 
-At `7f48161`, `scripts/hexagonal-refactor/gate.sh` passes. `cargo test` has 943 passed, 0 failed, 1 ignored (the
-baseline was 283). clippy shows 3 warnings (baseline 3). The 131-command golden CLI capture is byte-identical to
-the baseline. The test lock has 0 baseline tests missing. 150 baseline tests are CHANGED, each one a reviewed
-restructuring (65 against the `phase6-start` tag, each in Phase 6's "Test moves" table, which has 0 missing too; the
-table counts 66 because its `aborts_propagate` changed only an enum path, which testlock reports as PATH-ONLY).
-No test name is DUPLICATE, against either baseline.
-`REGISTERED_MODULES` = `completion`, `history`, `settings`, `shared`, `shell_integration`, `specs` (terminal_session
-waits for Phase 9).
+At `353faaa` (the registration; the docs commit that follows changes no code), `scripts/hexagonal-refactor/gate.sh`
+passes. `cargo test` has 986 passed, 0 failed, 1 ignored (the baseline was 283). clippy shows 3 warnings (baseline 3).
+The 131-command golden CLI capture is byte-identical to the baseline. The test lock has 0 baseline tests missing. 154
+baseline tests are CHANGED, each one a reviewed restructuring (5 against the `phase7-start` tag, each in Phase 7's
+"Test moves" table: `cd_validation`, `ghost_keys_and_words`, `ghost_with_control_chars_is_never_shown_or_accepted`,
+`profiles_and_source` and `request_bodies`; `cd_validation` was already CHANGED against `ef807c1`, so the count is 150
+plus four). Against `phase7-start` there are 43 NEW names, 0 missing and 0 DUPLICATE; against `ef807c1` too.
+`inline-diff.sh`, `integrations-diff.sh` and `precmd-diff.sh` are empty against the baseline binary.
+`REGISTERED_MODULES` = `completion`, `ghost_text`, `history`, `settings`, `shared`, `shell_integration`, `specs`
+(terminal_session waits for Phase 9).
 
 ## Files here
 
@@ -81,6 +83,11 @@ Run everything from the repo root. Output goes to `target/hexagonal-refactor/` (
   commands and of `_ pre-cmd`. Diff each one run on the baseline binary
   (`target/hexagonal-refactor/baseline-tree/target/debug/tabsmith`) against `target/debug/tabsmith`; the diff must
   be empty.
+- `inline-diff.sh <binary>` (Phase 7): a scrubbed transcript of what the golden capture never shows of `tabsmith
+  inline` and doctor's Inline check: valid and invalid `inline.profiles.<name>` (every reason), a selected profile,
+  `set-customization` by name and through the numbered chooser on a pty, a non-bool `inline.enabled`, and every inline
+  command over a corrupted `settings.json`, without a home and with only `TABSMITH_SETTINGS_PATH`. Diff it the same
+  way as the two above; the diff must be empty.
 
 ## Lessons from Phases 1-2
 

@@ -143,13 +143,27 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `ExecutableCatalog` | Port | The executables on `PATH`, directory by directory in `PATH` order, each sorted. | `suggest::executables` |
 
 ## ghost_text
+`LlmClient` is implemented by one `HttpLlmClient` for both providers.
+
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
-| `GhostText` | VO | Gray continuation after the cursor; accept all / next word. | `Option<String>` + `pty::{ghost_key, next_word, ghost_rest}` |
+| `GhostText` | VO | Gray continuation computed for one buffer: what is still to show after the typed buffer (none when empty or holding a control character), and the next word Alt-f accepts. Which key accepts it is key routing (`ghost_key`, in the pty until Phase 9). | `(String, String)` tuples + `pty::{next_word, ghost_rest}` |
 | `GhostTextSource` | VO | history, specs, history+specs, or an LLM profile. | `inline::Source` |
-| `LlmProfile` / `LlmProvider` | VO | Provider, model, base URL, API key env var, max tokens, effort. | `Profile`, `Provider` |
-| `LlmPrompt` | VO | System + user text sent to the provider (privacy-filtered history). | `history_prompt` output |
+| `LlmProfile` / `LlmProvider` | VO | Provider (`openai`, `anthropic`), model, base URL, API key env var, max tokens, effort; read from an `inline.profiles.<name>` setting, or a reason text when invalid. | `Profile` + `parse_profile`, `Provider`, `cli::provider_name` |
+| `LlmPrompt` | VO | System + user text sent to the provider: the OS, shell and cwd above the privacy-filtered, numbered history. | `SYSTEM` + `history_prompt` output |
 | `GhostTextCache` | Entity | Recent LLM completions with priorities, cleared per command. | `GhostCache` |
+| `GhostTextError` | Domain error | Settings (the settings error, printed as itself), customization not found, no customization selected, source chooser (the io error, printed as itself). | the `bail!`s and `?`s of `cli::inline` |
+| `GhostTextSourceResolver` | Domain service | The profiles (sorted by name, each a profile or its reason), the selected source and its name. | `inline::{profiles, source}`, `cli::selected_source` |
+| `CdTargetValidator` | Domain service | The directory a `cd` completion would change into, if any (quotes, `~` and `$VAR` expanded from the env). | the target half of `inline::validate`, `split_words`, `expand` |
+| `LlmPromptBuilder` | Domain service | Which history lines the LLM may see (finished, not private, the last `historyCount`) and the prompt built from them (10 240-byte budget, none for a private buffer). | `llm_history`, `is_private`, `usable`, `history_prompt` |
+| `LlmCompletionCleaner` | Domain service | The completion text kept from a provider reply (first usable line, unquoted, number and buffer stripped; none with a control character). | `inline::clean` |
+| `LlmClient` | Port | Sends an `LlmPrompt` to a profile's provider; the raw completion text or none (transport failures are logged by the adapter). | the HTTP half of `llm_complete` |
+| `DirectoryProbe` | Port | Is a path a directory; does it resolve to one; the home directory fallback. | `Path::is_dir`, `canonicalize`, `user_home_from_env` in `validate`/`expand` |
+| `SourceChooser` | Port | Asks the user to pick one of the valid profiles, or none. | `cli::choose_source` |
+| `GhostTextSources` | DTO | The selected source and every profile or its reason, for `inline show-customizations`. | `render_sources`' arguments |
+| `LlmGhostTextRequest` | DTO | Buffer, cwd and shell of an LLM ghost-text request. | `EngineMsg::Llm` fields |
+| `LlmGhostTextAnswer` | Application type | An LLM ghost text known at once (or none), or a job to run off the engine thread. | the two early sends and the spawn of `engine::llm` |
+| `LlmGhostTextJob` | Application type | The worker half of an LLM request: prompt, provider call, clean, cd check, cache insert. | the `llm` worker closure + `llm_complete` |
 
 ## dropdown
 | Term | Kind | Meaning | Replaces |
@@ -200,7 +214,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | Word | Name for each meaning |
 |---|---|
 | lock | `InsertionLock` (wait for echo) · integration lock (OSC 697 Lock/Unlock, a field of `MarkerTracker`) |
-| prompt | shell prompt · `LlmPrompt` · the `[Y/n]` confirmation `setup`/`uninstall` ask (`confirm`/`answer` in shell_integration's `infrastructure/cli/user_confirmation.rs`; no port, not a domain type) |
+| prompt | shell prompt · `LlmPrompt` · the `inline set-customization` chooser prompt (`Select a customization: `, written by `StdinSourceChooser`; no domain type) · the `[Y/n]` confirmation `setup`/`uninstall` ask (`confirm`/`answer` in shell_integration's `infrastructure/cli/user_confirmation.rs`; no port, not a domain type) |
 | ghost | `GhostText` (ours) · shell autosuggestion (zsh/fish/PSReadLine's own) |
 | history | `HistoryEntry` / `HistoryRepository` (store) · `SuggestionKind::History` (rows) · history mode (Ctrl-R in `Menu`) |
 | session | `TerminalSession` · `SessionContext` · `SessionId` · `CompletionSession` |
