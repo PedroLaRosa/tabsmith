@@ -70,21 +70,13 @@ mod tests {
     use crate::dropdown::domain::value_objects::modifiers::Modifiers;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
-    const NONE: Modifiers = Modifiers {
-        ctrl: false,
-        alt: false,
-        shift: false,
-        meta: false,
-    };
-    const CTRL: Modifiers = Modifiers { ctrl: true, ..NONE };
-    const ALT: Modifiers = Modifiers { alt: true, ..NONE };
-    const SHIFT: Modifiers = Modifiers {
-        shift: true,
-        ..NONE
-    };
+    const NONE: Modifiers = Modifiers::none();
+    const CTRL: Modifiers = NONE.with_ctrl(true);
+    const ALT: Modifiers = NONE.with_alt(true);
+    const SHIFT: Modifiers = NONE.with_shift(true);
 
     fn k(code: KeyCode, mods: Modifiers) -> Key {
-        Key { code, mods }
+        Key::new(code, mods)
     }
 
     fn settings(json: &str) -> Settings {

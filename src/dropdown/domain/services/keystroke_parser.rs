@@ -11,10 +11,10 @@ pub(crate) fn parse_keystroke(s: &str) -> Option<Key> {
             None | Some(("", "")) => break rest,
             Some((m, k)) => {
                 match m {
-                    "ctrl" | "control" => mods.ctrl = true,
-                    "shift" => mods.shift = true,
-                    "alt" | "option" => mods.alt = true,
-                    "meta" | "command" => mods.meta = true,
+                    "ctrl" | "control" => mods = mods.with_ctrl(true),
+                    "shift" => mods = mods.with_shift(true),
+                    "alt" | "option" => mods = mods.with_alt(true),
+                    "meta" | "command" => mods = mods.with_meta(true),
                     _ => {}
                 }
                 rest = k;
@@ -45,21 +45,21 @@ pub(crate) fn parse_keystroke(s: &str) -> Option<Key> {
             if chars.next().is_some() {
                 return None;
             }
-            if mods.shift && c.is_ascii_lowercase() {
+            if mods.shift() && c.is_ascii_lowercase() {
                 c = c.to_ascii_uppercase();
-                mods.shift = false;
+                mods = mods.with_shift(false);
             }
             KeyCode::Char(c)
         }
     };
-    Some(Key { code, mods })
+    Some(Key::new(code, mods))
 }
 
 /// ctrl/alt + ASCII letter match both cases.
-pub(crate) fn normalize(mut k: Key) -> Key {
-    if let KeyCode::Char(c) = k.code {
-        if (k.mods.ctrl || k.mods.alt) && c.is_ascii_alphabetic() {
-            k.code = KeyCode::Char(c.to_ascii_lowercase());
+pub(crate) fn normalize(k: Key) -> Key {
+    if let KeyCode::Char(c) = k.code() {
+        if (k.modifiers().ctrl() || k.modifiers().alt()) && c.is_ascii_alphabetic() {
+            return Key::new(KeyCode::Char(c.to_ascii_lowercase()), k.modifiers());
         }
     }
     k
@@ -69,21 +69,13 @@ pub(crate) fn normalize(mut k: Key) -> Key {
 mod tests {
     use super::*;
 
-    const NONE: Modifiers = Modifiers {
-        ctrl: false,
-        alt: false,
-        shift: false,
-        meta: false,
-    };
-    const CTRL: Modifiers = Modifiers { ctrl: true, ..NONE };
-    const ALT: Modifiers = Modifiers { alt: true, ..NONE };
-    const SHIFT: Modifiers = Modifiers {
-        shift: true,
-        ..NONE
-    };
+    const NONE: Modifiers = Modifiers::none();
+    const CTRL: Modifiers = NONE.with_ctrl(true);
+    const ALT: Modifiers = NONE.with_alt(true);
+    const SHIFT: Modifiers = NONE.with_shift(true);
 
     fn k(code: KeyCode, mods: Modifiers) -> Key {
-        Key { code, mods }
+        Key::new(code, mods)
     }
 
     #[test]
@@ -101,7 +93,7 @@ mod tests {
         assert_eq!(parse_keystroke("option+arrowup"), Some(k(Up, ALT)));
         assert_eq!(
             parse_keystroke("command+i"),
-            Some(k(Char('i'), Modifiers { meta: true, ..NONE }))
+            Some(k(Char('i'), NONE.with_meta(true)))
         );
         assert_eq!(parse_keystroke("ctrl+foo"), None);
         assert_eq!(parse_keystroke("a+"), None);

@@ -3,16 +3,13 @@ use crate::dropdown::domain::value_objects::modifiers::Modifiers;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Key {
-    pub(crate) code: KeyCode,
-    pub(crate) mods: Modifiers,
+    code: KeyCode,
+    modifiers: Modifiers,
 }
 
 impl Key {
     pub(crate) fn new(code: KeyCode, modifiers: Modifiers) -> Self {
-        Self {
-            code,
-            mods: modifiers,
-        }
+        Self { code, modifiers }
     }
 
     pub(crate) fn code(&self) -> KeyCode {
@@ -20,12 +17,12 @@ impl Key {
     }
 
     pub(crate) fn modifiers(&self) -> Modifiers {
-        self.mods
+        self.modifiers
     }
 
     /// The same key plus alt, as `ESC <key>` means; the case is left alone, `normalize` is the keymap's.
     pub(crate) fn with_alt(self) -> Self {
-        Self::new(self.code, self.mods.with_alt(true))
+        Self::new(self.code, self.modifiers.with_alt(true))
     }
 }
 

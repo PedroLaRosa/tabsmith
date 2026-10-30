@@ -190,19 +190,11 @@ pub fn expected_buffer(ins: &Insertion, ib: &str, cursor: usize) -> String {
 
 /// Ghost accept keys (SPEC §8.3): `Some(true)` = whole ghost, `Some(false)` = next word.
 fn ghost_key(k: &Key) -> Option<bool> {
-    let m = k.mods;
+    let m = k.modifiers();
     let plain = m == Modifiers::default();
-    let ctrl = m
-        == Modifiers {
-            ctrl: true,
-            ..Modifiers::default()
-        };
-    let alt = m
-        == Modifiers {
-            alt: true,
-            ..Modifiers::default()
-        };
-    match k.code {
+    let ctrl = m == Modifiers::none().with_ctrl(true);
+    let alt = m == Modifiers::none().with_alt(true);
+    match k.code() {
         KeyCode::Right | KeyCode::End if plain => Some(true),
         KeyCode::Char('f' | 'F' | 'e' | 'E') if ctrl => Some(true),
         KeyCode::Char('f') if alt => Some(false),
@@ -248,7 +240,7 @@ fn pump(mut reader: impl Read, credits: Receiver<()>, tx: Sender<Msg>) {
 }
 
 fn is_ctrl(k: &Key, c: char) -> bool {
-    k.mods.ctrl && matches!(k.code, KeyCode::Char(x) if x.eq_ignore_ascii_case(&c))
+    k.modifiers().ctrl() && matches!(k.code(), KeyCode::Char(x) if x.eq_ignore_ascii_case(&c))
 }
 
 type Rgb = (u8, u8, u8);
@@ -946,8 +938,10 @@ impl Session {
             .cur
             .as_ref()
             .is_some_and(|e| e.cursor == e.buffer.len());
-        match key.code {
-            KeyCode::Char(c) if key.mods == Modifiers::default() && at_end => self.unechoed.push(c),
+        match key.code() {
+            KeyCode::Char(c) if key.modifiers() == Modifiers::default() && at_end => {
+                self.unechoed.push(c)
+            }
             _ => {
                 self.unechoed.clear();
                 self.echo_pending = Some(self.req);
@@ -1050,7 +1044,7 @@ impl Session {
         for ev in self.decoder.decode(chunk) {
             #[cfg(test)]
             tests::maybe_panic();
-            let key = ev.key;
+            let key = ev.key();
             // Two or more printable keys in one read are a paste (pwsh has no bracketed paste) or typeahead the menu
             // was not computed for: the rest of the read reaches the shell as is.
             // Off the command line (an inline TUI's rows) keys belong to the TUI, as on the alternate screen.
@@ -1064,8 +1058,10 @@ impl Session {
             } else {
                 None
             };
-            let tab_show =
-                global && only_tab && key.code == KeyCode::Tab && key.mods == Modifiers::default();
+            let tab_show = global
+                && only_tab
+                && key.code() == KeyCode::Tab
+                && key.modifiers() == Modifiers::default();
             let ghost = ghost_key(&key)
                 .filter(|_| prompt && self.drawable())
                 .zip(self.ghost_text(true));
@@ -1075,7 +1071,7 @@ impl Session {
             if acts && self.echo_pending.is_some() {
                 // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
                 // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
-                self.held.extend_from_slice(&chunk[ev.bytes.start..]);
+                self.held.extend_from_slice(&chunk[ev.bytes().start..]);
                 self.held_at = Some(Instant::now() + INSERT_LOCK);
                 self.decoder = StdinKeyDecoder::default(); // held bytes start outside a paste and are decoded again
                 break;
@@ -1098,18 +1094,18 @@ impl Session {
                             redraw = true;
                         }
                         None => {
-                            if key.code == KeyCode::Enter && self.tracker.at_prompt() {
+                            if key.code() == KeyCode::Enter && self.tracker.at_prompt() {
                                 self.tracker.submitted = self.basis(); // history: the line, not what follows it
                             }
-                            fwd.extend_from_slice(&chunk[ev.bytes.clone()]);
+                            fwd.extend_from_slice(&chunk[ev.bytes()]);
                             typed += usize::from(
-                                matches!(key.code, KeyCode::Char(_)) && key.mods == Modifiers::default(),
+                                matches!(key.code(), KeyCode::Char(_)) && key.modifiers() == Modifiers::default(),
                             );
                             self.note_forwarded(&key);
                             // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
                             if is_ctrl(&key, 'c')
                                 || is_ctrl(&key, 'd')
-                                || key.code == KeyCode::Enter
+                                || key.code() == KeyCode::Enter
                             {
                                 self.menu.error_reset();
                                 redraw = true;
@@ -1683,15 +1679,9 @@ mod tests {
 
     #[test]
     fn ghost_keys_and_words_keys() {
-        let k = |code, mods| Key { code, mods };
-        let ctrl = Modifiers {
-            ctrl: true,
-            ..Modifiers::default()
-        };
-        let alt = Modifiers {
-            alt: true,
-            ..Modifiers::default()
-        };
+        let k = |code, mods| Key::new(code, mods);
+        let ctrl = Modifiers::none().with_ctrl(true);
+        let alt = Modifiers::none().with_alt(true);
         assert_eq!(ghost_key(&k(KeyCode::Right, Modifiers::default())), Some(true));
         assert_eq!(ghost_key(&k(KeyCode::Char('e'), ctrl)), Some(true));
         assert_eq!(ghost_key(&k(KeyCode::Char('f'), alt)), Some(false));

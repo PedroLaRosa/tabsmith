@@ -41,10 +41,7 @@ impl StdinKeyDecoder {
             } else {
                 decode_one(&chunk[i..])
             };
-            out.push(KeyEvent {
-                key,
-                bytes: i..i + len,
-            });
+            out.push(KeyEvent::new(key, i..i + len));
             i += len;
         }
         out
@@ -70,13 +67,13 @@ impl StdinKeyDecoder {
 }
 
 fn key(code: KeyCode, mods: Modifiers) -> Key {
-    Key { code, mods }
+    Key::new(code, mods)
 }
 
 /// One key at the start of `b` (non-empty) and its length in bytes.
 fn decode_one(b: &[u8]) -> (Key, usize) {
     let none = Modifiers::default();
-    let ctrl = Modifiers { ctrl: true, ..none };
+    let ctrl = none.with_ctrl(true);
     match b[0] {
         b'\r' | b'\n' => (key(KeyCode::Enter, none), 1),
         b'\t' => (key(KeyCode::Tab, none), 1),
@@ -110,9 +107,8 @@ fn decode_esc(b: &[u8]) -> (Key, usize) {
         Some(0x1b)
             if b.len() > 3 && matches!(b[2], b'[' | b'O') && !b[1..].starts_with(PASTE_START) =>
         {
-            let (mut k, len) = decode_esc(&b[1..]);
-            k.mods.alt = true;
-            (k, len + 1)
+            let (k, len) = decode_esc(&b[1..]);
+            (k.with_alt(), len + 1)
         }
         // ESC alone at the end of the chunk, or the first of two ESCs.
         None | Some(0x1b) => (key(KeyCode::Esc, none), 1),
@@ -135,9 +131,8 @@ fn decode_esc(b: &[u8]) -> (Key, usize) {
         }
         // ESC <key> = alt+<key>.
         Some(_) => {
-            let (mut k, len) = decode_one(&b[1..]);
-            k.mods.alt = true;
-            (k, len + 1)
+            let (k, len) = decode_one(&b[1..]);
+            (k.with_alt(), len + 1)
         }
     }
 }
@@ -170,12 +165,11 @@ fn decode_csi(b: &[u8]) -> (Key, usize) {
         .map(|s| s.split(':').next().unwrap_or("").parse().unwrap_or(0))
         .collect();
     let m = p.get(1).copied().unwrap_or(1).saturating_sub(1);
-    let mods = Modifiers {
-        shift: m & 1 != 0,
-        alt: m & 2 != 0,
-        ctrl: m & 4 != 0,
-        meta: m & 8 != 0,
-    };
+    let mods = Modifiers::none()
+        .with_shift(m & 1 != 0)
+        .with_alt(m & 2 != 0)
+        .with_ctrl(m & 4 != 0)
+        .with_meta(m & 8 != 0);
     let code = match fin {
         b'A' => KeyCode::Up,
         b'B' => KeyCode::Down,
@@ -184,18 +178,7 @@ fn decode_csi(b: &[u8]) -> (Key, usize) {
         b'H' => KeyCode::Home,
         b'F' => KeyCode::End,
         b'P' | b'Q' | b'S' => KeyCode::F(fin - b'P' + 1),
-        b'Z' => {
-            return (
-                key(
-                    KeyCode::Tab,
-                    Modifiers {
-                        shift: true,
-                        ..mods
-                    },
-                ),
-                len,
-            )
-        }
+        b'Z' => return (key(KeyCode::Tab, mods.with_shift(true)), len),
         b'~' => match p[0] {
             1 | 7 => KeyCode::Home,
             2 => KeyCode::Insert,
@@ -229,28 +212,20 @@ mod tests {
     use crate::settings::domain::value_objects::settings::Settings;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
 
-    const NONE: Modifiers = Modifiers {
-        ctrl: false,
-        alt: false,
-        shift: false,
-        meta: false,
-    };
-    const CTRL: Modifiers = Modifiers { ctrl: true, ..NONE };
-    const ALT: Modifiers = Modifiers { alt: true, ..NONE };
-    const SHIFT: Modifiers = Modifiers {
-        shift: true,
-        ..NONE
-    };
+    const NONE: Modifiers = Modifiers::none();
+    const CTRL: Modifiers = NONE.with_ctrl(true);
+    const ALT: Modifiers = NONE.with_alt(true);
+    const SHIFT: Modifiers = NONE.with_shift(true);
 
     fn k(code: KeyCode, mods: Modifiers) -> Key {
-        Key { code, mods }
+        Key::new(code, mods)
     }
 
     fn one(bytes: &[u8]) -> Key {
         let ev = decode(bytes);
         assert_eq!(ev.len(), 1, "{bytes:?} → {ev:?}");
-        assert_eq!(ev[0].bytes, 0..bytes.len());
-        ev[0].key
+        assert_eq!(ev[0].bytes(), 0..bytes.len());
+        ev[0].key()
     }
 
     #[test]
@@ -272,17 +247,7 @@ mod tests {
             (b"\x1b[1;5A", k(Up, CTRL)),
             (b"\x1b[1;2B", k(Down, SHIFT)),
             (b"\x1b[1;3C", k(Right, ALT)),
-            (
-                b"\x1b[1;7D",
-                k(
-                    Left,
-                    Modifiers {
-                        ctrl: true,
-                        alt: true,
-                        ..NONE
-                    },
-                ),
-            ),
+            (b"\x1b[1;7D", k(Left, CTRL.with_alt(true))),
             (b"\x1b[H", k(Home, NONE)),
             (b"\x1bOH", k(Home, NONE)),
             (b"\x1b[1~", k(Home, NONE)),
@@ -293,17 +258,7 @@ mod tests {
             (b"\x1bOI", k(Tab, NONE)),
             (b"\x1b\x1b[D", k(Left, ALT)),
             (b"\x1b\x1bOA", k(Up, ALT)),
-            (
-                b"\x1b\x1b[1;5C",
-                k(
-                    Right,
-                    Modifiers {
-                        ctrl: true,
-                        alt: true,
-                        ..NONE
-                    },
-                ),
-            ),
+            (b"\x1b\x1b[1;5C", k(Right, CTRL.with_alt(true))),
             (b"\x1b[4~", k(End, NONE)),
             (b"\x1b[8~", k(End, NONE)),
             (b"\x1b[3~", k(Delete, NONE)),
@@ -345,37 +300,37 @@ mod tests {
     fn decode_multi_key_chunk() {
         let chunk = b"ab\x1b[A\r\x1b[200~x\ty\x1b[201~\x0e\x1b";
         let ev = decode(chunk);
-        let keys: Vec<KeyCode> = ev.iter().map(|e| e.key.code).collect();
+        let keys: Vec<KeyCode> = ev.iter().map(|e| e.key().code()).collect();
         use KeyCode::*;
         assert_eq!(
             keys,
             vec![Char('a'), Char('b'), Up, Enter, Paste, Char('n'), Esc]
         );
-        let ranges: Vec<_> = ev.iter().map(|e| e.bytes.clone()).collect();
+        let ranges: Vec<_> = ev.iter().map(|e| e.bytes()).collect();
         assert_eq!(ranges, vec![0..1, 1..2, 2..5, 5..6, 6..21, 21..22, 22..23]);
         // Every byte belongs to exactly one event.
-        assert_eq!(ev.last().unwrap().bytes.end, chunk.len());
+        assert_eq!(ev.last().unwrap().bytes().end, chunk.len());
     }
 
     #[test]
     fn esc_not_last_and_double_esc() {
         let ev = decode(b"\x1b\x1b");
         assert_eq!(
-            ev.iter().map(|e| e.key.code).collect::<Vec<_>>(),
+            ev.iter().map(|e| e.key().code()).collect::<Vec<_>>(),
             vec![KeyCode::Esc, KeyCode::Esc]
         );
         // Esc right before a bracketed paste in the same chunk: the paste stays opaque.
         let ev = decode(b"\x1b\x1b[200~ls\x1b[201~");
         assert_eq!(
             ev.iter()
-                .map(|e| (e.key.code, e.bytes.clone()))
+                .map(|e| (e.key().code(), e.bytes()))
                 .collect::<Vec<_>>(),
             vec![(KeyCode::Esc, 0..1), (KeyCode::Paste, 1..15)]
         );
         // Incomplete CSI at the end: one opaque unknown event.
         let ev = decode(b"x\x1b[1;");
-        assert_eq!(ev[1].key.code, KeyCode::Unknown);
-        assert_eq!(ev[1].bytes, 1..5);
+        assert_eq!(ev[1].key().code(), KeyCode::Unknown);
+        assert_eq!(ev[1].bytes(), 1..5);
     }
 
     #[test]
@@ -383,20 +338,20 @@ mod tests {
         let mut d = StdinKeyDecoder::default();
         let a = d.decode(b"q\x1b[200~line1\r");
         assert_eq!(
-            a.iter().map(|e| e.key.code).collect::<Vec<_>>(),
+            a.iter().map(|e| e.key().code()).collect::<Vec<_>>(),
             vec![KeyCode::Char('q'), KeyCode::Paste]
         );
-        assert_eq!(a[1].bytes, 1..13);
+        assert_eq!(a[1].bytes(), 1..13);
         // End marker split across reads; `\r` inside the paste is not Enter.
         let b = d.decode(b"\tline2\r\x1b[20");
         assert_eq!(b.len(), 1);
-        assert_eq!(b[0].key.code, KeyCode::Paste);
+        assert_eq!(b[0].key().code(), KeyCode::Paste);
         let c = d.decode(b"1~\r");
         assert_eq!(
-            c.iter().map(|e| e.key.code).collect::<Vec<_>>(),
+            c.iter().map(|e| e.key().code()).collect::<Vec<_>>(),
             vec![KeyCode::Paste, KeyCode::Enter]
         );
-        assert_eq!(c[0].bytes, 0..2);
+        assert_eq!(c[0].bytes(), 0..2);
     }
 
     fn settings(json: &str) -> Settings {
