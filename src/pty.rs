@@ -11,7 +11,9 @@ use crate::dropdown::domain::value_objects::modifiers::Modifiers;
 use crate::shared::infrastructure::logger;
 use crate::dropdown::domain::entities::menu::Menu;
 use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
-use crate::dropdown::domain::value_objects::theme::Theme;
+use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
+use crate::dropdown::domain::services::theme_resolver::resolve_theme;
+use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeRepository;
 use crate::render::{FrameInput, Renderer};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
@@ -341,6 +343,8 @@ struct Session {
     tracker: Tracker,
     menu: Menu,
     renderer: Renderer,
+    /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
+    themes: Rc<dyn ThemeRepository>,
     keymap: Keymap,
     /// Kept across stdin reads: a bracketed paste split over several reads stays one opaque unit (SPEC §7.2.1).
     decoder: StdinKeyDecoder,
@@ -449,7 +453,9 @@ impl Session {
             std::env::var("COLORTERM").as_deref(),
             Ok("truecolor" | "24bit")
         ) || std::env::var_os("WT_SESSION").is_some();
-        let renderer = Renderer::new(Theme::from_settings(&settings, terminal_bg), truecolor)
+        let themes: Rc<dyn ThemeRepository> =
+            Rc::new(FileThemeRepository::new(data_directory_from_env()));
+        let renderer = Renderer::new(resolve_theme(&settings, terminal_bg, &*themes), truecolor)
             .with_images(kitty_graphics::detect());
         let (menu, keymap) = (Menu::new(), Keymap::from_settings(&settings));
         let (tx, rx) = mpsc::channel();
@@ -530,6 +536,7 @@ impl Session {
             tracker,
             menu,
             renderer,
+            themes,
             keymap,
             decoder: StdinKeyDecoder::default(),
             settings_mtime: settings_repository.last_modified(),
@@ -1021,7 +1028,7 @@ impl Session {
                 if bg.is_some() {
                     self.terminal_bg = bg;
                     self.renderer
-                        .set_theme(Theme::from_settings(&self.settings, bg));
+                        .set_theme(resolve_theme(&self.settings, bg, &*self.themes));
                 }
                 if cpr.is_some() {
                     self.probe_until = None;
@@ -1286,7 +1293,11 @@ impl Session {
         self.settings = load_or_defaults(&*self.settings_repository);
         self.keymap = Keymap::from_settings(&self.settings);
         self.renderer
-            .set_theme(Theme::from_settings(&self.settings, self.terminal_bg));
+            .set_theme(resolve_theme(
+                &self.settings,
+                self.terminal_bg,
+                &*self.themes,
+            ));
         self.engine.apply_settings(self.settings.clone());
         true
     }
@@ -1755,6 +1766,8 @@ mod tests {
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
 
     use crate::completion::domain::test_fixtures::{comp, item, settings};
+    use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
+    use crate::dropdown::domain::value_objects::theme::Theme;
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
@@ -1790,6 +1803,7 @@ mod tests {
             tracker,
             menu: Menu::new(),
             renderer: Renderer::new(Theme::dark(), false),
+            themes: Rc::new(InMemoryThemeRepository::default()),
             keymap: Keymap::from_settings(&settings),
             decoder: StdinKeyDecoder::default(),
             settings,
