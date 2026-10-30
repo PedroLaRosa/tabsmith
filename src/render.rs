@@ -1063,7 +1063,7 @@ mod tests {
         let s =
             settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
         let mut m = menu(subs(), &s);
-        m.handle(crate::keys::Action::NavigateDown, &s);
+        m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &s);
         // Cursor on the bottom row 13, after `$ ec`: menu above on rows 8..=12 (wide chars, colours), x0 = 0;
         // pop-out right of the list (0 + 20 + 30 <= 60).
         let mut out = String::from_utf8(screen("")).unwrap();
@@ -1610,8 +1610,8 @@ mod tests {
         // Scrolled: two rows high, third row selected, whose description has a newline and wide characters.
         let tall = settings(r#"{"autocomplete.width": 20, "autocomplete.height": 2}"#);
         let mut m = menu(subs(), &tall);
-        m.handle(crate::keys::Action::NavigateDown, &tall);
-        m.handle(crate::keys::Action::NavigateDown, &tall);
+        m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &tall);
+        m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &tall);
         let mut r = Renderer::new(Theme::dark(), true);
         got.push((
             "scrolled",
@@ -1622,7 +1622,7 @@ mod tests {
         let always =
             settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
         let mut m = menu(subs(), &always);
-        m.handle(crate::keys::Action::NavigateDown, &always);
+        m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &always);
         let mut out = String::from_utf8(screen("")).unwrap();
         out += "\r\n\r\n\r\n\r\n\r\n$ ec          \x1b[36m[rprompt]\x1b[0m\x1b[14;5H";
         let a = model(60, 14, &[out.as_bytes()]);
@@ -1646,7 +1646,7 @@ mod tests {
 
         // The custom theme over the list, second row selected.
         let mut m = menu(subs(), &s);
-        m.handle(crate::keys::Action::NavigateDown, &s);
+        m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &s);
         let a = model(40, 12, &[&below]);
         let mut r = Renderer::new(custom(), true);
         got.push((

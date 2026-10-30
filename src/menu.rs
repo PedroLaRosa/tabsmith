@@ -1,6 +1,6 @@
 //! Dropdown UI state: visibility machine, selection/scroll, actions, common prefix (SPEC §7.1–7.3).
 //! Pure: no I/O. OWNER: ui agent. Driven by the wrapper (pty.rs); read by render.rs.
-use crate::keys::Action;
+use crate::dropdown::domain::value_objects::key_action::KeyAction;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION, AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_HEIGHT,
     AUTOCOMPLETE_NAVIGATE_TO_HISTORY, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
@@ -221,35 +221,35 @@ impl Menu {
     }
 
     /// Run an action (SPEC §7.2.5). No-op without a selected item. The `onlyShowOnTab` preamble is `show_on_tab`.
-    pub fn handle(&mut self, action: Action, settings: &Settings) -> Vec<Effect> {
+    pub fn handle(&mut self, action: KeyAction, settings: &Settings) -> Vec<Effect> {
         if self.items.is_empty() {
             return Vec::new();
         }
         let always_desc = settings.bool(AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION);
         match action {
-            Action::NavigateUp => self.navigate(-1, true, settings),
-            Action::NavigateDown => self.navigate(1, false, settings),
-            Action::InsertSelected => self.insert_full(self.selected, false),
-            Action::InsertSelectedAndExecute => self.insert_full(self.selected, true),
-            Action::InsertCommonPrefix => {
+            KeyAction::NavigateUp => self.navigate(-1, true, settings),
+            KeyAction::NavigateDown => self.navigate(1, false, settings),
+            KeyAction::InsertSelected => self.insert_full(self.selected, false),
+            KeyAction::InsertSelectedAndExecute => self.insert_full(self.selected, true),
+            KeyAction::InsertCommonPrefix => {
                 self.common_prefix().unwrap_or_else(|| vec![Effect::Bell])
             }
-            Action::InsertCommonPrefixOrNavigateDown => self
+            KeyAction::InsertCommonPrefixOrNavigateDown => self
                 .common_prefix()
                 .unwrap_or_else(|| self.navigate(1, false, settings)),
-            Action::InsertCommonPrefixOrInsertSelected => self
+            KeyAction::InsertCommonPrefixOrInsertSelected => self
                 .common_prefix()
                 .unwrap_or_else(|| self.insert_full(self.selected, false)),
-            Action::Execute => vec![Effect::Write(b"\r".to_vec())],
-            Action::HideAutocomplete => {
+            KeyAction::Execute => vec![Effect::Write(b"\r".to_vec())],
+            KeyAction::HideAutocomplete => {
                 self.vis = Vis::HiddenUntilShown;
                 Vec::new()
             }
-            Action::ShowAutocomplete => {
+            KeyAction::ShowAutocomplete => {
                 self.vis = Vis::Visible;
                 Vec::new()
             }
-            Action::ToggleAutocomplete => {
+            KeyAction::ToggleAutocomplete => {
                 self.vis = if self.vis == Vis::Visible {
                     Vis::HiddenUntilShown
                 } else {
@@ -257,21 +257,21 @@ impl Menu {
                 };
                 Vec::new()
             }
-            Action::ToggleHistoryMode => {
+            KeyAction::ToggleHistoryMode => {
                 self.history_mode = !self.history_mode;
                 vec![Effect::Rerequest]
             }
-            Action::ToggleDescription | Action::ShowDescription | Action::HideDescription => {
+            KeyAction::ToggleDescription | KeyAction::ShowDescription | KeyAction::HideDescription => {
                 if !always_desc {
                     self.popout = match action {
-                        Action::ToggleDescription => !self.popout,
-                        a => a == Action::ShowDescription,
+                        KeyAction::ToggleDescription => !self.popout,
+                        a => a == KeyAction::ShowDescription,
                     };
                 }
                 Vec::new()
             }
-            Action::ToggleFuzzySearch => vec![Effect::ToggleFuzzy],
-            Action::SelectSuggestion(n) => {
+            KeyAction::ToggleFuzzySearch => vec![Effect::ToggleFuzzy],
+            KeyAction::SelectSuggestion(n) => {
                 let i = self.scroll_top + usize::from(n.max(1)) - 1;
                 if i < self.items.len() {
                     self.select(i, settings);
@@ -578,7 +578,7 @@ pub(crate) mod tests {
         let s = Settings::default();
         // Insertion with a new argument next → visible.
         let mut m = typed(&s);
-        let fx = m.handle(Action::InsertSelected, &s);
+        let fx = m.handle(KeyAction::InsertSelected, &s);
         assert_eq!(
             fx,
             vec![Effect::Insert {
@@ -605,7 +605,7 @@ pub(crate) mod tests {
 
         // Flag without a new argument → hidden until the next key.
         let mut m = typed(&s);
-        m.handle(Action::InsertSelected, &s);
+        m.handle(KeyAction::InsertSelected, &s);
         m.on_completion(comp("git checkout", 2, vec![]), &s);
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
         m.on_completion(comp("git checkout2", 2, vec![]), &s);
@@ -621,7 +621,7 @@ pub(crate) mod tests {
             ),
             &s,
         );
-        m.handle(Action::InsertSelected, &s);
+        m.handle(KeyAction::InsertSelected, &s);
         let mut c = comp("git c src/", 5, vec![item("main.rs", SuggestionKind::File, "")]);
         c = c.with_triggered_generators(vec![GeneratorKey::from_raw(7)]);
         m.on_completion(c, &s);
@@ -632,7 +632,7 @@ pub(crate) mod tests {
     fn esc_hides_for_the_line() {
         let s = Settings::default();
         let mut m = typed(&s);
-        assert!(m.handle(Action::HideAutocomplete, &s).is_empty());
+        assert!(m.handle(KeyAction::HideAutocomplete, &s).is_empty());
         assert_eq!(m.vis(), Vis::HiddenUntilShown);
         m.on_completion(comp("git co", 2, subs("co")), &s);
         m.on_completion(comp("git co ", 3, vec![item("x", SuggestionKind::Arg, "")]), &s);
@@ -640,11 +640,11 @@ pub(crate) mod tests {
         assert!(!m.shown(&s));
         // Items are still recomputed (globally interceptable keys like showAutocomplete work).
         assert_eq!(m.items()[0].names()[0], "x");
-        m.handle(Action::ShowAutocomplete, &s);
+        m.handle(KeyAction::ShowAutocomplete, &s);
         assert_eq!(m.vis(), Vis::Visible);
-        m.handle(Action::ToggleAutocomplete, &s);
+        m.handle(KeyAction::ToggleAutocomplete, &s);
         assert_eq!(m.vis(), Vis::HiddenUntilShown);
-        m.handle(Action::ToggleAutocomplete, &s);
+        m.handle(KeyAction::ToggleAutocomplete, &s);
         assert_eq!(m.vis(), Vis::Visible);
     }
 
@@ -652,7 +652,7 @@ pub(crate) mod tests {
     fn backspace_into_previous_token_and_large_change() {
         let s = Settings::default();
         let mut m = typed(&s);
-        m.handle(Action::HideAutocomplete, &s);
+        m.handle(KeyAction::HideAutocomplete, &s);
         m.on_completion(comp("git ", 2, subs("")), &s);
         m.on_completion(comp("git", 1, vec![]), &s);
         assert_eq!(
@@ -717,8 +717,8 @@ pub(crate) mod tests {
     fn error_reset_and_loading() {
         let s = Settings::default();
         let mut m = typed(&s);
-        m.handle(Action::ToggleHistoryMode, &s);
-        m.handle(Action::ToggleDescription, &s);
+        m.handle(KeyAction::ToggleHistoryMode, &s);
+        m.handle(KeyAction::ToggleDescription, &s);
         m.on_completion(CompletionResult::error(9, "git c".into(), 5), &s);
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
         assert!(!m.has_items() && !m.history_mode() && m.last().is_none());
@@ -769,30 +769,30 @@ pub(crate) mod tests {
     fn navigate_wrap_hide_history() {
         let s = Settings::default();
         let mut m = typed(&s);
-        m.handle(Action::NavigateDown, &s);
-        m.handle(Action::NavigateDown, &s);
-        m.handle(Action::NavigateDown, &s);
-        m.handle(Action::NavigateDown, &s);
+        m.handle(KeyAction::NavigateDown, &s);
+        m.handle(KeyAction::NavigateDown, &s);
+        m.handle(KeyAction::NavigateDown, &s);
+        m.handle(KeyAction::NavigateDown, &s);
         assert_eq!(m.selected(), 3, "clamped at the bottom");
         for _ in 0..3 {
-            m.handle(Action::NavigateUp, &s);
+            m.handle(KeyAction::NavigateUp, &s);
         }
         assert_eq!((m.selected(), m.vis()), (0, Vis::Visible));
-        m.handle(Action::NavigateUp, &s);
+        m.handle(KeyAction::NavigateUp, &s);
         assert_eq!(m.vis(), Vis::HiddenUntilKeypress, "Up at index 0 hides");
 
         let s = settings(r#"{"autocomplete.navigateToHistory": true}"#);
         let mut m = typed(&s);
-        assert_eq!(m.handle(Action::NavigateUp, &s), vec![Effect::Rerequest]);
+        assert_eq!(m.handle(KeyAction::NavigateUp, &s), vec![Effect::Rerequest]);
         assert!(m.history_mode() && m.vis() == Vis::Visible);
 
         let s = settings(r#"{"autocomplete.scrollWrapAround": true, "autocomplete.height": 2}"#);
         let mut m = typed(&s);
-        m.handle(Action::NavigateUp, &s);
+        m.handle(KeyAction::NavigateUp, &s);
         assert_eq!((m.selected(), m.scroll_top()), (3, 2));
-        m.handle(Action::NavigateDown, &s);
+        m.handle(KeyAction::NavigateDown, &s);
         assert_eq!((m.selected(), m.scroll_top()), (0, 0));
-        m.handle(Action::SelectSuggestion(2), &s);
+        m.handle(KeyAction::SelectSuggestion(2), &s);
         assert_eq!(m.selected(), 1);
     }
 
@@ -800,7 +800,7 @@ pub(crate) mod tests {
     fn sticky_selection_across_recompute() {
         let s = Settings::default();
         let mut m = typed(&s);
-        m.handle(Action::NavigateDown, &s); // cherry-pick
+        m.handle(KeyAction::NavigateDown, &s); // cherry-pick
                                             // Generator phase reply reorders the same items.
         let mut c = comp("git c", 2, subs("c").into_iter().rev().collect());
         c = c.with_phase(CompletionPhase::Generators);
@@ -813,13 +813,13 @@ pub(crate) mod tests {
         assert_eq!(m.selected(), 0, "not sticky after the reset");
         // Typing keeps the selection: the query-stripped insert text changes, the item does not.
         m.on_completion(comp("git ch", 2, subs("ch")), &s);
-        m.handle(Action::NavigateDown, &s);
+        m.handle(KeyAction::NavigateDown, &s);
         m.on_completion(comp("git che", 2, subs("che")), &s);
         assert_eq!(m.items()[m.selected()].names()[0], "cherry-pick");
     }
 
     fn prefix_fx(m: &mut Menu) -> Vec<Effect> {
-        m.handle(Action::InsertCommonPrefix, &Settings::default())
+        m.handle(KeyAction::InsertCommonPrefix, &Settings::default())
     }
 
     #[test]
@@ -972,7 +972,7 @@ pub(crate) mod tests {
         assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
         // …and `OrNavigateDown` falls back to navigation.
         assert!(m
-            .handle(Action::InsertCommonPrefixOrNavigateDown, &s)
+            .handle(KeyAction::InsertCommonPrefixOrNavigateDown, &s)
             .is_empty());
         assert_eq!(m.selected(), 1);
     }
@@ -989,7 +989,7 @@ pub(crate) mod tests {
     fn execute_and_record() {
         let s = Settings::default();
         let mut m = typed(&s);
-        let fx = m.handle(Action::InsertSelectedAndExecute, &s);
+        let fx = m.handle(KeyAction::InsertSelectedAndExecute, &s);
         assert!(matches!(
             &fx[..],
             [Effect::Insert {
@@ -1003,20 +1003,20 @@ pub(crate) mod tests {
             &s,
         );
         assert!(matches!(
-            &m.handle(Action::InsertSelected, &s)[..],
+            &m.handle(KeyAction::InsertSelected, &s)[..],
             [Effect::Insert { record: None, .. }]
         ));
         assert_eq!(
-            m.handle(Action::Execute, &s),
+            m.handle(KeyAction::Execute, &s),
             vec![Effect::Write(b"\r".to_vec())]
         );
         let mut m = typed(&s);
-        m.handle(Action::ShowDescription, &s);
+        m.handle(KeyAction::ShowDescription, &s);
         assert!(m.popout(&s));
-        m.handle(Action::HideDescription, &s);
+        m.handle(KeyAction::HideDescription, &s);
         assert!(!m.popout(&s));
         let always = settings(r#"{"autocomplete.alwaysShowDescription": true}"#);
-        m.handle(Action::ToggleDescription, &always);
+        m.handle(KeyAction::ToggleDescription, &always);
         assert!(
             m.popout(&always) && !m.popout(&s),
             "toggle is a no-op with alwaysShowDescription"

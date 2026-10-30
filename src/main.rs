@@ -8,6 +8,7 @@ mod bootstrap;
 mod cli;
 mod completion;
 mod doctor;
+mod dropdown;
 mod ghost_text;
 mod history;
 mod icons;

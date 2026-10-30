@@ -2,7 +2,13 @@
 //! OWNER: wrapper agent.
 use crate::ghost_text::domain::value_objects::ghost_text::GhostText;
 use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
-use crate::keys::{self, Action, Binding, Key, KeyCode, Keymap, Mods};
+use crate::dropdown::domain::value_objects::key::Key;
+use crate::dropdown::domain::value_objects::key_action::KeyAction;
+use crate::dropdown::domain::value_objects::key_binding::KeyBinding;
+use crate::dropdown::domain::value_objects::key_code::KeyCode;
+use crate::dropdown::domain::value_objects::keymap::Keymap;
+use crate::dropdown::domain::value_objects::modifiers::Modifiers;
+use crate::keys;
 use crate::shared::infrastructure::logger;
 use crate::menu::{Effect, Menu};
 use crate::render::{FrameInput, Renderer, Theme};
@@ -185,16 +191,16 @@ pub fn expected_buffer(ins: &Insertion, ib: &str, cursor: usize) -> String {
 /// Ghost accept keys (SPEC §8.3): `Some(true)` = whole ghost, `Some(false)` = next word.
 fn ghost_key(k: &Key) -> Option<bool> {
     let m = k.mods;
-    let plain = m == Mods::default();
+    let plain = m == Modifiers::default();
     let ctrl = m
-        == Mods {
+        == Modifiers {
             ctrl: true,
-            ..Mods::default()
+            ..Modifiers::default()
         };
     let alt = m
-        == Mods {
+        == Modifiers {
             alt: true,
-            ..Mods::default()
+            ..Modifiers::default()
         };
     match k.code {
         KeyCode::Right | KeyCode::End if plain => Some(true),
@@ -941,7 +947,7 @@ impl Session {
             .as_ref()
             .is_some_and(|e| e.cursor == e.buffer.len());
         match key.code {
-            KeyCode::Char(c) if key.mods == Mods::default() && at_end => self.unechoed.push(c),
+            KeyCode::Char(c) if key.mods == Modifiers::default() && at_end => self.unechoed.push(c),
             _ => {
                 self.unechoed.clear();
                 self.echo_pending = Some(self.req);
@@ -1059,13 +1065,13 @@ impl Session {
                 None
             };
             let tab_show =
-                global && only_tab && key.code == KeyCode::Tab && key.mods == Mods::default();
+                global && only_tab && key.code == KeyCode::Tab && key.mods == Modifiers::default();
             let ghost = ghost_key(&key)
                 .filter(|_| prompt && self.drawable())
                 .zip(self.ghost_text(true));
             let acts = ghost.is_some()
                 || tab_show
-                || (intercepting && matches!(binding, Some(Binding::Action(_) | Binding::Unknown)));
+                || (intercepting && matches!(binding, Some(KeyBinding::Action(_) | KeyBinding::Unknown)));
             if acts && self.echo_pending.is_some() {
                 // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
                 // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
@@ -1075,11 +1081,11 @@ impl Session {
                 break;
             }
             let effects = match binding {
-                Some(Binding::Action(a)) if intercepting => self.menu.handle(a, &self.settings),
-                Some(Binding::Unknown) if intercepting => Vec::new(),
+                Some(KeyBinding::Action(a)) if intercepting => self.menu.handle(a, &self.settings),
+                Some(KeyBinding::Unknown) if intercepting => Vec::new(),
                 _ if tab_show => self.menu.show_on_tab(&self.settings),
-                Some(Binding::Action(
-                    a @ (Action::ShowAutocomplete | Action::ToggleAutocomplete),
+                Some(KeyBinding::Action(
+                    a @ (KeyAction::ShowAutocomplete | KeyAction::ToggleAutocomplete),
                 )) if global => self.menu.handle(a, &self.settings),
                 _ => {
                     match ghost {
@@ -1097,7 +1103,7 @@ impl Session {
                             }
                             fwd.extend_from_slice(&chunk[ev.bytes.clone()]);
                             typed += usize::from(
-                                matches!(key.code, KeyCode::Char(_)) && key.mods == Mods::default(),
+                                matches!(key.code, KeyCode::Char(_)) && key.mods == Modifiers::default(),
                             );
                             self.note_forwarded(&key);
                             // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
@@ -1678,19 +1684,19 @@ mod tests {
     #[test]
     fn ghost_keys_and_words_keys() {
         let k = |code, mods| Key { code, mods };
-        let ctrl = Mods {
+        let ctrl = Modifiers {
             ctrl: true,
-            ..Mods::default()
+            ..Modifiers::default()
         };
-        let alt = Mods {
+        let alt = Modifiers {
             alt: true,
-            ..Mods::default()
+            ..Modifiers::default()
         };
-        assert_eq!(ghost_key(&k(KeyCode::Right, Mods::default())), Some(true));
+        assert_eq!(ghost_key(&k(KeyCode::Right, Modifiers::default())), Some(true));
         assert_eq!(ghost_key(&k(KeyCode::Char('e'), ctrl)), Some(true));
         assert_eq!(ghost_key(&k(KeyCode::Char('f'), alt)), Some(false));
         assert_eq!(ghost_key(&k(KeyCode::Right, ctrl)), Some(false));
-        assert_eq!(ghost_key(&k(KeyCode::Tab, Mods::default())), None);
+        assert_eq!(ghost_key(&k(KeyCode::Tab, Modifiers::default())), None);
     }
 
     #[test]
@@ -2240,7 +2246,7 @@ mod tests {
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         s.tracker.submitted = Some("stale".into());
-        let fx = s.menu.handle(Action::InsertSelectedAndExecute, &s.settings);
+        let fx = s.menu.handle(KeyAction::InsertSelectedAndExecute, &s.settings);
         let Some(Effect::Insert { ins, .. }) = fx.into_iter().next() else {
             panic!("no insertion")
         };
