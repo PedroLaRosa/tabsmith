@@ -50,6 +50,17 @@ mod tests {
     }
 
     #[test]
+    fn theme_file_parsing() {
+        parse_theme_definition(
+            r##"{"author":{"name":"Ann","github":"ann"},"version":"1.0","shade0":"#000000"}"##,
+        )
+        .unwrap();
+        assert!(parse_theme_definition(r#"{"author":"Ann"}"#).is_err());
+        assert!(parse_theme_definition(r#"{"shade3":5}"#).is_err());
+        assert!(parse_theme_definition("not json").is_err());
+    }
+
+    #[test]
     fn should_parse_a_full_author_and_a_name_only_author() {
         let full = r##"{"author":{"name":"Ann","twitter":"@ann","github":"ann"},"version":"1.0","shade0":"#000000"}"##;
         let name_only = r#"{"author":{"name":"Ann"}}"#;

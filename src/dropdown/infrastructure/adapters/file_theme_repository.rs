@@ -210,6 +210,23 @@ mod tests {
     }
 
     #[test]
+    fn theme_list_order() {
+        let temp_dir = TempDir::new("themes");
+        let d = temp_dir.path().to_path_buf();
+        fs::create_dir(d.join("themes")).unwrap();
+        for f in ["zed.json", "alpha.json", "dark.json", "notes.txt"] {
+            fs::write(d.join("themes").join(f), "{}").unwrap();
+        }
+
+        let listed = repository_in(&d).list();
+        let listed_without_a_folder = repository_in(&d.join("missing")).list();
+
+        assert_eq!(listed, ["alpha", "dark", "zed"]);
+        assert!(listed_without_a_folder.is_empty());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
     fn should_not_create_the_themes_directory() {
         let temp_dir = TempDir::new("themes-not-created");
         let repository = repository_in(temp_dir.path());

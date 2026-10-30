@@ -3,6 +3,8 @@
 
 use crate::bootstrap::bridges::SpecBundleBridge;
 use crate::bootstrap::channel_completion_engine::start_completion_engine;
+use crate::dropdown::infrastructure::cli::theme_command::{run_theme_command, ThemeArgs};
+use crate::dropdown::infrastructure::dropdown_module::{build_dropdown_module, DropdownModule};
 use crate::ghost_text::infrastructure::cli::inline_command::{run_inline_command, InlineCmd};
 use crate::ghost_text::infrastructure::inline_command_module::{
     build_inline_command_module, InlineCommandModule,
@@ -50,7 +52,7 @@ enum Command {
     /// Customize appearance & behavior
     Settings(SettingsArgs),
     /// Get or set theme
-    Theme(cli::ThemeArgs),
+    Theme(ThemeArgs),
     /// Inline shell completions
     #[command(subcommand)]
     Inline(InlineCmd),
@@ -130,7 +132,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
             &build_settings_module(&SharedDependencies::from_env()),
             print_settings_help,
         ),
-        Some(Command::Theme(a)) => cli::theme(a),
+        Some(Command::Theme(a)) => run_theme_command(a, &dropdown_module()),
         Some(Command::Inline(c)) => run_inline_command(c, &inline_command_module()),
         Some(Command::Integrations(c)) => run_integrations_command(c, &shell_integration_module()),
         Some(Command::Init(a)) => run_init_command(a, &shell_integration_module()),
@@ -158,6 +160,13 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
 /// The inline command's module over the settings file the environment names (resolved when a command needs it).
 fn inline_command_module() -> InlineCommandModule {
     build_inline_command_module(Rc::new(JsonFileSettingsRepository::new(data_directory_from_env())))
+}
+
+/// The theme command's module over the settings file the environment names (resolved when a command needs it).
+fn dropdown_module() -> DropdownModule {
+    let dependencies = SharedDependencies::from_env();
+    let settings = Rc::new(JsonFileSettingsRepository::new(dependencies.data_directory.clone()));
+    build_dropdown_module(&dependencies, settings)
 }
 
 /// The shell integration commands' module, built for the one command that runs.

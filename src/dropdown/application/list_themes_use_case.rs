@@ -47,6 +47,15 @@ mod tests {
     }
 
     #[test]
+    fn theme_list_order_built_ins() {
+        let with_custom = list(with_themes(&["zed", "alpha", "dark"]));
+        let without_custom = list(InMemoryThemeRepository::default());
+
+        assert_eq!(with_custom, ["dark", "light", "system", "alpha", "zed"]);
+        assert_eq!(without_custom, ["dark", "light", "system"]);
+    }
+
+    #[test]
     fn should_list_the_built_in_themes_first_then_the_custom_ones() {
         let names = list(with_themes(&["zed", "alpha"]));
 

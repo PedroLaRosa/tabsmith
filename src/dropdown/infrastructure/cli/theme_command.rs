@@ -141,6 +141,22 @@ mod tests {
     }
 
     #[test]
+    fn theme_file_parsing_banner() {
+        let f = parse_theme_definition(
+            r##"{"author":{"name":"Ann","github":"ann"},"version":"1.0","shade0":"#000000"}"##,
+        )
+        .unwrap();
+        assert_eq!(
+            theme_banner("ocean", &f, false),
+            "\n› Switching to theme 'ocean' by Ann\n  💻 github.com/ann\n\n"
+        );
+        assert_eq!(
+            theme_banner("ocean", &parse_theme_definition("{}").unwrap(), false),
+            "\n› Switching to theme 'ocean'\n\n"
+        );
+    }
+
+    #[test]
     fn should_print_a_non_text_setting_value_like_the_settings_command() {
         let values = [
             SettingValue::Null,

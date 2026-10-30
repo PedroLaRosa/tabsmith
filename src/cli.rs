@@ -1,11 +1,6 @@
-//! Small user-facing commands: theme, diagnostic, debug (SPEC §2.4, §2.10).
+//! Small user-facing commands: diagnostic, debug (SPEC §2.10).
 //! OWNER: cli agent.
 use crate::pty::CompletionEngineStarter;
-use crate::settings::domain::repositories::settings_repository::SettingsRepository;
-use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_THEME;
-use crate::settings::domain::value_objects::setting_value::SettingValue;
-use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
-use crate::settings::infrastructure::adapters::setting_value_json::setting_value_to_json;
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
@@ -16,25 +11,12 @@ use crate::shell_integration::domain::value_objects::integration_phase::Integrat
 use crate::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
 use crate::shell_integration::infrastructure::cli::init_command::{init_script, ShellArg};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::rc::Rc;
-
-#[derive(Args)]
-pub struct ThemeArgs {
-    /// List all available themes
-    #[arg(long, conflicts_with_all = ["folder", "theme"])]
-    pub list: bool,
-    /// Print the theme directory path
-    #[arg(long, conflicts_with = "theme")]
-    pub folder: bool,
-    /// Theme name: dark, light, system, or a custom theme
-    pub theme: Option<String>,
-}
 
 #[derive(Args)]
 pub struct DiagnosticArgs {
@@ -52,126 +34,6 @@ pub enum DebugCmd {
     },
     /// Show log file paths and the end of pty.log
     Logs,
-}
-
-/// settings.json, or the file `TABSMITH_SETTINGS_PATH` names, resolved when a command reads or writes it.
-fn settings_repository() -> JsonFileSettingsRepository {
-    JsonFileSettingsRepository::new(data_directory_from_env())
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// theme (SPEC §2.4)
-
-const BUILTIN_THEMES: [&str; 3] = ["dark", "light", "system"];
-
-#[derive(Deserialize)]
-struct ThemeAuthor {
-    name: Option<String>,
-    twitter: Option<String>,
-    github: Option<String>,
-}
-
-/// Custom theme file, parsed only to validate it and print the author (render.rs owns the colours).
-#[derive(Deserialize)]
-struct ThemeFile {
-    author: Option<ThemeAuthor>,
-    #[allow(dead_code)]
-    version: Option<String>,
-    #[allow(dead_code)]
-    theme: Option<Map<String, Value>>,
-    #[serde(flatten)]
-    rest: Map<String, Value>,
-}
-
-fn parse_theme(text: &str) -> Result<ThemeFile> {
-    let file: ThemeFile = serde_json::from_str(text)?;
-    for (k, v) in &file.rest {
-        if (k.starts_with("shade") || k.starts_with("accent")) && !v.is_string() {
-            bail!("{k} must be a string");
-        }
-    }
-    Ok(file)
-}
-
-pub fn theme(args: ThemeArgs) -> Result<i32> {
-    let dir = data_directory_from_env().themes_dir()?;
-    if args.folder {
-        std::fs::create_dir_all(&dir)?;
-        println!("{}", dir.display());
-        return Ok(0);
-    }
-    if args.list {
-        theme_list(&dir).iter().for_each(|t| println!("{t}"));
-        return Ok(0);
-    }
-    let repository = settings_repository();
-    let settings = repository.load()?;
-    let Some(name) = args.theme else {
-        println!(
-            "{}",
-            match settings.get(AUTOCOMPLETE_THEME) {
-                Some(v) if v.as_str().is_none() => format!("{:#}", setting_value_to_json(v)),
-                _ => settings
-                    .string(AUTOCOMPLETE_THEME)
-                    .unwrap_or_default()
-                    .to_string(),
-            }
-        );
-        return Ok(0);
-    };
-    let color = stdout_tty();
-    let path = dir.join(format!("{name}.json"));
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        let file =
-            parse_theme(&text).with_context(|| format!("invalid theme file {}", path.display()))?;
-        print!("{}", theme_banner(&name, &file, color));
-    } else if BUILTIN_THEMES.contains(&name.as_str()) {
-        println!("› Switching to theme '{}'", bold(&name, color));
-    } else {
-        bail!("'{name}' does not exist in {}", dir.display());
-    }
-    repository.save(&settings.with(AUTOCOMPLETE_THEME, SettingValue::Text(name)))?;
-    Ok(0)
-}
-
-/// Built-ins first, then the folder's `*.json` stems sorted (built-in names not repeated).
-fn theme_list(dir: &Path) -> Vec<String> {
-    let mut files: Vec<String> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            let p = e.path();
-            if p.extension()? != "json" {
-                return None;
-            }
-            Some(p.file_stem()?.to_str()?.to_string())
-        })
-        .filter(|s| !BUILTIN_THEMES.contains(&s.as_str()))
-        .collect();
-    files.sort();
-    files.dedup();
-    BUILTIN_THEMES
-        .iter()
-        .map(|s| s.to_string())
-        .chain(files)
-        .collect()
-}
-
-fn theme_banner(name: &str, file: &ThemeFile, color: bool) -> String {
-    let mut out = format!("\n› Switching to theme '{}'", bold(name, color));
-    if let Some(author) = &file.author {
-        if let Some(n) = &author.name {
-            out += &format!(" by {}", bold(n, color));
-        }
-        if let Some(t) = &author.twitter {
-            out += &format!("\n  🐦 {t}");
-        }
-        if let Some(g) = &author.github {
-            out += &format!("\n  💻 github.com/{g}");
-        }
-    }
-    out + "\n\n"
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -460,37 +322,6 @@ fn debug_logs() -> Result<i32> {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-
-    #[test]
-    fn theme_list_order() {
-        let temp_dir = TempDir::new("themes");
-        let d = temp_dir.path().to_path_buf();
-        for f in ["zed.json", "alpha.json", "dark.json", "notes.txt"] {
-            std::fs::write(d.join(f), "{}").unwrap();
-        }
-        assert_eq!(theme_list(&d), ["dark", "light", "system", "alpha", "zed"]);
-        assert_eq!(theme_list(&d.join("missing")), ["dark", "light", "system"]);
-        std::fs::remove_dir_all(&d).unwrap();
-    }
-
-    #[test]
-    fn theme_file_parsing() {
-        let f = parse_theme(
-            r##"{"author":{"name":"Ann","github":"ann"},"version":"1.0","shade0":"#000000"}"##,
-        )
-        .unwrap();
-        assert_eq!(
-            theme_banner("ocean", &f, false),
-            "\n› Switching to theme 'ocean' by Ann\n  💻 github.com/ann\n\n"
-        );
-        assert_eq!(
-            theme_banner("ocean", &parse_theme("{}").unwrap(), false),
-            "\n› Switching to theme 'ocean'\n\n"
-        );
-        assert!(parse_theme(r#"{"author":"Ann"}"#).is_err());
-        assert!(parse_theme(r#"{"shade3":5}"#).is_err());
-        assert!(parse_theme("not json").is_err());
-    }
 
     #[test]
     fn key_tester_line() {
