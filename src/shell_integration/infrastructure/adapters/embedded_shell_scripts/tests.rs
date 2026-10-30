@@ -133,12 +133,12 @@ fn integrations_post_scripts_emit_markers() {
         ),
     ];
     for (shell, prog, args, script) in cases {
-        if which(prog).is_none() {
+        let Some(exe) = which(prog) else {
             continue;
-        }
+        };
         let f = dir.join(format!("post.{prog}"));
         std::fs::write(&f, snapshot(shell, IntegrationPhase::Post)).unwrap();
-        let out = Command::new(prog)
+        let out = Command::new(exe)
             .args(args)
             .arg(script)
             .env("F", &f)
@@ -327,9 +327,9 @@ fn integrations_fish_confd_launches_in_a_pty() {
 /// once at every prompt.
 #[test]
 fn integrations_bash_prompt_command_rewrap() {
-    if which("bash").is_none() {
+    let Some(bash) = which("bash") else {
         return;
-    }
+    };
     let temp_dir = TempDir::new("bashpc");
     let dir = temp_dir.path().to_path_buf();
     let f = dir.join("post.bash");
@@ -340,7 +340,7 @@ fn integrations_bash_prompt_command_rewrap() {
             (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) && echo ARRAY
             pc; PROMPT_COMMAND="$PROMPT_COMMAND; true"; prompts
             PROMPT_COMMAND=$'__bp_a\n'"$PROMPT_COMMAND"$'\n__bp_b'; prompts"#;
-    let out = Command::new("bash")
+    let out = Command::new(bash)
         .args(["--norc", "--noprofile", "-c", script])
         .env("F", &f)
         .env("TABSMITH_SESSION_ID", "abc")
@@ -647,14 +647,14 @@ fn integrations_pwsh_utf8_under_oem_code_page() {
 /// Run `script` in `prog args… script` with `post` written to $F, session `abc`, data dir under `dir`.
 /// None when `prog` is not installed.
 fn run_post(prog: &str, args: &[&str], post: &str, script: &str, dir: &Path) -> Option<String> {
-    which(prog)?;
+    let exe = which(prog)?;
     let f = dir.join(if prog == "pwsh" {
         "post.ps1".into()
     } else {
         format!("post.{prog}")
     }); // pwsh runs only .ps1
     std::fs::write(&f, post).unwrap();
-    let out = Command::new(prog)
+    let out = Command::new(exe)
         .args(args)
         .arg(script)
         .env("F", &f)

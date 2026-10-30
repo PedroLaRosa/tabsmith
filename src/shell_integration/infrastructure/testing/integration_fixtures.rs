@@ -70,10 +70,10 @@ pub(crate) fn syntax_ok(shell: Shell, file: &Path) {
         )],
     };
     for (prog, args) in checks {
-        if which(prog).is_none() {
+        let Some(exe) = which(prog) else {
             continue;
-        }
-        let out = Command::new(prog).args(&args).output().unwrap();
+        };
+        let out = Command::new(exe).args(&args).output().unwrap();
         assert!(
             out.status.success(),
             "{prog} rejects {}:\n{}{}",

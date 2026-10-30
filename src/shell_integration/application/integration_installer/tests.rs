@@ -71,19 +71,26 @@ fn source_line(integration: &Integration, phase: IntegrationPhase) -> String {
 /// The `~/.tabsmith/shell` script file of `phase`, with the exact contents install writes.
 fn write_script(bed: &TestBed, integration: &Integration, phase: IntegrationPhase) {
     let script = integration.script(&paths(), phase);
-    bed.dotfiles.write(script.path(), script.contents()).unwrap();
+    bed.dotfiles
+        .write(script.path(), script.contents())
+        .unwrap();
 }
 
 #[test]
 fn should_list_the_bash_login_files_that_exist_after_bashrc() {
     let bed = test_bed();
-    bed.dotfiles.write(Path::new("/home/u/.bash_profile"), "").unwrap();
+    bed.dotfiles
+        .write(Path::new("/home/u/.bash_profile"), "")
+        .unwrap();
 
     let listed = bed.installer.integrations(&paths(), Shell::Bash).unwrap();
 
     assert_eq!(
         listed.iter().map(Integration::path).collect::<Vec<_>>(),
-        [Path::new("/home/u/.bashrc"), Path::new("/home/u/.bash_profile")]
+        [
+            Path::new("/home/u/.bashrc"),
+            Path::new("/home/u/.bash_profile")
+        ]
     );
 }
 
@@ -92,7 +99,13 @@ fn should_list_the_bash_login_files_that_exist_after_bashrc() {
 fn should_ask_pwsh_for_its_profile_on_each_listing_of_pwsh_and_for_no_other_shell() {
     let bed = test_bed();
 
-    for shell in [Shell::Bash, Shell::Pwsh, Shell::Zsh, Shell::Fish, Shell::Pwsh] {
+    for shell in [
+        Shell::Bash,
+        Shell::Pwsh,
+        Shell::Zsh,
+        Shell::Fish,
+        Shell::Pwsh,
+    ] {
         bed.installer.integrations(&paths(), shell).unwrap();
     }
 
@@ -102,7 +115,8 @@ fn should_ask_pwsh_for_its_profile_on_each_listing_of_pwsh_and_for_no_other_shel
 #[test]
 fn should_list_the_profile_pwsh_gives_as_its_one_dotfile() {
     let bed = test_bed_with(
-        RecordingShellEnvironment::default().with_pwsh_profile(Ok(PathBuf::from("/home/u/pwsh/profile.ps1"))),
+        RecordingShellEnvironment::default()
+            .with_pwsh_profile(Ok(PathBuf::from("/home/u/pwsh/profile.ps1"))),
     );
 
     let listed = bed.installer.integrations(&paths(), Shell::Pwsh).unwrap();
@@ -129,10 +143,14 @@ fn should_not_ask_pwsh_for_the_profile_the_paths_know() {
 #[test]
 fn should_fail_to_list_pwsh_when_pwsh_cannot_give_its_profile() {
     let bed = test_bed_with(
-        RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+        RecordingShellEnvironment::default()
+            .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
     );
 
-    let error = bed.installer.integrations(&paths(), Shell::Pwsh).unwrap_err();
+    let error = bed
+        .installer
+        .integrations(&paths(), Shell::Pwsh)
+        .unwrap_err();
 
     assert_eq!(error.to_string(), "pwsh printed an empty $PROFILE");
 }
@@ -155,8 +173,13 @@ fn should_find_a_dotfile_that_does_not_source_the_pre_script_not_installed() {
 fn should_find_a_pre_source_line_that_is_not_first_improperly_installed() {
     let bed = test_bed();
     let zshrc = zshrc();
-    let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
-    bed.dotfiles.write(zshrc.path(), &format!("export A=1\n{pre}\n{post}\n")).unwrap();
+    let (pre, post) = (
+        source_line(&zshrc, IntegrationPhase::Pre),
+        source_line(&zshrc, IntegrationPhase::Post),
+    );
+    bed.dotfiles
+        .write(zshrc.path(), &format!("export A=1\n{pre}\n{post}\n"))
+        .unwrap();
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
@@ -171,7 +194,12 @@ fn should_find_a_pre_source_line_that_is_not_first_improperly_installed() {
 fn should_check_the_pre_script_after_its_line_and_before_the_post_line() {
     let bed = test_bed();
     let zshrc = zshrc();
-    bed.dotfiles.write(zshrc.path(), &format!("{}\n", source_line(&zshrc, IntegrationPhase::Pre))).unwrap();
+    bed.dotfiles
+        .write(
+            zshrc.path(),
+            &format!("{}\n", source_line(&zshrc, IntegrationPhase::Pre)),
+        )
+        .unwrap();
 
     let pre_script = zshrc.script(&paths(), IntegrationPhase::Pre);
 
@@ -187,7 +215,15 @@ fn should_check_the_pre_script_after_its_line_and_before_the_post_line() {
 fn should_find_a_dotfile_that_does_not_source_the_post_script_not_installed() {
     let bed = test_bed();
     let zshrc = zshrc();
-    bed.dotfiles.write(zshrc.path(), &format!("{}\nexport A=1\n", source_line(&zshrc, IntegrationPhase::Pre))).unwrap();
+    bed.dotfiles
+        .write(
+            zshrc.path(),
+            &format!(
+                "{}\nexport A=1\n",
+                source_line(&zshrc, IntegrationPhase::Pre)
+            ),
+        )
+        .unwrap();
     write_script(&bed, &zshrc, IntegrationPhase::Pre);
 
     let checked = bed.installer.check(&paths(), &zshrc);
@@ -202,8 +238,13 @@ fn should_find_a_dotfile_that_does_not_source_the_post_script_not_installed() {
 fn should_find_a_post_source_line_that_is_not_last_improperly_installed() {
     let bed = test_bed();
     let zshrc = zshrc();
-    let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
-    bed.dotfiles.write(zshrc.path(), &format!("{pre}\n{post}\nexport A=1\n")).unwrap();
+    let (pre, post) = (
+        source_line(&zshrc, IntegrationPhase::Pre),
+        source_line(&zshrc, IntegrationPhase::Post),
+    );
+    bed.dotfiles
+        .write(zshrc.path(), &format!("{pre}\n{post}\nexport A=1\n"))
+        .unwrap();
     write_script(&bed, &zshrc, IntegrationPhase::Pre);
 
     let checked = bed.installer.check(&paths(), &zshrc);
@@ -218,10 +259,17 @@ fn should_find_a_post_source_line_that_is_not_last_improperly_installed() {
 fn should_find_a_script_file_holding_anything_else_improperly_installed() {
     let bed = test_bed();
     let zshrc = zshrc();
-    let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
-    bed.dotfiles.write(zshrc.path(), &format!("{pre}\n{post}\n")).unwrap();
+    let (pre, post) = (
+        source_line(&zshrc, IntegrationPhase::Pre),
+        source_line(&zshrc, IntegrationPhase::Post),
+    );
+    bed.dotfiles
+        .write(zshrc.path(), &format!("{pre}\n{post}\n"))
+        .unwrap();
     let pre_script = zshrc.script(&paths(), IntegrationPhase::Pre);
-    bed.dotfiles.write(pre_script.path(), "echo edited\n").unwrap();
+    bed.dotfiles
+        .write(pre_script.path(), "echo edited\n")
+        .unwrap();
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
@@ -240,8 +288,16 @@ fn should_find_a_script_file_holding_anything_else_improperly_installed() {
 fn should_find_the_source_lines_first_and_last_among_comments_and_blank_lines_installed() {
     let bed = test_bed();
     let zshrc = zshrc();
-    let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
-    bed.dotfiles.write(zshrc.path(), &format!("# mine\n\n  {pre}\nexport A=1\n{post}  \n\n# end\n")).unwrap();
+    let (pre, post) = (
+        source_line(&zshrc, IntegrationPhase::Pre),
+        source_line(&zshrc, IntegrationPhase::Post),
+    );
+    bed.dotfiles
+        .write(
+            zshrc.path(),
+            &format!("# mine\n\n  {pre}\nexport A=1\n{post}  \n\n# end\n"),
+        )
+        .unwrap();
     write_script(&bed, &zshrc, IntegrationPhase::Pre);
     write_script(&bed, &zshrc, IntegrationPhase::Post);
 
@@ -254,7 +310,9 @@ fn should_find_the_source_lines_first_and_last_among_comments_and_blank_lines_in
 fn should_take_an_opted_out_dotfile_for_installed() {
     let bed = test_bed();
     let zshrc = zshrc();
-    bed.dotfiles.write(zshrc.path(), "export A=1\n  #  Tabsmith Ignore\n").unwrap();
+    bed.dotfiles
+        .write(zshrc.path(), "export A=1\n  #  Tabsmith Ignore\n")
+        .unwrap();
 
     let checked = bed.installer.check(&paths(), &zshrc);
 
@@ -267,7 +325,10 @@ fn should_fail_the_check_of_a_dotfile_it_cannot_read_on_the_dotfile() {
 
     let checked = bed.installer.check(&paths(), &zshrc());
 
-    assert_eq!(checked.unwrap_err().to_string(), "File does not exist: /home/u/.zshrc");
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        "File does not exist: /home/u/.zshrc"
+    );
 }
 
 #[test]
@@ -275,7 +336,9 @@ fn should_find_a_whole_file_holding_exactly_its_script_installed() {
     let bed = test_bed();
     let fish_pre = fish_pre();
     let script = fish_pre.whole_file_script(&paths()).unwrap();
-    bed.dotfiles.write(fish_pre.path(), script.contents()).unwrap();
+    bed.dotfiles
+        .write(fish_pre.path(), script.contents())
+        .unwrap();
 
     let checked = bed.installer.check(&paths(), &fish_pre);
 
@@ -287,7 +350,9 @@ fn should_find_a_whole_file_holding_more_than_its_script_improperly_installed() 
     let bed = test_bed();
     let fish_pre = fish_pre();
     let script = fish_pre.whole_file_script(&paths()).unwrap();
-    bed.dotfiles.write(fish_pre.path(), &format!("{}# edited\n", script.contents())).unwrap();
+    bed.dotfiles
+        .write(fish_pre.path(), &format!("{}# edited\n", script.contents()))
+        .unwrap();
 
     let checked = bed.installer.check(&paths(), &fish_pre);
 
@@ -331,9 +396,15 @@ fn should_remove_the_file_of_a_whole_file_integration_on_uninstall() {
 fn should_take_the_tabsmith_lines_out_and_trim_the_blank_lines_around_the_rest_on_uninstall() {
     let bed = test_bed();
     let zshrc = zshrc();
-    let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
+    let (pre, post) = (
+        source_line(&zshrc, IntegrationPhase::Pre),
+        source_line(&zshrc, IntegrationPhase::Post),
+    );
     bed.dotfiles
-        .write(zshrc.path(), &format!("\n\n{PRE_MARKER}\n{pre}\nexport A=1\n\n{POST_MARKER}\n{post}\n\n"))
+        .write(
+            zshrc.path(),
+            &format!("\n\n{PRE_MARKER}\n{pre}\nexport A=1\n\n{POST_MARKER}\n{post}\n\n"),
+        )
         .unwrap();
 
     bed.installer.uninstall(&paths(), &zshrc).unwrap();
@@ -417,7 +488,9 @@ fn should_change_nothing_of_an_installed_integration_on_install() {
 fn should_leave_an_opted_out_dotfile_alone_on_install() {
     let bed = test_bed();
     let zshrc = zshrc();
-    bed.dotfiles.write(zshrc.path(), "# tabsmith ignore\n").unwrap();
+    bed.dotfiles
+        .write(zshrc.path(), "# tabsmith ignore\n")
+        .unwrap();
 
     bed.installer.install(&paths(), &zshrc).unwrap();
 
@@ -437,7 +510,10 @@ fn should_back_up_an_existing_dotfile_into_the_dir_named_after_the_clock_seconds
 
     assert_eq!(
         bed.backups.backups(),
-        [(PathBuf::from("/home/u/.zshrc"), PathBuf::from("/home/u/.tabsmith/backups/1700000123"))]
+        [(
+            PathBuf::from("/home/u/.zshrc"),
+            PathBuf::from("/home/u/.tabsmith/backups/1700000123")
+        )]
     );
 }
 
@@ -470,7 +546,9 @@ fn should_write_the_script_files_before_the_dotfile_on_install() {
 fn should_put_the_user_lines_between_the_blocks_on_install() {
     let bed = test_bed();
     let zshrc = zshrc();
-    bed.dotfiles.write(zshrc.path(), "#!/bin/zsh\nexport A=1\n").unwrap();
+    bed.dotfiles
+        .write(zshrc.path(), "#!/bin/zsh\nexport A=1\n")
+        .unwrap();
 
     bed.installer.install(&paths(), &zshrc).unwrap();
 
@@ -489,7 +567,10 @@ fn should_put_the_user_lines_between_the_blocks_on_install() {
 fn should_replace_the_blocks_already_there_rather_than_add_a_second_pair_on_install() {
     let bed = test_bed();
     let zshrc = zshrc();
-    let (pre, post) = (source_line(&zshrc, IntegrationPhase::Pre), source_line(&zshrc, IntegrationPhase::Post));
+    let (pre, post) = (
+        source_line(&zshrc, IntegrationPhase::Pre),
+        source_line(&zshrc, IntegrationPhase::Post),
+    );
     let installed = format!("{PRE_MARKER}\n{pre}\nexport A=1\n{POST_MARKER}\n{post}\n");
     bed.dotfiles.write(zshrc.path(), &installed).unwrap();
 
@@ -526,7 +607,9 @@ fn should_find_traces_of_a_script_file_left_behind() {
 fn should_find_traces_in_a_tabsmith_line_of_the_dotfile_even_with_trailing_whitespace() {
     let bed = test_bed();
     let zshrc = zshrc();
-    bed.dotfiles.write(zshrc.path(), &format!("export A=1\n{POST_MARKER}  \r\n")).unwrap();
+    bed.dotfiles
+        .write(zshrc.path(), &format!("export A=1\n{POST_MARKER}  \r\n"))
+        .unwrap();
 
     let traces = bed.installer.has_traces(&paths(), &zshrc);
 
@@ -538,7 +621,9 @@ fn should_find_traces_in_a_tabsmith_line_of_the_dotfile_even_with_trailing_white
 fn should_not_take_a_marker_behind_a_byte_order_mark_for_a_trace() {
     let bed = test_bed();
     let zshrc = zshrc();
-    bed.dotfiles.write(zshrc.path(), &format!("\u{feff}{PRE_MARKER}\nexport A=1\n")).unwrap();
+    bed.dotfiles
+        .write(zshrc.path(), &format!("\u{feff}{PRE_MARKER}\nexport A=1\n"))
+        .unwrap();
 
     let traces = bed.installer.has_traces(&paths(), &zshrc);
 
@@ -580,7 +665,12 @@ fn should_find_traces_of_a_whole_file_integration_in_its_file() {
 fn should_report_that_the_operation_ran_when_it_ran_on_a_picked_integration() {
     let bed = test_bed();
 
-    let ran = bed.installer.apply(&paths(), &[Shell::Zsh], |i| i.file_name() == ".zprofile", |_| Ok(()));
+    let ran = bed.installer.apply(
+        &paths(),
+        &[Shell::Zsh],
+        |i| i.file_name() == ".zprofile",
+        |_| Ok(()),
+    );
 
     assert!(matches!(ran, Ok(true)), "{ran:?}");
 }
@@ -590,12 +680,20 @@ fn should_report_that_nothing_ran_when_no_integration_is_picked() {
     let bed = test_bed();
     let ran_on = RefCell::new(Vec::new());
 
-    let ran = bed.installer.apply(&paths(), &[Shell::Bash, Shell::Zsh], |_| false, |i| {
-        ran_on.borrow_mut().push(i.path().to_path_buf());
-        Ok(())
-    });
+    let ran = bed.installer.apply(
+        &paths(),
+        &[Shell::Bash, Shell::Zsh],
+        |_| false,
+        |i| {
+            ran_on.borrow_mut().push(i.path().to_path_buf());
+            Ok(())
+        },
+    );
 
-    assert!(matches!(ran, Ok(false)) && ran_on.borrow().is_empty(), "{ran:?} {ran_on:?}");
+    assert!(
+        matches!(ran, Ok(false)) && ran_on.borrow().is_empty(),
+        "{ran:?} {ran_on:?}"
+    );
 }
 
 /// Each failure of a failed run as (kind, shell or description, reason).
@@ -604,7 +702,10 @@ fn failures_of(ran: Result<bool, Vec<IntegrationFailure>>) -> Vec<(&'static str,
         .into_iter()
         .map(|failure| match failure {
             IntegrationFailure::Listing { shell, reason } => ("listing", shell, reason),
-            IntegrationFailure::Operation { description, reason } => ("operation", description, reason),
+            IntegrationFailure::Operation {
+                description,
+                reason,
+            } => ("operation", description, reason),
         })
         .collect()
 }
@@ -615,7 +716,10 @@ fn failure(kind: &'static str, subject: &str, reason: &str) -> (&'static str, St
 
 /// The permission error of `file` joined under the home as the catalog joins it (`/home/u\.zshrc` on Windows).
 fn permission_denied_under_home(file: &str) -> String {
-    format!("Permission denied: {}", Path::new("/home/u").join(file).display())
+    format!(
+        "Permission denied: {}",
+        Path::new("/home/u").join(file).display()
+    )
 }
 
 #[test]
@@ -623,18 +727,36 @@ fn should_run_the_operation_on_every_picked_integration_past_its_failures_and_re
     let bed = test_bed();
     let ran_on = RefCell::new(Vec::new());
 
-    let ran = bed.installer.apply(&paths(), &[Shell::Zsh], |_| true, |i| {
-        ran_on.borrow_mut().push(i.path().to_path_buf());
-        Err(ShellIntegrationError::PermissionDenied(i.path().to_path_buf()))
-    });
+    let ran = bed.installer.apply(
+        &paths(),
+        &[Shell::Zsh],
+        |_| true,
+        |i| {
+            ran_on.borrow_mut().push(i.path().to_path_buf());
+            Err(ShellIntegrationError::PermissionDenied(
+                i.path().to_path_buf(),
+            ))
+        },
+    );
 
     assert_eq!(
         (ran_on.into_inner(), failures_of(ran)),
         (
-            vec![PathBuf::from("/home/u/.zshrc"), PathBuf::from("/home/u/.zprofile")],
             vec![
-                failure("operation", "zsh pre post into .zshrc", &permission_denied_under_home(".zshrc")),
-                failure("operation", "zsh pre post into .zprofile", &permission_denied_under_home(".zprofile")),
+                PathBuf::from("/home/u/.zshrc"),
+                PathBuf::from("/home/u/.zprofile")
+            ],
+            vec![
+                failure(
+                    "operation",
+                    "zsh pre post into .zshrc",
+                    &permission_denied_under_home(".zshrc")
+                ),
+                failure(
+                    "operation",
+                    "zsh pre post into .zprofile",
+                    &permission_denied_under_home(".zprofile")
+                ),
             ]
         )
     );
@@ -643,21 +765,35 @@ fn should_run_the_operation_on_every_picked_integration_past_its_failures_and_re
 #[test]
 fn should_report_a_shell_it_cannot_list_at_its_place_among_the_failures() {
     let bed = test_bed_with(
-        RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+        RecordingShellEnvironment::default()
+            .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
     );
 
     let shells = [Shell::Zsh, Shell::Pwsh, Shell::Bash];
-    let ran = bed.installer.apply(&paths(), &shells, |_| true, |i| match i.file_name().as_str() {
-        ".zprofile" | ".bashrc" => Err(ShellIntegrationError::NotInstalled("gone".into())),
-        _ => Ok(()),
-    });
+    let ran = bed.installer.apply(
+        &paths(),
+        &shells,
+        |_| true,
+        |i| match i.file_name().as_str() {
+            ".zprofile" | ".bashrc" => Err(ShellIntegrationError::NotInstalled("gone".into())),
+            _ => Ok(()),
+        },
+    );
 
     assert_eq!(
         failures_of(ran),
         [
-            failure("operation", "zsh pre post into .zprofile", "Integration not installed: gone"),
+            failure(
+                "operation",
+                "zsh pre post into .zprofile",
+                "Integration not installed: gone"
+            ),
             failure("listing", "pwsh", "pwsh printed an empty $PROFILE"),
-            failure("operation", "bash pre post into .bashrc", "Integration not installed: gone"),
+            failure(
+                "operation",
+                "bash pre post into .bashrc",
+                "Integration not installed: gone"
+            ),
         ]
     );
 }
@@ -666,12 +802,18 @@ fn should_report_a_shell_it_cannot_list_at_its_place_among_the_failures() {
 #[test]
 fn should_fail_the_run_on_any_failure_even_when_the_operation_ran() {
     let bed = test_bed_with(
-        RecordingShellEnvironment::default().with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+        RecordingShellEnvironment::default()
+            .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
     );
 
-    let ran = bed.installer.apply(&paths(), &[Shell::Zsh, Shell::Pwsh], |_| true, |_| Ok(()));
+    let ran = bed
+        .installer
+        .apply(&paths(), &[Shell::Zsh, Shell::Pwsh], |_| true, |_| Ok(()));
 
-    assert_eq!(failures_of(ran), [failure("listing", "pwsh", "pwsh printed an empty $PROFILE")]);
+    assert_eq!(
+        failures_of(ran),
+        [failure("listing", "pwsh", "pwsh printed an empty $PROFILE")]
+    );
 }
 
 #[test]
@@ -680,10 +822,16 @@ fn should_install_only_the_integrations_that_are_not_installed() {
     bed.installer.install(&paths(), &zshrc()).unwrap();
     let installed_before = bed.dotfiles.writes().len();
 
-    let installed = bed.installer.install_missing(&paths(), &[Shell::Zsh]).unwrap();
+    let installed = bed
+        .installer
+        .install_missing(&paths(), &[Shell::Zsh])
+        .unwrap();
 
     assert_eq!(
-        (installed, bed.dotfiles.writes()[installed_before..].to_vec()),
+        (
+            installed,
+            bed.dotfiles.writes()[installed_before..].to_vec()
+        ),
         (
             true,
             vec![
@@ -698,9 +846,13 @@ fn should_install_only_the_integrations_that_are_not_installed() {
 #[test]
 fn should_report_nothing_installed_when_every_integration_already_is() {
     let bed = test_bed();
-    bed.installer.install_missing(&paths(), &[Shell::Zsh, Shell::Fish]).unwrap();
+    bed.installer
+        .install_missing(&paths(), &[Shell::Zsh, Shell::Fish])
+        .unwrap();
 
-    let installed = bed.installer.install_missing(&paths(), &[Shell::Zsh, Shell::Fish]);
+    let installed = bed
+        .installer
+        .install_missing(&paths(), &[Shell::Zsh, Shell::Fish]);
 
     assert!(matches!(installed, Ok(false)), "{installed:?}");
 }
