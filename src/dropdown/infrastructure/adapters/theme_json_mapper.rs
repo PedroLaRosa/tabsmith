@@ -70,6 +70,13 @@ pub(crate) fn theme_palette_from_json(v: &Value) -> ThemePalette {
     })
 }
 
+/// The text of a theme file for drawing; `None` unless it is valid JSON.
+pub(crate) fn parse_theme_palette(text: &str) -> Option<ThemePalette> {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .map(|value| theme_palette_from_json(&value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

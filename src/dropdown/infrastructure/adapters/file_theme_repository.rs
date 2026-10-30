@@ -1,7 +1,10 @@
 use crate::dropdown::domain::dropdown_error::DropdownError;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::value_objects::theme_definition::ThemeDefinition;
-use crate::dropdown::infrastructure::adapters::theme_json_mapper::parse_theme_definition;
+use crate::dropdown::domain::value_objects::theme_palette::ThemePalette;
+use crate::dropdown::infrastructure::adapters::theme_json_mapper::{
+    parse_theme_definition, parse_theme_palette,
+};
 use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use std::path::PathBuf;
 
@@ -69,12 +72,18 @@ impl ThemeRepository for FileThemeRepository {
         files.dedup();
         files
     }
+
+    fn find_palette(&self, name: &str) -> Option<ThemePalette> {
+        let text = std::fs::read_to_string(self.theme_file(name)?).ok()?;
+        parse_theme_palette(&text)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dropdown::domain::value_objects::theme_definition::ThemeDefinition;
+    use crate::dropdown::domain::value_objects::theme_palette::ThemePalette;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use std::fs;
     use std::path::Path;
@@ -298,5 +307,66 @@ mod tests {
         let found = repository_in(temp_dir.path()).find("locked").unwrap();
 
         assert_eq!(found, None);
+    }
+
+    fn main_bg_of(palette: Option<ThemePalette>) -> Option<(u8, u8, u8)> {
+        palette.map(|palette| palette.theme().main_bg())
+    }
+
+    #[test]
+    fn should_find_a_palette_for_valid_json_that_is_not_a_theme() {
+        let temp_dir = TempDir::new("palette-not-a-theme");
+        let themes = temp_dir.path().join("themes");
+        fs::create_dir(&themes).unwrap();
+        fs::write(themes.join("empty.json"), "{}").unwrap();
+        fs::write(themes.join("list.json"), "[1]").unwrap();
+        fs::write(themes.join("my.theme.json"), "{}").unwrap();
+        fs::write(themes.join("my.json"), r##"{"shade0":"#101010"}"##).unwrap();
+        let repository = repository_in(temp_dir.path());
+
+        let found = ["empty", "list", "my.theme"].map(|name| main_bg_of(repository.find_palette(name)));
+
+        assert_eq!(found, [Some((24, 24, 24)); 3]);
+    }
+
+    #[test]
+    fn should_find_no_palette_for_invalid_json() {
+        let temp_dir = TempDir::new("palette-invalid");
+        let themes = temp_dir.path().join("themes");
+        fs::create_dir_all(themes.join("dir.json")).unwrap();
+        fs::write(themes.join("text.json"), "not json").unwrap();
+        fs::write(themes.join("blank.json"), "").unwrap();
+        fs::write(themes.join("bom.json"), "\u{feff}{}").unwrap();
+        fs::write(themes.join("bytes.json"), [0xff, 0xfe]).unwrap();
+        let repository = repository_in(temp_dir.path());
+
+        let found = ["text", "blank", "bom", "bytes", "dir", "missing"]
+            .map(|name| repository.find_palette(name));
+
+        assert_eq!(found, [None, None, None, None, None, None]);
+    }
+
+    #[test]
+    fn should_find_no_palette_without_a_home() {
+        let repository = FileThemeRepository::new(DataDirectory::new(None, None));
+
+        let found = repository.find_palette("zed");
+
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn should_read_the_file_again_on_every_call() {
+        let temp_dir = TempDir::new("palette-reread");
+        let themes = temp_dir.path().join("themes");
+        fs::create_dir(&themes).unwrap();
+        fs::write(themes.join("zed.json"), r##"{"shade0":"#101010"}"##).unwrap();
+        let repository = repository_in(temp_dir.path());
+        let first = main_bg_of(repository.find_palette("zed"));
+        fs::write(themes.join("zed.json"), r##"{"shade0":"#202020"}"##).unwrap();
+
+        let second = main_bg_of(repository.find_palette("zed"));
+
+        assert_eq!((first, second), (Some((16, 16, 16)), Some((32, 32, 32))));
     }
 }

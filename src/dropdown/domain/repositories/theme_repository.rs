@@ -1,5 +1,8 @@
 use crate::dropdown::domain::dropdown_error::DropdownError;
 use crate::dropdown::domain::value_objects::theme_definition::ThemeDefinition;
+use crate::dropdown::domain::value_objects::theme_palette::ThemePalette;
+#[cfg(test)]
+use std::cell::RefCell;
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -13,6 +16,10 @@ pub(crate) trait ThemeRepository {
     fn find(&self, name: &str) -> Result<Option<ThemeDefinition>, DropdownError>;
     /// The name of every theme file, sorted, without repeats; empty when the folder cannot be listed.
     fn list(&self) -> Vec<String>;
+    /// The theme file called `name`, read leniently for drawing (it never goes through `find`): `None` when there is
+    /// no readable file, no home, or the text is not valid JSON; any other JSON value gives a palette. Never an
+    /// error, never logged, read again at every call.
+    fn find_palette(&self, name: &str) -> Option<ThemePalette>;
 }
 
 /// Themes kept in memory, for tests. `Default` is a folder-less repository with no theme.
@@ -21,6 +28,8 @@ pub(crate) trait ThemeRepository {
 pub(crate) struct InMemoryThemeRepository {
     folder: PathBuf,
     themes: BTreeMap<String, Result<ThemeDefinition, String>>,
+    palettes: BTreeMap<String, ThemePalette>,
+    asked_palettes: RefCell<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -41,6 +50,17 @@ impl InMemoryThemeRepository {
         self.themes
             .insert(name.to_string(), Err(reason.to_string()));
         self
+    }
+
+    /// The palette `find_palette` answers for `name`.
+    pub(crate) fn with_palette(mut self, name: &str, palette: ThemePalette) -> Self {
+        self.palettes.insert(name.to_string(), palette);
+        self
+    }
+
+    /// The names `find_palette` was asked for, in order.
+    pub(crate) fn asked_palettes(&self) -> Vec<String> {
+        self.asked_palettes.borrow().clone()
     }
 }
 
@@ -64,12 +84,18 @@ impl ThemeRepository for InMemoryThemeRepository {
     fn list(&self) -> Vec<String> {
         self.themes.keys().cloned().collect()
     }
+
+    fn find_palette(&self, name: &str) -> Option<ThemePalette> {
+        self.asked_palettes.borrow_mut().push(name.to_string());
+        self.palettes.get(name).cloned()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dropdown::domain::value_objects::theme_author::ThemeAuthor;
+    use crate::dropdown::domain::value_objects::theme_palette::Base16PaletteParts;
 
     fn by(name: &str) -> ThemeDefinition {
         ThemeDefinition::new(Some(ThemeAuthor::new(Some(name.to_string()), None, None)))
@@ -94,5 +120,23 @@ mod tests {
         let names = themes.list();
 
         assert_eq!(names, ["alpha", "broken", "zed"]);
+    }
+
+    #[test]
+    fn should_answer_the_palette_it_was_given_for_a_name() {
+        let palette = ThemePalette::base16(Base16PaletteParts {
+            shade0: Some((16, 16, 16)),
+            shade1: None,
+            shade2: None,
+            shade5: None,
+            shade6: None,
+            shade7: None,
+            accent6: None,
+        });
+        let themes = InMemoryThemeRepository::default().with_palette("zed", palette.clone());
+
+        let found = (themes.find_palette("zed"), themes.find_palette("other"));
+
+        assert_eq!(found, (Some(palette), None));
     }
 }
