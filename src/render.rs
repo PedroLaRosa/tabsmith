@@ -3,6 +3,7 @@
 use crate::dropdown::domain::services::color_parser::{parse_color, xterm256};
 use crate::dropdown::domain::services::icon_resolver;
 use crate::dropdown::domain::services::menu_describer::describe;
+use crate::dropdown::domain::services::menu_layout_calculator::layout;
 use crate::dropdown::domain::services::text_fitting::{clean, cw, fit, width, wrap};
 use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::dropdown::domain::value_objects::icon_id::{self, IconId};
@@ -336,16 +337,16 @@ impl Renderer {
         };
         // Keep the selection inside the (possibly shrunk) window.
         let mut top = menu.scroll_top().min(sel);
-        if sel >= top + l.n {
-            top = sel + 1 - l.n;
+        if sel >= top + l.n() {
+            top = sel + 1 - l.n();
         }
-        top = top.min(items.len() - l.n);
-        for (i, idx) in (top..top + l.n).enumerate() {
-            let (s, pad, img) = self.list_row(&items[idx], idx == sel, l.w);
+        top = top.min(items.len() - l.n());
+        for (i, idx) in (top..top + l.n()).enumerate() {
+            let (s, pad, img) = self.list_row(&items[idx], idx == sel, l.w());
             out.push(Patch {
-                row: l.list_top + i,
-                x: l.x0,
-                w: l.w,
+                row: l.list_top() + i,
+                x: l.x0(),
+                w: l.w(),
                 s,
                 pad,
                 img,
@@ -353,20 +354,20 @@ impl Renderer {
         }
         let pop_x = match () {
             _ if items.is_empty() || !menu.popout(s) => None,
-            _ if l.x0 + l.w + POP_W <= size.1 => Some(l.x0 + l.w),
-            _ if l.x0 >= POP_W => Some(l.x0 - POP_W),
+            _ if l.x0() + l.w() + POP_W <= size.1 => Some(l.x0() + l.w()),
+            _ if l.x0() >= POP_W => Some(l.x0() - POP_W),
             _ => None,
         };
         if let Some(px) = pop_x {
             // ponytail: no spinner while the pop-out replaces the description bar.
             let pad = self.pen(self.theme.description_text(), self.theme.main_bg(), "");
             for (i, s) in self
-                .popout_rows(menu, l.n + 1, &pad)
+                .popout_rows(menu, l.n() + 1, &pad)
                 .into_iter()
                 .enumerate()
             {
                 out.push(Patch {
-                    row: l.list_top + i,
+                    row: l.list_top() + i,
                     x: px,
                     w: POP_W,
                     s,
@@ -378,11 +379,11 @@ impl Renderer {
             let spin = menu
                 .loading(Instant::now())
                 .then(|| SPINNER[input.spinner % SPINNER.len()]);
-            let (s, pad) = self.desc_row(menu, l.w, spin);
+            let (s, pad) = self.desc_row(menu, l.w(), spin);
             out.push(Patch {
-                row: l.desc_row,
-                x: l.x0,
-                w: l.w,
+                row: l.desc_row(),
+                x: l.x0(),
+                w: l.w(),
                 s,
                 pad,
                 img: None,
@@ -518,66 +519,6 @@ impl Renderer {
             })
             .collect()
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Side {
-    Below,
-    Above,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct Layout {
-    side: Side,
-    /// List rows (0 in argument-hint mode).
-    n: usize,
-    list_top: usize,
-    desc_row: usize,
-    x0: usize,
-    w: usize,
-}
-
-/// SPEC §7.4.1 (D8: never scroll; below, above, shrink, else hide). `items == 0` = argument-hint mode (one row).
-fn layout(
-    (rows, cols): (usize, usize),
-    (cy, cx): (usize, usize),
-    items: usize,
-    n_max: usize,
-    menu_w: usize,
-    query_w: usize,
-) -> Option<Layout> {
-    let w = menu_w.min(cols);
-    let mut n = n_max.min(items);
-    let mut h = n + 1;
-    let (below, above) = (rows - 1 - cy, cy);
-    let side = match () {
-        _ if below >= h => Side::Below,
-        _ if above >= h => Side::Above,
-        _ if below >= above => Side::Below,
-        _ => Side::Above,
-    };
-    let room = if side == Side::Below { below } else { above };
-    if room < h {
-        if items == 0 || room < 2 {
-            return None;
-        }
-        n = room - 1;
-        h = room;
-    }
-    // Rows start with `' '` + icon (2 columns) + `' '`: 4 columns before the title.
-    let x0 = (cx as isize - query_w as isize - 4).clamp(0, (cols - w) as isize) as usize;
-    let (list_top, desc_row) = match side {
-        Side::Below => (cy + 1, cy + n + 1),
-        Side::Above => (cy - h, cy - 1),
-    };
-    Some(Layout {
-        side,
-        n,
-        list_top,
-        desc_row,
-        x0,
-        w,
-    })
 }
 
 /// Ghost text at the cursor in bright black, clipped at the first non-blank cell to the right and at the right
@@ -1034,79 +975,6 @@ mod tests {
         let b = model(40, 10, &[out, &rep, &rep, &rep]);
         assert_eq!(b.grid().history_size(), 0);
         assert_same(&a, &b);
-    }
-
-    #[test]
-    fn layout_decisions() {
-        // (rows, cols), (cy, cx), items, n_max, width, query width
-        let l = layout((24, 40), (2, 10), 5, 7, 20, 0).unwrap();
-        assert_eq!(
-            l,
-            Layout {
-                side: Side::Below,
-                n: 5,
-                list_top: 3,
-                desc_row: 8,
-                x0: 6,
-                w: 20
-            }
-        );
-        let l = layout((24, 40), (22, 10), 9, 7, 20, 0).unwrap();
-        assert_eq!(
-            l,
-            Layout {
-                side: Side::Above,
-                n: 7,
-                list_top: 14,
-                desc_row: 21,
-                x0: 6,
-                w: 20
-            }
-        );
-        // Neither side fits: shrink on the bigger side (above here).
-        let l = layout((10, 40), (5, 10), 9, 7, 20, 0).unwrap();
-        assert_eq!(
-            l,
-            Layout {
-                side: Side::Above,
-                n: 4,
-                list_top: 0,
-                desc_row: 4,
-                x0: 6,
-                w: 20
-            }
-        );
-        let l = layout((10, 40), (4, 10), 9, 7, 20, 0).unwrap();
-        assert_eq!(
-            (l.side, l.n, l.list_top, l.desc_row),
-            (Side::Below, 4, 5, 9)
-        );
-        // No room for one row + description: hide. Argument hint needs one row.
-        assert_eq!(layout((3, 40), (1, 10), 3, 7, 20, 0), None);
-        let l = layout((3, 40), (1, 10), 0, 7, 20, 0).unwrap();
-        assert_eq!(
-            (l.side, l.n, l.list_top, l.desc_row),
-            (Side::Below, 0, 2, 2)
-        );
-        let l = layout((3, 40), (2, 10), 0, 7, 20, 0).unwrap();
-        assert_eq!((l.side, l.list_top, l.desc_row), (Side::Above, 1, 1));
-        // x0 clamping (aligned under the typed token, kept on screen) and width clamping.
-        // Title (after `' '` + icon + `' '`) starts in the column of the typed token: 12 - 3 = 5 + 4.
-        assert_eq!(layout((24, 40), (2, 12), 3, 7, 20, 3).unwrap().x0, 5);
-        assert_eq!(layout((24, 40), (2, 2), 3, 7, 20, 5).unwrap().x0, 0);
-        assert_eq!(layout((24, 40), (2, 39), 3, 7, 20, 0).unwrap().x0, 20);
-        let l = layout((24, 30), (2, 9), 3, 7, 40, 0).unwrap();
-        assert_eq!(
-            l,
-            Layout {
-                side: Side::Below,
-                n: 3,
-                list_top: 3,
-                desc_row: 6,
-                x0: 0,
-                w: 30
-            }
-        );
     }
 
     #[test]
