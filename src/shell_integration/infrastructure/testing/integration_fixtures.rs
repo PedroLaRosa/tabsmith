@@ -131,7 +131,10 @@ impl IntegrationOnDisk for Integration {
 }
 
 /// The integrations of `shell`, as the installer lists them.
-pub(crate) fn integrations(paths: &IntegrationPaths, shell: Shell) -> Result<Vec<Integration>, ShellIntegrationError> {
+pub(crate) fn integrations(
+    paths: &IntegrationPaths,
+    shell: Shell,
+) -> Result<Vec<Integration>, ShellIntegrationError> {
     installer().integrations(paths, shell)
 }
 
@@ -143,7 +146,10 @@ pub(crate) fn install_dotfiles(paths: &IntegrationPaths, shells: &[Shell]) -> an
 }
 
 /// Uninstall every integration of `shells` with something on disk, failing with the text main prints.
-pub(crate) fn uninstall_dotfiles(paths: &IntegrationPaths, shells: &[Shell]) -> anyhow::Result<bool> {
+pub(crate) fn uninstall_dotfiles(
+    paths: &IntegrationPaths,
+    shells: &[Shell],
+) -> anyhow::Result<bool> {
     installer()
         .uninstall_traced(paths, shells)
         .map_err(integration_failures_error)
