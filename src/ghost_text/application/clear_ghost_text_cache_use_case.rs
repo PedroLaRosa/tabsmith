@@ -12,8 +12,8 @@ impl ClearGhostTextCacheUseCase {
     }
 
     pub(crate) fn execute(&self) {
-        if let Ok(mut c) = self.cache.lock() {
-            c.clear();
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
         }
     }
 }

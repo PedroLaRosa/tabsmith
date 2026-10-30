@@ -47,8 +47,8 @@ impl LlmGhostTextJob {
     /// The completion to show, remembered in the cache before it is returned.
     pub(crate) fn run(self: Box<Self>) -> Option<String> {
         let text = self.complete();
-        if let (Some(t), Ok(mut c)) = (&text, self.cache.lock()) {
-            c.insert(&[format!("{}{t}", self.request.buffer)]);
+        if let (Some(completion), Ok(mut cache)) = (&text, self.cache.lock()) {
+            cache.insert(&[format!("{}{completion}", self.request.buffer)]);
         }
         text
     }

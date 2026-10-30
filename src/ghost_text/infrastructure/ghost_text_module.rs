@@ -78,9 +78,10 @@ mod tests {
             shell: Shell::Zsh,
         };
         let env = HashMap::new();
-        if let LlmGhostTextAnswer::Deferred(job) = module.request_llm_ghost_text.execute(&settings, &env, request()) {
-            job.run();
-        }
+        match module.request_llm_ghost_text.execute(&settings, &env, request()) {
+            LlmGhostTextAnswer::Deferred(job) => job.run(),
+            _ => panic!("expected a deferred answer"),
+        };
         module.clear_ghost_text_cache.execute();
 
         let answer = module.request_llm_ghost_text.execute(&settings, &env, request());
