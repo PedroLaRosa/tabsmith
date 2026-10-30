@@ -201,6 +201,10 @@ fn pty_run(argv: &[&str], env: &[(&str, &Path)], ready: &str, input: &str) -> (S
     cb.env_clear();
     cb.env("PATH", std::env::var_os("PATH").unwrap_or_default());
     cb.env("TERM", "xterm-256color");
+    // PSReadLine 2.4 (pwsh 7.6) names its history mutex under TMPDIR and crashes on macOS without it.
+    if let Some(tmp) = std::env::var_os("TMPDIR") {
+        cb.env("TMPDIR", tmp);
+    }
     for (k, v) in env {
         cb.env(k, v);
     }
