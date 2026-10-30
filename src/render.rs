@@ -890,7 +890,7 @@ fn wrap(text: &str, w: usize, max: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::menu::tests::{comp, item, settings};
+    use crate::completion::domain::test_fixtures::{comp, item, settings};
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::term::Config;
     use alacritty_terminal::vte::ansi::Processor;

@@ -1751,7 +1751,7 @@ mod tests {
 
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
 
-    use crate::menu::tests::{comp, item, settings};
+    use crate::completion::domain::test_fixtures::{comp, item, settings};
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;

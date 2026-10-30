@@ -471,70 +471,7 @@ impl Menu {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
-    use crate::completion::domain::value_objects::completion_result::CompletionResultParts;
-    use crate::completion::domain::value_objects::suggestion::SuggestionParts;
-    use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
-
-    pub fn item(name: &str, kind: SuggestionKind, query: &str) -> Suggestion {
-        let typed = name.starts_with(query) && !query.is_empty();
-        Suggestion::new(SuggestionParts {
-            names: vec![name.to_string()],
-            display_name: None,
-            description: Some(format!("about {name}")),
-            kind,
-            original_kind: None,
-            priority: 50.0,
-            is_dangerous: false,
-            args_hint: String::new(),
-            highlight: (0..query.chars().count()).collect(),
-            query: query.to_string(),
-            insert: Insertion::new(InsertionParts {
-                delete: if typed { 0 } else { query.chars().count() },
-                text: if typed {
-                    name[query.len()..].to_string()
-                } else {
-                    name.to_string()
-                },
-                cursor_back: 0,
-                execute: false,
-            }),
-            generator: None,
-            prefix_match: true,
-            template_type: None,
-            icon: None,
-        })
-    }
-
-    /// A Parse reply for `buffer` (tokens split on spaces, a trailing space adds an empty token).
-    pub fn comp(buffer: &str, arg_key: u64, items: Vec<Suggestion>) -> CompletionResult {
-        let tokens: Vec<String> = buffer.split(' ').map(String::from).collect();
-        CompletionResult::new(CompletionResultParts {
-            req: 1,
-            phase: CompletionPhase::Parse,
-            error: false,
-            buffer: buffer.to_string(),
-            cursor: buffer.len(),
-            search_term: tokens.last().cloned().unwrap_or_default(),
-            tokens,
-            command_text: buffer.to_string(),
-            command_index: 0,
-            arg_key,
-            current_arg: Some(ArgumentHint::new("path".into(), "A path".into())),
-            triggered_generators: Vec::new(),
-            items,
-            loading: false,
-            ghost: None,
-            fuzzy: false,
-        })
-    }
-
-    pub fn settings(json: &str) -> Settings {
-        match serde_json::from_str(json).unwrap() {
-            serde_json::Value::Object(m) => settings_from_json(m),
-            _ => unreachable!(),
-        }
-    }
+    use crate::completion::domain::test_fixtures::{comp, item, settings};
 
     fn subs(q: &str) -> Vec<Suggestion> {
         ["checkout", "cherry-pick", "clone", "commit"]

@@ -376,7 +376,7 @@ fn base64(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::menu::tests::item;
+    use crate::completion::domain::test_fixtures::item;
 
     #[test]
     fn base64_matches_rfc4648() {
