@@ -11,9 +11,11 @@ use crate::shell_integration::domain::value_objects::integration_phase::Integrat
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
 #[cfg(unix)]
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::PWSH_PROFILE_CMD;
-#[cfg(unix)]
-use crate::shell_integration::infrastructure::testing::integration_fixtures::{ctx, integrations, IntegrationOnDisk};
 use crate::shell_integration::infrastructure::testing::integration_fixtures::syntax_ok;
+#[cfg(unix)]
+use crate::shell_integration::infrastructure::testing::integration_fixtures::{
+    ctx, integrations, IntegrationOnDisk,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -89,8 +91,11 @@ fn integrations_init_snapshots() {
     }
     assert!(snapshot(Shell::Zsh, IntegrationPhase::Pre)
         .starts_with("TABSMITH_SHELL='/bin/zsh'\nSHOULD_TABSMITH_LAUNCH=0\n"));
-    assert!(snapshot(Shell::Fish, IntegrationPhase::Pre).starts_with("set -g SHOULD_TABSMITH_LAUNCH 0\n"));
-    assert!(snapshot(Shell::Pwsh, IntegrationPhase::Pre).starts_with("$TABSMITH_SHOULD_LAUNCH = 0\n"));
+    assert!(snapshot(Shell::Fish, IntegrationPhase::Pre)
+        .starts_with("set -g SHOULD_TABSMITH_LAUNCH 0\n"));
+    assert!(
+        snapshot(Shell::Pwsh, IntegrationPhase::Pre).starts_with("$TABSMITH_SHOULD_LAUNCH = 0\n")
+    );
     assert!(snapshot(Shell::Pwsh, IntegrationPhase::Pre).contains("& 'tabsmith' _ pty"));
 }
 
@@ -133,12 +138,12 @@ fn integrations_post_scripts_emit_markers() {
         ),
     ];
     for (shell, prog, args, script) in cases {
-        if which(prog).is_none() {
+        let Some(exe) = which(prog) else {
             continue;
-        }
+        };
         let f = dir.join(format!("post.{prog}"));
         std::fs::write(&f, snapshot(shell, IntegrationPhase::Post)).unwrap();
-        let out = Command::new(prog)
+        let out = Command::new(exe)
             .args(args)
             .arg(script)
             .env("F", &f)
@@ -201,6 +206,10 @@ fn pty_run(argv: &[&str], env: &[(&str, &Path)], ready: &str, input: &str) -> (S
     cb.env_clear();
     cb.env("PATH", std::env::var_os("PATH").unwrap_or_default());
     cb.env("TERM", "xterm-256color");
+    // PSReadLine 2.4 (pwsh 7.6) names its history mutex under TMPDIR and crashes on macOS without it.
+    if let Some(tmp) = std::env::var_os("TMPDIR") {
+        cb.env("TMPDIR", tmp);
+    }
     for (k, v) in env {
         cb.env(k, v);
     }
@@ -283,7 +292,11 @@ fn integrations_fish_confd_launches_in_a_pty() {
     for i in integrations(&c, Shell::Fish).unwrap() {
         i.install(&c).unwrap();
     }
-    std::fs::write(format!("{bin}.pre"), init_for(Shell::Fish, IntegrationPhase::Pre, &bin)).unwrap();
+    std::fs::write(
+        format!("{bin}.pre"),
+        init_for(Shell::Fish, IntegrationPhase::Pre, &bin),
+    )
+    .unwrap();
     std::fs::write(
         format!("{bin}.post"),
         init_for(Shell::Fish, IntegrationPhase::Post, &bin),
@@ -327,9 +340,9 @@ fn integrations_fish_confd_launches_in_a_pty() {
 /// once at every prompt.
 #[test]
 fn integrations_bash_prompt_command_rewrap() {
-    if which("bash").is_none() {
+    let Some(bash) = which("bash") else {
         return;
-    }
+    };
     let temp_dir = TempDir::new("bashpc");
     let dir = temp_dir.path().to_path_buf();
     let f = dir.join("post.bash");
@@ -340,7 +353,7 @@ fn integrations_bash_prompt_command_rewrap() {
             (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) && echo ARRAY
             pc; PROMPT_COMMAND="$PROMPT_COMMAND; true"; prompts
             PROMPT_COMMAND=$'__bp_a\n'"$PROMPT_COMMAND"$'\n__bp_b'; prompts"#;
-    let out = Command::new("bash")
+    let out = Command::new(bash)
         .args(["--norc", "--noprofile", "-c", script])
         .env("F", &f)
         .env("TABSMITH_SESSION_ID", "abc")
@@ -617,9 +630,7 @@ fn integrations_pwsh_utf8_under_oem_code_page() {
     // Both encoding setters tolerate a missing console (Windows); empty init output runs nothing, no error.
     let line = pwsh.script_contents(&c, IntegrationPhase::Pre);
     assert!(
-        line.contains(
-            "try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}"
-        ),
+        line.contains("try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new() } catch {}"),
         "{line}"
     );
     assert!(
@@ -647,14 +658,14 @@ fn integrations_pwsh_utf8_under_oem_code_page() {
 /// Run `script` in `prog args… script` with `post` written to $F, session `abc`, data dir under `dir`.
 /// None when `prog` is not installed.
 fn run_post(prog: &str, args: &[&str], post: &str, script: &str, dir: &Path) -> Option<String> {
-    which(prog)?;
+    let exe = which(prog)?;
     let f = dir.join(if prog == "pwsh" {
         "post.ps1".into()
     } else {
         format!("post.{prog}")
     }); // pwsh runs only .ps1
     std::fs::write(&f, post).unwrap();
-    let out = Command::new(prog)
+    let out = Command::new(exe)
         .args(args)
         .arg(script)
         .env("F", &f)
@@ -912,8 +923,7 @@ fn integrations_bash_vscode_real_integration() {
         );
         let prompts: Vec<&str> = s.split("\x1b]697;NewCmd=abc").collect();
         for p in &prompts[..prompts.len() - 1] {
-            let ok =
-                p.matches("\x1b]633;A").count() == 1 && p.matches("StartPrompt").count() == 1;
+            let ok = p.matches("\x1b]633;A").count() == 1 && p.matches("StartPrompt").count() == 1;
             assert!(
                 ok,
                 "{rc}: each prompt wrapped once by VS Code and by us: {p:?}"
@@ -952,7 +962,12 @@ fn integrations_fish_prompt_wrappers() {
         script,
         &dir,
     ) {
-        assert!(s.contains("\nP=\x1b]697;StartPrompt\x07a\\cb \\o/ args=--final-rendering> \x1b]697;EndPrompt"), "{s:?}");
+        assert!(
+            s.contains(
+                "\nP=\x1b]697;StartPrompt\x07a\\cb \\o/ args=--final-rendering> \x1b]697;EndPrompt"
+            ),
+            "{s:?}"
+        );
         assert!(
             !s.contains("RESURRECTED") && s.contains("\nLASTPID-KEPT"),
             "{s:?}"
@@ -1055,7 +1070,11 @@ fn integrations_pwsh_pre_launch_rules() {
     let launched = || std::fs::remove_file(format!("{bin}.launched")).is_ok();
 
     let set_wrapper = |w: &str| {
-        std::fs::write(format!("{bin}.pre"), init_for(Shell::Pwsh, IntegrationPhase::Pre, w)).unwrap()
+        std::fs::write(
+            format!("{bin}.pre"),
+            init_for(Shell::Pwsh, IntegrationPhase::Pre, w),
+        )
+        .unwrap()
     };
     set_wrapper(&bin);
     let d = dir.display().to_string();
@@ -1229,8 +1248,7 @@ fn integrations_terminal_injected_integration_reloaded() {
         std::fs::create_dir_all(dir.join(p).parent().unwrap()).unwrap();
         std::fs::write(dir.join(p), text).unwrap();
     }
-    std::fs::set_permissions(dir.join("bin/code"), std::fs::Permissions::from_mode(0o755))
-        .unwrap();
+    std::fs::set_permissions(dir.join("bin/code"), std::fs::Permissions::from_mode(0o755)).unwrap();
     let env = format!(
         "export GHOSTTY_RESOURCES_DIR={d}/ghostty KITTY_SHELL_INTEGRATION=enabled KITTY_INSTALLATION_DIR={d}/kitty VSCODE_INJECTION=1 PATH={d}/bin:$PATH"
     );
@@ -1298,7 +1316,11 @@ fn integrations_pre_detects_ghostty_injection() {
     let pre = dir.join("pre.sh");
     std::fs::write(
         &pre,
-        init_for(Shell::Bash, IntegrationPhase::Pre, &fake.display().to_string()),
+        init_for(
+            Shell::Bash,
+            IntegrationPhase::Pre,
+            &fake.display().to_string(),
+        ),
     )
     .unwrap();
     let cases = [
@@ -1450,7 +1472,8 @@ fn integrations_bash_prompt_command_keeps_pipestatus() {
     let f = dir.join("post.bash");
     std::fs::write(&f, init_for(Shell::Bash, IntegrationPhase::Post, &bin)).unwrap();
     let rc = dir.join("bashrc");
-    let user = r#"_show_ps() { _ps="${PIPESTATUS[*]}"; }; PROMPT_COMMAND=_show_ps; PS1='[ps=$_ps] $ '"#;
+    let user =
+        r#"_show_ps() { _ps="${PIPESTATUS[*]}"; }; PROMPT_COMMAND=_show_ps; PS1='[ps=$_ps] $ '"#;
     std::fs::write(&rc, format!("HISTFILE=/dev/null; {user}; source \"$F\"\n")).unwrap();
     let env: &[(&str, &Path)] = &[
         ("HOME", &dir),
