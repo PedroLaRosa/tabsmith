@@ -1,5 +1,6 @@
 pub(crate) mod common_prefix_outcome;
 pub(crate) mod icon_id;
+pub(crate) mod icon_slot;
 pub(crate) mod key;
 pub(crate) mod key_action;
 pub(crate) mod key_binding;
