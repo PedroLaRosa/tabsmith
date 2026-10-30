@@ -1,11 +1,12 @@
 //! The terminal session's `CompletionEngine` port over the engine thread's inbox, wired here because only bootstrap
 //! may join modules.
+use crate::bootstrap::engine_message::EngineMessage;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
-use crate::types::{EngineMsg, Msg};
+use crate::types::Msg;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -14,7 +15,7 @@ use std::sync::mpsc::Sender;
 /// Each call is one message to the engine thread, its payload unchanged. A send error (the engine stopped or never
 /// started) is dropped, never logged.
 pub(crate) struct ChannelCompletionEngine {
-    sender: Sender<EngineMsg>,
+    sender: Sender<EngineMessage>,
 }
 
 /// Starts the engine thread, its replies going to `replies`, and returns the port over its inbox. The inbox keeps a
@@ -27,23 +28,23 @@ pub(crate) fn start_completion_engine(replies: Sender<Msg>, settings: Settings) 
 
 impl CompletionEngine for ChannelCompletionEngine {
     fn complete(&self, request: CompletionRequest) {
-        let _ = self.sender.send(EngineMsg::Complete(request));
+        let _ = self.sender.send(EngineMessage::Complete(request));
     }
 
     fn command_finished(&self, entry: HistoryEntry) {
-        let _ = self.sender.send(EngineMsg::CommandFinished(entry));
+        let _ = self.sender.send(EngineMessage::CommandFinished(entry));
     }
 
     fn command_ended(&self) {
-        let _ = self.sender.send(EngineMsg::CommandEnded);
+        let _ = self.sender.send(EngineMessage::CommandEnded);
     }
 
     fn record_insertion(&self, command: String, name: String) {
-        let _ = self.sender.send(EngineMsg::RecordInsert { cmd: command, name });
+        let _ = self.sender.send(EngineMessage::RecordInsert { cmd: command, name });
     }
 
     fn request_llm_ghost_text(&self, request: u64, buffer: String, cwd: PathBuf, shell: Shell) {
-        let _ = self.sender.send(EngineMsg::Llm {
+        let _ = self.sender.send(EngineMessage::Llm {
             req: request,
             buffer,
             cwd,
@@ -52,19 +53,19 @@ impl CompletionEngine for ChannelCompletionEngine {
     }
 
     fn apply_settings(&self, settings: Settings) {
-        let _ = self.sender.send(EngineMsg::Settings(settings));
+        let _ = self.sender.send(EngineMessage::Settings(settings));
     }
 
     fn apply_session_context(&self, env: HashMap<String, String>, alias: Option<String>) {
-        let _ = self.sender.send(EngineMsg::Session { env, alias });
+        let _ = self.sender.send(EngineMessage::Session { env, alias });
     }
 
     fn toggle_fuzzy_search(&self) {
-        let _ = self.sender.send(EngineMsg::ToggleFuzzy);
+        let _ = self.sender.send(EngineMessage::ToggleFuzzy);
     }
 
     fn shut_down(&self) {
-        let _ = self.sender.send(EngineMsg::Shutdown);
+        let _ = self.sender.send(EngineMessage::Shutdown);
     }
 }
 
@@ -127,15 +128,15 @@ mod tests {
         assert!(matches!(
             &messages[..],
             [
-                EngineMsg::Complete(sent_request),
-                EngineMsg::CommandFinished(sent_entry),
-                EngineMsg::CommandEnded,
-                EngineMsg::RecordInsert { cmd, name },
-                EngineMsg::Llm { req: 8, buffer, cwd, shell: Shell::Bash },
-                EngineMsg::Settings(sent_settings),
-                EngineMsg::Session { env: sent_env, alias },
-                EngineMsg::ToggleFuzzy,
-                EngineMsg::Shutdown,
+                EngineMessage::Complete(sent_request),
+                EngineMessage::CommandFinished(sent_entry),
+                EngineMessage::CommandEnded,
+                EngineMessage::RecordInsert { cmd, name },
+                EngineMessage::Llm { req: 8, buffer, cwd, shell: Shell::Bash },
+                EngineMessage::Settings(sent_settings),
+                EngineMessage::Session { env: sent_env, alias },
+                EngineMessage::ToggleFuzzy,
+                EngineMessage::Shutdown,
             ] if sent_request.id == 7
                 && sent_request.buffer == "git "
                 && sent_request.cursor == 4

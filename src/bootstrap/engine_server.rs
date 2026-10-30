@@ -15,10 +15,6 @@ use crate::settings::domain::services::settings_catalog::{INLINE_ENABLED, INLINE
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
-use crate::specs::application::ports::runtime_event::RuntimeEvent;
-use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
-use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
-use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
 use crate::specs::domain::value_objects::spec_index::SpecIndex;
 use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
 use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
@@ -29,20 +25,17 @@ use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::history::domain::repositories::history_repository::HistoryRepository;
 use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
-use crate::types::{
-    EngineMsg, Msg,
-};
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use crate::bootstrap::engine_inbox::EngineInbox;
+use crate::bootstrap::engine_message::EngineMessage;
+use crate::types::Msg;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 /// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
-/// Returns the engine's inbox. The thread exits on `EngineMsg::Shutdown` or when all senders are dropped.
-pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
+/// Returns the engine's inbox. The thread exits on `EngineMessage::Shutdown` or when all senders are dropped.
+pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMessage> {
     let (etx, erx) = mpsc::channel();
     let inner = etx.clone();
     let spawned = std::thread::Builder::new()
@@ -88,89 +81,6 @@ pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMsg> {
         logger::error(&format!("engine: spawn: {e}"));
     }
     etx
-}
-
-/// The engine's inbox: one channel for the engine's messages and the spec runtime's events. While the runtime
-/// waits it polls the inbox, which keeps every other message, in arrival order, for the engine loop.
-struct EngineInbox {
-    receiver: Receiver<EngineMsg>,
-    sender: Sender<EngineMsg>,
-    deferred: RefCell<VecDeque<EngineMsg>>,
-}
-
-impl EngineInbox {
-    fn new(receiver: Receiver<EngineMsg>, sender: Sender<EngineMsg>) -> Self {
-        EngineInbox {
-            receiver,
-            sender,
-            deferred: RefCell::new(VecDeque::new()),
-        }
-    }
-
-    /// Next message for the engine loop: deferred messages first (incl. a request that aborted a wait), then a
-    /// blocking receive. `Runtime` events are handed to the runtime at once. `None` when all senders are gone.
-    fn next_msg(&self, runtime: &QuickJsSpecRuntime) -> Option<EngineMsg> {
-        loop {
-            if let Some(m) = self.deferred.borrow_mut().pop_front() {
-                return Some(m);
-            }
-            let m = self.receiver.recv().ok()?;
-            if let Some(m) = Self::deliver_runtime_event(runtime, m) {
-                return Some(m);
-            }
-        }
-    }
-
-    /// Like `next_msg` but non-blocking.
-    fn try_next_msg(&self, runtime: &QuickJsSpecRuntime) -> Option<EngineMsg> {
-        loop {
-            if let Some(m) = self.deferred.borrow_mut().pop_front() {
-                return Some(m);
-            }
-            let m = self.receiver.try_recv().ok()?;
-            if let Some(m) = Self::deliver_runtime_event(runtime, m) {
-                return Some(m);
-            }
-        }
-    }
-
-    /// Hand a `Runtime` event to the runtime; return any other message.
-    fn deliver_runtime_event(runtime: &QuickJsSpecRuntime, m: EngineMsg) -> Option<EngineMsg> {
-        match m {
-            EngineMsg::Runtime(event) => runtime.handle_event(event),
-            m => return Some(m),
-        }
-        None
-    }
-}
-
-impl RuntimeEventSource for EngineInbox {
-    fn sink(&self) -> RuntimeEventSink {
-        let sender = self.sender.clone();
-        Arc::new(move |event: RuntimeEvent| {
-            let _ = sender.send(EngineMsg::Runtime(event));
-        })
-    }
-
-    /// Looks only at the kept messages, never at the channel: a `Complete` still unread there aborts nothing.
-    fn has_newer_request(&self) -> bool {
-        self.deferred
-            .borrow()
-            .iter()
-            .any(|m| matches!(m, EngineMsg::Complete(_)))
-    }
-
-    fn poll(&self, timeout: Duration) -> RuntimeEventPoll {
-        match self.receiver.recv_timeout(timeout) {
-            Ok(EngineMsg::Runtime(event)) => RuntimeEventPoll::Event(event),
-            Ok(m) => {
-                self.deferred.borrow_mut().push_back(m); // the newer-request check at the top of a wait aborts
-                RuntimeEventPoll::MessageKept
-            }
-            Err(RecvTimeoutError::Timeout) => RuntimeEventPoll::TimedOut,
-            Err(RecvTimeoutError::Disconnected) => RuntimeEventPoll::Disconnected,
-        }
-    }
 }
 
 struct EngineServer {
@@ -237,33 +147,33 @@ impl EngineServer {
     }
 
     /// Handle one message; `false` = shut down.
-    fn handle(&mut self, m: EngineMsg, pending: &mut Option<CompletionRequest>) -> bool {
+    fn handle(&mut self, m: EngineMessage, pending: &mut Option<CompletionRequest>) -> bool {
         match m {
-            EngineMsg::Complete(r) => *pending = Some(r),
-            EngineMsg::CommandFinished(_) | EngineMsg::CommandEnded => {
-                if let EngineMsg::CommandFinished(e) = m {
+            EngineMessage::Complete(r) => *pending = Some(r),
+            EngineMessage::CommandFinished(_) | EngineMessage::CommandEnded => {
+                if let EngineMessage::CommandFinished(e) = m {
                     self.record_command.execute(e);
                 }
                 self.clear_ghost_text_cache();
                 // generator results without `cache` live until the command ends
                 self.completion.reset_generators.execute(&mut self.session);
             }
-            EngineMsg::RecordInsert { cmd, name } => {
+            EngineMessage::RecordInsert { cmd, name } => {
                 self.completion.record_suggestion_insertion.execute(&mut self.session, cmd, name)
             }
-            EngineMsg::Llm {
+            EngineMessage::Llm {
                 req,
                 buffer,
                 cwd,
                 shell,
             } => self.request_llm_ghost_text(req, buffer, cwd, shell),
-            EngineMsg::Settings(s) => self.completion.apply_completion_settings.execute(&mut self.session, s),
-            EngineMsg::Session { env, alias } => {
+            EngineMessage::Settings(s) => self.completion.apply_completion_settings.execute(&mut self.session, s),
+            EngineMessage::Session { env, alias } => {
                 self.completion.apply_session_context.execute(&mut self.session, env, alias)
             }
-            EngineMsg::ToggleFuzzy => self.completion.toggle_fuzzy_search.execute(&mut self.session),
-            EngineMsg::Runtime(_) => {} // handed to the js host by the inbox
-            EngineMsg::Shutdown => return false,
+            EngineMessage::ToggleFuzzy => self.completion.toggle_fuzzy_search.execute(&mut self.session),
+            EngineMessage::Runtime(_) => {} // handed to the js host by the inbox
+            EngineMessage::Shutdown => return false,
         }
         true
     }
@@ -362,15 +272,10 @@ mod tests {
     use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
     use crate::specs::application::ports::runtime_event_source::ChannelRuntimeEventSource;
-    use crate::specs::application::ports::spec_runtime::SpecRuntime;
     use crate::specs::domain::repositories::spec_repository::SpecRepository;
-    use crate::specs::domain::value_objects::process_output::ProcessOutput;
-    use crate::specs::domain::value_objects::exec_request::ExecRequest;
-    use crate::specs::domain::spec_error::SpecError;
-    use crate::specs::domain::value_objects::generator_context::GeneratorContext;
     use serde_json::{json, Value};
-    use std::collections::HashMap;
-    use std::time::Instant;
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn llm_history_honours_history_count() {
@@ -442,94 +347,13 @@ mod tests {
     }
 
     /// The message a shell's session context arrives as: its env and its alias text.
-    fn session_context(env: &[(&str, &str)], alias: Option<&str>) -> EngineMsg {
+    fn session_context(env: &[(&str, &str)], alias: Option<&str>) -> EngineMessage {
         let env = env
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         let alias = alias.map(str::to_owned);
-        EngineMsg::Session { env, alias }
-    }
-
-    /// A runtime over a real engine inbox, and a sender into that inbox.
-    fn runtime_with_inbox() -> (QuickJsSpecRuntime, Rc<EngineInbox>, Sender<EngineMsg>) {
-        let (tx, rx) = mpsc::channel();
-        let inbox = Rc::new(EngineInbox::new(rx, tx.clone()));
-        let js = QuickJsSpecRuntime::new(inbox.clone(), &Settings::default()).unwrap();
-        (js, inbox, tx)
-    }
-
-    #[test]
-    fn wait_aborts_and_defers_on_complete() {
-        let (js, inbox, tx) = runtime_with_inbox();
-        let req = |id| CompletionRequest {
-            id,
-            buffer: "git ".into(),
-            cursor: 4,
-            cwd: "/".into(),
-            shell: Shell::Zsh,
-            history_mode: false,
-        };
-        let slow = js.start_sleep(10_000);
-        tx.send(EngineMsg::ToggleFuzzy).unwrap();
-        tx.send(EngineMsg::Complete(req(7))).unwrap();
-        tx.send(EngineMsg::Shutdown).unwrap();
-        let t0 = Instant::now();
-        assert_eq!(
-            js.wait_json(&[slow], Instant::now() + Duration::from_secs(5)),
-            Err(SpecError::Aborted)
-        );
-        assert!(t0.elapsed() < Duration::from_secs(1));
-        // Still queued → a new wait aborts at once.
-        assert_eq!(
-            js.wait_json(&[slow], Instant::now() + Duration::from_secs(5)),
-            Err(SpecError::Aborted)
-        );
-        assert!(matches!(inbox.next_msg(&js), Some(EngineMsg::ToggleFuzzy)));
-        assert!(matches!(inbox.next_msg(&js), Some(EngineMsg::Complete(r)) if r.id == 7));
-        // Non-Complete messages are deferred without aborting; the slow task is still pending.
-        let quick = js.start_sleep(10);
-        let r = js
-            .wait_json(&[quick, slow], Instant::now() + Duration::from_millis(300))
-            .unwrap();
-        assert_eq!(r, vec![Some(Ok(Value::Null)), None]);
-        assert!(matches!(inbox.try_next_msg(&js), Some(EngineMsg::Shutdown)));
-        assert!(inbox.try_next_msg(&js).is_none());
-        js.forget(&[slow]);
-        let unknown = |t| Some(Err(format!("unknown task {t}")));
-        assert_eq!(
-            js.wait_json(&[slow, quick], Instant::now()).unwrap(),
-            vec![unknown(slow), unknown(quick)]
-        );
-        // Exec tasks deliver `{stdout, stderr, status}`; its Runtime event is consumed internally.
-        let e = js.start_exec(
-            ExecRequest::new("fig".into(), vec![], None, HashMap::new(), None),
-            &GeneratorContext::default(),
-        );
-        let r = js
-            .wait_json(&[e], Instant::now() + Duration::from_secs(5))
-            .unwrap();
-        assert_eq!(
-            r,
-            vec![Some(Ok(json!({"stdout": "", "stderr": "", "status": 1})))]
-        );
-    }
-
-    #[test]
-    fn should_deliver_a_runtime_event_read_by_the_engine_loop_to_the_runtime() {
-        let (rt, inbox, tx) = runtime_with_inbox();
-        let id = rt.start_sleep(10_000);
-        let output = Ok(ProcessOutput::new("x".into(), "".into(), 0));
-        tx.send(EngineMsg::Runtime(RuntimeEvent { id, output })).unwrap();
-
-        let read = inbox.try_next_msg(&rt);
-        let delivered = rt.wait_json(&[id], Instant::now());
-
-        assert!(read.is_none());
-        assert_eq!(
-            delivered,
-            Ok(vec![Some(Ok(json!({"status": 0, "stderr": "", "stdout": "x"})))])
-        );
+        EngineMessage::Session { env, alias }
     }
 
     // The engine loop seen from its inbox: requests and events go in, replies come out (6.0a characterization).
@@ -602,12 +426,12 @@ mod tests {
         }
     }
 
-    fn complete(id: u64, cwd: &Path, buffer: &str) -> EngineMsg {
+    fn complete(id: u64, cwd: &Path, buffer: &str) -> EngineMessage {
         complete_at(id, cwd, buffer, buffer.len())
     }
 
-    fn complete_at(id: u64, cwd: &Path, buffer: &str, cursor: usize) -> EngineMsg {
-        EngineMsg::Complete(CompletionRequest {
+    fn complete_at(id: u64, cwd: &Path, buffer: &str, cursor: usize) -> EngineMessage {
+        EngineMessage::Complete(CompletionRequest {
             id,
             buffer: buffer.into(),
             cursor,
@@ -617,22 +441,22 @@ mod tests {
         })
     }
 
-    fn command_ended() -> EngineMsg {
-        EngineMsg::CommandEnded
+    fn command_ended() -> EngineMessage {
+        EngineMessage::CommandEnded
     }
 
-    fn apply_settings(settings: Settings) -> EngineMsg {
-        EngineMsg::Settings(settings)
+    fn apply_settings(settings: Settings) -> EngineMessage {
+        EngineMessage::Settings(settings)
     }
 
-    fn shutdown() -> EngineMsg {
-        EngineMsg::Shutdown
+    fn shutdown() -> EngineMessage {
+        EngineMessage::Shutdown
     }
 
     /// What `serve`'s watcher does after a reply arrived.
     enum Then {
         Wait,
-        Deliver(Vec<EngineMsg>),
+        Deliver(Vec<EngineMessage>),
         Stop,
     }
 
@@ -646,7 +470,7 @@ mod tests {
     fn serve(
         settings: Settings,
         history: Vec<HistoryEntry>,
-        first: Vec<EngineMsg>,
+        first: Vec<EngineMessage>,
         grace: Duration,
         mut react: impl FnMut(&[Reply]) -> Then + Send + 'static,
     ) -> Vec<Reply> {
