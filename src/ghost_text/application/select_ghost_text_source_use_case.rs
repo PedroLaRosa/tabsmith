@@ -28,22 +28,26 @@ impl SelectGhostTextSourceUseCase {
     pub(crate) fn execute(&self, name: Option<String>) -> Result<Option<String>, GhostTextError> {
         let settings = self.settings.load()?;
         // Only valid profiles can be selected (an invalid one would only make doctor fail).
-        let profiles: Vec<(String, LlmProfile)> = profiles(&settings)
+        let valid_profiles: Vec<(String, LlmProfile)> = profiles(&settings)
             .into_iter()
-            .filter_map(|(n, p)| Some((n, p.ok()?)))
+            .filter_map(|(profile_name, profile)| Some((profile_name, profile.ok()?)))
             .collect();
         let name = match name {
-            Some(n) => n,
-            None => match self.chooser.choose(&profiles)? {
-                Some(n) => n,
+            Some(named) => named,
+            None => match self.chooser.choose(&valid_profiles)? {
+                Some(chosen) => chosen,
                 None => {
                     self.settings.save(&settings.without(INLINE_SOURCE))?;
                     return Ok(None);
                 }
             },
         };
-        if !BUILTIN_SOURCES.iter().any(|(b, _)| *b == name)
-            && !profiles.iter().any(|(n, _)| *n == name)
+        if !BUILTIN_SOURCES
+            .iter()
+            .any(|(builtin_name, _)| *builtin_name == name)
+            && !valid_profiles
+                .iter()
+                .any(|(profile_name, _)| *profile_name == name)
         {
             return Err(GhostTextError::CustomizationNotFound);
         }
