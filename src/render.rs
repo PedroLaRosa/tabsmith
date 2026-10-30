@@ -2,6 +2,7 @@
 //! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2). OWNER: ui agent.
 use crate::dropdown::domain::services::color_parser::{parse_color, xterm256};
 use crate::dropdown::domain::services::icon_resolver;
+use crate::dropdown::domain::services::menu_describer::describe;
 use crate::dropdown::domain::services::text_fitting::{clean, cw, fit, width, wrap};
 use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::dropdown::domain::value_objects::icon_id::{self, IconId};
@@ -14,7 +15,6 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::types::Model;
-use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -520,25 +520,6 @@ impl Renderer {
     }
 }
 
-/// (bold label, description): the selected item's, `file`/`folder`, else the current argument's. Sanitized.
-fn describe(menu: &Menu) -> (String, String) {
-    let sel = menu.items().get(menu.selected());
-    let own = sel
-        .and_then(|s| s.description())
-        .filter(|d| !d.trim().is_empty())
-        .map(String::from)
-        .or_else(|| match sel.map(|s| s.kind()) {
-            Some(SuggestionKind::File) => Some("file".into()),
-            Some(SuggestionKind::Folder) => Some("folder".into()),
-            _ => None,
-        });
-    match (own, menu.arg_hint()) {
-        (Some(d), _) => (String::new(), clean(&d)),
-        (None, Some(a)) => (clean(a.name()), clean(a.description())),
-        (None, None) => (String::new(), String::new()),
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Side {
     Below,
@@ -749,6 +730,7 @@ fn blank(c: &Cell) -> bool {
 mod tests {
     use super::*;
     use crate::completion::domain::test_fixtures::{comp, item, settings};
+    use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::term::Config;
     use alacritty_terminal::vte::ansi::Processor;
