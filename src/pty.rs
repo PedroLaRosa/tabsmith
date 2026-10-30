@@ -9,7 +9,8 @@ use crate::dropdown::domain::value_objects::key_code::KeyCode;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
 use crate::dropdown::domain::value_objects::modifiers::Modifiers;
 use crate::shared::infrastructure::logger;
-use crate::menu::{Effect, Menu};
+use crate::dropdown::domain::entities::menu::Menu;
+use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::render::{FrameInput, Renderer, Theme};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
@@ -1118,17 +1119,17 @@ impl Session {
             redraw = true;
             for e in effects {
                 match e {
-                    Effect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
-                    Effect::Write(b) => {
+                    MenuEffect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
+                    MenuEffect::Write(b) => {
                         if b == b"\r" && self.tracker.at_prompt() {
                             self.tracker.submitted = self.basis(); // `execute`
                         }
                         fwd.extend(b);
                         self.unechoed.clear();
                     }
-                    Effect::Bell => self.emit(b"\x07"),
-                    Effect::Rerequest => rerequest = true,
-                    Effect::ToggleFuzzy => {
+                    MenuEffect::Bell => self.emit(b"\x07"),
+                    MenuEffect::Rerequest => rerequest = true,
+                    MenuEffect::ToggleFuzzy => {
                         self.engine.toggle_fuzzy_search();
                         rerequest = true;
                     }
@@ -2237,7 +2238,7 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.tracker.submitted = Some("stale".into());
         let fx = s.menu.handle(KeyAction::InsertSelectedAndExecute, &s.settings);
-        let Some(Effect::Insert { ins, .. }) = fx.into_iter().next() else {
+        let Some(MenuEffect::Insert { ins, .. }) = fx.into_iter().next() else {
             panic!("no insertion")
         };
         s.insert(&ins, None, &mut Vec::new());

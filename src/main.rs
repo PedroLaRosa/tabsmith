@@ -12,7 +12,6 @@ mod dropdown;
 mod ghost_text;
 mod history;
 mod icons;
-mod menu;
 mod pty;
 mod render;
 mod settings;

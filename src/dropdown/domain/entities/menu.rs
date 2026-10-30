@@ -1,6 +1,6 @@
-//! Dropdown UI state: visibility machine, selection/scroll, actions, common prefix (SPEC §7.1–7.3).
-//! Pure: no I/O. OWNER: ui agent. Driven by the wrapper (pty.rs); read by render.rs.
 use crate::dropdown::domain::value_objects::key_action::KeyAction;
+use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
+use crate::dropdown::domain::value_objects::menu_visibility::MenuVisibility;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION, AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_HEIGHT,
     AUTOCOMPLETE_NAVIGATE_TO_HISTORY, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
@@ -16,36 +16,10 @@ use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Vis {
-    Visible,
-    HiddenUntilKeypress,
-    HiddenUntilShown,
-    HiddenByInsertion,
-}
-
-/// What the wrapper must do after an action.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Effect {
-    /// Write an insertion to the PTY (with buffer reconciliation + insertion lock, SPEC §7.3).
-    /// `full` = a full insertion (visibility HiddenByInsertion already applied); `record` = (cmd, name) for recency.
-    Insert {
-        ins: Insertion,
-        full: bool,
-        record: Option<(String, String)>,
-    },
-    /// Write raw bytes to the PTY (e.g. "\r" for `execute`).
-    Write(Vec<u8>),
-    /// Ring the bell (common-prefix failure "shake").
-    Bell,
-    /// Re-request completions for the current buffer (history mode toggled).
-    Rerequest,
-    /// Toggle fuzzy search in the engine, then re-request.
-    ToggleFuzzy,
-}
-
-pub struct Menu {
-    vis: Vis,
+/// Dropdown UI state: visibility machine, selection/scroll, actions, common prefix (SPEC §7.1–7.3).
+/// Pure: no I/O.
+pub(crate) struct Menu {
+    vis: MenuVisibility,
     items: Vec<Suggestion>,
     selected: usize,
     /// The user navigated: keep the selection across recomputes.
@@ -62,7 +36,7 @@ pub struct Menu {
 }
 
 /// Max visible list rows (`autocomplete.height`, D14).
-pub fn max_rows(settings: &Settings) -> usize {
+pub(crate) fn max_rows(settings: &Settings) -> usize {
     settings.f64(AUTOCOMPLETE_HEIGHT).max(1.0) as usize
 }
 
@@ -89,9 +63,9 @@ fn matching_type(a: &Suggestion, b_first: &str, b_kind: SuggestionKind) -> bool 
 }
 
 impl Menu {
-    pub fn new() -> Menu {
+    pub(crate) fn new() -> Menu {
         Menu {
-            vis: Vis::HiddenUntilKeypress,
+            vis: MenuVisibility::HiddenUntilKeypress,
             items: Vec::new(),
             selected: 0,
             sticky: false,
@@ -106,7 +80,7 @@ impl Menu {
     }
 
     /// Phase-Parse / phase-Generators reply for the latest request (SPEC §7.1). An error reply resets.
-    pub fn on_completion(&mut self, mut c: CompletionResult, settings: &Settings, now: Instant) {
+    pub(crate) fn on_completion(&mut self, mut c: CompletionResult, settings: &Settings, now: Instant) {
         if c.is_error() {
             return self.error_reset();
         }
@@ -136,15 +110,15 @@ impl Menu {
             };
             let orig = self.vis;
             self.vis = match orig {
-                Vis::HiddenUntilKeypress => Vis::Visible,
-                Vis::HiddenByInsertion => {
+                MenuVisibility::HiddenUntilKeypress => MenuVisibility::Visible,
+                MenuVisibility::HiddenByInsertion => {
                     let retriggered = self
                         .last_inserted_gen
                         .is_some_and(|g| c.triggered_generators().contains(&g));
                     if has_new_arg || retriggered {
-                        Vis::Visible
+                        MenuVisibility::Visible
                     } else {
-                        Vis::HiddenUntilKeypress
+                        MenuVisibility::HiddenUntilKeypress
                     }
                 }
                 v => v,
@@ -152,11 +126,11 @@ impl Menu {
             if settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB) {
                 self.vis = orig;
                 if has_new_arg {
-                    self.vis = Vis::HiddenUntilShown;
+                    self.vis = MenuVisibility::HiddenUntilShown;
                 }
             }
             if backspaced || (large && !self.just_inserted) {
-                self.vis = Vis::HiddenUntilKeypress;
+                self.vis = MenuVisibility::HiddenUntilKeypress;
             }
             self.just_inserted = false;
         }
@@ -168,7 +142,7 @@ impl Menu {
     /// replaced, so show/toggle/Tab never act on a stale list.
     fn set_items(&mut self, items: Vec<Suggestion>, settings: &Settings) {
         let keep = match self.items.get(self.selected) {
-            Some(old) if self.sticky && self.vis == Vis::Visible => {
+            Some(old) if self.sticky && self.vis == MenuVisibility::Visible => {
                 items.iter().position(|it| same_item(it, old))
             }
             _ => None,
@@ -188,7 +162,7 @@ impl Menu {
     }
 
     /// Error reset: no items, HiddenUntilKeypress, history mode off (SPEC §7.1).
-    pub fn error_reset(&mut self) {
+    pub(crate) fn error_reset(&mut self) {
         // The pop-out is UI state outside the item store: it survives resets.
         *self = Menu {
             popout: self.popout,
@@ -197,14 +171,14 @@ impl Menu {
     }
 
     /// Menu drawn? (`Visible` and items or arg hint, and not `autocomplete.disable`.)
-    pub fn shown(&self, settings: &Settings) -> bool {
+    pub(crate) fn shown(&self, settings: &Settings) -> bool {
         !settings.bool(AUTOCOMPLETE_DISABLE)
-            && self.vis == Vis::Visible
+            && self.vis == MenuVisibility::Visible
             && (!self.items.is_empty() || self.arg_hint().is_some())
     }
 
     /// Current argument with a name or description (argument-hint row).
-    pub fn arg_hint(&self) -> Option<&ArgumentHint> {
+    pub(crate) fn arg_hint(&self) -> Option<&ArgumentHint> {
         self.last
             .as_ref()?
             .current_arg()
@@ -212,16 +186,16 @@ impl Menu {
     }
 
     /// Keys are intercepted (shown and items non-empty, SPEC §7.2.4).
-    pub fn intercepting(&self, settings: &Settings) -> bool {
+    pub(crate) fn intercepting(&self, settings: &Settings) -> bool {
         self.shown(settings) && !self.items.is_empty()
     }
 
-    pub fn has_items(&self) -> bool {
+    pub(crate) fn has_items(&self) -> bool {
         !self.items.is_empty()
     }
 
     /// Run an action (SPEC §7.2.5). No-op without a selected item. The `onlyShowOnTab` preamble is `show_on_tab`.
-    pub fn handle(&mut self, action: KeyAction, settings: &Settings) -> Vec<Effect> {
+    pub(crate) fn handle(&mut self, action: KeyAction, settings: &Settings) -> Vec<MenuEffect> {
         if self.items.is_empty() {
             return Vec::new();
         }
@@ -232,7 +206,7 @@ impl Menu {
             KeyAction::InsertSelected => self.insert_full(self.selected, false),
             KeyAction::InsertSelectedAndExecute => self.insert_full(self.selected, true),
             KeyAction::InsertCommonPrefix => {
-                self.common_prefix().unwrap_or_else(|| vec![Effect::Bell])
+                self.common_prefix().unwrap_or_else(|| vec![MenuEffect::Bell])
             }
             KeyAction::InsertCommonPrefixOrNavigateDown => self
                 .common_prefix()
@@ -240,26 +214,26 @@ impl Menu {
             KeyAction::InsertCommonPrefixOrInsertSelected => self
                 .common_prefix()
                 .unwrap_or_else(|| self.insert_full(self.selected, false)),
-            KeyAction::Execute => vec![Effect::Write(b"\r".to_vec())],
+            KeyAction::Execute => vec![MenuEffect::Write(b"\r".to_vec())],
             KeyAction::HideAutocomplete => {
-                self.vis = Vis::HiddenUntilShown;
+                self.vis = MenuVisibility::HiddenUntilShown;
                 Vec::new()
             }
             KeyAction::ShowAutocomplete => {
-                self.vis = Vis::Visible;
+                self.vis = MenuVisibility::Visible;
                 Vec::new()
             }
             KeyAction::ToggleAutocomplete => {
-                self.vis = if self.vis == Vis::Visible {
-                    Vis::HiddenUntilShown
+                self.vis = if self.vis == MenuVisibility::Visible {
+                    MenuVisibility::HiddenUntilShown
                 } else {
-                    Vis::Visible
+                    MenuVisibility::Visible
                 };
                 Vec::new()
             }
             KeyAction::ToggleHistoryMode => {
                 self.history_mode = !self.history_mode;
-                vec![Effect::Rerequest]
+                vec![MenuEffect::Rerequest]
             }
             KeyAction::ToggleDescription | KeyAction::ShowDescription | KeyAction::HideDescription => {
                 if !always_desc {
@@ -270,7 +244,7 @@ impl Menu {
                 }
                 Vec::new()
             }
-            KeyAction::ToggleFuzzySearch => vec![Effect::ToggleFuzzy],
+            KeyAction::ToggleFuzzySearch => vec![MenuEffect::ToggleFuzzy],
             KeyAction::SelectSuggestion(n) => {
                 let i = self.scroll_top + usize::from(n.max(1)) - 1;
                 if i < self.items.len() {
@@ -282,53 +256,54 @@ impl Menu {
     }
 
     /// `onlyShowOnTab` Tab while hidden: 1 item → insert it, else show (SPEC §7.2.5 preamble).
-    pub fn show_on_tab(&mut self, settings: &Settings) -> Vec<Effect> {
+    pub(crate) fn show_on_tab(&mut self, settings: &Settings) -> Vec<MenuEffect> {
         let _ = settings;
         if self.items.len() == 1 {
             return self.insert_full(0, false);
         }
-        self.vis = Vis::Visible;
+        self.vis = MenuVisibility::Visible;
         Vec::new()
     }
 
-    pub fn history_mode(&self) -> bool {
+    pub(crate) fn history_mode(&self) -> bool {
         self.history_mode
     }
 
     /// Latest completion applied (tokens, current arg, buffer it was computed from). Its `items` are empty:
     /// the list lives in `items()`.
-    pub fn last(&self) -> Option<&CompletionResult> {
+    pub(crate) fn last(&self) -> Option<&CompletionResult> {
         self.last.as_ref()
     }
 
-    pub fn items(&self) -> &[Suggestion] {
+    pub(crate) fn items(&self) -> &[Suggestion] {
         &self.items
     }
 
-    pub fn selected(&self) -> usize {
+    pub(crate) fn selected(&self) -> usize {
         self.selected
     }
 
-    pub fn scroll_top(&self) -> usize {
+    pub(crate) fn scroll_top(&self) -> usize {
         self.scroll_top
     }
 
-    pub fn vis(&self) -> Vis {
+    #[cfg(test)]
+    pub(crate) fn vis(&self) -> MenuVisibility {
         self.vis
     }
 
     /// Description pop-out open (or `alwaysShowDescription`).
-    pub fn popout(&self, settings: &Settings) -> bool {
+    pub(crate) fn popout(&self, settings: &Settings) -> bool {
         self.popout || settings.bool(AUTOCOMPLETE_ALWAYS_SHOW_DESCRIPTION)
     }
 
     /// Some generator has been loading for > 200 ms (spinner).
-    pub fn loading(&self, now: Instant) -> bool {
+    pub(crate) fn loading(&self, now: Instant) -> bool {
         self.loading_since
             .is_some_and(|t| now.duration_since(t) > Duration::from_millis(200))
     }
 
-    fn navigate(&mut self, d: isize, hide_on_negative: bool, settings: &Settings) -> Vec<Effect> {
+    fn navigate(&mut self, d: isize, hide_on_negative: bool, settings: &Settings) -> Vec<MenuEffect> {
         let len = self.items.len() as isize;
         let mut i = self.selected as isize + d;
         if settings.bool(AUTOCOMPLETE_SCROLL_WRAP_AROUND) {
@@ -336,9 +311,9 @@ impl Menu {
         } else if i == -1 && hide_on_negative {
             if settings.bool(AUTOCOMPLETE_NAVIGATE_TO_HISTORY) {
                 self.history_mode = !self.history_mode;
-                return vec![Effect::Rerequest];
+                return vec![MenuEffect::Rerequest];
             }
-            self.vis = Vis::HiddenUntilKeypress;
+            self.vis = MenuVisibility::HiddenUntilKeypress;
             return Vec::new();
         }
         self.select(i.clamp(0, len - 1) as usize, settings);
@@ -360,7 +335,7 @@ impl Menu {
     }
 
     /// Full insertion of item `idx` (SPEC §7.3): HiddenByInsertion + recency record (D21; skipped for `↪`).
-    fn insert_full(&mut self, idx: usize, execute: bool) -> Vec<Effect> {
+    fn insert_full(&mut self, idx: usize, execute: bool) -> Vec<MenuEffect> {
         let item = &self.items[idx];
         let mut ins = item.insert().clone();
         if execute && item.kind() != SuggestionKind::AutoExecute {
@@ -375,9 +350,9 @@ impl Menu {
             _ => None,
         };
         self.last_inserted_gen = item.generator();
-        self.vis = Vis::HiddenByInsertion;
+        self.vis = MenuVisibility::HiddenByInsertion;
         self.just_inserted = true;
-        vec![Effect::Insert {
+        vec![MenuEffect::Insert {
             ins,
             full: true,
             record,
@@ -385,7 +360,7 @@ impl Menu {
     }
 
     /// Inserts the common prefix of the listed items; `None` = failure (shake).
-    fn common_prefix(&mut self) -> Option<Vec<Effect>> {
+    fn common_prefix(&mut self) -> Option<Vec<MenuEffect>> {
         let sel = self.items[self.selected].clone();
         if self.items.len() == 1 {
             return Some(self.insert_full(self.selected, false));
@@ -455,7 +430,7 @@ impl Menu {
             _ => (raw, text),
         };
         self.just_inserted = true;
-        Some(vec![Effect::Insert {
+        Some(vec![MenuEffect::Insert {
             ins: Insertion::new(InsertionParts {
                 delete,
                 text,
@@ -496,15 +471,15 @@ pub(crate) mod tests {
     fn typing_and_space() {
         let s = Settings::default();
         let mut m = Menu::new();
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilKeypress);
         m.on_completion(comp("g", 1, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
         // Visible with an arg hint but no items: drawn, not intercepting.
         assert!(m.shown(&s) && !m.intercepting(&s));
         m.on_completion(comp("gi", 1, vec![]), &s, Instant::now());
         m.on_completion(comp("git", 1, vec![]), &s, Instant::now());
         m.on_completion(comp("git ", 2, subs("")), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
         assert_eq!(m.items().len(), 4);
         assert!(m.intercepting(&s));
         assert!(!m.intercepting(&settings(r#"{"autocomplete.disable": true}"#)));
@@ -518,7 +493,7 @@ pub(crate) mod tests {
         let fx = m.handle(KeyAction::InsertSelected, &s);
         assert_eq!(
             fx,
-            vec![Effect::Insert {
+            vec![MenuEffect::Insert {
                 ins: Insertion::new(InsertionParts {
                     delete: 0,
                     text: "heckout".into(),
@@ -529,7 +504,7 @@ pub(crate) mod tests {
                 record: Some(("git".into(), "checkout".into())),
             }]
         );
-        assert_eq!(m.vis(), Vis::HiddenByInsertion);
+        assert_eq!(m.vis(), MenuVisibility::HiddenByInsertion);
         m.on_completion(
             comp("git checkout ", 3, vec![item("main", SuggestionKind::Arg, "")]),
             &s,
@@ -537,7 +512,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             m.vis(),
-            Vis::Visible,
+            MenuVisibility::Visible,
             "multi-char echo is not a large change after an insertion"
         );
 
@@ -545,9 +520,9 @@ pub(crate) mod tests {
         let mut m = typed(&s);
         m.handle(KeyAction::InsertSelected, &s);
         m.on_completion(comp("git checkout", 2, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilKeypress);
         m.on_completion(comp("git checkout2", 2, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
 
         // Folder `src/` re-triggers its generator → visible.
         let mut m = typed(&s);
@@ -564,7 +539,7 @@ pub(crate) mod tests {
         let mut c = comp("git c src/", 5, vec![item("main.rs", SuggestionKind::File, "")]);
         c = c.with_triggered_generators(vec![GeneratorKey::from_raw(7)]);
         m.on_completion(c, &s, Instant::now());
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
     }
 
     #[test]
@@ -572,19 +547,19 @@ pub(crate) mod tests {
         let s = Settings::default();
         let mut m = typed(&s);
         assert!(m.handle(KeyAction::HideAutocomplete, &s).is_empty());
-        assert_eq!(m.vis(), Vis::HiddenUntilShown);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilShown);
         m.on_completion(comp("git co", 2, subs("co")), &s, Instant::now());
         m.on_completion(comp("git co ", 3, vec![item("x", SuggestionKind::Arg, "")]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::HiddenUntilShown);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilShown);
         assert!(!m.shown(&s));
         // Items are still recomputed (globally interceptable keys like showAutocomplete work).
         assert_eq!(m.items()[0].names()[0], "x");
         m.handle(KeyAction::ShowAutocomplete, &s);
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
         m.handle(KeyAction::ToggleAutocomplete, &s);
-        assert_eq!(m.vis(), Vis::HiddenUntilShown);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilShown);
         m.handle(KeyAction::ToggleAutocomplete, &s);
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
     }
 
     #[test]
@@ -596,16 +571,16 @@ pub(crate) mod tests {
         m.on_completion(comp("git", 1, vec![]), &s, Instant::now());
         assert_eq!(
             m.vis(),
-            Vis::HiddenUntilKeypress,
+            MenuVisibility::HiddenUntilKeypress,
             "backspace into the previous token overrides Esc"
         );
         m.on_completion(comp("gi", 1, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
 
         // A paste is a large change.
         let mut m = typed(&s);
         m.on_completion(comp("git commit -m 'x' --amend", 9, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilKeypress);
         // The list is refreshed while hidden (nothing is drawn): show/toggle/Tab never act on stale items.
         assert!(!m.has_items());
     }
@@ -624,10 +599,10 @@ pub(crate) mod tests {
             &s,
             Instant::now(),
         );
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilKeypress);
         let fx = m.show_on_tab(&s);
         assert!(
-            matches!(&fx[..], [Effect::Insert { record: Some((c, n)), .. }] if c == "echo" && n == "hi.txt"),
+            matches!(&fx[..], [MenuEffect::Insert { record: Some((c, n)), .. }] if c == "echo" && n == "hi.txt"),
             "{fx:?}"
         );
     }
@@ -642,15 +617,15 @@ pub(crate) mod tests {
         m.on_completion(at(3, "git", 1, vec![]), &s, Instant::now());
         // The reply for `git ` (request 4) was skipped by the engine: two edits over two requests is typing.
         m.on_completion(at(5, "git c", 2, subs("c")), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
         // A paste is still large when a request was skipped before it.
         m.on_completion(at(7, "git commit -m x", 3, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilKeypress);
         m.on_completion(at(8, "git commit -m x ", 3, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::Visible, "keypress");
+        assert_eq!(m.vis(), MenuVisibility::Visible, "keypress");
         // Two requests, but `x ` → `zz` needs four edits (not prefix related): large.
         m.on_completion(at(10, "git commit -m zz", 3, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilKeypress);
     }
 
     #[test]
@@ -660,7 +635,7 @@ pub(crate) mod tests {
         m.handle(KeyAction::ToggleHistoryMode, &s);
         m.handle(KeyAction::ToggleDescription, &s);
         m.on_completion(CompletionResult::error(9, "git c".into(), 5), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilKeypress);
         assert!(!m.has_items() && !m.history_mode() && m.last().is_none());
         assert!(m.popout(&s));
         let mut c = comp("g", 1, vec![]);
@@ -717,17 +692,17 @@ pub(crate) mod tests {
         let s = settings(r#"{"autocomplete.onlyShowOnTab": true}"#);
         let mut m = Menu::new();
         m.on_completion(comp("g", 1, vec![]), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::HiddenUntilShown, "never auto-opens");
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilShown, "never auto-opens");
         m.on_completion(comp("gi", 1, vec![]), &s, Instant::now());
         m.on_completion(comp("git", 1, vec![]), &s, Instant::now());
         m.on_completion(comp("git ", 2, subs("")), &s, Instant::now());
         m.on_completion(comp("git c", 2, subs("c")), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::HiddenUntilShown);
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilShown);
         assert_eq!(m.items().len(), 4);
         assert!(m.show_on_tab(&s).is_empty());
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
         m.on_completion(comp("git co", 2, subs("co")), &s, Instant::now());
-        assert_eq!(m.vis(), Vis::Visible, "stays open within the argument");
+        assert_eq!(m.vis(), MenuVisibility::Visible, "stays open within the argument");
         m.on_completion(
             comp("git co ", 3, vec![item("main", SuggestionKind::Arg, "")]),
             &s,
@@ -735,12 +710,12 @@ pub(crate) mod tests {
         );
         assert_eq!(
             m.vis(),
-            Vis::HiddenUntilShown,
+            MenuVisibility::HiddenUntilShown,
             "every new argument hides again"
         );
         let fx = m.show_on_tab(&s);
         assert!(
-            matches!(&fx[..], [Effect::Insert { full: true, .. }]),
+            matches!(&fx[..], [MenuEffect::Insert { full: true, .. }]),
             "single item: Tab inserts it"
         );
     }
@@ -757,14 +732,14 @@ pub(crate) mod tests {
         for _ in 0..3 {
             m.handle(KeyAction::NavigateUp, &s);
         }
-        assert_eq!((m.selected(), m.vis()), (0, Vis::Visible));
+        assert_eq!((m.selected(), m.vis()), (0, MenuVisibility::Visible));
         m.handle(KeyAction::NavigateUp, &s);
-        assert_eq!(m.vis(), Vis::HiddenUntilKeypress, "Up at index 0 hides");
+        assert_eq!(m.vis(), MenuVisibility::HiddenUntilKeypress, "Up at index 0 hides");
 
         let s = settings(r#"{"autocomplete.navigateToHistory": true}"#);
         let mut m = typed(&s);
-        assert_eq!(m.handle(KeyAction::NavigateUp, &s), vec![Effect::Rerequest]);
-        assert!(m.history_mode() && m.vis() == Vis::Visible);
+        assert_eq!(m.handle(KeyAction::NavigateUp, &s), vec![MenuEffect::Rerequest]);
+        assert!(m.history_mode() && m.vis() == MenuVisibility::Visible);
 
         let s = settings(r#"{"autocomplete.scrollWrapAround": true, "autocomplete.height": 2}"#);
         let mut m = typed(&s);
@@ -798,7 +773,7 @@ pub(crate) mod tests {
         assert_eq!(m.items()[m.selected()].names()[0], "cherry-pick");
     }
 
-    fn prefix_fx(m: &mut Menu) -> Vec<Effect> {
+    fn prefix_fx(m: &mut Menu) -> Vec<MenuEffect> {
         m.handle(KeyAction::InsertCommonPrefix, &Settings::default())
     }
 
@@ -811,7 +786,7 @@ pub(crate) mod tests {
         let fx = prefix_fx(&mut m);
         assert_eq!(
             fx,
-            vec![Effect::Insert {
+            vec![MenuEffect::Insert {
                 ins: Insertion::new(InsertionParts {
                     delete: 0,
                     text: "e".into(),
@@ -822,7 +797,7 @@ pub(crate) mod tests {
                 record: None
             }]
         );
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
         assert!(m.just_inserted);
 
         // Typed in another case → delete the query and retype in the selected item's casing.
@@ -833,16 +808,16 @@ pub(crate) mod tests {
                 .collect(),
         ));
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins, full: false, .. }] if ins.delete() == 2 && ins.text() == "che")
+            matches!(&fx[..], [MenuEffect::Insert { ins, full: false, .. }] if ins.delete() == 2 && ins.text() == "che")
         );
 
         // No remaining prefix → bell; a single item → full insertion.
         let mut m = typed(&s);
-        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
+        assert_eq!(prefix_fx(&mut m), vec![MenuEffect::Bell]);
         m.on_completion(comp("git cl", 2, subs("cl")), &s, Instant::now());
         assert!(matches!(
             &prefix_fx(&mut m)[..],
-            [Effect::Insert { full: true, .. }]
+            [MenuEffect::Insert { full: true, .. }]
         ));
 
         // Mixed types: only items of the selected item's type count; file and folder match each other.
@@ -853,7 +828,7 @@ pub(crate) mod tests {
         ]);
         assert_eq!(
             prefix_fx(&mut m),
-            vec![Effect::Bell],
+            vec![MenuEffect::Bell],
             "lcp of src/ and setup.py is the query"
         );
         let mut m = with(vec![
@@ -863,7 +838,7 @@ pub(crate) mod tests {
         ]);
         let fx = prefix_fx(&mut m);
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins, full: false, .. }] if ins.delete() == 0 && ins.text() == "r")
+            matches!(&fx[..], [MenuEffect::Insert { ins, full: false, .. }] if ins.delete() == 0 && ins.text() == "r")
         );
 
         // `../` only matches `../`: with `..foo/` selected, `../` is not a candidate → full insertion.
@@ -873,7 +848,7 @@ pub(crate) mod tests {
         ]);
         assert!(matches!(
             &prefix_fx(&mut m)[..],
-            [Effect::Insert { full: true, .. }]
+            [MenuEffect::Insert { full: true, .. }]
         ));
 
         // Shared prefix equal to the full insertion → full insertion (foo vs foobar, foo selected).
@@ -883,7 +858,7 @@ pub(crate) mod tests {
         ]);
         assert!(matches!(
             &prefix_fx(&mut m)[..],
-            [Effect::Insert { full: true, .. }]
+            [MenuEffect::Insert { full: true, .. }]
         ));
 
         // Escaped spaces: the raw token `my\ d` (5 chars) is deleted and retyped escaped (D22).
@@ -897,7 +872,7 @@ pub(crate) mod tests {
         };
         let fx = prefix_fx(&mut with(vec![mk("my dir/"), mk("my dirt/")]));
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins, .. }] if ins.delete() == 5 && ins.text() == "my\\ dir")
+            matches!(&fx[..], [MenuEffect::Insert { ins, .. }] if ins.delete() == 5 && ins.text() == "my\\ dir")
         );
 
         // A shared prefix with shell syntax (`zz;` of branches `zz;a`, `zz;b`) is never typed unquoted → bell.
@@ -913,7 +888,7 @@ pub(crate) mod tests {
             quoted("zz;a", "z", "'zz;a'"),
             quoted("zz;b", "z", "'zz;b'"),
         ]);
-        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
+        assert_eq!(prefix_fx(&mut m), vec![MenuEffect::Bell]);
         // r3-common-prefix-var-ref-bell: `$XDG_` of `$XDG_CONFIG_HOME` rows is typed (the engine leaves a variable
         // reference bare); files `$foo1.txt` (quoted by the engine) still ring.
         let fx = prefix_fx(&mut with(vec![
@@ -921,26 +896,26 @@ pub(crate) mod tests {
             item("$XDG_DATA_HOME", SuggestionKind::Arg, "$XDG"),
         ]));
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins, full: false, .. }] if ins.delete() == 0 && ins.text() == "_"),
+            matches!(&fx[..], [MenuEffect::Insert { ins, full: false, .. }] if ins.delete() == 0 && ins.text() == "_"),
             "{fx:?}"
         );
         let mut m = with(vec![
             quoted("$foo1.txt", "$f", "'$foo1.txt'"),
             quoted("$foo2.txt", "$f", "'$foo2.txt'"),
         ]);
-        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
+        assert_eq!(prefix_fx(&mut m), vec![MenuEffect::Bell]);
         // r3-pwsh-common-prefix-backslash: pwsh quotes `my dir1.txt`, so `my\ dir` (two pwsh args) is never typed
         let mut m = with(vec![
             quoted("my dir1.txt", "my", "'my dir1.txt'"),
             quoted("my dir2.txt", "my", "'my dir2.txt'"),
         ]);
-        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
+        assert_eq!(prefix_fx(&mut m), vec![MenuEffect::Bell]);
         let fx = prefix_fx(&mut with(vec![
             quoted("my dir1.txt", "my", "my\\ dir1.txt"),
             quoted("my dir2.txt", "my", "my\\ dir2.txt"),
         ]));
         assert!(
-            matches!(&fx[..], [Effect::Insert { ins, .. }] if ins.delete() == 0 && ins.text() == "\\ dir"),
+            matches!(&fx[..], [MenuEffect::Insert { ins, .. }] if ins.delete() == 0 && ins.text() == "\\ dir"),
             "{fx:?}"
         );
 
@@ -949,7 +924,7 @@ pub(crate) mod tests {
             item("↪", SuggestionKind::AutoExecute, "").with_original_kind(Some(SuggestionKind::Special)),
             item("x", SuggestionKind::Arg, ""),
         ]);
-        assert_eq!(prefix_fx(&mut m), vec![Effect::Bell]);
+        assert_eq!(prefix_fx(&mut m), vec![MenuEffect::Bell]);
         // …and `OrNavigateDown` falls back to navigation.
         assert!(m
             .handle(KeyAction::InsertCommonPrefixOrNavigateDown, &s)
@@ -961,7 +936,7 @@ pub(crate) mod tests {
     fn with(items: Vec<Suggestion>) -> Menu {
         let mut m = Menu::new();
         m.on_completion(comp("x", 1, items), &Settings::default(), Instant::now());
-        assert_eq!(m.vis(), Vis::Visible);
+        assert_eq!(m.vis(), MenuVisibility::Visible);
         m
     }
 
@@ -972,7 +947,7 @@ pub(crate) mod tests {
         let fx = m.handle(KeyAction::InsertSelectedAndExecute, &s);
         assert!(matches!(
             &fx[..],
-            [Effect::Insert {
+            [MenuEffect::Insert {
                 ins,
                 ..
             }] if ins.executes()
@@ -985,11 +960,11 @@ pub(crate) mod tests {
         );
         assert!(matches!(
             &m.handle(KeyAction::InsertSelected, &s)[..],
-            [Effect::Insert { record: None, .. }]
+            [MenuEffect::Insert { record: None, .. }]
         ));
         assert_eq!(
             m.handle(KeyAction::Execute, &s),
-            vec![Effect::Write(b"\r".to_vec())]
+            vec![MenuEffect::Write(b"\r".to_vec())]
         );
         let mut m = typed(&s);
         m.handle(KeyAction::ShowDescription, &s);
@@ -1020,12 +995,12 @@ pub(crate) mod tests {
 
         assert!(matches!(
             &fx[..],
-            [Effect::Insert { ins, full: true, record: Some((_, name)) }] if ins.text() == "<path>" && name == "<path>"
+            [MenuEffect::Insert { ins, full: true, record: Some((_, name)) }] if ins.text() == "<path>" && name == "<path>"
         ));
-        assert_eq!(lone.vis(), Vis::HiddenByInsertion);
+        assert_eq!(lone.vis(), MenuVisibility::HiddenByInsertion);
         assert!(matches!(
             &fx_auto[..],
-            [Effect::Insert {
+            [MenuEffect::Insert {
                 full: true,
                 record: None,
                 ..
@@ -1033,7 +1008,7 @@ pub(crate) mod tests {
         ));
         assert_eq!(
             fx_two,
-            vec![Effect::Bell],
+            vec![MenuEffect::Bell],
             "two special rows share no prefix to type"
         );
     }
@@ -1067,21 +1042,21 @@ pub(crate) mod tests {
         let fx_whole = prefix_fx(&mut whole);
         let fx_whole_plain = prefix_fx(&mut whole_plain);
 
-        assert_eq!(fx_single, vec![Effect::Bell]);
-        assert_eq!(fx_whole, vec![Effect::Bell]);
+        assert_eq!(fx_single, vec![MenuEffect::Bell]);
+        assert_eq!(fx_whole, vec![MenuEffect::Bell]);
         assert_eq!(
             single.vis(),
-            Vis::Visible,
+            MenuVisibility::Visible,
             "a failure leaves the menu untouched"
         );
         assert!(!single.just_inserted && !whole.just_inserted);
         assert!(matches!(
             &fx_single_plain[..],
-            [Effect::Insert { full: true, .. }]
+            [MenuEffect::Insert { full: true, .. }]
         ));
         assert!(matches!(
             &fx_whole_plain[..],
-            [Effect::Insert { full: true, .. }]
+            [MenuEffect::Insert { full: true, .. }]
         ));
     }
 }
