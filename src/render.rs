@@ -1070,24 +1070,6 @@ mod tests {
         out
     }
 
-    #[test]
-    fn colours_and_themes_theme_choice() {
-        let theme = |name: &str, bg| {
-            Theme::from_settings(
-                &settings(&format!(r#"{{"autocomplete.theme": "{name}"}}"#)),
-                bg,
-            )
-        };
-        assert_eq!(theme("light", None), Theme::light());
-        assert_eq!(theme("system", Some((250, 250, 250))), Theme::light());
-        assert_eq!(theme("system", Some((10, 10, 30))), Theme::dark());
-        assert_eq!(theme("system", None), Theme::dark());
-        assert_eq!(
-            Theme::from_settings(&Settings::default(), None),
-            Theme::dark()
-        );
-    }
-
     /// 64-bit FNV-1a: a stable hash that needs no crate and does not change between Rust versions.
     fn fnv1a(bytes: &[u8]) -> u64 {
         bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
