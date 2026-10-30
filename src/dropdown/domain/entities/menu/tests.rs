@@ -1,5 +1,6 @@
 use super::*;
 use crate::completion::domain::test_fixtures::{comp, item, settings};
+use crate::completion::domain::value_objects::insertion::{Insertion, InsertionParts};
 
 fn subs(q: &str) -> Vec<Suggestion> {
     ["checkout", "cherry-pick", "clone", "commit"]

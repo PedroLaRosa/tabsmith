@@ -1,3 +1,5 @@
+use crate::dropdown::domain::services::common_prefix;
+use crate::dropdown::domain::value_objects::common_prefix_outcome::CommonPrefixOutcome;
 use crate::dropdown::domain::value_objects::key_action::KeyAction;
 use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::value_objects::menu_visibility::MenuVisibility;
@@ -11,7 +13,6 @@ use crate::completion::domain::value_objects::argument_hint::ArgumentHint;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::completion::domain::value_objects::generator_key::GeneratorKey;
-use crate::completion::domain::value_objects::insertion::{Insertion, InsertionParts};
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use std::time::{Duration, Instant};
@@ -51,15 +52,6 @@ fn typing(a: &str, b: &str, steps: usize) -> bool {
 /// left out (it changes on every keystroke).
 fn same_item(a: &Suggestion, b: &Suggestion) -> bool {
     a.names() == b.names() && a.kind() == b.kind() && a.description() == b.description()
-}
-
-/// Whether the types match (`../` only matches `../`; file and folder match each other).
-fn matching_type(a: &Suggestion, b_first: &str, b_kind: SuggestionKind) -> bool {
-    if a.first_name() == "../" {
-        return b_first == "../";
-    }
-    let file_like = |k| matches!(k, SuggestionKind::File | SuggestionKind::Folder);
-    (file_like(a.kind()) && file_like(b_kind)) || a.kind() == b_kind
 }
 
 impl Menu {
@@ -361,85 +353,18 @@ impl Menu {
 
     /// Inserts the common prefix of the listed items; `None` = failure (shake).
     fn common_prefix(&mut self) -> Option<Vec<MenuEffect>> {
-        let sel = self.items[self.selected].clone();
-        if self.items.len() == 1 {
-            return Some(self.insert_full(self.selected, false));
+        match common_prefix::decide(&self.items, self.selected) {
+            CommonPrefixOutcome::Failed => None,
+            CommonPrefixOutcome::InsertSelected => Some(self.insert_full(self.selected, false)),
+            CommonPrefixOutcome::InsertPrefix(ins) => {
+                self.just_inserted = true;
+                Some(vec![MenuEffect::Insert {
+                    ins,
+                    full: false,
+                    record: None,
+                }])
+            }
         }
-        let auto = sel.kind() == SuggestionKind::AutoExecute;
-        let kind = if auto { sel.original_kind()? } else { sel.kind() };
-        if matches!(kind, SuggestionKind::Special | SuggestionKind::AutoExecute) {
-            return None;
-        }
-        let mut sel_first = sel.first_name().to_string();
-        if auto && kind == SuggestionKind::Folder && !sel_first.ends_with('/') {
-            sel_first.push('/');
-        }
-        let q = sel.query().to_lowercase();
-        let mut names: Vec<String> = (self.items.iter())
-            .filter(|a| matching_type(a, &sel_first, kind))
-            .map(|a| a.first_name().to_lowercase())
-            .filter(|n| n.starts_with(&q))
-            .collect();
-        if names.len() == 1 {
-            return (!auto).then(|| self.insert_full(self.selected, false));
-        }
-        names.sort();
-        let lcp = match (names.first(), names.last()) {
-            (Some(a), Some(b)) => a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count(),
-            _ => 0,
-        };
-        let shared: String = sel.first_name().chars().take(lcp).collect();
-        if shared.is_empty() || shared == sel.query() {
-            return None;
-        }
-        let text: String = shared
-            .chars()
-            .map(|c| {
-                if c.is_whitespace() {
-                    "\\ ".into()
-                } else {
-                    c.to_string()
-                }
-            })
-            .collect();
-        // The engine strips an already-typed query from `insert.text` (delete == 0): put it back to compare.
-        let full = if sel.insert().delete() == 0 {
-            format!("{}{}", sel.query(), sel.insert().text())
-        } else {
-            sel.insert().text().to_string()
-        };
-        // The engine escaped the row for its shell: type the shared prefix only as the start of that insertion
-        // (`$XDG_` of `$XDG_CONFIG_HOME`), else BEL (`zz;` of `'zz;a'`, pwsh `my\ dir` of `'my dir1.txt'`).
-        // ponytail: a prefix that needs quoting is not quoted half-way.
-        if !full.starts_with(&text) {
-            return None;
-        }
-        if text == full || format!("{text} ") == full {
-            return (!auto).then(|| self.insert_full(self.selected, false));
-        }
-        // Partial insertion. Raw on-screen token chars (D22): the item's own delete count, or the query when it was
-        // stripped (then the typed text equals the query and is not retyped).
-        let q_chars = sel.query().chars().count();
-        let raw = if sel.insert().delete() > 0 {
-            sel.insert().delete()
-        } else {
-            q_chars
-        };
-        let (delete, text) = match text.strip_prefix(sel.query()) {
-            Some(rest) if raw == q_chars => (0, rest.to_string()),
-            _ => (raw, text),
-        };
-        self.just_inserted = true;
-        Some(vec![MenuEffect::Insert {
-            ins: Insertion::new(InsertionParts {
-                delete,
-                text,
-                cursor_back: 0,
-                execute: false,
-            }),
-            full: false,
-            record: None,
-        }])
     }
 }
 
