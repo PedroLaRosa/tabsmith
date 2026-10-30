@@ -1496,8 +1496,10 @@ which cites the code behind each; the phase ran as 11 steps, `7.0` … `7.10`, i
   `StdinSourceChooser`, and the Enable, Disable, Status, SetCustomization and ShowCustomizations arms of
   `run_inline_command`, have no unit test of their own: golden, inline-diff and the pty groups cover them, and only
   `render_sources` has one (`inline_show_customizations`, moved path-only).
-- **History**: no Phase 7 subject is over 72 characters (the longest are exactly 72). Every message went through
-  `git commit -F` with the Sonnet 5.5 trailer, and none was rewritten.
+- **History**: one Phase 7 subject is over 72 characters: `fe4b320` ("refactor(ghost_text): name the select use
+  case's locals after what they hold"), 76, the review fix round of run 3. It stays in history (no rewrite), as
+  Phase 6's two did. Every other subject is at most 72. Every message went through `git commit -F` with the Sonnet 5.5
+  trailer, and none was rewritten.
 - **Manual smoke pending** (the user's, after the phase; section 8): (1) plan section 8 item 4 on `debug shell zsh`
   (`echo hi`, then `ec` shows `ho hi`, → accepts, Alt-f accepts one word); (2) `tabsmith settings inline.source
   '"specs"'` makes `git ch` ghost a subcommand, `'"history"'` only history; (3) the LLM against a local fake server
