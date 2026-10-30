@@ -190,7 +190,7 @@ calling the other module's use case or adapter.
 | `diagnostics::CheckFixer` | shell_integration install/reinstall use cases, settings repository reset, `specs::InstallSpecBundleUseCase`, data-dir creation |
 | `terminal_session::CompletionEngine` | `bootstrap::ChannelCompletionEngine` (sends `EngineMessage` to the engine server thread) |
 | `terminal_session::GeneratorProcessReaper` | `specs` `ProcessExecutor::kill_live_children` |
-| `specs::RuntimeEventSource` | `bootstrap::EngineServer` inbox (single channel, keeps today's abort-on-newer-request semantics) |
+| `specs::RuntimeEventSource` | `bootstrap::EngineInbox` (`engine_inbox.rs`, the engine server's single channel; keeps today's abort-on-newer-request semantics) |
 | theme and settings repositories used by `terminal_session` | `dropdown::FileThemeRepository`, `settings::JsonFileSettingsRepository` (injected as trait objects) |
 
 ---
@@ -1284,7 +1284,12 @@ Phase 6 notes (decisions Q1-Q33 and deviations 1-38 of
   (CON-T27). Rule 3's accepted ceilings (Phase 5 notes) gain one: a use case that names a sibling use case of its own
   module passes (rule 3 reads only another module's). The hand check for it, every
   `src/<module>/application/*_use_case.rs` above its `#[cfg(test)]` grepped for a `*UseCase`/`*_use_case` other than
-  its own, found none in the 24 files. These
+  its own, found none in the 24 files. The Phase 4 `IntegrationInstaller` ceiling carries over to completion, the
+  first registered module with application services other modules depend on (section 2): rule 3 cannot see
+  another module's application service, so an import of `CommandLineParser` or `GeneratorRunner` from ghost_text,
+  dropdown or terminal_session passes every rule (plan section 1 allows only domain types, repository and port
+  traits and DTOs). `grep -rnE 'completion::application::(command_line_parser|generator_runner|test_fixtures)' src
+  --exclude-dir=completion` is empty at the end of Phase 6 (hand-off below). These
   greps also ran by hand at the end and found nothing outside `#[cfg(test)]` code: a legacy module under
   `src/completion` or `src/terminal_session/application/ports` (the one hit is `empty_search_term_is_no_prefix_match`
   calling `crate::inline::spec_ghost`, test code that Phase 7.3 moves; no grouped `use crate::{` exists there), a
@@ -1342,6 +1347,9 @@ Phase 6 notes (decisions Q1-Q33 and deviations 1-38 of
     `quickjs_spec_repository.rs`'s tests, the `_first_token` half is a parser test). `SpecIndex::completions()` (in
     order) feeds the first-token suggestions, and `SpecLocation::cache_key()` builds the parser's prefix-cache key.
 - **Hand-offs** (details in the research's "Hand-off notes for later phases"):
+  - Phases 7, 8 and 9: rule 3 cannot see completion's application services (Fitness rules above), so every step
+    of these phases reruns `grep -rnE 'completion::application::(command_line_parser|generator_runner|test_fixtures)'
+    src --exclude-dir=completion` by hand; it must stay empty outside `#[cfg(test)]` code.
   - Phase 7: one `impl EngineServer` block of `src/bootstrap/engine_server.rs`, marked `// legacy ghost text: Phase 7.6
     replaces this block`, holds `local_ghost_text(&self, result)`, `request_llm_ghost_text(&mut self, req, buffer,
     cwd, shell)` (thread `llm`, warn `engine: llm worker: {e}`) and `clear_ghost_text_cache(&self)`; the free
