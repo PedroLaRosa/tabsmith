@@ -1346,7 +1346,8 @@ Phase 6 notes (decisions Q1-Q33 and deviations 1-38 of
     replaces this block`, holds `local_ghost_text(&self, result)`, `request_llm_ghost_text(&mut self, req, buffer,
     cwd, shell)` (thread `llm`, warn `engine: llm worker: {e}`) and `clear_ghost_text_cache(&self)`; the free
     `llm_history` follows it, the field is `ghost_cache: Arc<Mutex<inline::GhostCache>>`, and
-    `llm_history_honours_history_count` is in its tests. `send_reply` is the only `Msg::Completion` sender and calls
+    `llm_history_honours_history_count` is in its tests, the sibling `engine_server/tests.rs` (548 lines inline were over
+    section 1's ~500). `send_reply` is the only `Msg::Completion` sender and calls
     `local_ghost_text`; the CommandFinished/CommandEnded arm calls `record_command.execute` (Finished only), then
     `clear_ghost_text_cache`, then `ResetGeneratorsUseCase`; the `Llm` arm calls `request_llm_ghost_text`. The twelve
     6.0a tests run under `bootstrap::engine_server::tests` (14 tests with `llm_history_honours_history_count` and the D6
