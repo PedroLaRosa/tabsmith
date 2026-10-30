@@ -1,9 +1,8 @@
 //! Row icons: which icon a row gets, as an id and a two-column slot (`assets/icons` has the PNGs, origin and licence
 //! in its README). The pixels and the kitty protocol live in `terminal_session`.
 
-use unicode_width::UnicodeWidthChar;
-
 use crate::completion::domain::value_objects::suggestion::Suggestion;
+use crate::dropdown::domain::services::text_fitting::width;
 use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::dropdown::domain::value_objects::icon_id::{placeholders, IconId, ICON_NAMES};
 use crate::dropdown::domain::value_objects::icon_slot::IconSlot;
@@ -120,10 +119,6 @@ fn pad2(s: &str) -> String {
     } else {
         s.to_string()
     }
-}
-
-fn width(s: &str) -> usize {
-    s.chars().map(|c| c.width().unwrap_or(0)).sum()
 }
 
 fn param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
