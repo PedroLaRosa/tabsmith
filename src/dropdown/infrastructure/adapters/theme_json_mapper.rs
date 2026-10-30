@@ -1,5 +1,9 @@
+use crate::dropdown::domain::services::color_parser::parse_color;
 use crate::dropdown::domain::value_objects::theme_author;
 use crate::dropdown::domain::value_objects::theme_definition::ThemeDefinition;
+use crate::dropdown::domain::value_objects::theme_palette::{
+    Base16PaletteParts, FigPaletteParts, ThemePalette,
+};
 use crate::dropdown::infrastructure::adapters::theme_file_error::ThemeFileError;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -38,9 +42,40 @@ pub(crate) fn parse_theme_definition(text: &str) -> Result<ThemeDefinition, Them
     })))
 }
 
+/// Lenient reading for drawing: any JSON value gives a palette, a colour that is missing, not a string or unparsable is `None` for its role only. The Fig format needs `version` to be the string "1.0" AND `theme` an object; everything else is read as base16 (P8-T26).
+pub(crate) fn theme_palette_from_json(v: &Value) -> ThemePalette {
+    let col = |p: &str| v.pointer(p).and_then(Value::as_str).and_then(parse_color);
+    if v.get("version").and_then(Value::as_str) == Some("1.0")
+        && v.get("theme").is_some_and(Value::is_object)
+    {
+        return ThemePalette::fig(FigPaletteParts {
+            main_bg: col("/theme/backgroundColor"),
+            main_text: col("/theme/textColor"),
+            matching_bg: col("/theme/matchBackgroundColor"),
+            selected_bg: col("/theme/selection/backgroundColor"),
+            selected_text: col("/theme/selection/textColor"),
+            selected_matching_bg: col("/theme/selection/matchBackgroundColor"),
+            description_text: col("/theme/description/textColor"),
+            description_border: col("/theme/description/borderColor"),
+        });
+    }
+    ThemePalette::base16(Base16PaletteParts {
+        shade0: col("/shade0"),
+        shade1: col("/shade1"),
+        shade2: col("/shade2"),
+        shade5: col("/shade5"),
+        shade6: col("/shade6"),
+        shade7: col("/shade7"),
+        accent6: col("/accent6"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dropdown::domain::value_objects::rgb::Rgb;
+    use crate::dropdown::domain::value_objects::theme::Theme;
+    use serde_json::json;
 
     fn error_texts(inputs: &[&str]) -> Vec<String> {
         inputs
@@ -223,6 +258,169 @@ mod tests {
         assert_eq!(
             format!("{has_author:?}"),
             "[Ok(false), Ok(false), Ok(false), Ok(true)]"
+        );
+    }
+
+    #[test]
+    fn should_map_a_fig_theme_to_its_roles() {
+        let value = json!({"version":"1.0","theme":{"backgroundColor":"#010101","textColor":"#020202","matchBackgroundColor":"#030303","selection":{"backgroundColor":"#040404","textColor":"#050505","matchBackgroundColor":"#060606"},"description":{"textColor":"#070707","borderColor":"#080808"}}});
+
+        let palette = theme_palette_from_json(&value);
+
+        assert_eq!(
+            palette,
+            ThemePalette::fig(FigPaletteParts {
+                main_bg: Some((1, 1, 1)),
+                main_text: Some((2, 2, 2)),
+                matching_bg: Some((3, 3, 3)),
+                selected_bg: Some((4, 4, 4)),
+                selected_text: Some((5, 5, 5)),
+                selected_matching_bg: Some((6, 6, 6)),
+                description_text: Some((7, 7, 7)),
+                description_border: Some((8, 8, 8)),
+            })
+        );
+    }
+
+    #[test]
+    fn colours_and_themes_theme_json() {
+        let v1: Value = serde_json::from_str(
+            r##"{"version":"1.0","theme":{"backgroundColor":"#000","selection":{"backgroundColor":"rgb(1, 2, 3)"},
+                 "description":{"textColor":"nope"}}}"##,
+        )
+        .unwrap();
+        let t = theme_palette_from_json(&v1).theme();
+        assert_eq!((t.main_bg(), t.selected_bg()), ((0, 0, 0), (1, 2, 3)));
+        assert_eq!(
+            (t.main_text(), t.description_text()),
+            (Theme::dark().main_text(), Theme::dark().description_text())
+        );
+        let b16: Value =
+            serde_json::from_str(r##"{"shade0":"#101010","accent6":"#123456"}"##).unwrap();
+        let t = theme_palette_from_json(&b16).theme();
+        assert_eq!(
+            (
+                t.main_bg(),
+                t.matching_bg(),
+                t.selected_matching_bg(),
+                t.main_text()
+            ),
+            ((16, 16, 16), (40, 40, 40), (18, 52, 86), (232, 232, 232))
+        );
+    }
+
+    /// The eight colours of a theme in field order: main_bg, main_text, matching_bg, selected_bg, selected_text,
+    /// selected_matching_bg, description_text, description_border.
+    fn roles(t: &Theme) -> [Rgb; 8] {
+        [
+            t.main_bg(),
+            t.main_text(),
+            t.matching_bg(),
+            t.selected_bg(),
+            t.selected_text(),
+            t.selected_matching_bg(),
+            t.description_text(),
+            t.description_border(),
+        ]
+    }
+
+    #[test]
+    fn should_draw_a_json_value_that_is_not_a_fig_theme_with_the_base16_filler() {
+        let filler = [
+            (24, 24, 24),
+            (232, 232, 232),
+            (40, 40, 40),
+            (56, 56, 56),
+            (248, 248, 248),
+            (186, 139, 175),
+            (216, 216, 216),
+            (40, 40, 40),
+        ];
+        let not_fig = [
+            json!({}),
+            json!([1]),
+            json!("x"),
+            json!(null),
+            json!(5),
+            json!({"version": "1.0"}),
+            json!({"version": 1, "theme": {}}),
+            json!({"version": "1.0", "theme": "x"}),
+        ];
+
+        for value in not_fig {
+            assert_eq!(roles(&theme_palette_from_json(&value).theme()), filler, "{value}");
+        }
+    }
+
+    #[test]
+    fn should_fall_back_per_colour_for_a_fig_theme_with_missing_or_unparsable_colours() {
+        let fig = json!({
+            "version": "1.0",
+            "theme": {
+                "backgroundColor": "#000",
+                "matchBackgroundColor": "red",
+                "selection": {"backgroundColor": 5, "textColor": null, "matchBackgroundColor": "rgb(1,2)"},
+                "description": {"textColor": "#102030"}
+            }
+        });
+        let dark = [
+            (48, 48, 48),
+            (180, 180, 180),
+            (95, 89, 56),
+            (30, 90, 199),
+            (253, 253, 253),
+            (106, 142, 218),
+            (180, 180, 180),
+            (65, 65, 65),
+        ];
+
+        let theme = theme_palette_from_json(&fig).theme();
+
+        assert_eq!(
+            roles(&theme),
+            [
+                (0, 0, 0),
+                dark[1],
+                dark[2],
+                dark[3],
+                dark[4],
+                dark[5],
+                (16, 32, 48),
+                dark[7]
+            ]
+        );
+        // a Fig theme without a single colour is dark, not the base16 filler
+        let empty = json!({"version": "1.0", "theme": {}});
+        assert_eq!(roles(&theme_palette_from_json(&empty).theme()), dark);
+    }
+
+    #[test]
+    fn should_fall_back_per_colour_for_a_base16_theme_with_missing_or_unparsable_colours() {
+        let base16 = json!({
+            "shade0": "#101010",
+            "shade1": "#0a0b0c",
+            "shade5": 5,
+            "shade6": null,
+            "shade7": "red",
+            "accent6": "rgb(1,2)",
+            "shade3": "#ffffff",
+            "accent0": "#ffffff"
+        });
+
+        let theme = theme_palette_from_json(&base16).theme();
+
+        assert_eq!(
+            roles(&theme),
+            [
+                (16, 16, 16),
+                (232, 232, 232),
+                (10, 11, 12),
+                (56, 56, 56),
+                (248, 248, 248),
+                (186, 139, 175),
+                (216, 216, 216),
+                (10, 11, 12)
+            ]
         );
     }
 }
