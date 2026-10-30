@@ -14,7 +14,7 @@ use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeRepository;
-use crate::render::{FrameInput, Renderer};
+use crate::terminal_session::infrastructure::adapters::overlay_renderer::{FrameInput, Renderer};
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
 };
