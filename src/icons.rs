@@ -377,6 +377,7 @@ fn base64(data: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::completion::domain::test_fixtures::item;
+    use crate::dropdown::domain::value_objects::icon_id::ICON_NAMES;
 
     #[test]
     fn base64_matches_rfc4648() {
@@ -752,5 +753,18 @@ mod tests {
             assert_eq!((label.as_str(), *mode), (*want_label, *want_mode));
             assert_eq!(hash, want_hash, "{label} in {mode}");
         }
+    }
+
+    /// Temporary: the domain's `ICON_NAMES` lists the PNG assets in `PNGS` order, because an icon id is a position in both.
+    #[test]
+    fn should_list_the_icon_names_in_the_order_of_the_png_assets() {
+        // Arrange
+        let asset_names: Vec<&str> = PNGS.iter().map(|(name, _)| *name).collect();
+
+        // Act
+        let listed = ICON_NAMES.to_vec();
+
+        // Assert
+        assert_eq!(listed, asset_names);
     }
 }
