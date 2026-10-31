@@ -1,0 +1,8 @@
+#!/bin/bash
+# macOS `stat -f FORMAT` emulation for the Linux container (GNU stat).
+if [ "$1" = "-f" ]; then
+  fmt="$2"; shift 2
+  fmt="${fmt//%Lp/%a}"; fmt="${fmt//%HT/%F}"
+  exec /usr/bin/stat -c "$fmt" "$@"
+fi
+exec /usr/bin/stat "$@"

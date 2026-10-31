@@ -8,11 +8,12 @@
 # restructuring may be legitimate) but are listed so the step can justify each one.
 # Needs the golden baseline once per machine: scripts/hexagonal-refactor/make-baseline.sh
 HERE="$(cd "$(dirname "$0")" && pwd)"
+[ "$(uname)" = Linux ] && export PATH="$HERE/compat:$PATH"   # macOS `stat -f` / `sed -i ''` shims for golden.sh
 WORK="$PWD/target/hexagonal-refactor"
 BASE="$WORK/baseline"
 BASELINE_REV=ef807c1
 BASELINE_PASSED=283
-BASELINE_CLIPPY=3
+BASELINE_CLIPPY=${BASELINE_CLIPPY:-3}   # Linux with clippy 1.97 reports 4 (one new lint in completion_result_builder.rs): BASELINE_CLIPPY=4
 fail=0
 LOG="$WORK/gate-runs/$$"   # per run, so concurrent gates never share logs; gate-last points at the newest
 mkdir -p "$LOG"; ln -sfn "$LOG" "$WORK/gate-last"
