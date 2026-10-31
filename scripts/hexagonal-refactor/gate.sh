@@ -49,6 +49,14 @@ if [ "$warnings" -gt "$BASELINE_CLIPPY" ] || [ "$errors" -gt 0 ]; then
   grep -E "^(warning|error)" -A8 "$LOG/clippy.txt" | head -120; echo "GATE FAIL: clippy"; fail=1
 fi
 
+# cfg(windows) code is never built by the host build: check it when the target and a mingw C compiler are installed
+# (rustup target add x86_64-pc-windows-gnu; apt-get install gcc-mingw-w64-x86-64).
+if rustup target list --installed 2>/dev/null | grep -q '^x86_64-pc-windows-gnu$' && command -v x86_64-w64-mingw32-gcc >/dev/null; then
+  echo "== windows check"
+  if cargo check --locked --all-targets --target x86_64-pc-windows-gnu >"$LOG/windows.txt" 2>&1; then echo "windows: ok"
+  else grep -E "^(error|warning)" -A8 "$LOG/windows.txt" | head -60; echo "GATE FAIL: windows check"; fail=1; fi
+fi
+
 if [ "$1" != "--fast" ]; then
   echo "== golden CLI output"
   # run a copy at a fixed depth under target/, like the baseline binary (golden.sh scrubs both paths)
