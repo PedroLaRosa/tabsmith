@@ -27,10 +27,11 @@ use crate::shell_integration::infrastructure::shell_integration_module::{
 use crate::specs::infrastructure::specs_module::build_specs_module;
 use crate::terminal_session::infrastructure::cli::key_tester_command::run_key_tester_command;
 use crate::terminal_session::infrastructure::cli::pre_cmd_command::run_pre_cmd_command;
+use crate::terminal_session::infrastructure::cli::pty_command::run_pty_command;
 use crate::terminal_session::infrastructure::terminal_session_module::{
     build_terminal_session_module, TerminalSessionModule,
 };
-use crate::{cli, doctor, pty};
+use crate::{cli, doctor};
 use anyhow::Result;
 use clap::{ArgAction, Args, Parser, Subcommand};
 use std::io::Write;
@@ -166,7 +167,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
             DebugCmd::Logs => cli::debug_logs(),
         },
         Some(Command::Internal(c)) => match c {
-            InternalCmd::Pty { shell, cmd } => Ok(pty::run(shell, cmd, &terminal_session_module())),
+            InternalCmd::Pty { shell, cmd } => run_pty_command(shell, cmd, &terminal_session_module()),
             InternalCmd::ShouldLaunch => run_should_launch_command(&shell_integration_module()),
             InternalCmd::GetShell => run_get_shell_command(),
             InternalCmd::PreCmd { alias } => run_pre_cmd_command(alias, &terminal_session_module()),
