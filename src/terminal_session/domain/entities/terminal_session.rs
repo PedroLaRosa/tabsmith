@@ -12,12 +12,13 @@ use crate::terminal_session::domain::entities::reload_watch::ReloadWatch;
 use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
 use crate::terminal_session::domain::entities::shell_exit::ShellExit;
 use crate::terminal_session::domain::services::render_guard;
-use crate::terminal_session::domain::services::session_deadlines;
+use crate::terminal_session::domain::services::session_deadlines::{self, REDRAW_GRACE};
 use crate::terminal_session::domain::value_objects::completion_query::CompletionQuery;
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
 use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
+use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -279,6 +280,48 @@ impl TerminalSession {
             return None;
         }
         Some(CompletionQuery::new(self.request, buffer, cursor, self.menu.history_mode()))
+    }
+
+    /// A batch of shell output arrived: a resize in progress is still being redrawn.
+    pub(crate) fn output_arrived(&mut self, now: Instant) {
+        self.resize.output_arrived(now); // the shell / ConPTY is still redrawing
+    }
+
+    /// Leaving the alternate screen resets the menu.
+    pub(crate) fn screen_changed(&mut self, before: &ScreenState, after: &ScreenState) {
+        if before.alt_screen() && !after.alt_screen() {
+            self.menu.error_reset();
+        }
+    }
+
+    /// The tracker's event. True when the settings and the session context files are to be looked at.
+    pub(crate) fn on_shell_event(&mut self, event: &ShellEvent, now: Instant) -> bool {
+        match event {
+            // A prompt redraw (SIGWINCH, `zle reset-prompt`, an empty line) re-emits NewCmd: line, menu and ghost
+            // stay, and the unchanged line is not re-requested (its reply would count as a keypress). A cleared line
+            // resets through the empty-buffer path in `refresh`, once a line split off into a later read had time.
+            ShellEvent::NewCommand(None) => {
+                self.redraw_until = Some(now + REDRAW_GRACE);
+                return true;
+            }
+            ShellEvent::NewCommand(Some(_)) | ShellEvent::CommandEnded => {
+                self.menu.error_reset();
+                self.sent = None;
+            }
+            ShellEvent::PreExec => self.menu.error_reset(),
+        }
+        self.echo.reset();
+        self.ghost.reset();
+        self.lock = None;
+        match event {
+            ShellEvent::NewCommand(_) | ShellEvent::CommandEnded => true,
+            ShellEvent::PreExec => false,
+        }
+    }
+
+    /// Re-ask for the current buffer: the next `refresh` sends it even though it did not change.
+    pub(crate) fn forget_sent(&mut self) {
+        self.sent = None;
     }
 
     pub(crate) fn resize_applied(&mut self, now: Instant) {

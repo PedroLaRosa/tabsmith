@@ -18,7 +18,7 @@ use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
 use crate::terminal_session::domain::services::key_router::{ends_line, is_enter, plain_char, route};
-use crate::terminal_session::domain::services::session_deadlines::{REDRAW_GRACE, SPINNER_TICK};
+use crate::terminal_session::domain::services::session_deadlines::SPINNER_TICK;
 use crate::terminal_session::domain::value_objects::key_facts::{KeyFacts, KeyFactsParts};
 use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
@@ -482,17 +482,15 @@ impl Session {
 
     /// PTY batch (SPEC §4.5): clear, bytes (markers stripped), frame — one stdout write.
     fn on_output(&mut self, batch: &[u8]) {
-        self.session.resize.output_arrived(Instant::now()); // the shell / ConPTY is still redrawing
-        let was_alt = self.alt();
+        self.session.output_arrived(Instant::now());
+        let before = self.screen.state();
         let mut body = Vec::new();
         let (splitter, tracker) = self.session.output_parts();
         let events = self.feeder.feed(splitter, tracker, batch, &mut body);
         for ev in events {
             self.on_event(ev);
         }
-        if was_alt && !self.alt() {
-            self.session.menu.error_reset();
-        }
+        self.session.screen_changed(&before, &self.screen.state());
         self.refresh();
         // Taken late: a panic above leaves the clear cached for `guard`.
         let mut out = self.screen.take_clear();
@@ -504,29 +502,14 @@ impl Session {
     }
 
     fn on_event(&mut self, ev: ShellEvent) {
-        match ev {
-            // A prompt redraw (SIGWINCH, `zle reset-prompt`, an empty line) re-emits NewCmd: line, menu and ghost
-            // stay, and the unchanged line is not re-requested (its reply would count as a keypress). A cleared line
-            // resets through the empty-buffer path in `refresh`, once a line split off into a later read had time.
-            ShellEvent::NewCommand(None) => {
-                self.session.redraw_until = Some(Instant::now() + REDRAW_GRACE);
-                self.poll_files();
-                return;
-            }
-            ShellEvent::NewCommand(Some(_)) | ShellEvent::CommandEnded => {
-                match ev {
-                    ShellEvent::NewCommand(Some(h)) => self.engine.command_finished(h),
-                    _ => self.engine.command_ended(), // NoHistory: the end-of-command reset, nothing recorded
-                }
-                self.session.menu.error_reset();
-                self.session.sent = None;
-                self.poll_files();
-            }
-            ShellEvent::PreExec => self.session.menu.error_reset(),
+        match &ev {
+            ShellEvent::NewCommand(Some(h)) => self.engine.command_finished(h.clone()),
+            ShellEvent::CommandEnded => self.engine.command_ended(), // NoHistory: the end-of-command reset, nothing recorded
+            ShellEvent::NewCommand(None) | ShellEvent::PreExec => {}
         }
-        self.session.echo.reset();
-        self.session.ghost.reset();
-        self.session.lock = None;
+        if self.session.on_shell_event(&ev, Instant::now()) {
+            self.poll_files();
+        }
     }
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
@@ -768,7 +751,7 @@ impl Session {
             }
         }
         if rerequest {
-            self.session.sent = None;
+            self.session.forget_sent();
             self.refresh();
         }
         if redraw {

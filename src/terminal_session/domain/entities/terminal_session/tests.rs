@@ -3,6 +3,8 @@ use crate::completion::domain::test_fixtures::settings;
 use crate::terminal_session::domain::entities::insertion_lock::INSERT_LOCK;
 use crate::terminal_session::domain::value_objects::completion_query::CompletionQuery;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenStateParts;
+use crate::terminal_session::domain::services::session_deadlines::REDRAW_GRACE;
+use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::terminal_session::domain::value_objects::shell_marker::ShellMarker;
 use crate::terminal_session::domain::services::session_deadlines::{
     EXIT_GRACE, FILE_POLL, RESIZE_DEBOUNCE,
@@ -217,4 +219,54 @@ fn should_keep_an_insertion_in_the_basis_while_the_shell_echoes_nothing_and_rele
         (held, basis, session.has_insertion_lock(), released),
         (None, Some("git checkout".to_string()), false, None)
     );
+}
+
+#[test]
+fn should_not_act_on_an_empty_line_before_the_prompt_redraw_grace_is_over() {
+    let start = Instant::now();
+    let mut session = session_at_prompt("{}");
+    session.refresh(&screen(), line("git ch"), start);
+    session.on_shell_event(&ShellEvent::NewCommand(None), start);
+
+    let within_grace = session.refresh(&screen(), line(""), start + Duration::from_millis(10));
+    let requests_within_grace = session.request_id();
+    let after_grace = session.refresh(&screen(), line(""), start + REDRAW_GRACE);
+
+    assert_eq!(
+        (within_grace, requests_within_grace, after_grace, session.request_id()),
+        (None, 1, None, 2)
+    );
+}
+
+#[test]
+fn should_keep_the_menu_and_the_unchanged_line_over_a_prompt_redraw() {
+    let start = Instant::now();
+    let mut session = session_at_prompt("{}");
+    session.refresh(&screen(), line("git ch"), start);
+
+    let polls = session.on_shell_event(&ShellEvent::NewCommand(None), start);
+    let again = session.refresh(&screen(), line("git ch"), start);
+
+    assert_eq!((polls, again, session.request_id()), (true, None, 1));
+}
+
+#[test]
+fn should_forget_what_was_sent_when_a_command_ends_so_the_same_line_is_asked_again() {
+    let start = Instant::now();
+    let mut session = session_at_prompt("{}");
+    session.refresh(&screen(), line("git ch"), start);
+
+    let polls = session.on_shell_event(&ShellEvent::CommandEnded, start);
+    let again = session.refresh(&screen(), line("git ch"), start);
+
+    assert_eq!((polls, again.map(|query| query.request())), (true, Some(2)));
+}
+
+#[test]
+fn should_not_poll_the_files_for_a_command_that_starts() {
+    let mut session = session_at_prompt("{}");
+
+    let polls = session.on_shell_event(&ShellEvent::PreExec, Instant::now());
+
+    assert!(!polls);
 }
