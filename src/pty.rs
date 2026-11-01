@@ -22,6 +22,7 @@ use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes, unechoed_after};
 use crate::terminal_session::domain::services::key_router::{ghost_key, is_ctrl};
+use crate::terminal_session::domain::services::render_guard::allows_drawing;
 use crate::terminal_session::domain::services::session_deadlines::{
     next_deadline, EXIT_GRACE, FILE_POLL, REDRAW_GRACE, RESIZE_DEBOUNCE, SPINNER_TICK,
 };
@@ -841,12 +842,7 @@ impl Session {
     /// ponytail: mirrors overlay_renderer.rs `compose`'s guards; its no-room-for-the-menu case (3-row terminal) is not covered.
     fn drawable(&self) -> bool {
         let screen = self.screen.state();
-        !self.suppressed_in(&screen)
-            && !screen.scroll_region()
-            && !(screen.alt_screen() || screen.origin_mode() || screen.insert_mode())
-            && !screen.pending_wrap()
-            && screen.columns() >= 10
-            && screen.lines() >= 3
+        !self.suppressed_in(&screen) && allows_drawing(&screen)
     }
 
     fn frame(&mut self) -> Vec<u8> {
