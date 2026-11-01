@@ -13,6 +13,7 @@ use crate::terminal_session::application::ports::working_directory::WorkingDirec
 use crate::terminal_session::application::ports::wrapped_shell::WrappedShell;
 use crate::terminal_session::application::session_ports_parts::SessionPortsParts;
 use crate::terminal_session::application::session_use_cases::SessionUseCases;
+use crate::terminal_session::application::shell_end::ShellEnd;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
@@ -365,7 +366,7 @@ impl Session {
                 }
             }
             SessionMessage::PtyEof => {
-                return self.session.shell_output_ended();
+                return self.use_cases.handle_shell_exit.execute(&mut self.session, ShellEnd::OutputClosed);
             }
             SessionMessage::Resize(cols, rows) if self.session.is_passthrough() => {
                 self.pty.resize(cols, rows);
@@ -375,13 +376,12 @@ impl Session {
             }
             SessionMessage::ChildExit(c) => {
                 self.pty.release_pseudo_console();
-                if !self.session.child_exited(c, Instant::now()) {
+                if !self.use_cases.handle_shell_exit.execute(&mut self.session, ShellEnd::ChildExited(c)) {
                     return false;
                 }
             }
             SessionMessage::Term => {
-                self.session.terminated();
-                return false;
+                return self.use_cases.handle_shell_exit.execute(&mut self.session, ShellEnd::Terminated);
             }
             SessionMessage::Completion(_) | SessionMessage::Ghost { .. } if self.session.is_passthrough() => {}
             SessionMessage::Completion(c) => {

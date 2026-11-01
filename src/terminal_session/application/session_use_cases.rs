@@ -2,6 +2,7 @@ use crate::terminal_session::application::apply_completion_result_use_case::Appl
 use crate::terminal_session::application::apply_llm_ghost_text_use_case::ApplyLlmGhostTextUseCase;
 use crate::terminal_session::application::completion_requester::CompletionRequester;
 use crate::terminal_session::application::handle_keystrokes_use_case::HandleKeystrokesUseCase;
+use crate::terminal_session::application::handle_shell_exit_use_case::HandleShellExitUseCase;
 use crate::terminal_session::application::keystroke_handler::KeystrokeHandler;
 use crate::terminal_session::application::overlay_painter::OverlayPainter;
 use crate::terminal_session::application::process_shell_output_use_case::{
@@ -25,6 +26,7 @@ pub(crate) struct SessionUseCases {
     pub(crate) apply_completion_result: ApplyCompletionResultUseCase,
     pub(crate) apply_llm_ghost_text: ApplyLlmGhostTextUseCase,
     pub(crate) resize_terminal: ResizeTerminalUseCase,
+    pub(crate) handle_shell_exit: HandleShellExitUseCase,
 }
 
 impl SessionUseCases {
@@ -57,6 +59,7 @@ impl SessionUseCases {
             ApplyCompletionResultUseCase::new(ports.clock.clone(), painter.clone(), keystroke_handler.clone());
         let apply_llm_ghost_text = ApplyLlmGhostTextUseCase::new(painter.clone());
         let resize_terminal = ResizeTerminalUseCase::new(ports.screen.clone(), ports.shell, ports.clock.clone());
+        let handle_shell_exit = HandleShellExitUseCase::new(ports.clock.clone());
         let process_shell_output = ProcessShellOutputUseCase::new(ProcessShellOutputParts {
             engine: ports.engine,
             feeder: ShellOutputFeeder::new(ports.screen.clone(), ports.clock.clone()),
@@ -78,6 +81,7 @@ impl SessionUseCases {
             apply_completion_result,
             apply_llm_ghost_text,
             resize_terminal,
+            handle_shell_exit,
         }
     }
 

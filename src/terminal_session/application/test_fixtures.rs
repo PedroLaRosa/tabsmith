@@ -43,6 +43,8 @@ use crate::terminal_session::application::session_ports_parts::SessionPortsParts
 #[cfg(test)]
 use crate::terminal_session::application::session_use_cases::SessionUseCases;
 #[cfg(test)]
+use crate::terminal_session::application::shell_end::ShellEnd;
+#[cfg(test)]
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 #[cfg(test)]
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
@@ -226,6 +228,11 @@ impl TerminalSessionHarness {
     /// The user's terminal is resized to `columns` x `rows`.
     pub(crate) fn resize(&mut self, columns: u16, rows: u16) {
         self.use_cases.resize_terminal.execute(&mut self.session, columns, rows);
+    }
+
+    /// The shell's side of the session ends; true while the loop goes on.
+    pub(crate) fn end(&mut self, end: ShellEnd) -> bool {
+        self.use_cases.handle_shell_exit.execute(&mut self.session, end)
     }
 
     /// A bash prompt `$ ` with the integration markers, then `text` echoed.
