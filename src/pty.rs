@@ -3136,6 +3136,10 @@ mod tests {
             self.rig.stash_is_stdin()
         }
 
+        fn request_id(&self) -> u64 {
+            self.rig.request_id()
+        }
+
         fn exit_state(&self) -> ExitState {
             ExitState {
                 code: self.rig.exit_code(),
@@ -3346,7 +3350,7 @@ mod tests {
         let mut rig = loop_session();
         rig.draw_menu();
         rig.pass_through();
-        let request = rig.rig.request_id();
+        let request = rig.request_id();
         rig.queue_completion(comp("git ch", 1, subs("ch")).with_request_id(request));
         rig.queue_ghost(request, Some("eckout".into()));
 

@@ -22,7 +22,7 @@ fn check(root: &Path, name: &str, actual: &str, create: bool) -> Result<(), Stri
             path.display(),
             line_differences(&expected, actual)
         )),
-        Err(_) if create => create_fixture(&path, actual),
+        Err(_) if create => write_then_reject(&path, actual),
         Err(_) => Err(format!(
             "missing fixture {}; create it once with {WRITE_FIXTURES_VARIABLE}=1 cargo test <test name>",
             path.display()
@@ -30,7 +30,7 @@ fn check(root: &Path, name: &str, actual: &str, create: bool) -> Result<(), Stri
     }
 }
 
-fn create_fixture(path: &Path, actual: &str) -> Result<(), String> {
+fn write_then_reject(path: &Path, actual: &str) -> Result<(), String> {
     let parent = path.parent().unwrap_or(path);
     std::fs::create_dir_all(parent)
         .and_then(|()| std::fs::write(path, actual))

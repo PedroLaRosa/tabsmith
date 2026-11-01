@@ -1,9 +1,9 @@
 #!/bin/bash
-# p9-greps.sh: the Phase 9 acceptance greps (the "9.8 greps"), one line per check:  OK / FAIL / REVIEW  <label>
+# phase9-greps.sh: the Phase 9 acceptance greps (the "9.8 greps"), one line per check:  OK / FAIL / REVIEW  <label>
 #   OK      the grep is empty, as required
 #   FAIL    it must be empty and is not (the hits follow, indented)
 #   REVIEW  it lists the places a human must read (the hits follow); the expectation is in the label
-# Run from the repo root at the end of every step that moves code, and at the close. At phase9-start (HEAD 5efb4b2)
+# Run from the repo root at the end of every step that moves code, and at the close. At phase9-start (858b7b5)
 # the A and some B checks FAIL on purpose: pty.rs and tracker.rs are still alive there.
 #   usage: scripts/hexagonal-refactor/phase9-greps.sh [base-rev]      (base-rev default phase9-start, for the cfg check)
 cd "$(git rev-parse --show-toplevel)" || exit 2
