@@ -23,11 +23,12 @@ use crate::terminal_session::domain::entities::ghost_candidates::GhostCandidates
 use crate::terminal_session::domain::entities::insertion_lock::InsertionLock;
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
+use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
 use crate::terminal_session::domain::services::key_router::{ghost_key, is_ctrl};
 use crate::terminal_session::domain::services::render_guard::allows_drawing;
 use crate::terminal_session::domain::services::session_deadlines::{
-    next_deadline, EXIT_GRACE, FILE_POLL, REDRAW_GRACE, RESIZE_DEBOUNCE, SPINNER_TICK,
+    next_deadline, EXIT_GRACE, FILE_POLL, REDRAW_GRACE, SPINNER_TICK,
 };
 use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
@@ -208,8 +209,8 @@ struct Session {
     ghost: GhostCandidates,
     /// The startup probe timed out: drop its late reply from stdin until then.
     probe_until: Option<Instant>,
-    resize_at: Option<Instant>,
-    repaint: bool,
+    /// The quiet spell after a resize and the repaint it owes (SPEC §7.6).
+    resize: ResizeDebounce,
     spinner: usize,
     spinner_at: Option<Instant>,
     poll_at: Instant,
@@ -381,8 +382,7 @@ impl Session {
             redraw_until: None,
             ghost: GhostCandidates::default(),
             probe_until,
-            resize_at: None,
-            repaint: false,
+            resize: ResizeDebounce::default(),
             spinner: 0,
             spinner_at: None,
             poll_at: Instant::now() + FILE_POLL,
@@ -541,7 +541,7 @@ impl Session {
             self.passthrough,
             self.exit_at,
             [
-                self.resize_at,
+                self.resize.deadline(),
                 lock,
                 self.ghost.llm_due_at(),
                 self.spinner_at,
@@ -570,9 +570,7 @@ impl Session {
 
     /// PTY batch (SPEC §4.5): clear, bytes (markers stripped), frame — one stdout write.
     fn on_output(&mut self, batch: &[u8]) {
-        if self.resize_at.is_some() {
-            self.resize_at = Some(Instant::now() + RESIZE_DEBOUNCE); // the shell / ConPTY is still redrawing
-        }
+        self.resize.output_arrived(Instant::now()); // the shell / ConPTY is still redrawing
         let was_alt = self.alt();
         let mut body = Vec::new();
         let events = self
@@ -772,8 +770,8 @@ impl Session {
             // The cursor is off the command line (an inline TUI's rows: fzf, fish's pager): a menu for the line
             // stays hidden and keeps its hands off the keys.
             || self.cur.is_none()
-            || self.resize_at.is_some()
-            || self.repaint
+            || self.resize.is_settling()
+            || self.resize.repaint_pending()
             || screen.in_string()
             || self.redraw_until.is_some()
             // PSReadLine's ListView predictions own the rows below a non-empty line.
@@ -979,10 +977,7 @@ impl Session {
 
     /// SPEC §7.6: resize PTY + model now, repaint after 150 ms of quiet.
     fn on_resize(&mut self, cols: u16, rows: u16) {
-        if cols == 0
-            || rows == 0
-            || (cols as usize, rows as usize) == self.screen.state().size()
-        {
+        if !self.resize.wants(cols, rows, &self.screen.state()) {
             return;
         }
         if let Some(m) = &self.master {
@@ -994,15 +989,14 @@ impl Session {
             });
         }
         self.screen.resize(cols as usize, rows as usize);
-        self.resize_at = Some(Instant::now() + RESIZE_DEBOUNCE);
+        self.resize.resized(Instant::now());
     }
 
     /// Full repaint once the resize settled (postponed while on the alternate screen).
     fn take_repaint(&mut self) -> Vec<u8> {
-        if !self.repaint || self.resize_at.is_some() || self.alt() {
+        if !self.resize.take_repaint(self.alt()) {
             return Vec::new();
         }
-        self.repaint = false;
         self.screen.full_repaint()
     }
 
@@ -1010,10 +1004,7 @@ impl Session {
         let now = Instant::now();
         let due = |d: Option<Instant>| d.is_some_and(|d| d <= now);
         let mut redraw = false;
-        if due(self.resize_at) {
-            self.resize_at = None;
-            self.repaint = true;
-        }
+        self.resize.settle_if_due(now);
         if due(self.redraw_until) {
             self.redraw_until = None;
             self.refresh(); // the line really is empty
@@ -1168,8 +1159,7 @@ mod tests {
             redraw_until: None,
             ghost: GhostCandidates::default(),
             probe_until: None,
-            resize_at: None,
-            repaint: false,
+            resize: ResizeDebounce::default(),
             spinner: 0,
             spinner_at: None,
             poll_at: Instant::now() + FILE_POLL,
@@ -2017,7 +2007,7 @@ mod tests {
         }
 
         fn poke_resize_due(&mut self) {
-            self.s.resize_at = Some(Instant::now());
+            self.s.resize.expire_settle_at(Instant::now());
         }
 
         fn poke_llm_due(&mut self) {
