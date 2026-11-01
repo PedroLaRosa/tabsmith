@@ -487,12 +487,7 @@ impl Session {
 
     /// SPEC §7.6: resize PTY + model now, repaint after 150 ms of quiet.
     fn on_resize(&mut self, cols: u16, rows: u16) {
-        if !self.session.resize_wanted(cols, rows, &self.screen.state()) {
-            return;
-        }
-        self.pty.resize(cols, rows);
-        self.screen.resize(cols as usize, rows as usize);
-        self.session.resize_applied(Instant::now());
+        self.use_cases.resize_terminal.execute(&mut self.session, cols, rows);
     }
 
     /// Full repaint once the resize settled (postponed while on the alternate screen).

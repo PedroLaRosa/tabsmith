@@ -7,6 +7,7 @@ use crate::terminal_session::application::overlay_painter::OverlayPainter;
 use crate::terminal_session::application::process_shell_output_use_case::{
     ProcessShellOutputParts, ProcessShellOutputUseCase,
 };
+use crate::terminal_session::application::resize_terminal_use_case::ResizeTerminalUseCase;
 use crate::terminal_session::application::session_file_poller::SessionFilePoller;
 use crate::terminal_session::application::session_ports_parts::SessionPortsParts;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
@@ -23,6 +24,7 @@ pub(crate) struct SessionUseCases {
     pub(crate) process_shell_output: ProcessShellOutputUseCase,
     pub(crate) apply_completion_result: ApplyCompletionResultUseCase,
     pub(crate) apply_llm_ghost_text: ApplyLlmGhostTextUseCase,
+    pub(crate) resize_terminal: ResizeTerminalUseCase,
 }
 
 impl SessionUseCases {
@@ -44,7 +46,7 @@ impl SessionUseCases {
         let keystroke_handler = Rc::new(KeystrokeHandler::new(
             ports.engine.clone(),
             ports.screen.clone(),
-            ports.shell,
+            ports.shell.clone(),
             ports.writer.clone(),
             ports.clock.clone(),
             requester.clone(),
@@ -54,6 +56,7 @@ impl SessionUseCases {
         let apply_completion_result =
             ApplyCompletionResultUseCase::new(ports.clock.clone(), painter.clone(), keystroke_handler.clone());
         let apply_llm_ghost_text = ApplyLlmGhostTextUseCase::new(painter.clone());
+        let resize_terminal = ResizeTerminalUseCase::new(ports.screen.clone(), ports.shell, ports.clock.clone());
         let process_shell_output = ProcessShellOutputUseCase::new(ProcessShellOutputParts {
             engine: ports.engine,
             feeder: ShellOutputFeeder::new(ports.screen.clone(), ports.clock.clone()),
@@ -74,6 +77,7 @@ impl SessionUseCases {
             process_shell_output,
             apply_completion_result,
             apply_llm_ghost_text,
+            resize_terminal,
         }
     }
 

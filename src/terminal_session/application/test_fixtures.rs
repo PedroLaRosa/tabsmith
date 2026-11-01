@@ -223,6 +223,11 @@ impl TerminalSessionHarness {
         self.use_cases.process_shell_output.execute(&mut self.session, batch);
     }
 
+    /// The user's terminal is resized to `columns` x `rows`.
+    pub(crate) fn resize(&mut self, columns: u16, rows: u16) {
+        self.use_cases.resize_terminal.execute(&mut self.session, columns, rows);
+    }
+
     /// A bash prompt `$ ` with the integration markers, then `text` echoed.
     pub(crate) fn prompt(&mut self, text: &str) {
         self.output(format!("\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}").as_bytes());
