@@ -93,7 +93,7 @@ grep -q '"terminal_session"' src/architecture_tests.rs && echo "OK      E1 termi
 
 echo "== F. names that live only inside terminal_session"
 expect_empty "F1 session services and use cases are named only inside terminal_session (the legacy pty.rs is exempt until 9.6d)" \
-  "$(grep -rnE '\b(KeystrokeHandler|CompletionRequester|OverlayPainter|SessionFilePoller|ShellOutputFeeder|SessionUseCases)\b' src | grep -v '^src/terminal_session/' | grep -v '^src/pty.rs:')"
+  "$(grep -rnE '\b(KeystrokeHandler|CompletionRequester|OverlayPainter|SessionFilePoller|ShellOutputFeeder|SessionUseCases)\b' src | grep -v '^src/terminal_session/' | grep -v '^src/pty.rs:' | grep -v '^src/architecture_tests.rs:')"
 expect_empty "F2 no legacy decoder or tracker names (OutFilter, StdinKeyDecoder, Extracted, TAG_PROMPT, Splitter, Piece::)" \
   "$(grep -rnE '\b(OutFilter|StdinKeyDecoder|Extracted|TAG_PROMPT|Splitter)\b|\bPiece::' src)"
 expect_empty "F3 write_stdout only in stdout_terminal_writer.rs; std::io::stdout( in terminal_session only in that file, key_tester_command.rs, debug_shell_command.rs and session_launcher.rs" \

@@ -806,7 +806,7 @@ the Phase 8 notes in section 9.
 
 Done at `b898db1`: `terminal_session` registered in the architecture test (at 9.0a, the first step), `pty.rs` and
 `tracker.rs` gone, `types.rs` down to `now_ms` and `now_secs`, the aggregate, the entities, seven new ports, five services, ten
-use cases and the runner in place, gate green (1413 passed). The phase ran in 42 steps (`9.0a` … `9.7`) in six runs. See
+use cases and the runner in place, gate green (1414 passed). The phase ran in 42 steps (`9.0a` … `9.7`) in six runs. See
 the Phase 9 notes in section 9.
 
 ### Phase 10: diagnostics
@@ -1876,11 +1876,11 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
   `completion_result.rs`, `parsed_command_line.rs`, `suggestion.rs`, `data_directory.rs`, and `types.rs`' `now_ms`), and 0 under
   `terminal_session`: `launch_session` takes the clock from `module.clock()`, so the module's `clock` field and getter are read
   (the review of run 6 found the launcher building its own `SystemClock`; the same clock in production, one line).
-- **Checks**: totals at the end of the phase (`b898db1` plus the review-fix commit, which adds two runner tests; the other closing commits change docs only): 1413 passed, 0 failed, 1 ignored (`all_bundle_modules`, whose release run prints `1 passed`;
+- **Checks**: totals at the end of the phase (`b898db1` plus the review-fix commits, which add two runner tests and one architecture test; the other closing commits change docs only): 1414 passed, 0 failed, 1 ignored (`all_bundle_modules`, whose release run prints `1 passed`;
   1091 at `phase9-start`), clippy 3 warnings on this Linux container (clippy 1.97 reports one lint more than macOS, so the
   gate runs with `BASELINE_CLIPPY=4`; the lint on the pty's `Modes::default()` went at 9.4c), build warnings 0, golden
   identical (131 commands), `windows: ok`. Test lock against `ef807c1`: MISSING 0, DUPLICATE 0, CHANGED 210 (the 168 at
-  the start of Phase 9 plus 42), NEW 1132, PATH-ONLY 31. Against `phase9-start`: MISSING 0, DUPLICATE 0, NEW 323, CHANGED
+  the start of Phase 9 plus 42), NEW 1133, PATH-ONLY 31. Against `phase9-start`: MISSING 0, DUPLICATE 0, NEW 324, CHANGED
   59, PATH-ONLY 12; all 59 are in the research's allowed list of 83 names and each is a restructuring in its "Test moves"
   tables: the tracker pipeline tests (field reads to accessors, the `(Tracker, Model)` pair to one rig over
   `AlacrittyTerminalScreen`, `Event` to `ShellEvent`: `extract_*`, `pwsh_*`, `prompt_*`, `at_prompt_only_on_the_command_line`,
@@ -1905,9 +1905,9 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
   `panic_while_handling_keys_still_forwards_them`, `conpty_is_closed_off_the_main_loop`),
   `debug_shell_survives_closed_terminal` (the D9 string; the child branch builds the module) and the module test
   `should_report_the_context_into_the_run_files_of_the_data_directory_it_was_built_with`; no assertion changed. Against
-  `phase9-guards`: MISSING 0, DUPLICATE 0, NEW 289, CHANGED 60: the same 59 plus the guard test
-  `should_generate_a_session_id_of_32_lowercase_hex_digits`, which calls `generate_session_id()` after the move (same three
-  assertions). The fixtures are untouched. `theme-diff.sh`, `inline-diff.sh`, `integrations-diff.sh`, `precmd-diff.sh`,
+  `phase9-guards`: MISSING 0, DUPLICATE 0, NEW 290, CHANGED 61: the same 59 plus two guard tests: `should_generate_a_session_id_of_32_lowercase_hex_digits`, which calls
+  `generate_session_id()` after the move (same three assertions), and `should_debounce_and_show_the_llm_ghost_text_exactly_as_at_the_phase_9_start`,
+  whose Rig helper `step_ghost` was renamed `llm_reply` (it no longer steps the runner; same calls, same assertions). The fixtures are untouched. `theme-diff.sh`, `inline-diff.sh`, `integrations-diff.sh`, `precmd-diff.sh`,
   `pty-diff.py` and `session-diff.py` print nothing against the baseline binary; `debug_shell_survives_closed_terminal`
   alone passes three times in a row; 20 serial runs of `pty::` and `exactly_as_at_the_phase_9_start` (44 tests per run) have
   0 failures; `cargo check --locked --no-default-features --all-targets` passes. `integrations_zsh_powerlevel10k_prompt_wrapped`

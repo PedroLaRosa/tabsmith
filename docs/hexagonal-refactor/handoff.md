@@ -96,11 +96,11 @@ researchers' raw notes `recon-*.md` with their compiled prototypes, the step gat
 | 9, services and use cases (run 5: 9.5a-9.5h) | up to `b7338e1` | five services, ten use cases, `SessionUseCases`, the harness |
 | 9, runner and close (run 6: 9.6d-9.6f, 9.7) | `f5921cb..b898db1`, then the docs | `pty.rs` became `session_runner.rs`; `probe_terminal`, `run_pty_session`, `launch_session`; tests moved; docs written from the as-built tree |
 
-State at `b898db1` (the docs commits after it change no code; numbers measured in 9.7): full gate `GATE PASS`, 1413 passed,
+State at `b898db1` (the docs commits after it change no code; numbers measured in 9.7): full gate `GATE PASS`, 1414 passed,
 0 failed, 1 ignored (`all_bundle_modules`, release run `1 passed`), clippy 3 warnings (Linux budget 4), build warnings 0, golden
-identical, `windows: ok`; testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 210, NEW 1132, PATH-ONLY 31; against
-`phase9-start` MISSING 0, DUPLICATE 0, CHANGED 59, NEW 323, PATH-ONLY 12; against `phase9-guards` MISSING 0, DUPLICATE 0, CHANGED
-60 (the 59 plus `should_generate_a_session_id_of_32_lowercase_hex_digits`), NEW 289; the 17 fixtures identical to `phase9-guards`;
+identical, `windows: ok`; testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 210, NEW 1133, PATH-ONLY 31; against
+`phase9-start` MISSING 0, DUPLICATE 0, CHANGED 59, NEW 324, PATH-ONLY 12; against `phase9-guards` MISSING 0, DUPLICATE 0, CHANGED
+61 (the 59 plus `should_generate_a_session_id_of_32_lowercase_hex_digits` and the Rig-helper rename `step_ghost` -> `llm_reply` in `should_debounce_and_show_the_llm_ghost_text_exactly_as_at_the_phase_9_start`), NEW 290; the 17 fixtures identical to `phase9-guards`;
 the six diff scripts empty; `debug_shell_survives_closed_terminal` x3 green; 20 serial runs of `pty::` and
 `exactly_as_at_the_phase_9_start` (44 tests) 0 failures; `cargo check --locked --no-default-features --all-targets` passes;
 `phase9-greps.sh`: every A, B1-B3, B5-B7, B9-B13, E1 and F label OK, Z lists 118 files (the design's 116 plus two sliced test
