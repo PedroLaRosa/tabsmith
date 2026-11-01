@@ -47,47 +47,46 @@ pub(crate) const LATE_PROBE: Duration = Duration::from_secs(3);
 /// texts, what was sent ahead of the shell's echo, the timers and the exit state. It decides; it never reads a clock
 /// (every method that needs the time takes it), a file or the screen (`ScreenState` is passed in), and it never calls
 /// the engine, the shell or the terminal: the use cases do, with what it returns.
-// The fields are pub(crate) until step 9.3i: the legacy `Session` still reads them while its logic moves in.
 pub(crate) struct TerminalSession {
-    pub(crate) id: SessionId,
+    id: SessionId,
     /// Shell of the spawned program (the tracker's `Shell=` wins once known).
-    pub(crate) launched_shell: Shell,
-    pub(crate) settings: Settings,
-    pub(crate) keymap: Keymap,
-    pub(crate) menu: Menu,
+    launched_shell: Shell,
+    settings: Settings,
+    keymap: Keymap,
+    menu: Menu,
     /// Shell-integration state of the session (SPEC 5.1).
-    pub(crate) tracker: MarkerTracker,
+    tracker: MarkerTracker,
     /// Splits the shell's output into bytes, window names and OSC 697 markers; keeps the cut sequences between reads.
-    pub(crate) splitter: MarkerSplitter,
+    splitter: MarkerSplitter,
     /// Kept across stdin reads: a bracketed paste split over several reads stays one opaque unit (SPEC §7.2.1).
-    pub(crate) decoder: KeyDecoder,
-    pub(crate) terminal_background: Option<TerminalBackground>,
+    decoder: KeyDecoder,
+    terminal_background: Option<TerminalBackground>,
     /// The startup probe timed out: drop its late reply from stdin until then.
-    pub(crate) late_probe_until: Option<Instant>,
+    late_probe_until: Option<Instant>,
     /// Latest completion request id and the buffer/cursor it was sent for.
-    pub(crate) request: u64,
-    pub(crate) sent: Option<(String, usize)>,
-    pub(crate) changed_at: Instant,
+    request: u64,
+    sent: Option<(String, usize)>,
+    changed_at: Instant,
     /// Edit buffer at the last batch.
-    pub(crate) edit_buffer: Option<EditBuffer>,
+    edit_buffer: Option<EditBuffer>,
     /// Insertion lock (SPEC §7.3), re-armed up to its cap while the shell has echoed nothing of the insertion.
-    pub(crate) lock: Option<InsertionLock>,
+    lock: Option<InsertionLock>,
     /// What was sent ahead of the shell's echo and the keys held back (SPEC §7.3).
-    pub(crate) echo: EchoHold,
+    echo: EchoHold,
     /// Ghost candidates (SPEC §8): local (engine) and LLM, with the LLM request id and its debounce deadline.
-    pub(crate) ghost: GhostCandidates,
+    ghost: GhostCandidates,
     /// A prompt redraw is in progress (see `REDRAW_GRACE`).
-    pub(crate) redraw_until: Option<Instant>,
+    redraw_until: Option<Instant>,
     /// The quiet spell after a resize and the repaint it owes (SPEC §7.6).
-    pub(crate) resize: ResizeDebounce,
-    pub(crate) spinner: usize,
-    pub(crate) spinner_at: Option<Instant>,
+    resize: ResizeDebounce,
+    spinner: usize,
+    spinner_at: Option<Instant>,
     /// When the settings and the session context files are looked at, and the modification times last seen.
-    pub(crate) reload: ReloadWatch,
+    reload: ReloadWatch,
     /// The exit code, the end of the pty output and the grace the rest of the output gets.
-    pub(crate) exit: ShellExit,
+    exit: ShellExit,
     /// After a panic in a handler: plain pass-through until the child exits.
-    pub(crate) passthrough: bool,
+    passthrough: bool,
 }
 
 pub(crate) struct TerminalSessionParts {
@@ -565,10 +564,6 @@ impl TerminalSession {
         false
     }
 
-    pub(crate) fn child_exited(&mut self, code: i32, now: Instant) -> bool {
-        self.exit.child_exited(code, now)
-    }
-
     pub(crate) fn insertion_lock_due(&self, now: Instant) -> bool {
         self.lock.as_ref().is_some_and(|l| l.is_due(now))
     }
@@ -627,11 +622,59 @@ impl TerminalSession {
         self.passthrough = true;
     }
 
+    /// The child exited. True while the session must go on (waiting for the rest of its output).
+    pub(crate) fn child_exited(&mut self, code: i32, now: Instant) -> bool {
+        self.exit.child_exited(code, now)
+    }
+
+    /// The pty reached EOF. True while the session must go on (the child has not exited yet).
+    pub(crate) fn shell_output_ended(&mut self) -> bool {
+        self.exit.output_ended()
+    }
+
+    /// The wrapper was told to stop (SIGTERM and SIGHUP alike): it exits with 129.
+    pub(crate) fn terminated(&mut self) {
+        self.exit.terminated();
+    }
+
+    pub(crate) fn exit_grace_over(&self, now: Instant) -> bool {
+        self.exit.grace_over(now)
+    }
+
+    /// The code the wrapper exits with.
+    pub(crate) fn exit_code(&self) -> i32 {
+        self.exit.exit_code()
+    }
 }
 
-/// Test arrangement and inspection: the fields stay readable only through these once they are private (9.3i).
+/// Test arrangement and inspection: the fields are private, so the pokes and the probes of the session tests go
+/// through these.
 #[cfg(test)]
 impl TerminalSession {
+    pub(crate) fn expire_resize_settle_at(&mut self, at: Instant) {
+        self.resize.expire_settle_at(at);
+    }
+
+    pub(crate) fn schedule_llm_request_at(&mut self, at: Instant) {
+        self.ghost.schedule_llm(at);
+    }
+
+    pub(crate) fn expire_poll_at(&mut self, at: Instant) {
+        self.reload.expire_poll_at(at);
+    }
+
+    pub(crate) fn set_spinner_at(&mut self, at: Option<Instant>) {
+        self.spinner_at = at;
+    }
+
+    pub(crate) fn has_seen_pty_eof(&self) -> bool {
+        self.exit.has_seen_eof()
+    }
+
+    pub(crate) fn exit_deadline(&self) -> Option<Instant> {
+        self.exit.deadline()
+    }
+
     pub(crate) fn tracker_mut(&mut self) -> &mut MarkerTracker {
         &mut self.tracker
     }

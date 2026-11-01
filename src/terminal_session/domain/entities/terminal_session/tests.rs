@@ -117,7 +117,7 @@ fn should_wake_for_each_source_of_a_deadline_on_its_own() {
     let at = start + Duration::from_secs(1);
     let sources: [(&str, Arm, Instant); 9] = [
         ("nothing armed: the file poll", |_, _| {}, start + FILE_POLL),
-        ("resize settle", |s, at| s.resize.expire_settle_at(at), at),
+        ("resize settle", |s, at| s.expire_resize_settle_at(at), at),
         (
             "insertion lock",
             |s, at| {
@@ -127,9 +127,9 @@ fn should_wake_for_each_source_of_a_deadline_on_its_own() {
             },
             at,
         ),
-        ("llm schedule", |s, at| s.ghost.schedule_llm(at), at),
-        ("spinner", |s, at| s.spinner_at = Some(at), at),
-        ("file poll", |s, at| s.reload.expire_poll_at(at), at),
+        ("llm schedule", |s, at| s.schedule_llm_request_at(at), at),
+        ("spinner", |s, at| s.set_spinner_at(Some(at)), at),
+        ("file poll", |s, at| s.expire_poll_at(at), at),
         (
             "child exit",
             |s, at| {
@@ -137,8 +137,8 @@ fn should_wake_for_each_source_of_a_deadline_on_its_own() {
             },
             at,
         ),
-        ("redraw grace", |s, at| s.redraw_until = Some(at), at),
-        ("held keys", |s, at| s.echo.expire_hold_at(at), at),
+        ("redraw grace", |s, at| s.set_redraw_until(Some(at)), at),
+        ("held keys", |s, at| s.expire_hold_at(at), at),
     ];
 
     let woken: Vec<(&str, Option<Instant>)> = sources
@@ -462,5 +462,20 @@ fn should_poll_the_files_once_the_interval_passed_and_arm_the_next_poll() {
     assert_eq!(
         (too_early, due, at_once_again, session.next_deadline()),
         (false, true, false, Some(start + FILE_POLL * 2))
+    );
+}
+
+#[test]
+fn should_report_the_exit_once_the_child_exited_and_the_output_had_ended() {
+    let start = Instant::now();
+    let mut session = session_at(start);
+    let before_any_report = session.exit_code();
+
+    let waits_for_the_child = session.shell_output_ended();
+    let waits_for_more_output = session.child_exited(7, start);
+
+    assert_eq!(
+        (before_any_report, waits_for_the_child, waits_for_more_output, session.exit_code(), session.exit_grace_over(start)),
+        (0, true, false, 7, false)
     );
 }

@@ -331,27 +331,27 @@ impl Session {
             if !go {
                 break;
             }
-            if self.session.exit.grace_over(Instant::now()) {
+            if self.session.exit_grace_over(Instant::now()) {
                 break;
             }
-            if !self.session.passthrough {
+            if !self.session.is_passthrough() {
                 self.guard(Session::on_timers);
             }
         }
         self.cleanup();
-        self.session.exit.exit_code()
+        self.session.exit_code()
     }
 
     /// One main-loop message; false = leave the loop.
     fn step(&mut self, msg: SessionMessage, stash: &mut Option<SessionMessage>) -> bool {
         match msg {
-            SessionMessage::Stdin(b) if self.session.passthrough => {
+            SessionMessage::Stdin(b) if self.session.is_passthrough() => {
                 let _ = self.writer.send(b);
             }
             SessionMessage::Stdin(b) => {
                 // on_input writes nothing before its last step: after a panic, keys the menu would not have taken go
                 // out raw (an Enter meant for an item is dropped rather than running the line).
-                let raw = !self.session.menu.intercepting(&self.session.settings);
+                let raw = !self.session.menu_intercepts();
                 if !self.guard(|s| s.on_input(&b)) && raw {
                     let _ = self.writer.send(b);
                 }
@@ -373,7 +373,7 @@ impl Session {
                     }
                 }
                 // on_output writes nothing before its last step: after a panic the batch goes out raw.
-                if self.session.passthrough || !self.guard(|s| s.on_output(&b)) {
+                if self.session.is_passthrough() || !self.guard(|s| s.on_output(&b)) {
                     self.emit(&b);
                 }
                 for _ in 0..chunks {
@@ -381,9 +381,9 @@ impl Session {
                 }
             }
             SessionMessage::PtyEof => {
-                return self.session.exit.output_ended();
+                return self.session.shell_output_ended();
             }
-            SessionMessage::Resize(cols, rows) if self.session.passthrough => {
+            SessionMessage::Resize(cols, rows) if self.session.is_passthrough() => {
                 if let Some(m) = &self.master {
                     let _ = m.resize(PtySize {
                         rows,
@@ -402,15 +402,15 @@ impl Session {
                 if let Some(m) = self.master.take_if(|_| cfg!(windows)) {
                     thread::spawn(move || drop(m));
                 }
-                if !self.session.exit.child_exited(c, Instant::now()) {
+                if !self.session.child_exited(c, Instant::now()) {
                     return false;
                 }
             }
             SessionMessage::Term => {
-                self.session.exit.terminated();
+                self.session.terminated();
                 return false;
             }
-            SessionMessage::Completion(_) | SessionMessage::Ghost { .. } if self.session.passthrough => {}
+            SessionMessage::Completion(_) | SessionMessage::Ghost { .. } if self.session.is_passthrough() => {}
             SessionMessage::Completion(c) => {
                 self.guard(|s| s.on_completion(*c));
             }
@@ -433,7 +433,7 @@ impl Session {
             return true;
         }
         logger::error("pty: internal error; passing the session through until the shell exits");
-        self.session.passthrough = true;
+        self.session.enter_passthrough();
         let clear = self.screen.take_clear();
         self.emit(&clear);
         false
@@ -506,7 +506,7 @@ impl Session {
             None
         } else {
             self.session
-                .tracker
+                .tracker()
                 .edit_buffer_context()
                 .and_then(|context| self.screen.edit_buffer(&context))
         };
@@ -563,14 +563,14 @@ impl Session {
         let ghost = self.ghost_text(false);
         let screen = self.screen.state();
         let input = FrameInput {
-            settings: &self.session.settings,
+            settings: self.session.settings(),
             ghost: ghost.as_deref(),
-            spinner: self.session.spinner,
+            spinner: self.session.spinner_frame(),
             suppress: self.suppressed_in(&screen),
             scroll_region: screen.scroll_region(),
             now: Instant::now(),
         };
-        self.screen.draw_overlay(&self.session.menu, &input)
+        self.screen.draw_overlay(self.session.menu(), &input)
     }
 
     /// State-only change: the renderer clears a changed frame in the same write and skips an identical one
@@ -1249,7 +1249,7 @@ mod tests {
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         s.session.tracker_mut().set_submitted(Some("stale".into()));
-        let fx = s.session.menu.handle(KeyAction::InsertSelectedAndExecute, &s.session.settings);
+        let fx = s.session.run_menu_action(KeyAction::InsertSelectedAndExecute);
         let Some(MenuEffect::Insert { ins, .. }) = fx.into_iter().next() else {
             panic!("no insertion")
         };
@@ -1673,15 +1673,15 @@ mod tests {
         }
 
         fn poke_resize_due(&mut self) {
-            self.s.session.resize.expire_settle_at(Instant::now());
+            self.s.session.expire_resize_settle_at(Instant::now());
         }
 
         fn poke_llm_due(&mut self) {
-            self.s.session.ghost.schedule_llm(Instant::now());
+            self.s.session.schedule_llm_request_at(Instant::now());
         }
 
         fn poke_poll_due(&mut self) {
-            self.s.session.reload.expire_poll_at(Instant::now());
+            self.s.session.expire_poll_at(Instant::now());
         }
 
         fn poke_hold_due(&mut self) {
@@ -1689,7 +1689,7 @@ mod tests {
         }
 
         fn poke_spinner_due(&mut self) {
-            self.s.session.spinner_at = Some(Instant::now());
+            self.s.session.set_spinner_at(Some(Instant::now()));
         }
 
         fn poke_probe_window(&mut self) {
@@ -2138,8 +2138,8 @@ mod tests {
         fn exit_state(&self) -> ExitState {
             ExitState {
                 code: self.rig.exit_code(),
-                output_ended: self.rig.s.session.exit.has_seen_eof(),
-                grace_armed: self.rig.s.session.exit.deadline().is_some(),
+                output_ended: self.rig.s.session.has_seen_pty_eof(),
+                grace_armed: self.rig.s.session.exit_deadline().is_some(),
             }
         }
 
@@ -2148,8 +2148,7 @@ mod tests {
             self.rig
                 .s
                 .session
-                .exit
-                .deadline()
+                .exit_deadline()
                 .is_some_and(|at| at >= self.stepped_before + delay && at <= self.stepped_after + delay)
         }
 
