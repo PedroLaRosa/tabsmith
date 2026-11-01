@@ -28,6 +28,12 @@ impl PtyWrappedShell {
             thread::spawn(move || drop(m));
         }
     }
+
+    /// The size the master reports, `None` once it is released.
+    #[cfg(test)]
+    pub(crate) fn size(&self) -> Option<PtySize> {
+        self.master.borrow().as_ref().and_then(|m| m.get_size().ok())
+    }
 }
 
 impl WrappedShell for PtyWrappedShell {

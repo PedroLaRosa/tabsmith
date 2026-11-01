@@ -7,6 +7,8 @@ use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
+use crate::terminal_session::application::ports::terminal_writer::TerminalWriter;
+use crate::terminal_session::application::ports::wrapped_shell::WrappedShell;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
@@ -15,6 +17,8 @@ use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
+use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::PtyWrappedShell;
+use crate::terminal_session::infrastructure::adapters::stdout_terminal_writer::StdoutTerminalWriter;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
@@ -36,12 +40,12 @@ use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
 use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, PROBE, PROBE_TIMEOUT};
 use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use anyhow::{anyhow, bail, Context, Result};
-use portable_pty::{CommandBuilder, MasterPty, PtySize};
+use portable_pty::{CommandBuilder, PtySize};
 use std::io::{IsTerminal, Write};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -96,23 +100,16 @@ fn session_id() -> String {
     )
 }
 
-fn write_stdout(b: &[u8]) {
-    if b.is_empty() {
-        return;
-    }
-    let mut o = std::io::stdout().lock();
-    let _ = o.write_all(b);
-    let _ = o.flush();
-}
-
 struct Session {
     rx: Receiver<SessionMessage>,
     engine: Rc<dyn CompletionEngine>,
-    writer: Sender<Vec<u8>>,
-    /// Returns PTY read credits to the reader thread (see `pump`).
+    /// Returns PTY read credits to the reader thread (see `pump`). Declared before `pty`: it is dropped first, so a
+    /// ConPTY close never waits for a reader that waits for a credit.
     credits: SyncSender<()>,
-    /// Dropped after the child exits on Windows to unblock the ConPTY reader.
-    master: Option<Box<dyn MasterPty + Send>>,
+    /// The shell the session wraps: its input and its size.
+    pty: Rc<PtyWrappedShell>,
+    /// The user's terminal.
+    output: Rc<dyn TerminalWriter>,
     modes: sys::Modes,
     /// The model, the filter and the renderer of the session, behind the screen port.
     screen: Rc<dyn TerminalScreen>,
@@ -126,8 +123,6 @@ struct Session {
     generator_processes: Rc<dyn GeneratorProcessReaper>,
     /// What the wrapper knows of the shell it runs; the ports and plumbing around it stay here.
     session: TerminalSession,
-    /// Test builds: stdout bytes are captured here instead of written.
-    sink: Vec<u8>,
 }
 
 impl Session {
@@ -139,6 +134,7 @@ impl Session {
         let program = command
             .program()
             .context("no shell to run (set SHELL or pass --shell)")?;
+        let output: Rc<dyn TerminalWriter> = Rc::new(StdoutTerminalWriter);
         let settings_repository = module.settings_repository();
         let settings = load_or_defaults(&*settings_repository);
         let (m, lf_to_ind) = sys::enter()?;
@@ -154,7 +150,7 @@ impl Session {
         });
 
         // Sync the model with the real cursor; always ask for the background, the theme may become `system` later.
-        write_stdout(PROBE);
+        output.write(PROBE);
         let deadline = Instant::now() + PROBE_TIMEOUT;
         let mut replies = Vec::new();
         let (cpr, terminal_bg, typeahead) = loop {
@@ -168,7 +164,7 @@ impl Session {
         // ponytail: a reply cut by the timeout is forwarded as typeahead; only a whole late reply is dropped.
         let probe_ended_at = cpr.is_none().then(Instant::now);
         if cpr.is_none() {
-            write_stdout(b"\x1b[H\x1b[2J");
+            output.write(b"\x1b[H\x1b[2J");
         }
 
         // Everything that can fail goes before the child exists, so the fallback never orphans a shell.
@@ -227,11 +223,11 @@ impl Session {
             command.argv()
         ));
 
-        write_stdout(&command.window_title());
+        output.write(&command.window_title());
 
         // Threads (SPEC §4.3).
         let credits = spawn_pty_reader(reader, tx.clone());
-        let (writer, wrx) = mpsc::channel::<Vec<u8>>();
+        let (input, wrx) = mpsc::channel::<Vec<u8>>();
         thread::spawn(move || {
             for b in wrx {
                 if pty_writer
@@ -248,8 +244,9 @@ impl Session {
             let _ = t.send(SessionMessage::ChildExit(sys::wait(&mut *child)));
         });
         sys::spawn_input(tx);
+        let pty = Rc::new(PtyWrappedShell::new(input, pair.master));
         if !typeahead.is_empty() {
-            let _ = writer.send(typeahead);
+            pty.write_input(typeahead);
         }
 
         let session_contexts = module.session_contexts();
@@ -268,9 +265,9 @@ impl Session {
         Ok(Session {
             rx,
             engine,
-            writer,
             credits,
-            master: Some(pair.master),
+            pty,
+            output,
             modes: m,
             screen,
             feeder,
@@ -279,7 +276,6 @@ impl Session {
             session_contexts,
             generator_processes: module.generator_processes(),
             session,
-            sink: Vec::new(),
         })
     }
 
@@ -319,14 +315,14 @@ impl Session {
     fn step(&mut self, msg: SessionMessage, stash: &mut Option<SessionMessage>) -> bool {
         match msg {
             SessionMessage::Stdin(b) if self.session.is_passthrough() => {
-                let _ = self.writer.send(b);
+                self.pty.write_input(b);
             }
             SessionMessage::Stdin(b) => {
                 // on_input writes nothing before its last step: after a panic, keys the menu would not have taken go
                 // out raw (an Enter meant for an item is dropped rather than running the line).
                 let raw = !self.session.menu_intercepts();
                 if !self.guard(|s| s.on_input(&b)) && raw {
-                    let _ = self.writer.send(b);
+                    self.pty.write_input(b);
                 }
             }
             SessionMessage::Pty(mut b) => {
@@ -357,24 +353,13 @@ impl Session {
                 return self.session.shell_output_ended();
             }
             SessionMessage::Resize(cols, rows) if self.session.is_passthrough() => {
-                if let Some(m) = &self.master {
-                    let _ = m.resize(PtySize {
-                        rows,
-                        cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    });
-                }
+                self.pty.resize(cols, rows);
             }
             SessionMessage::Resize(c, r) => {
                 self.guard(|s| s.on_resize(c, r));
             }
             SessionMessage::ChildExit(c) => {
-                // ConPTY does not EOF on child exit. Its close may wait until the final frame fits in the pipe, which
-                // the reader drains only with credits from this loop: close it on a helper thread.
-                if let Some(m) = self.master.take_if(|_| cfg!(windows)) {
-                    thread::spawn(move || drop(m));
-                }
+                self.pty.release_pseudo_console();
                 if !self.session.child_exited(c, Instant::now()) {
                     return false;
                 }
@@ -412,12 +397,8 @@ impl Session {
         false
     }
 
-    fn emit(&mut self, b: &[u8]) {
-        if cfg!(test) {
-            self.sink.extend_from_slice(b);
-        } else {
-            write_stdout(b);
-        }
+    fn emit(&self, b: &[u8]) {
+        self.output.write(b);
     }
 
     fn next_deadline(&self) -> Option<Instant> {
@@ -629,7 +610,7 @@ impl Session {
             self.redraw();
         }
         if !fwd.is_empty() {
-            let _ = self.writer.send(fwd); // last: after a panic above, `step` forwards the read raw
+            self.pty.write_input(fwd); // last: after a panic above, `step` forwards the read raw
         }
     }
 
@@ -649,14 +630,7 @@ impl Session {
         if !self.session.resize_wanted(cols, rows, &self.screen.state()) {
             return;
         }
-        if let Some(m) = &self.master {
-            let _ = m.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
-        }
+        self.pty.resize(cols, rows);
         self.screen.resize(cols as usize, rows as usize);
         self.session.resize_applied(Instant::now());
     }
@@ -738,6 +712,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::Sender;
     use std::time::Duration;
 
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
@@ -752,6 +727,8 @@ mod tests {
     use crate::settings::domain::value_objects::settings::Settings;
     use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
     use crate::terminal_session::application::ports::generator_process_reaper::RecordingGeneratorProcessReaper;
+    use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
+    use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::RecordingMasterPty;
     use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
     use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
     use crate::completion::domain::value_objects::suggestion::Suggestion;
@@ -768,14 +745,22 @@ mod tests {
         }
     }
 
-    fn session(json: &str) -> (Session, Receiver<Vec<u8>>) {
+    /// What a session sent out: the bytes it wrote to the shell (read from the writer thread's channel) and to the
+    /// user's terminal.
+    struct Taps {
+        shell_input: Receiver<Vec<u8>>,
+        stdout: Rc<CapturingTerminalWriter>,
+    }
+
+    fn session(json: &str) -> (Session, Taps) {
         session_named(json, SID)
     }
 
     /// A session whose id is `id` (the shell integration markers keep the id `SID`).
-    fn session_named(json: &str, id: &str) -> (Session, Receiver<Vec<u8>>) {
+    fn session_named(json: &str, id: &str) -> (Session, Taps) {
         let settings = settings(json);
-        let (writer, wrx) = mpsc::channel();
+        let (input, shell_input) = mpsc::channel();
+        let stdout = Rc::new(CapturingTerminalWriter::new());
         let marker = MarkerTracker::new(
             SessionId::new(SID.to_string()).unwrap(),
             Some(Shell::Bash),
@@ -785,9 +770,9 @@ mod tests {
         let s = Session {
             rx: mpsc::channel().1,
             engine: Rc::new(RecordingCompletionEngine::new(mpsc::channel().0)),
-            writer,
             credits: mpsc::sync_channel(PTY_CREDITS).0,
-            master: None,
+            pty: Rc::new(PtyWrappedShell::new(input, Box::new(RecordingMasterPty::new()))),
+            output: stdout.clone(),
             modes: sys::Modes::default(),
             feeder: ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock)),
             screen,
@@ -804,9 +789,8 @@ mod tests {
                 settings_modified: None,
                 now: Instant::now(),
             }),
-            sink: Vec::new(),
         };
-        (s, wrx)
+        (s, Taps { shell_input, stdout })
     }
 
     /// A bash prompt `$ ` with the integration markers, then `text` echoed.
@@ -833,8 +817,8 @@ mod tests {
             .collect()
     }
 
-    fn sent(pty: &Receiver<Vec<u8>>) -> Vec<u8> {
-        pty.try_iter().flatten().collect()
+    fn sent(pty: &Taps) -> Vec<u8> {
+        pty.shell_input.try_iter().flatten().collect()
     }
 
     /// The shell line after `line` receives what pty wrote (DEL erases, printable bytes append).
@@ -988,16 +972,16 @@ mod tests {
 
     #[test]
     fn identical_redraw_writes_nothing() {
-        let (mut s, _) = session("{}");
+        let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         assert!(
-            s.sink.windows(8).any(|w| w == b"\x1b[?2026h"),
+            pty.stdout.written().windows(8).any(|w| w == b"\x1b[?2026h"),
             "a frame was drawn"
         );
-        s.sink.clear();
+        pty.stdout.clear();
         s.redraw();
-        assert!(s.sink.is_empty(), "{:?}", String::from_utf8_lossy(&s.sink));
+        assert!(pty.stdout.written().is_empty(), "{:?}", String::from_utf8_lossy(&pty.stdout.written()));
     }
 
     #[test]
@@ -1020,17 +1004,17 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        s.sink.clear();
+        pty.stdout.clear();
         s.on_output(b"\x1bP+q");
         assert!(
-            s.sink.ends_with(b"\x1bP+q"),
+            pty.stdout.written().ends_with(b"\x1bP+q"),
             "{:?}",
-            String::from_utf8_lossy(&s.sink)
+            String::from_utf8_lossy(&pty.stdout.written())
         );
         s.on_input(b"\x1b[D");
         assert_eq!(sent(&pty), b"\x1b[D");
         s.on_output(b"696e\x1b\\");
-        assert!(s.sink.ends_with(b"\x1b[?2026l"), "frame back after ST");
+        assert!(pty.stdout.written().ends_with(b"\x1b[?2026l"), "frame back after ST");
     }
 
     #[test]
@@ -1038,16 +1022,16 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        s.sink.clear();
+        pty.stdout.clear();
         assert!(!s.guard(|_| panic!("injected")));
         assert!(
-            s.session.is_passthrough() && s.sink.starts_with(b"\x1b[?2026h"),
+            s.session.is_passthrough() && pty.stdout.written().starts_with(b"\x1b[?2026h"),
             "overlay cleared"
         );
-        s.sink.clear();
+        pty.stdout.clear();
         let mut stash = None;
         assert!(s.step(SessionMessage::Pty(b"out\x1b]697;NewCmd\x07".to_vec()), &mut stash));
-        assert_eq!(s.sink, b"out\x1b]697;NewCmd\x07");
+        assert_eq!(pty.stdout.written(), b"out\x1b]697;NewCmd\x07");
         assert!(s.step(SessionMessage::Stdin(b"\r".to_vec()), &mut stash));
         assert_eq!(sent(&pty), b"\r", "keys reach the shell unintercepted");
         assert!(s.step(SessionMessage::ChildExit(3), &mut stash));
@@ -1253,12 +1237,12 @@ mod tests {
         s.on_input(b"\r");
         assert_eq!(sent(&pty), b"\r");
         assert!(!s.session.menu().shown(s.session.settings()));
-        s.sink.clear();
+        pty.stdout.clear();
         s.on_output(b"\r\n");
         assert!(
-            !String::from_utf8_lossy(&s.sink).contains("path"),
+            !String::from_utf8_lossy(&pty.stdout.written()).contains("path"),
             "{:?}",
-            String::from_utf8_lossy(&s.sink)
+            String::from_utf8_lossy(&pty.stdout.written())
         );
     }
 
@@ -1297,13 +1281,13 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), Some("eckout"));
-        s.sink.clear();
+        pty.stdout.clear();
         s.on_output(b"\r\n  1/2\r\n> rea");
         assert!(s.session.menu().intercepting(s.session.settings()) && !s.drawable());
         assert!(
-            !String::from_utf8_lossy(&s.sink).contains("checkout"),
+            !String::from_utf8_lossy(&pty.stdout.written()).contains("checkout"),
             "{:?}",
-            String::from_utf8_lossy(&s.sink)
+            String::from_utf8_lossy(&pty.stdout.written())
         );
         s.on_input(b"\x1b[B\r\x1b[C");
         assert_eq!(sent(&pty), b"\x1b[B\r\x1b[C");
@@ -1323,10 +1307,10 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.session.tracker_mut().set_pwsh_list_view(true);
         assert!(!s.drawable());
-        s.sink.clear();
+        pty.stdout.clear();
         s.redraw();
         assert!(
-            !String::from_utf8_lossy(&s.sink).contains("checkout"),
+            !String::from_utf8_lossy(&pty.stdout.written()).contains("checkout"),
             "menu not drawn"
         );
         s.on_input(b"\r");
@@ -1470,6 +1454,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn conpty_is_closed_off_the_main_loop() {
+        use portable_pty::MasterPty;
         struct Master(mpsc::Sender<thread::ThreadId>);
         impl MasterPty for Master {
             fn resize(&self, _: PtySize) -> anyhow::Result<()> {
@@ -1493,7 +1478,7 @@ mod tests {
         }
         let (mut s, _) = session("{}");
         let (tx, rx) = mpsc::channel();
-        s.master = Some(Box::new(Master(tx)));
+        s.pty = Rc::new(PtyWrappedShell::new(mpsc::channel().0, Box::new(Master(tx))));
         assert!(s.step(SessionMessage::ChildExit(0), &mut None));
         let on = rx.recv_timeout(Duration::from_secs(5)).expect("closed");
         assert_ne!(on, thread::current().id());
@@ -1538,7 +1523,7 @@ mod tests {
     /// that drive `Session::step`.
     struct Rig {
         s: Session,
-        pty: Receiver<Vec<u8>>,
+        pty: Taps,
         engine: Receiver<CompletionEngineCall>,
         log: String,
         mark: usize,
@@ -1569,8 +1554,9 @@ mod tests {
         }
 
         fn note(&mut self, step: &str) {
-            let out = self.s.sink[self.mark..].to_vec();
-            self.mark = self.s.sink.len();
+            let written = self.pty.stdout.written();
+            let out = written[self.mark..].to_vec();
+            self.mark = written.len();
             let engine: Vec<String> = self.engine.try_iter().map(|c| describe(&c)).collect();
             self.log += &format!(
                 "{step}\n  stdout={}\n  pty={}\n  engine={engine:?}\n",
@@ -2123,8 +2109,9 @@ mod tests {
 
         /// What reached stdout since the last call.
         fn stdout(&mut self) -> Vec<u8> {
-            let written = self.rig.s.sink[self.stdout_mark..].to_vec();
-            self.stdout_mark = self.rig.s.sink.len();
+            let all = self.rig.pty.stdout.written();
+            let written = all[self.stdout_mark..].to_vec();
+            self.stdout_mark = all.len();
             written
         }
 
@@ -2173,12 +2160,14 @@ mod tests {
             let pair = portable_pty::native_pty_system()
                 .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
                 .unwrap();
-            self.rig.s.master = Some(pair.master);
+            let (input, shell_input) = mpsc::channel();
+            self.rig.s.pty = Rc::new(PtyWrappedShell::new(input, pair.master));
+            self.rig.pty.shell_input = shell_input;
             self.pty_slave = Some(pair.slave);
         }
 
         fn pty_size(&self) -> PtySize {
-            self.rig.s.master.as_ref().unwrap().get_size().unwrap()
+            self.rig.s.pty.size().unwrap()
         }
 
         fn model_size(&self) -> (usize, usize) {
