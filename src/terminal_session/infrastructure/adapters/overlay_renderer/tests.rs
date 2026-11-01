@@ -4,6 +4,10 @@ use std::time::{Duration, Instant};
 use crate::completion::domain::test_fixtures::{comp, item, settings};
 use crate::dropdown::infrastructure::adapters::theme_json_mapper::theme_palette_from_json;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
+use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
+use crate::terminal_session::domain::services::render_guard::allows_drawing;
+use crate::terminal_session::domain::value_objects::screen_state::{ScreenState, ScreenStateParts};
+use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::term::Config;
 use alacritty_terminal::vte::ansi::Processor;
@@ -570,4 +574,105 @@ fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
         assert_eq!(drawn, want_drawn, "{name}: the frame bytes changed");
         assert_eq!(cleared, want_cleared, "{name}: the clear bytes changed");
     }
+}
+
+/// The screen facts the render guard reads, as one combination to try.
+#[derive(Clone, Copy, Debug)]
+struct ScreenFacts {
+    scroll_region: bool,
+    alt_screen: bool,
+    origin_mode: bool,
+    insert_mode: bool,
+    pending_wrap: bool,
+    columns: usize,
+    lines: usize,
+}
+
+fn every_combination_of_screen_facts() -> Vec<ScreenFacts> {
+    let flags = [false, true];
+    let mut all = Vec::new();
+    for scroll_region in flags {
+        for alt_screen in flags {
+            for origin_mode in flags {
+                for insert_mode in flags {
+                    for pending_wrap in flags {
+                        for columns in [9, 10] {
+                            for lines in [2, 3] {
+                                all.push(ScreenFacts {
+                                    scroll_region,
+                                    alt_screen,
+                                    origin_mode,
+                                    insert_mode,
+                                    pending_wrap,
+                                    columns,
+                                    lines,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    all
+}
+
+/// A real screen put into the modes of `facts`; the scroll region is wrapper-tracked, so it is not played here.
+fn screen_with(facts: &ScreenFacts) -> AlacrittyTerminalScreen {
+    let screen = AlacrittyTerminalScreen::for_tests(facts.columns, facts.lines);
+    let mut played = String::new();
+    if facts.alt_screen {
+        played += "\x1b[?1049h";
+    }
+    if facts.origin_mode {
+        played += "\x1b[?6h";
+    }
+    if facts.insert_mode {
+        played += "\x1b[4h";
+    }
+    if facts.pending_wrap {
+        played += &"x".repeat(facts.columns);
+    }
+    screen.advance_model(played.as_bytes());
+    screen
+}
+
+fn state_with_scroll_region(screen: &AlacrittyTerminalScreen, scroll_region: bool) -> ScreenState {
+    let state = screen.state();
+    ScreenState::new(ScreenStateParts {
+        alt_screen: state.alt_screen(),
+        origin_mode: state.origin_mode(),
+        insert_mode: state.insert_mode(),
+        pending_wrap: state.pending_wrap(),
+        columns: state.columns(),
+        lines: state.lines(),
+        scroll_region,
+        in_string: state.in_string(),
+    })
+}
+
+#[test]
+fn should_draw_a_frame_exactly_when_the_render_guard_allows_drawing() {
+    let s = Settings::default();
+    let m = menu(subs(), &s);
+    let combinations = every_combination_of_screen_facts();
+
+    let disagreements: Vec<(ScreenFacts, bool, bool)> = combinations
+        .into_iter()
+        .filter_map(|facts| {
+            let screen = screen_with(&facts);
+            let allowed = allows_drawing(&state_with_scroll_region(&screen, facts.scroll_region));
+            let mut frame_input = input(&s, Some("x"));
+            frame_input.scroll_region = facts.scroll_region;
+            let drawn = !OverlayRenderer::new(Theme::dark(), false)
+                .frame(&screen.model(), &m, &frame_input)
+                .is_empty();
+            (drawn != allowed).then_some((facts, allowed, drawn))
+        })
+        .collect();
+
+    assert!(
+        disagreements.is_empty(),
+        "(facts, guard allows, frame drawn): {disagreements:?}"
+    );
 }
