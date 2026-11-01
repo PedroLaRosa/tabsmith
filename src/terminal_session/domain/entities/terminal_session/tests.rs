@@ -1,5 +1,6 @@
 use super::*;
-use crate::completion::domain::test_fixtures::settings;
+use crate::completion::domain::test_fixtures::{comp, settings};
+use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::terminal_session::domain::entities::insertion_lock::INSERT_LOCK;
 use crate::terminal_session::domain::value_objects::completion_query::CompletionQuery;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenStateParts;
@@ -269,4 +270,34 @@ fn should_not_poll_the_files_for_a_command_that_starts() {
     let polls = session.on_shell_event(&ShellEvent::PreExec, Instant::now());
 
     assert!(!polls);
+}
+
+// llm_ghost_requested_for_commands_without_spec, at the aggregate.
+#[test]
+fn should_schedule_the_llm_request_for_an_error_reply_with_the_cursor_at_the_end_and_not_mid_word() {
+    let start = Instant::now();
+    let mut session = session_at_prompt(
+        r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
+    );
+    session.refresh(&screen(), line("zzzcmd foo"), start);
+
+    session.apply_completion(CompletionResult::error(session.request_id(), "zzzcmd foo".into(), 10), start);
+    let at_end = session.llm_due_at();
+    session.cancel_llm_schedule();
+    session.apply_completion(CompletionResult::error(session.request_id(), "zzzcmd foo".into(), 3), start);
+
+    assert_eq!((at_end.is_some(), session.llm_due_at()), (true, None));
+}
+
+#[test]
+fn should_drop_a_reply_for_an_older_request() {
+    let start = Instant::now();
+    let mut session = session_at_prompt("{}");
+    session.refresh(&screen(), line("git ch"), start);
+    session.refresh(&screen(), line("git che"), start);
+
+    let older = session.apply_completion(comp("git ch", 1, vec![]).with_request_id(1), start);
+    let latest = session.apply_completion(comp("git che", 1, vec![]).with_request_id(2), start);
+
+    assert_eq!((older, latest), (false, true));
 }

@@ -1,7 +1,5 @@
 //! `tabsmith _ pty`: the PTY wrapper session (SPEC §4.3–4.5, §7.2.4, §7.3, §7.6, §8).
 //! OWNER: wrapper agent.
-use crate::ghost_text::domain::value_objects::ghost_text::GhostText;
-use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
 use crate::dropdown::domain::value_objects::key::Key;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
 use crate::shared::infrastructure::logger;
@@ -25,7 +23,7 @@ use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
 use crate::settings::domain::services::settings_catalog::{
-    AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
+    AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_ENABLED,
 };
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
@@ -42,7 +40,6 @@ use crate::terminal_session::domain::value_objects::wrapped_shell_command::Wrapp
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
-use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::terminal_session::infrastructure::pty::completion_engine_starter::CompletionEngineStarter;
 use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
@@ -57,7 +54,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use crate::terminal_session::infrastructure::pty::platform_unix as sys;
 #[cfg(windows)]
@@ -428,8 +425,7 @@ impl Session {
             }
             SessionMessage::Ghost { req, text } => {
                 self.guard(|s| {
-                    let sent_buffer = s.session.sent.as_ref().map(|x| x.0.as_str());
-                    if s.session.ghost.accept_llm_reply(req, s.session.request, text, sent_buffer) {
+                    if s.session.accept_llm_reply(req, text) {
                         s.redraw();
                     }
                 });
@@ -538,38 +534,11 @@ impl Session {
     }
 
     fn on_completion(&mut self, c: CompletionResult) {
-        if c.request_id() != self.session.request {
-            return; // only the latest request is served
+        if !self.session.apply_completion(c, Instant::now()) {
+            return; // a stale reply changes nothing: no redraw, no release of held keys
         }
-        self.session.echo.answered_by(c.request_id());
-        if c.phase() == CompletionPhase::Parse || c.ghost().is_some() {
-            self.session.ghost
-                .replace_local(c.ghost().map(String::from).map(|g| GhostText::new(c.buffer().to_string(), g)));
-        }
-        // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
-        // command) too: the inline source depends on the buffer only. A mid-word cursor fails the length check.
-        if c.phase() == CompletionPhase::Parse
-            && c.ghost().is_none()
-            && c.cursor() == c.buffer().len()
-            && self.llm_enabled()
-        {
-            let debounce = self.session.settings.i64(INLINE_DEBOUNCE_MS).max(0) as u64;
-            self.session.ghost.schedule_llm(self.session.changed_at + Duration::from_millis(debounce));
-        }
-        if c.is_loading() && self.session.spinner_at.is_none() {
-            self.session.spinner_at = Some(Instant::now() + SPINNER_TICK);
-        }
-        self.session.menu.on_completion(c, &self.session.settings, Instant::now());
         self.redraw();
         self.release_held();
-    }
-
-    fn llm_enabled(&self) -> bool {
-        self.session.settings.bool(INLINE_ENABLED)
-            && matches!(
-                crate::ghost_text::domain::services::ghost_text_source_resolver::source(&self.session.settings),
-                Ok(GhostTextSource::Profile(_))
-            )
     }
 
     /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
@@ -902,6 +871,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
 

@@ -1,5 +1,11 @@
+use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
+use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::dropdown::domain::entities::menu::Menu;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
+use crate::ghost_text::domain::services::ghost_text_source_resolver;
+use crate::ghost_text::domain::value_objects::ghost_text::GhostText;
+use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
+use crate::settings::domain::services::settings_catalog::{INLINE_DEBOUNCE_MS, INLINE_ENABLED};
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::entities::echo_hold::EchoHold;
@@ -12,7 +18,7 @@ use crate::terminal_session::domain::entities::reload_watch::ReloadWatch;
 use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
 use crate::terminal_session::domain::entities::shell_exit::ShellExit;
 use crate::terminal_session::domain::services::render_guard;
-use crate::terminal_session::domain::services::session_deadlines::{self, REDRAW_GRACE};
+use crate::terminal_session::domain::services::session_deadlines::{self, REDRAW_GRACE, SPINNER_TICK};
 use crate::terminal_session::domain::value_objects::completion_query::CompletionQuery;
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
 use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
@@ -317,6 +323,49 @@ impl TerminalSession {
             ShellEvent::NewCommand(_) | ShellEvent::CommandEnded => true,
             ShellEvent::PreExec => false,
         }
+    }
+
+    /// The engine's reply. False when it is not for the latest request (dropped, nothing changed); true when it was
+    /// applied and the frame is to be drawn again.
+    pub(crate) fn apply_completion(&mut self, c: CompletionResult, now: Instant) -> bool {
+        if c.request_id() != self.request {
+            return false; // only the latest request is served
+        }
+        self.echo.answered_by(c.request_id());
+        if c.phase() == CompletionPhase::Parse || c.ghost().is_some() {
+            self.ghost
+                .replace_local(c.ghost().map(String::from).map(|g| GhostText::new(c.buffer().to_string(), g)));
+        }
+        // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
+        // command) too: the inline source depends on the buffer only. A mid-word cursor fails the length check.
+        if c.phase() == CompletionPhase::Parse
+            && c.ghost().is_none()
+            && c.cursor() == c.buffer().len()
+            && self.llm_enabled()
+        {
+            let debounce = self.settings.i64(INLINE_DEBOUNCE_MS).max(0) as u64;
+            self.ghost
+                .schedule_llm(self.changed_at + Duration::from_millis(debounce));
+        }
+        if c.is_loading() && self.spinner_at.is_none() {
+            self.spinner_at = Some(now + SPINNER_TICK);
+        }
+        self.menu.on_completion(c, &self.settings, now);
+        true
+    }
+
+    fn llm_enabled(&self) -> bool {
+        self.settings.bool(INLINE_ENABLED)
+            && matches!(
+                ghost_text_source_resolver::source(&self.settings),
+                Ok(GhostTextSource::Profile(_))
+            )
+    }
+
+    /// The LLM's reply. True when it answers the latest request that went out (the frame is to be drawn again).
+    pub(crate) fn accept_llm_reply(&mut self, reply: u64, text: Option<String>) -> bool {
+        let sent_buffer = self.sent.as_ref().map(|(buffer, _)| buffer.as_str());
+        self.ghost.accept_llm_reply(reply, self.request, text, sent_buffer)
     }
 
     /// Re-ask for the current buffer: the next `refresh` sends it even though it did not change.
