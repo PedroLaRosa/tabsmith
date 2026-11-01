@@ -66,7 +66,7 @@ review "B14 threads and channels live in infrastructure/pty only (plus the Arc<d
   "$(prod 'thread::|mpsc::|Arc<' $TS | grep -v '/infrastructure/pty/')"
 review "B15 Rc<dyn ..> holders: use cases, services and the session runner (single thread, deviation O5)" \
   "$(prod 'Rc<dyn ' $TS | awk -F: '{print $1}' | sort | uniq -c)" 30
-review "B16 more than one pub(crate) type per file (allowed: *Parts, a private helper enum, a trait with its #[cfg(test)] double and Call enum, ShellArg-style parameter types)" \
+review "B16 more than one pub(crate) type per file (allowed: *Parts, a private helper enum, a trait with its #[cfg(test)] double and Call enum, ShellArg-style parameter types; DeferredMarker and LockSettlement have their own files)" \
   "$(git ls-files -co --exclude-standard $TS | grep '\.rs$' | grep -v '/mod\.rs$\|/tests\.rs$' | while read -r f; do n=$(awk '/^#\[cfg\(test\)\]/ {skip=1} !skip && /^pub\(crate\) (struct|enum|trait)/ {c++} END{print c+0}' "$f"); [ "$n" -gt 1 ] && echo "$f: $n"; done)"
 
 review "B17 bodyless #[cfg(test)] item whose line holds an unpaired ( or [ (a b\"\\x1b[\" literal): the fitness scanner then reads the following production lines as test code (P8-T49; use \\x5b)" \
@@ -77,7 +77,7 @@ cfg_lines() { grep -hE 'cfg\((windows|unix|not\(|target_os|all\()|cfg!\(' | sed 
 OLD_CFG="$(git ls-tree -r --name-only "$BASE" -- $TS src/bootstrap src/cli.rs src/pty.rs src/tracker.rs | grep '\.rs$' | while read -r f; do git show "$BASE:$f"; done | cfg_lines)"
 NEW_CFG="$( (git ls-files -co --exclude-standard $TS src/bootstrap src/cli.rs src/pty.rs src/tracker.rs | grep '\.rs$' | while read -r f; do [ -e "$f" ] && cat "$f"; done) | cfg_lines)"
 REVIEW_CFG="$(comm -3 <(echo "$OLD_CFG") <(echo "$NEW_CFG") | sed -E 's/^\t/  ADDED   /; t; s/^/  REMOVED /')"
-review "C1 cfg lines of pty.rs, tracker.rs, cli.rs, bootstrap and terminal_session at $BASE vs now: a move shows nothing; REMOVED 'if cfg!(test)' is the TerminalWriter port; every ADDED/REMOVED line needs a reason" "$REVIEW_CFG" 30
+review "C1 cfg lines ($(echo "$OLD_CFG" | grep -c .) at $BASE, $(echo "$NEW_CFG" | grep -c .) now) of pty.rs, tracker.rs, cli.rs, bootstrap and terminal_session at $BASE vs now: a move shows nothing; REMOVED 'if cfg!(test)' is the TerminalWriter port; every ADDED/REMOVED line needs a reason" "$REVIEW_CFG" 30
 echo "          then: cargo check --locked --all-targets --target x86_64-pc-windows-gnu (the gate runs it)"
 
 echo "== D. tests and the panic hook"

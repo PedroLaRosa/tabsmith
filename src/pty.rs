@@ -3036,9 +3036,9 @@ mod tests {
     }
 
     /// An engine that panics when it is asked for completions and ignores everything else.
-    struct PanickingEngine;
+    struct PanickingCompletionEngine;
 
-    impl CompletionEngine for PanickingEngine {
+    impl CompletionEngine for PanickingCompletionEngine {
         fn complete(&self, _request: CompletionRequest) {
             panic!("the engine was asked");
         }
@@ -3195,7 +3195,7 @@ mod tests {
         }
 
         fn panic_when_the_engine_is_asked(&mut self) {
-            self.rig.s.engine = Rc::new(PanickingEngine);
+            self.rig.s.engine = Rc::new(PanickingCompletionEngine);
         }
 
         fn panic_in_key_handling(&mut self) {
