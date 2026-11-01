@@ -1,5 +1,10 @@
 use super::*;
-use crate::completion::domain::test_fixtures::{comp, settings};
+use crate::completion::domain::test_fixtures::{comp, item, settings};
+use crate::dropdown::domain::value_objects::key::Key;
+use crate::dropdown::domain::value_objects::key_code::KeyCode;
+use crate::dropdown::domain::value_objects::modifiers::Modifiers;
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
+use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::terminal_session::domain::entities::insertion_lock::INSERT_LOCK;
 use crate::terminal_session::domain::value_objects::completion_query::CompletionQuery;
@@ -373,4 +378,33 @@ fn should_draw_the_llm_ghost_text_of_the_current_request_behind_the_local_one() 
             Some("sh".to_string())
         )
     );
+}
+
+// keys_after_an_unmodelled_key_wait_for_its_echo, first scenario, at the aggregate: Enter is held behind Backspace.
+#[test]
+fn should_hold_enter_behind_an_unmodelled_backspace_until_its_reply_came() {
+    let start = Instant::now();
+    let mut session = session_at_prompt("{}");
+    let subcommands = |query: &str| {
+        ["checkout", "cherry-pick"]
+            .iter()
+            .map(|name| item(name, SuggestionKind::Subcommand, query))
+            .collect::<Vec<_>>()
+    };
+    session.refresh(&screen(), line("git che"), start);
+    for _ in 0..2 {
+        // the first reply after a reset only arms the menu
+        session.apply_completion(comp("git che", 1, subcommands("che")).with_request_id(1), start);
+    }
+    session.forward_key(&Key::new(KeyCode::Backspace, Modifiers::default()));
+
+    let route = session.route_key(&Key::new(KeyCode::Enter, Modifiers::default()), 0, &screen());
+    session.hold_keys(b"\r", start);
+    let before_the_reply = session.release_held_keys(start);
+    session.refresh(&screen(), line("git ch"), start);
+    let latest = session.request_id();
+    session.apply_completion(comp("git ch", 1, subcommands("ch")).with_request_id(latest), start);
+    let after_the_reply = session.release_held_keys(start);
+
+    assert_eq!((route, before_the_reply, after_the_reply), (KeyRoute::Hold, None, Some(b"\r".to_vec())));
 }

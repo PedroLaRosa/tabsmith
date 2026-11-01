@@ -1,6 +1,5 @@
 //! `tabsmith _ pty`: the PTY wrapper session (SPEC §4.3–4.5, §7.2.4, §7.3, §7.6, §8).
 //! OWNER: wrapper agent.
-use crate::dropdown::domain::value_objects::key::Key;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::system_clock::SystemClock;
@@ -11,20 +10,14 @@ use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeR
 use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
-use crate::terminal_session::domain::entities::insertion_lock::InsertionLock;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
-use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
-use crate::terminal_session::domain::services::key_router::{ends_line, is_enter, plain_char, route};
+use crate::terminal_session::domain::services::key_router::plain_char;
 use crate::terminal_session::domain::services::session_deadlines::SPINNER_TICK;
-use crate::terminal_session::domain::value_objects::key_facts::{KeyFacts, KeyFactsParts};
 use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
-use crate::settings::domain::services::settings_catalog::{
-    AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
-};
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
@@ -551,23 +544,9 @@ impl Session {
         self.session.basis()
     }
 
-    /// Track a forwarded key: a printable char at the end of the line comes back as echo; anything else
-    /// (backspace, arrows, control keys, paste) cannot be modelled and drops the prediction.
-    fn note_forwarded(&mut self, key: &Key) {
-        let at_end = self
-            .session
-            .edit_buffer
-            .as_ref()
-            .is_some_and(|e| e.cursor() == e.buffer().len());
-        match plain_char(key) {
-            Some(c) if at_end => self.session.echo.typed_ahead(c),
-            _ => self.session.echo.forwarded_unmodelled(self.session.request),
-        }
-    }
-
     /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
     fn release_held(&mut self) {
-        let Some(held) = self.session.echo.release(Instant::now()) else {
+        let Some(held) = self.session.release_held_keys(Instant::now()) else {
             return;
         };
         self.on_keys(&held);
@@ -627,61 +606,37 @@ impl Session {
     }
 
     fn on_keys(&mut self, chunk: &[u8]) {
-        if self.session.echo.is_holding() {
-            self.session.echo.hold_behind(chunk); // keys keep their order behind held ones
+        if self.session.is_holding_keys() {
+            self.session.hold_behind(chunk); // keys keep their order behind held ones
             return;
         }
         let mut fwd = Vec::new();
         let (mut redraw, mut rerequest) = (false, false);
-        let only_tab = self.session.settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB);
-        let disabled = self.session.settings.bool(AUTOCOMPLETE_DISABLE);
         let mut typed = 0usize;
-        for ev in self.session.decoder.decode(chunk) {
+        for ev in self.session.decode_keys(chunk) {
             #[cfg(test)]
             tests::maybe_panic();
             let key = ev.key();
-            // Two or more printable keys in one read are a paste (pwsh has no bracketed paste) or typeahead the menu
-            // was not computed for: the rest of the read reaches the shell as is.
-            // Off the command line (an inline TUI's rows) keys belong to the TUI, as on the alternate screen.
-            let prompt = !self.session.tracker.preexec() && !self.alt() && self.session.edit_buffer.is_some() && typed < 2;
-            let facts = KeyFacts::new(KeyFactsParts {
-                prompt,
-                menu_intercepts: self.session.menu.intercepting(&self.session.settings),
-                drawable: self.drawable(),
-                menu_has_items: self.session.menu.has_items(),
-                autocomplete_disabled: disabled,
-                only_show_on_tab: only_tab,
-                waiting_for_echo: self.session.echo.is_waiting_for_echo(),
-                ghost_text: self.ghost_text(true),
-            });
-            let effects = match route(&key, &self.session.keymap, &facts) {
+            let effects = match self.session.route_key(&key, typed, &self.screen.state()) {
                 KeyRoute::Hold => {
                     // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
                     // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
-                    self.session.echo.hold(&chunk[ev.bytes().start..], Instant::now());
-                    self.session.decoder.reset(); // held bytes start outside a paste and are decoded again
+                    self.session.hold_keys(&chunk[ev.bytes().start..], Instant::now());
                     break;
                 }
-                KeyRoute::MenuAction(a) => self.session.menu.handle(a, &self.session.settings),
+                KeyRoute::MenuAction(a) => self.session.run_menu_action(a),
                 KeyRoute::Swallow => Vec::new(),
-                KeyRoute::ShowOnTab => self.session.menu.show_on_tab(&self.session.settings),
+                KeyRoute::ShowOnTab => self.session.show_menu_on_tab(),
                 KeyRoute::AcceptGhost(g) => {
                     fwd.extend_from_slice(g.as_bytes());
-                    self.session.echo.accepted_ghost(&g);
-                    self.session.ghost.accepted();
+                    self.session.accept_ghost(&g);
                     redraw = true;
                     continue;
                 }
                 KeyRoute::Forward => {
-                    if is_enter(&key) && self.session.tracker.at_prompt() {
-                        self.session.tracker.set_submitted(self.basis()); // history: the line, not what follows it
-                    }
                     fwd.extend_from_slice(&chunk[ev.bytes()]);
                     typed += usize::from(plain_char(&key).is_some());
-                    self.note_forwarded(&key);
-                    // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
-                    if ends_line(&key) {
-                        self.session.menu.error_reset();
+                    if self.session.forward_key(&key) {
                         redraw = true;
                     }
                     continue;
@@ -692,11 +647,8 @@ impl Session {
                 match e {
                     MenuEffect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
                     MenuEffect::Write(b) => {
-                        if b == b"\r" && self.session.tracker.at_prompt() {
-                            self.session.tracker.set_submitted(self.basis()); // `execute`
-                        }
-                        fwd.extend(b);
-                        self.session.echo.forget_unechoed();
+                        fwd.extend_from_slice(&b);
+                        self.session.wrote_to_shell(&b);
                     }
                     MenuEffect::Bell => self.emit(b"\x07"),
                     MenuEffect::Rerequest => rerequest = true,
@@ -721,32 +673,10 @@ impl Session {
 
     /// Insertion with reconciliation + lock (SPEC §7.3). Dropped while a command runs.
     fn insert(&mut self, ins: &Insertion, record: Option<(String, String)>, fwd: &mut Vec<u8>) {
-        if self.session.tracker.preexec() {
-            return;
-        }
-        let from = self.session.menu.last().map(|c| (c.buffer().to_string(), c.cursor()));
-        let Some((ib, at)) =
-            from.or_else(|| self.session.edit_buffer.as_ref().map(|e| (e.buffer().to_string(), e.cursor())))
-        else {
+        let Some(bytes) = self.session.insert(ins, Instant::now()) else {
             return;
         };
-        // Against what the shell will show, not the last batch: keys sent ahead of their echo are reconciled too.
-        let cur = self.basis().unwrap_or_else(|| ib.clone());
-        fwd.extend(insertion_bytes(ins, &ib, &cur));
-        self.session.echo.forget_unechoed();
-        let expected = expected_buffer(ins, &ib, at);
-        if ins.executes() {
-            // As for Enter: preferred over a scrape with a transient prompt in front of the line; pre_exec still
-            // reads a line the shell rewrote from the screen.
-            self.session.tracker.set_submitted(Some(expected.clone()));
-        }
-        let before = self
-            .session
-            .edit_buffer
-            .as_ref()
-            .map_or_else(|| ib.clone(), |e| e.buffer().to_string());
-        let now = Instant::now();
-        self.session.lock = Some(InsertionLock::new(now, expected, before));
+        fwd.extend(bytes);
         if let Some((cmd, name)) = record {
             self.engine.record_insertion(cmd, name);
         }

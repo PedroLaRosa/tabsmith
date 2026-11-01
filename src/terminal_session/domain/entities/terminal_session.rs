@@ -1,11 +1,17 @@
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
+use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::dropdown::domain::entities::menu::Menu;
+use crate::dropdown::domain::value_objects::key::Key;
+use crate::dropdown::domain::value_objects::key_action::KeyAction;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
+use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::ghost_text::domain::services::ghost_text_source_resolver;
 use crate::ghost_text::domain::value_objects::ghost_text::GhostText;
 use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
-use crate::settings::domain::services::settings_catalog::{INLINE_DEBOUNCE_MS, INLINE_ENABLED};
+use crate::settings::domain::services::settings_catalog::{
+    AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
+};
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::entities::echo_hold::EchoHold;
@@ -17,10 +23,15 @@ use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::reload_watch::ReloadWatch;
 use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
 use crate::terminal_session::domain::entities::shell_exit::ShellExit;
+use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
+use crate::terminal_session::domain::services::key_router;
 use crate::terminal_session::domain::services::render_guard;
 use crate::terminal_session::domain::services::session_deadlines::{self, REDRAW_GRACE, SPINNER_TICK};
 use crate::terminal_session::domain::value_objects::completion_query::CompletionQuery;
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
+use crate::terminal_session::domain::value_objects::key_event::KeyEvent;
+use crate::terminal_session::domain::value_objects::key_facts::{KeyFacts, KeyFactsParts};
+use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
@@ -395,6 +406,131 @@ impl TerminalSession {
     /// Re-ask for the current buffer: the next `refresh` sends it even though it did not change.
     pub(crate) fn forget_sent(&mut self) {
         self.sent = None;
+    }
+
+    /// The menu would take its bound keys now (SPEC §7.2.4).
+    pub(crate) fn menu_intercepts(&self) -> bool {
+        self.menu.intercepting(&self.settings)
+    }
+
+    /// Decodes a stdin read; a bracketed paste split over several reads stays one unit.
+    pub(crate) fn decode_keys(&mut self, chunk: &[u8]) -> Vec<KeyEvent> {
+        self.decoder.decode(chunk)
+    }
+
+    pub(crate) fn is_holding_keys(&self) -> bool {
+        self.echo.is_holding()
+    }
+
+    /// Keys keep their order behind held ones.
+    pub(crate) fn hold_behind(&mut self, chunk: &[u8]) {
+        self.echo.hold_behind(chunk);
+    }
+
+    /// `keys` = the key that would act and the rest of its read. The held bytes start outside a paste and are decoded
+    /// again.
+    pub(crate) fn hold_keys(&mut self, keys: &[u8], now: Instant) {
+        self.echo.hold(keys, now);
+        self.decoder.reset();
+    }
+
+    /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
+    pub(crate) fn release_held_keys(&mut self, now: Instant) -> Option<Vec<u8>> {
+        self.echo.release(now)
+    }
+
+    /// What one decoded key of a stdin read does. `typed` = the plain chars already seen in this read.
+    pub(crate) fn route_key(&self, key: &Key, typed: usize, screen: &ScreenState) -> KeyRoute {
+        // Two or more printable keys in one read are a paste (pwsh has no bracketed paste) or typeahead the menu was
+        // not computed for: the rest of the read reaches the shell as is.
+        // Off the command line (an inline TUI's rows) keys belong to the TUI, as on the alternate screen.
+        let prompt = !self.tracker.preexec() && !screen.alt_screen() && self.edit_buffer.is_some() && typed < 2;
+        let facts = KeyFacts::new(KeyFactsParts {
+            prompt,
+            menu_intercepts: self.menu_intercepts(),
+            drawable: self.drawable(screen),
+            menu_has_items: self.menu.has_items(),
+            autocomplete_disabled: self.settings.bool(AUTOCOMPLETE_DISABLE),
+            only_show_on_tab: self.settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB),
+            waiting_for_echo: self.echo.is_waiting_for_echo(),
+            ghost_text: self.ghost_text(true, screen),
+        });
+        key_router::route(key, &self.keymap, &facts)
+    }
+
+    pub(crate) fn run_menu_action(&mut self, action: KeyAction) -> Vec<MenuEffect> {
+        self.menu.handle(action, &self.settings)
+    }
+
+    pub(crate) fn show_menu_on_tab(&mut self) -> Vec<MenuEffect> {
+        self.menu.show_on_tab(&self.settings)
+    }
+
+    /// A ghost text, or its next word, goes to the shell.
+    pub(crate) fn accept_ghost(&mut self, text: &str) {
+        self.echo.accepted_ghost(text);
+        self.ghost.accepted();
+    }
+
+    /// A key goes to the shell as it is. True when it ends the line (the frame is to be drawn again).
+    pub(crate) fn forward_key(&mut self, key: &Key) -> bool {
+        if key_router::is_enter(key) && self.tracker.at_prompt() {
+            self.tracker.set_submitted(self.basis()); // history: the line, not what follows it
+        }
+        self.note_forwarded(key);
+        // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
+        if key_router::ends_line(key) {
+            self.menu.error_reset();
+            return true;
+        }
+        false
+    }
+
+    /// Track a forwarded key: a printable char at the end of the line comes back as echo; anything else
+    /// (backspace, arrows, control keys, paste) cannot be modelled and drops the prediction.
+    fn note_forwarded(&mut self, key: &Key) {
+        let at_end = self
+            .edit_buffer
+            .as_ref()
+            .is_some_and(|e| e.cursor() == e.buffer().len());
+        match key_router::plain_char(key) {
+            Some(c) if at_end => self.echo.typed_ahead(c),
+            _ => self.echo.forwarded_unmodelled(self.request),
+        }
+    }
+
+    /// Insertion with reconciliation + lock (SPEC §7.3): the bytes for the shell. None while a command runs, or
+    /// without a buffer.
+    pub(crate) fn insert(&mut self, ins: &Insertion, now: Instant) -> Option<Vec<u8>> {
+        if self.tracker.preexec() {
+            return None;
+        }
+        let from = self.menu.last().map(|c| (c.buffer().to_string(), c.cursor()));
+        let (ib, at) = from.or_else(|| self.edit_buffer.as_ref().map(|e| (e.buffer().to_string(), e.cursor())))?;
+        // Against what the shell will show, not the last batch: keys sent ahead of their echo are reconciled too.
+        let cur = self.basis().unwrap_or_else(|| ib.clone());
+        let bytes = insertion_bytes(ins, &ib, &cur);
+        self.echo.forget_unechoed();
+        let expected = expected_buffer(ins, &ib, at);
+        if ins.executes() {
+            // As for Enter: preferred over a scrape with a transient prompt in front of the line; pre_exec still
+            // reads a line the shell rewrote from the screen.
+            self.tracker.set_submitted(Some(expected.clone()));
+        }
+        let before = self
+            .edit_buffer
+            .as_ref()
+            .map_or_else(|| ib.clone(), |e| e.buffer().to_string());
+        self.lock = Some(InsertionLock::new(now, expected, before));
+        Some(bytes)
+    }
+
+    /// Raw bytes of a menu action went to the shell.
+    pub(crate) fn wrote_to_shell(&mut self, bytes: &[u8]) {
+        if bytes == b"\r" && self.tracker.at_prompt() {
+            self.tracker.set_submitted(self.basis()); // `execute`
+        }
+        self.echo.forget_unechoed();
     }
 
     pub(crate) fn resize_applied(&mut self, now: Instant) {
