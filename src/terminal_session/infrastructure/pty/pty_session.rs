@@ -2,6 +2,7 @@ use crate::shared::infrastructure::logger;
 use crate::terminal_session::application::launch_environment::LaunchEnvironment;
 use crate::terminal_session::application::launch_request::LaunchRequest;
 use crate::terminal_session::infrastructure::pty::fallback_shell::run_fallback_shell;
+use crate::terminal_session::infrastructure::pty::session_launcher::launch_session;
 use crate::terminal_session::infrastructure::pty::session_runner::SessionRunner;
 use crate::terminal_session::infrastructure::terminal_session_module::TerminalSessionModule;
 use anyhow::anyhow;
@@ -22,7 +23,7 @@ pub(crate) fn run_pty_session(shell: Option<String>, cmd: Vec<String>, module: &
         },
     });
     let mut modes = None;
-    let err = match attempt(|| SessionRunner::start(&command, &mut modes, module).map(SessionRunner::run)) {
+    let err = match attempt(|| launch_session(&command, &mut modes, module).map(SessionRunner::run)) {
         Ok(code) => return code,
         Err(e) => e,
     };

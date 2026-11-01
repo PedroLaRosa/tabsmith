@@ -2,57 +2,21 @@
 //! OWNER: wrapper agent.
 use crate::shared::infrastructure::logger;
 use crate::shared::application::ports::clock::Clock;
-use crate::shared::infrastructure::system_clock::SystemClock;
-use crate::dropdown::domain::services::theme_resolver::resolve_theme;
-use crate::terminal_session::application::ports::terminal_modes::TerminalModes;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::ports::terminal_writer::TerminalWriter;
 use crate::terminal_session::application::ports::wrapped_shell::WrappedShell;
-use crate::terminal_session::application::session_ports_parts::SessionPortsParts;
 use crate::terminal_session::application::session_use_cases::SessionUseCases;
 use crate::terminal_session::application::shell_end::ShellEnd;
-use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
-use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
-use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
-use crate::terminal_session::infrastructure::adapters::console_terminal_modes::ConsoleTerminalModes;
-use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
+use crate::terminal_session::domain::entities::terminal_session::TerminalSession;
 use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::PtyWrappedShell;
-use crate::terminal_session::infrastructure::adapters::stdout_terminal_writer::StdoutTerminalWriter;
-use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
-use crate::shared::domain::value_objects::shell::Shell;
-use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
-use crate::terminal_session::infrastructure::adapters::kitty_graphics;
-use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
-use crate::terminal_session::infrastructure::terminal_session_module::TerminalSessionModule;
-use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
-use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, probe_terminal, PROBE_TIMEOUT};
+use crate::terminal_session::infrastructure::pty::terminal_probe::parse_probe;
 use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
-use anyhow::{bail, Context, Result};
-use portable_pty::{CommandBuilder, PtySize};
-use std::io::{IsTerminal, Write};
 use std::panic::AssertUnwindSafe;
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
-use std::thread;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-#[cfg(unix)]
-use crate::terminal_session::infrastructure::pty::platform_unix as sys;
-#[cfg(windows)]
-use crate::terminal_session::infrastructure::pty::platform_windows as sys;
-
-fn session_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    format!(
-        "{:016x}{:016x}",
-        nanos,
-        std::process::id() as u64 ^ nanos.rotate_left(17)
-    )
-}
+use std::time::Instant;
 
 /// What `SessionRunner::new` takes: the fields of the runner, declared in the order the runner drops them.
 pub(crate) struct SessionRunnerParts {
@@ -94,7 +58,7 @@ pub(crate) struct SessionRunner {
 }
 
 impl SessionRunner {
-    fn new(parts: SessionRunnerParts) -> Self {
+    pub(crate) fn new(parts: SessionRunnerParts) -> Self {
         SessionRunner {
             inbox: parts.inbox,
             credits: parts.credits,
@@ -105,160 +69,6 @@ impl SessionRunner {
             use_cases: parts.use_cases,
             clock: parts.clock,
         }
-    }
-
-    /// SPEC §4.4 steps 1–9. `modes` receives the saved terminal modes as soon as they change.
-    pub(crate) fn start(command: &WrappedShellCommand, modes: &mut Option<Rc<dyn TerminalModes>>, module: &TerminalSessionModule) -> Result<SessionRunner> {
-        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-            bail!("stdin/stdout is not a terminal");
-        }
-        let program = command
-            .program()
-            .context("no shell to run (set SHELL or pass --shell)")?;
-        let output: Rc<dyn TerminalWriter> = Rc::new(StdoutTerminalWriter);
-        let live_settings = module.live_settings();
-        let settings = live_settings.load();
-        let (saved_modes, lf_to_ind) = sys::enter()?;
-        let terminal_modes: Rc<dyn TerminalModes> = Rc::new(ConsoleTerminalModes::new(saved_modes));
-        *modes = Some(terminal_modes.clone());
-        let (cols, rows) = crossterm::terminal::size().context("terminal size")?;
-        let (cols, rows) = (cols.max(1), rows.max(1));
-        let sid = session_id();
-        let id = SessionId::new(sid.clone()).expect("generated ids are valid");
-        let shell = Shell::from_name(program).unwrap_or(if cfg!(windows) {
-            Shell::Pwsh
-        } else {
-            Shell::Bash
-        });
-
-        // Sync the model with the real cursor; always ask for the background, the theme may become `system` later.
-        let (cpr, terminal_bg, typeahead) = probe_terminal(&*output, PROBE_TIMEOUT, sys::read_timeout);
-        // ponytail: a reply cut by the timeout is forwarded as typeahead; only a whole late reply is dropped.
-        let probe_ended_at = cpr.is_none().then(Instant::now);
-        if cpr.is_none() {
-            output.write(b"\x1b[H\x1b[2J");
-        }
-
-        // Everything that can fail goes before the child exists, so the fallback never orphans a shell.
-        let truecolor = matches!(
-            std::env::var("COLORTERM").as_deref(),
-            Ok("truecolor" | "24bit")
-        ) || std::env::var_os("WT_SESSION").is_some();
-        let themes = module.themes();
-        let renderer = OverlayRenderer::new(resolve_theme(&settings, terminal_bg, &*themes), truecolor)
-            .with_images(kitty_graphics::detect());
-        let marker = MarkerTracker::new(
-            id.clone(),
-            Shell::from_name(program),
-            cfg!(windows),
-        );
-        let screen = AlacrittyTerminalScreen::new(cols as usize, rows as usize, renderer, lf_to_ind);
-        // Sync the model with the real cursor, through the same parser as the shell's output.
-        if let Some((r, c)) = cpr {
-            screen.advance_model(format!("\x1b[{r};{c}H").as_bytes());
-        }
-        let screen: Rc<dyn TerminalScreen> = Rc::new(screen);
-        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
-        let (tx, rx) = mpsc::channel();
-        sys::spawn_resize(tx.clone())?;
-        let engine = module.start_completion_engine()(tx.clone(), settings.clone());
-
-        let pair = portable_pty::native_pty_system().openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-        let command = command
-            .clone()
-            .in_session(env!("CARGO_PKG_VERSION"), std::env::var_os("TMUX").is_some(), &id);
-        let mut cb = CommandBuilder::from_argv(command.argv().iter().map(Into::into).collect());
-        let cwd = std::env::current_dir()
-            .ok()
-            .filter(|d| d.is_dir())
-            .or_else(|| user_home_from_env().ok());
-        if let Some(cwd) = cwd {
-            cb.cwd(cwd);
-        }
-        for (name, value) in command.env_to_set() {
-            cb.env(name, value);
-        }
-        for name in command.env_to_remove() {
-            cb.env_remove(name);
-        }
-        let mut child = pair.slave.spawn_command(cb)?;
-        drop(pair.slave);
-        let reader = pair.master.try_clone_reader()?;
-        let mut pty_writer = pair.master.take_writer()?;
-        logger::info(&format!(
-            "pty: {:?} {cols}x{rows} sid {sid} cpr {cpr:?}",
-            command.argv()
-        ));
-
-        output.write(&command.window_title());
-
-        // Threads (SPEC §4.3).
-        let credits = spawn_pty_reader(reader, tx.clone());
-        let (input, wrx) = mpsc::channel::<Vec<u8>>();
-        thread::spawn(move || {
-            for b in wrx {
-                if pty_writer
-                    .write_all(&b)
-                    .and_then(|_| pty_writer.flush())
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-        let t = tx.clone();
-        thread::spawn(move || {
-            let _ = t.send(SessionMessage::ChildExit(sys::wait(&mut *child)));
-        });
-        sys::spawn_input(tx);
-        let pty = Rc::new(PtyWrappedShell::new(input, pair.master));
-        if !typeahead.is_empty() {
-            pty.write_input(typeahead);
-        }
-
-        let session_contexts = module.session_contexts();
-        let mut session = TerminalSession::new(TerminalSessionParts {
-            id,
-            launched_shell: shell,
-            settings,
-            tracker: marker,
-            terminal_background: terminal_bg.map(TerminalBackground::new),
-            settings_modified: live_settings.last_modified(),
-            now: Instant::now(),
-        });
-        if let Some(probe_ended_at) = probe_ended_at {
-            session.expect_late_probe_reply(probe_ended_at);
-        }
-        let working_directory = module.working_directory();
-        let generator_processes = module.generator_processes();
-        let use_cases = SessionUseCases::new(SessionPortsParts {
-            engine: engine.clone(),
-            screen: screen.clone(),
-            writer: output.clone(),
-            shell: pty.clone(),
-            reaper: generator_processes.clone(),
-            modes: terminal_modes.clone(),
-            live_settings: live_settings.clone(),
-            session_contexts: session_contexts.clone(),
-            themes: themes.clone(),
-            working_directory: working_directory.clone(),
-            clock: clock.clone(),
-        });
-        Ok(SessionRunner::new(SessionRunnerParts {
-            inbox: rx,
-            credits,
-            pty,
-            session,
-            screen,
-            output,
-            use_cases,
-            clock,
-        }))
     }
 
     /// Main loop (SPEC §4.3); returns the child's exit code.
@@ -410,6 +220,16 @@ impl SessionRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::infrastructure::system_clock::SystemClock;
+    use crate::shared::domain::value_objects::shell::Shell;
+    use crate::terminal_session::application::ports::terminal_modes::TerminalModes;
+    use crate::terminal_session::application::session_ports_parts::SessionPortsParts;
+    use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
+    use crate::terminal_session::domain::entities::terminal_session::TerminalSessionParts;
+    use crate::terminal_session::domain::value_objects::session_id::SessionId;
+    use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
+    use portable_pty::PtySize;
+    use std::sync::mpsc;
     use std::sync::mpsc::Sender;
     use std::time::Duration;
     use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
@@ -628,7 +448,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn conpty_is_closed_off_the_main_loop() {
+        use anyhow::bail;
         use portable_pty::MasterPty;
+        use std::io::Write;
+        use std::thread;
         struct Master(mpsc::Sender<thread::ThreadId>);
         impl MasterPty for Master {
             fn resize(&self, _: PtySize) -> anyhow::Result<()> {
@@ -1536,14 +1359,5 @@ mod tests {
         let processed = [clear_of_the_menu(10), b"\r\n".to_vec()].concat();
         let raw_again = b"\r\n\x1b]697;PreExec\x07".to_vec();
         assert_eq!(rig.stdout(), [processed, raw_again].concat());
-    }
-
-    #[test]
-    fn should_generate_a_session_id_of_32_lowercase_hex_digits() {
-        let id = session_id();
-
-        assert_eq!(id.len(), 32);
-        assert!(id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')), "{id}");
-        assert!(SessionId::new(id.clone()).is_ok(), "{id}");
     }
 }
