@@ -461,13 +461,7 @@ impl Session {
 
     /// SPEC §4.4 step 10.
     fn cleanup(&mut self) {
-        let mut out = self.screen.take_clear();
-        out.extend_from_slice(b"\x1b[0m\x1b[?25h");
-        self.emit(&out);
-        self.engine.shut_down();
-        self.generator_processes.kill_live_children(); // Windows has no atexit hook for running generators
-        self.modes.restore();
-        self.session_contexts.remove(self.session.id());
+        self.use_cases.end_session.execute(&self.session);
     }
 }
 

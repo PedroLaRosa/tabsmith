@@ -240,6 +240,11 @@ impl TerminalSessionHarness {
         self.use_cases.handle_timer_tick.execute(&mut self.session);
     }
 
+    /// The loop was left: the session is over.
+    pub(crate) fn end_session(&self) {
+        self.use_cases.end_session.execute(&self.session);
+    }
+
     /// A bash prompt `$ ` with the integration markers, then `text` echoed.
     pub(crate) fn prompt(&mut self, text: &str) {
         self.output(format!("\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}").as_bytes());

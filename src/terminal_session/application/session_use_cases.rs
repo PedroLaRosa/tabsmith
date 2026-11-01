@@ -1,6 +1,7 @@
 use crate::terminal_session::application::apply_completion_result_use_case::ApplyCompletionResultUseCase;
 use crate::terminal_session::application::apply_llm_ghost_text_use_case::ApplyLlmGhostTextUseCase;
 use crate::terminal_session::application::completion_requester::CompletionRequester;
+use crate::terminal_session::application::end_session_use_case::EndSessionUseCase;
 use crate::terminal_session::application::handle_keystrokes_use_case::HandleKeystrokesUseCase;
 use crate::terminal_session::application::handle_shell_exit_use_case::HandleShellExitUseCase;
 use crate::terminal_session::application::handle_timer_tick_use_case::HandleTimerTickUseCase;
@@ -29,6 +30,7 @@ pub(crate) struct SessionUseCases {
     pub(crate) resize_terminal: ResizeTerminalUseCase,
     pub(crate) handle_shell_exit: HandleShellExitUseCase,
     pub(crate) handle_timer_tick: HandleTimerTickUseCase,
+    pub(crate) end_session: EndSessionUseCase,
 }
 
 impl SessionUseCases {
@@ -42,7 +44,7 @@ impl SessionUseCases {
         ));
         let poller = Rc::new(SessionFilePoller::new(
             ports.live_settings,
-            ports.session_contexts,
+            ports.session_contexts.clone(),
             ports.engine.clone(),
             ports.screen.clone(),
             ports.themes,
@@ -71,6 +73,14 @@ impl SessionUseCases {
             poller.clone(),
             keystroke_handler.clone(),
         );
+        let end_session = EndSessionUseCase::new(
+            ports.screen.clone(),
+            ports.writer.clone(),
+            ports.engine.clone(),
+            ports.reaper,
+            ports.modes,
+            ports.session_contexts,
+        );
         let process_shell_output = ProcessShellOutputUseCase::new(ProcessShellOutputParts {
             engine: ports.engine,
             feeder: ShellOutputFeeder::new(ports.screen.clone(), ports.clock.clone()),
@@ -94,6 +104,7 @@ impl SessionUseCases {
             resize_terminal,
             handle_shell_exit,
             handle_timer_tick,
+            end_session,
         }
     }
 

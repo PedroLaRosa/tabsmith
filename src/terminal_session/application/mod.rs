@@ -1,6 +1,7 @@
 pub(crate) mod apply_completion_result_use_case;
 pub(crate) mod apply_llm_ghost_text_use_case;
 pub(crate) mod completion_requester;
+pub(crate) mod end_session_use_case;
 pub(crate) mod frame_input;
 pub(crate) mod handle_keystrokes_use_case;
 pub(crate) mod handle_shell_exit_use_case;
