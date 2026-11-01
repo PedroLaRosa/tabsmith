@@ -451,10 +451,6 @@ impl Session {
         self.session.next_deadline()
     }
 
-    fn alt(&self) -> bool {
-        self.screen.state().alt_screen()
-    }
-
     fn cwd(&self) -> PathBuf {
         self.session
             .tracked_cwd()
@@ -537,11 +533,6 @@ impl Session {
         self.session.ghost_text(typed, &self.screen.state())
     }
 
-    /// The buffer once the shell echoed everything already sent (SPEC §7.3 reconciliation).
-    fn basis(&self) -> Option<String> {
-        self.session.basis()
-    }
-
     /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
     fn release_held(&mut self) {
         let Some(held) = self.session.release_held_keys(Instant::now()) else {
@@ -555,6 +546,7 @@ impl Session {
     }
 
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
+    #[cfg(test)]
     fn drawable(&self) -> bool {
         self.session.drawable(&self.screen.state())
     }

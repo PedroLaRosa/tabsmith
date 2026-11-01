@@ -154,23 +154,6 @@ impl TerminalSession {
         self.terminal_background
     }
 
-    pub(crate) fn request_id(&self) -> u64 {
-        self.request
-    }
-
-    /// The buffer and cursor the latest request was sent for.
-    pub(crate) fn sent(&self) -> Option<(&str, usize)> {
-        self.sent.as_ref().map(|(buffer, cursor)| (buffer.as_str(), *cursor))
-    }
-
-    pub(crate) fn edit_buffer(&self) -> Option<&EditBuffer> {
-        self.edit_buffer.as_ref()
-    }
-
-    pub(crate) fn has_insertion_lock(&self) -> bool {
-        self.lock.is_some()
-    }
-
     pub(crate) fn is_passthrough(&self) -> bool {
         self.passthrough
     }
@@ -651,6 +634,23 @@ impl TerminalSession {
 /// through these.
 #[cfg(test)]
 impl TerminalSession {
+    pub(crate) fn request_id(&self) -> u64 {
+        self.request
+    }
+
+    /// The buffer and cursor the latest request was sent for.
+    pub(crate) fn sent(&self) -> Option<(&str, usize)> {
+        self.sent.as_ref().map(|(buffer, cursor)| (buffer.as_str(), *cursor))
+    }
+
+    pub(crate) fn edit_buffer(&self) -> Option<&EditBuffer> {
+        self.edit_buffer.as_ref()
+    }
+
+    pub(crate) fn has_insertion_lock(&self) -> bool {
+        self.lock.is_some()
+    }
+
     pub(crate) fn expire_resize_settle_at(&mut self, at: Instant) {
         self.resize.expire_settle_at(at);
     }

@@ -39,6 +39,7 @@ impl ShellExit {
         self.leave_at
     }
 
+    #[cfg(test)]
     pub(crate) fn code(&self) -> Option<i32> {
         self.code
     }
