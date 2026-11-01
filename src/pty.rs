@@ -3,11 +3,7 @@
 use crate::ghost_text::domain::value_objects::ghost_text::GhostText;
 use crate::ghost_text::domain::value_objects::ghost_text_source::GhostTextSource;
 use crate::dropdown::domain::value_objects::key::Key;
-use crate::dropdown::domain::value_objects::key_action::KeyAction;
-use crate::dropdown::domain::value_objects::key_binding::KeyBinding;
-use crate::dropdown::domain::value_objects::key_code::KeyCode;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
-use crate::dropdown::domain::value_objects::modifiers::Modifiers;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::dropdown::domain::entities::menu::Menu;
@@ -27,11 +23,13 @@ use crate::terminal_session::domain::entities::reload_watch::ReloadWatch;
 use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
 use crate::terminal_session::domain::entities::shell_exit::ShellExit;
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
-use crate::terminal_session::domain::services::key_router::{ghost_key, is_ctrl};
+use crate::terminal_session::domain::services::key_router::{ends_line, is_enter, plain_char, route};
 use crate::terminal_session::domain::services::render_guard::allows_drawing;
 use crate::terminal_session::domain::services::session_deadlines::{
     next_deadline, REDRAW_GRACE, SPINNER_TICK,
 };
+use crate::terminal_session::domain::value_objects::key_facts::{KeyFacts, KeyFactsParts};
+use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
@@ -742,10 +740,8 @@ impl Session {
             .cur
             .as_ref()
             .is_some_and(|e| e.cursor() == e.buffer().len());
-        match key.code() {
-            KeyCode::Char(c) if key.modifiers() == Modifiers::default() && at_end => {
-                self.echo.typed_ahead(c)
-            }
+        match plain_char(key) {
+            Some(c) if at_end => self.echo.typed_ahead(c),
             _ => self.echo.forwarded_unmodelled(self.req),
         }
     }
@@ -840,66 +836,45 @@ impl Session {
             // was not computed for: the rest of the read reaches the shell as is.
             // Off the command line (an inline TUI's rows) keys belong to the TUI, as on the alternate screen.
             let prompt = !self.marker.preexec() && !self.alt() && self.cur.is_some() && typed < 2;
-            // A logically shown menu acts on keys only while the render guards let it be seen.
-            let shown = prompt && self.menu.intercepting(&self.settings);
-            let intercepting = shown && self.drawable();
-            let global = prompt && !shown && !disabled && self.menu.has_items();
-            let binding = if prompt {
-                self.keymap.lookup(&key)
-            } else {
-                None
-            };
-            let tab_show = global
-                && only_tab
-                && key.code() == KeyCode::Tab
-                && key.modifiers() == Modifiers::default();
-            let ghost = ghost_key(&key)
-                .filter(|_| prompt && self.drawable())
-                .zip(self.ghost_text(true));
-            let acts = ghost.is_some()
-                || tab_show
-                || (intercepting && matches!(binding, Some(KeyBinding::Action(_) | KeyBinding::Unknown)));
-            if acts && self.echo.is_waiting_for_echo() {
-                // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
-                // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
-                self.echo.hold(&chunk[ev.bytes().start..], Instant::now());
-                self.decoder.reset(); // held bytes start outside a paste and are decoded again
-                break;
-            }
-            let effects = match binding {
-                Some(KeyBinding::Action(a)) if intercepting => self.menu.handle(a, &self.settings),
-                Some(KeyBinding::Unknown) if intercepting => Vec::new(),
-                _ if tab_show => self.menu.show_on_tab(&self.settings),
-                Some(KeyBinding::Action(
-                    a @ (KeyAction::ShowAutocomplete | KeyAction::ToggleAutocomplete),
-                )) if global => self.menu.handle(a, &self.settings),
-                _ => {
-                    match ghost {
-                        Some((full, g)) => {
-                            let g = if full { g.as_str() } else { GhostText::next_word(&g) };
-                            fwd.extend_from_slice(g.as_bytes());
-                            self.echo.accepted_ghost(g);
-                            self.ghost.accepted();
-                            redraw = true;
-                        }
-                        None => {
-                            if key.code() == KeyCode::Enter && self.marker.at_prompt() {
-                                self.marker.set_submitted(self.basis()); // history: the line, not what follows it
-                            }
-                            fwd.extend_from_slice(&chunk[ev.bytes()]);
-                            typed += usize::from(
-                                matches!(key.code(), KeyCode::Char(_)) && key.modifiers() == Modifiers::default(),
-                            );
-                            self.note_forwarded(&key);
-                            // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
-                            if is_ctrl(&key, 'c')
-                                || is_ctrl(&key, 'd')
-                                || key.code() == KeyCode::Enter
-                            {
-                                self.menu.error_reset();
-                                redraw = true;
-                            }
-                        }
+            let facts = KeyFacts::new(KeyFactsParts {
+                prompt,
+                menu_intercepts: self.menu.intercepting(&self.settings),
+                drawable: self.drawable(),
+                menu_has_items: self.menu.has_items(),
+                autocomplete_disabled: disabled,
+                only_show_on_tab: only_tab,
+                waiting_for_echo: self.echo.is_waiting_for_echo(),
+                ghost_text: self.ghost_text(true),
+            });
+            let effects = match route(&key, &self.keymap, &facts) {
+                KeyRoute::Hold => {
+                    // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
+                    // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
+                    self.echo.hold(&chunk[ev.bytes().start..], Instant::now());
+                    self.decoder.reset(); // held bytes start outside a paste and are decoded again
+                    break;
+                }
+                KeyRoute::MenuAction(a) => self.menu.handle(a, &self.settings),
+                KeyRoute::Swallow => Vec::new(),
+                KeyRoute::ShowOnTab => self.menu.show_on_tab(&self.settings),
+                KeyRoute::AcceptGhost(g) => {
+                    fwd.extend_from_slice(g.as_bytes());
+                    self.echo.accepted_ghost(&g);
+                    self.ghost.accepted();
+                    redraw = true;
+                    continue;
+                }
+                KeyRoute::Forward => {
+                    if is_enter(&key) && self.marker.at_prompt() {
+                        self.marker.set_submitted(self.basis()); // history: the line, not what follows it
+                    }
+                    fwd.extend_from_slice(&chunk[ev.bytes()]);
+                    typed += usize::from(plain_char(&key).is_some());
+                    self.note_forwarded(&key);
+                    // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
+                    if ends_line(&key) {
+                        self.menu.error_reset();
+                        redraw = true;
                     }
                     continue;
                 }
@@ -1089,6 +1064,7 @@ mod tests {
 
     use crate::terminal_session::infrastructure::pty::pty_reader::PTY_CREDITS;
     use crate::completion::domain::test_fixtures::{comp, item, settings};
+    use crate::dropdown::domain::value_objects::key_action::KeyAction;
     use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
