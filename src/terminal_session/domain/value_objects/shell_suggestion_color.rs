@@ -13,10 +13,12 @@ impl ShellSuggestionColor {
         ShellSuggestionColor { fg, bg }
     }
 
+    #[cfg(test)]
     pub(crate) fn fg(&self) -> &[Option<u8>] {
         &self.fg
     }
 
+    #[cfg(test)]
     pub(crate) fn bg(&self) -> &[Option<u8>] {
         &self.bg
     }

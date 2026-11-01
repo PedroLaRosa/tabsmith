@@ -11,10 +11,12 @@ pub(crate) struct PwshPredictionColor {
 }
 
 impl PwshPredictionColor {
+    #[cfg(test)]
     pub(crate) fn colors(&self) -> &ShellSuggestionColor {
         &self.colors
     }
 
+    #[cfg(test)]
     pub(crate) fn emphasis(&self) -> TextEmphasis {
         self.emphasis
     }

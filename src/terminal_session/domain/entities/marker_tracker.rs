@@ -243,6 +243,7 @@ impl MarkerTracker {
         self.pwsh_list_view
     }
 
+    #[cfg(test)]
     pub(crate) fn submitted(&self) -> Option<&str> {
         self.submitted.as_deref()
     }

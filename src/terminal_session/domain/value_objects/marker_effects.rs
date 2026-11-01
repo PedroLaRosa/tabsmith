@@ -14,6 +14,7 @@ impl MarkerEffects {
         &self.screen_commands
     }
 
+    #[cfg(test)]
     pub(crate) fn events(&self) -> &[ShellEvent] {
         &self.events
     }
