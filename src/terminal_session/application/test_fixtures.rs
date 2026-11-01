@@ -31,7 +31,9 @@ use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 #[cfg(test)]
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
 #[cfg(test)]
-use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
+use crate::terminal_session::domain::repositories::session_context_repository::{
+    InMemorySessionContextRepository, SessionContextRepository,
+};
 #[cfg(test)]
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 #[cfg(test)]
@@ -97,6 +99,22 @@ impl TerminalSessionHarness {
 
     /// A session of `SID` at a bash prompt that was launched as bash, with the settings `settings_json`.
     pub(crate) fn with_clock(settings_json: &str, clock: Arc<dyn Clock + Send + Sync>) -> Self {
+        let id = SessionId::new(SID.to_string()).unwrap();
+        Self::assemble(settings_json, clock, id, Rc::new(InMemorySessionContextRepository::default()))
+    }
+
+    /// A session called `id` that finds its context in `session_contexts`; its shell integration markers still
+    /// carry `SID`.
+    pub(crate) fn with_session_contexts(id: SessionId, session_contexts: Rc<dyn SessionContextRepository>) -> Self {
+        Self::assemble("{}", Arc::new(SystemClock), id, session_contexts)
+    }
+
+    fn assemble(
+        settings_json: &str,
+        clock: Arc<dyn Clock + Send + Sync>,
+        id: SessionId,
+        session_contexts: Rc<dyn SessionContextRepository>,
+    ) -> Self {
         let settings = settings(settings_json);
         let journal = Rc::new(IoJournal::new());
         let screen = Rc::new(AlacrittyTerminalScreen::for_tests(80, 24));
@@ -113,13 +131,13 @@ impl TerminalSessionHarness {
             reaper: reaper.clone(),
             modes: Rc::new(RecordingTerminalModes::new()),
             live_settings: live_settings.clone(),
-            session_contexts: Rc::new(InMemorySessionContextRepository::default()),
+            session_contexts,
             themes: Rc::new(InMemoryThemeRepository::default()),
             working_directory: Rc::new(FixedWorkingDirectory::new(std::env::current_dir().ok())),
             clock: clock.clone(),
         });
         let session = TerminalSession::new(TerminalSessionParts {
-            id: SessionId::new(SID.to_string()).unwrap(),
+            id,
             launched_shell: Shell::Bash,
             settings,
             tracker: MarkerTracker::new(SessionId::new(SID.to_string()).unwrap(), Some(Shell::Bash), false),

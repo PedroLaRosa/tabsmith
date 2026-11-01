@@ -659,26 +659,7 @@ impl Session {
 
     /// Settings (live reload) and the session env file from `_ pre-cmd` (D17). True when settings changed.
     fn poll_files(&mut self) -> bool {
-        let m = self.session_contexts.last_modified(self.session.id());
-        if self.session.context_changed(m) {
-            if let Some(ctx) = self.session_contexts.find(self.session.id()) {
-                self.engine
-                    .apply_session_context(ctx.env().clone(), ctx.alias().map(str::to_owned));
-            }
-        }
-        let m = self.live_settings.last_modified();
-        if !self.session.settings_changed(m) {
-            return false;
-        }
-        self.session.apply_settings(self.live_settings.load());
-        self.screen
-            .set_theme(resolve_theme(
-                self.session.settings(),
-                self.session.terminal_background().map(TerminalBackground::rgb),
-                &*self.themes,
-            ));
-        self.engine.apply_settings(self.session.settings().clone());
-        true
+        self.use_cases.poller().poll(&mut self.session)
     }
 
     /// SPEC §4.4 step 10.
@@ -711,6 +692,7 @@ mod tests {
     use crate::terminal_session::application::ports::working_directory::FixedWorkingDirectory;
     use crate::terminal_session::infrastructure::adapters::lenient_live_settings::LenientLiveSettings;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
     use crate::settings::domain::value_objects::settings::Settings;
     use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
@@ -718,7 +700,6 @@ mod tests {
     use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
     use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::RecordingMasterPty;
     use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
-    use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
     use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
@@ -1351,135 +1332,6 @@ mod tests {
         s.session.set_redraw_until(None);
         s.session.tracker_mut().set_pwsh_list_view(true);
         assert!(s.drawable(), "an empty line has no list");
-    }
-
-    // --- The session context `_ pre-cmd` reports, reloaded by `poll_files` (D17). ------------------------------
-
-    use crate::shared::infrastructure::testing::temp_dir::TempDir;
-    use std::collections::HashMap;
-
-    /// A session reading its context from `<temp>/run/abc.json`, and what it sends the engine.
-    fn session_reading_context_in(temp_dir: &TempDir) -> (Session, Receiver<CompletionEngineCall>) {
-        let (mut s, _) = session_named("{}", "abc");
-        let (engine, sent_to_engine) = mpsc::channel();
-        s.engine = Rc::new(RecordingCompletionEngine::new(engine));
-        s.session_contexts = Rc::new(FileSessionContextRepository::new(DataDirectory::new(
-            Some(temp_dir.path().to_path_buf()),
-            None,
-        )));
-        (s, sent_to_engine)
-    }
-
-    fn write_context_file(temp_dir: &TempDir, json: &str, modified: SystemTime) {
-        let path = temp_dir.path().join("run/abc.json");
-        std::fs::create_dir_all(temp_dir.path().join("run")).unwrap();
-        std::fs::write(&path, json).unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(modified)
-            .unwrap();
-    }
-
-    fn contexts_sent(sent_to_engine: &Receiver<CompletionEngineCall>) -> Vec<(HashMap<String, String>, Option<String>)> {
-        sent_to_engine
-            .try_iter()
-            .map(|m| match m {
-                CompletionEngineCall::ApplySessionContext { env, alias } => (env, alias),
-                _ => panic!("only session contexts are sent"),
-            })
-            .collect()
-    }
-
-    fn at(secs: u64) -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(secs)
-    }
-
-    #[test]
-    fn should_send_the_engine_the_env_and_alias_of_a_saved_session_context() {
-        let temp_dir = TempDir::new("pty-context-sent");
-        let (mut s, sent_to_engine) = session_reading_context_in(&temp_dir);
-        write_context_file(&temp_dir, r#"{"env":{"A":"1"},"alias":"ll='ls -l'","ts":7}"#, at(1_000));
-
-        s.poll_files();
-
-        assert_eq!(
-            contexts_sent(&sent_to_engine),
-            [(
-                HashMap::from([("A".to_string(), "1".to_string())]),
-                Some("ll='ls -l'".to_string())
-            )]
-        );
-    }
-
-    #[test]
-    fn should_not_send_the_session_context_again_while_its_file_keeps_its_modification_time() {
-        let temp_dir = TempDir::new("pty-context-unchanged");
-        let (mut s, sent_to_engine) = session_reading_context_in(&temp_dir);
-        write_context_file(&temp_dir, r#"{"env":{"A":"1"}}"#, at(1_000));
-        s.poll_files();
-        contexts_sent(&sent_to_engine);
-
-        s.poll_files();
-
-        assert_eq!(contexts_sent(&sent_to_engine), Vec::new());
-    }
-
-    /// A removed file is no change: its context is not reloaded until the file comes back with a new time.
-    #[test]
-    fn should_send_nothing_and_keep_the_modification_time_once_the_context_file_is_deleted() {
-        let temp_dir = TempDir::new("pty-context-deleted");
-        let (mut s, sent_to_engine) = session_reading_context_in(&temp_dir);
-        write_context_file(&temp_dir, r#"{"env":{"A":"1"}}"#, at(1_000));
-        s.poll_files();
-        contexts_sent(&sent_to_engine);
-        std::fs::remove_file(temp_dir.path().join("run/abc.json")).unwrap();
-
-        s.poll_files();
-
-        assert_eq!(
-            (contexts_sent(&sent_to_engine), s.session.context_modified()),
-            (Vec::new(), Some(at(1_000)))
-        );
-    }
-
-    /// The time is kept before the file is read, so a file that cannot be read is not read again until it changes.
-    #[test]
-    fn should_send_nothing_for_a_context_file_that_is_not_json_but_keep_its_new_modification_time() {
-        let temp_dir = TempDir::new("pty-context-bad-json");
-        let (mut s, sent_to_engine) = session_reading_context_in(&temp_dir);
-        write_context_file(&temp_dir, r#"{"env":{"A":"1"}}"#, at(1_000));
-        s.poll_files();
-        contexts_sent(&sent_to_engine);
-        write_context_file(&temp_dir, "not json", at(2_000));
-
-        s.poll_files();
-
-        assert_eq!(
-            (contexts_sent(&sent_to_engine), s.session.context_modified()),
-            (Vec::new(), Some(at(2_000)))
-        );
-    }
-
-    #[test]
-    fn should_send_the_session_context_again_once_its_file_is_rewritten_with_a_new_modification_time() {
-        let temp_dir = TempDir::new("pty-context-rewritten");
-        let (mut s, sent_to_engine) = session_reading_context_in(&temp_dir);
-        write_context_file(&temp_dir, r#"{"env":{"A":"1"}}"#, at(1_000));
-        s.poll_files();
-        contexts_sent(&sent_to_engine);
-        write_context_file(&temp_dir, r#"{"env":{"B":"2"},"alias":""}"#, at(2_000));
-
-        s.poll_files();
-
-        assert_eq!(
-            contexts_sent(&sent_to_engine),
-            [(
-                HashMap::from([("B".to_string(), "2".to_string())]),
-                Some(String::new())
-            )]
-        );
     }
 
     #[cfg(windows)]
