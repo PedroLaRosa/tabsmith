@@ -2,6 +2,8 @@
 use crate::shell_integration::application::ports::spec_bundle_installer::SpecBundleInstaller;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::specs::application::install_spec_bundle_use_case::InstallSpecBundleUseCase;
+use crate::specs::infrastructure::adapters::process_executor::kill_live_children;
+use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
 
 /// setup's spec bundle, extracted by the specs module (specs' InstallSpecBundleUseCase).
 pub(crate) struct SpecBundleBridge {
@@ -25,6 +27,15 @@ impl SpecBundleInstaller for SpecBundleBridge {
 /// The whole chain, as anyhow's `{:#}` prints it: the error's Display shows no source (P3, T15).
 fn spec_bundle_failure(error: anyhow::Error) -> ShellIntegrationError {
     ShellIntegrationError::SpecBundle(format!("{error:#}"))
+}
+
+/// The terminal session's reaper over the specs module's process-wide list of running generators.
+pub(crate) struct GeneratorProcessBridge;
+
+impl GeneratorProcessReaper for GeneratorProcessBridge {
+    fn kill_live_children(&self) {
+        kill_live_children();
+    }
 }
 
 #[cfg(test)]
