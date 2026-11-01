@@ -65,6 +65,7 @@ mod tests {
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
     use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
     use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
+    use crate::terminal_session::application::test_fixtures::{subs, TerminalSessionHarness};
     use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
     use crate::terminal_session::domain::entities::terminal_session::TerminalSessionParts;
     use crate::terminal_session::domain::value_objects::session_id::SessionId;
@@ -211,5 +212,19 @@ mod tests {
         let repaint = scene.painter.take_repaint(&mut scene.session);
 
         assert!(repaint.is_empty());
+    }
+
+    #[test]
+    fn identical_redraw_writes_nothing() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        assert!(
+            h.written().windows(8).any(|w| w == b"\x1b[?2026h"),
+            "a frame was drawn"
+        );
+        h.clear_written();
+        h.redraw();
+        assert!(h.written().is_empty(), "{:?}", String::from_utf8_lossy(&h.written()));
     }
 }

@@ -149,4 +149,18 @@ mod tests {
         // The reply's frame, then the replayed Enter draws its own, then it reaches the shell.
         assert_eq!(order, ["frame", "frame", "shell"]);
     }
+
+    #[test]
+    fn llm_ghost_requested_for_commands_without_spec() {
+        let mut h = TerminalSessionHarness::new(
+            r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
+        );
+        h.prompt("zzzcmd foo");
+        h.complete(CompletionResult::error(h.session.request_id(), "zzzcmd foo".into(), 10));
+        assert!(h.session.llm_due_at().is_some());
+        // Mid-word cursor: still none.
+        h.session.cancel_llm_schedule();
+        h.complete(CompletionResult::error(h.session.request_id(), "zzzcmd foo".into(), 3));
+        assert!(h.session.llm_due_at().is_none());
+    }
 }

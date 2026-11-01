@@ -438,12 +438,6 @@ impl Session {
         self.use_cases.apply_completion_result.execute(&mut self.session, c);
     }
 
-    /// Ghost text (SPEC §8.1): `typed` = after the keys typed ahead of their echo, else after the buffer on screen.
-    #[cfg(test)]
-    fn ghost_text(&self, typed: bool) -> Option<String> {
-        self.session.ghost_text(typed, &self.screen.state())
-    }
-
     /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
     fn release_held(&mut self) {
         self.use_cases.keystroke_handler().release_held(&mut self.session);
@@ -715,43 +709,6 @@ mod tests {
     }
 
     #[test]
-    fn llm_ghost_requested_for_commands_without_spec() {
-        let (mut s, _) = session(
-            r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
-        );
-        prompt(&mut s, "zzzcmd foo");
-        s.on_completion(CompletionResult::error(s.session.request_id(), "zzzcmd foo".into(), 10));
-        assert!(s.session.llm_due_at().is_some());
-        // Mid-word cursor: still none.
-        s.session.cancel_llm_schedule();
-        s.on_completion(CompletionResult::error(s.session.request_id(), "zzzcmd foo".into(), 3));
-        assert!(s.session.llm_due_at().is_none());
-    }
-
-    #[test]
-    fn should_show_the_llm_ghost_text_of_the_current_request_behind_the_local_one() {
-        let (mut s, _) = session("{}");
-        prompt(&mut s, "git sta");
-        s.session.expect_llm_reply(s.session.request_id());
-        let llm_reply = |req, text: Option<&str>| SessionMessage::Ghost { req, text: text.map(String::from) };
-
-        s.step(llm_reply(s.session.request_id(), Some("tus")), &mut None);
-        let from_the_current_request = s.ghost_text(false);
-        s.step(llm_reply(s.session.request_id() + 1, Some("x")), &mut None);
-        let after_another_request = s.ghost_text(false);
-        s.step(llm_reply(s.session.request_id(), None), &mut None);
-        let after_an_empty_reply = s.ghost_text(false);
-        s.step(llm_reply(s.session.request_id(), Some("tus")), &mut None);
-        reply(&mut s, Vec::new(), Some("sh"));
-        let with_a_local_ghost_text = s.ghost_text(false);
-
-        assert_eq!(
-            (from_the_current_request, after_another_request, after_an_empty_reply, with_a_local_ghost_text),
-            (Some("tus".to_string()), Some("tus".to_string()), None, Some("sh".to_string()))
-        );
-    }
-
-    #[test]
     fn late_probe_reply_is_not_typed() {
         let (mut s, pty) = session("{}");
         s.session.expect_late_probe_reply(Instant::now());
@@ -762,20 +719,6 @@ mod tests {
             (s.session.terminal_background().map(TerminalBackground::rgb), s.session.late_probe_until()),
             (Some((255, 255, 255)), None)
         );
-    }
-
-    #[test]
-    fn identical_redraw_writes_nothing() {
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        assert!(
-            pty.stdout.written().windows(8).any(|w| w == b"\x1b[?2026h"),
-            "a frame was drawn"
-        );
-        pty.stdout.clear();
-        s.redraw();
-        assert!(pty.stdout.written().is_empty(), "{:?}", String::from_utf8_lossy(&pty.stdout.written()));
     }
 
     #[test]

@@ -64,4 +64,26 @@ mod tests {
 
         assert!(harness.written().is_empty());
     }
+
+    #[test]
+    fn should_show_the_llm_ghost_text_of_the_current_request_behind_the_local_one() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git sta");
+        h.session.expect_llm_reply(h.session.request_id());
+
+        h.llm_reply(h.session.request_id(), Some("tus"));
+        let from_the_current_request = h.ghost_text(false);
+        h.llm_reply(h.session.request_id() + 1, Some("x"));
+        let after_another_request = h.ghost_text(false);
+        h.llm_reply(h.session.request_id(), None);
+        let after_an_empty_reply = h.ghost_text(false);
+        h.llm_reply(h.session.request_id(), Some("tus"));
+        h.reply(Vec::new(), Some("sh"));
+        let with_a_local_ghost_text = h.ghost_text(false);
+
+        assert_eq!(
+            (from_the_current_request, after_another_request, after_an_empty_reply, with_a_local_ghost_text),
+            (Some("tus".to_string()), Some("tus".to_string()), None, Some("sh".to_string()))
+        );
+    }
 }
