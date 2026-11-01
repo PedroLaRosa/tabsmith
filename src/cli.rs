@@ -5,16 +5,15 @@ use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::output_format::OutputFormat;
-use crate::shared::infrastructure::terminal_style::{bold, sgr, stdout_tty};
 use crate::shell_integration::application::render_init_script_use_case::RenderInitScriptUseCase;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
-use crate::shell_integration::infrastructure::cli::init_command::{init_script, ShellArg};
+use crate::shell_integration::infrastructure::cli::init_command::init_script;
 use anyhow::{Context, Result};
-use clap::{Args, Subcommand};
+use clap::Args;
 use serde_json::{json, Value};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -22,18 +21,6 @@ use std::rc::Rc;
 pub struct DiagnosticArgs {
     #[arg(long, short, value_enum, default_value_t)]
     pub format: OutputFormat,
-}
-
-#[derive(Subcommand)]
-pub enum DebugCmd {
-    /// Print the bytes of every key press (Ctrl-D exits)
-    KeyTester,
-    /// Start a shell with only the tabsmith integration loaded
-    Shell {
-        shell: Option<ShellArg>,
-    },
-    /// Show log file paths and the end of pty.log
-    Logs,
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -179,56 +166,8 @@ fn to_toml(sections: &[Section]) -> String {
 // ---------------------------------------------------------------------------------------------------------------
 // debug (SPEC §2.10)
 
-pub fn debug(cmd: DebugCmd, module: &TerminalSessionModule) -> Result<i32> {
-    match cmd {
-        DebugCmd::KeyTester => key_tester(),
-        DebugCmd::Shell { shell } => debug_shell(shell.map(Into::into), module),
-        DebugCmd::Logs => debug_logs(),
-    }
-}
-
-fn key_line(input: &[u8]) -> String {
-    let hex: Vec<String> = input.iter().map(|b| format!("{b:#04x}")).collect();
-    format!(
-        "{} bytes : \"{}\" : [{}]",
-        input.len(),
-        input.escape_ascii(),
-        hex.join(", ")
-    )
-}
-
-/// ponytail: Windows reads through std's console stdin, so keys without VT input mode show as text only.
-fn key_tester() -> Result<i32> {
-    let color = stdout_tty();
-    println!(
-        "{} (use {} to quit)",
-        bold("Testing Key Input", color),
-        sgr("ctrl-d", "35", color)
-    );
-    crossterm::terminal::enable_raw_mode()?;
-    let res = (|| -> Result<()> {
-        let (mut stdin, mut stdout) = (std::io::stdin().lock(), std::io::stdout().lock());
-        let mut buf = [0u8; 1024];
-        loop {
-            let n = stdin.read(&mut buf)?;
-            if n == 0 {
-                return Ok(());
-            }
-            write!(stdout, "{}\r\n", key_line(&buf[..n]))?;
-            stdout.flush()?;
-            if buf[..n] == [4] {
-                return Ok(());
-            }
-        }
-    })();
-    crossterm::terminal::disable_raw_mode()?;
-    res?;
-    println!("ctrl-d");
-    Ok(0)
-}
-
 /// `_ pty` with only the post integration loaded.
-fn debug_shell(shell: Option<Shell>, module: &TerminalSessionModule) -> Result<i32> {
+pub(crate) fn debug_shell(shell: Option<Shell>, module: &TerminalSessionModule) -> Result<i32> {
     let env_shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty());
     let shell = match shell {
         Some(s) => s,
@@ -303,7 +242,7 @@ fn debug_shell_files(
     Ok((dir, cmd))
 }
 
-fn debug_logs() -> Result<i32> {
+pub fn debug_logs() -> Result<i32> {
     let dir = data_directory_from_env().logs_dir()?;
     let pty = dir.join("pty.log");
     println!("{}\n{}", dir.join("cli.log").display(), pty.display());
@@ -322,15 +261,6 @@ fn debug_logs() -> Result<i32> {
 mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
-
-    #[test]
-    fn key_tester_line() {
-        assert_eq!(
-            key_line(b"\x1b[A"),
-            "3 bytes : \"\\x1b[A\" : [0x1b, 0x5b, 0x41]"
-        );
-        assert_eq!(key_line(&[4]), "1 bytes : \"\\x04\" : [0x04]");
-    }
 
     #[test]
     fn diagnostic_toml() {

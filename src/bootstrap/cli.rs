@@ -16,7 +16,7 @@ use crate::shared::infrastructure::data_directory_from_env::data_directory_from_
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::terminal_style::epaint;
 use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
-use crate::shell_integration::infrastructure::cli::init_command::{run_init_command, InitArgs};
+use crate::shell_integration::infrastructure::cli::init_command::{run_init_command, InitArgs, ShellArg};
 use crate::shell_integration::infrastructure::cli::integrations_command::{run_integrations_command, IntegrationsCmd};
 use crate::shell_integration::infrastructure::cli::setup_command::{run_setup_command, SetupArgs};
 use crate::shell_integration::infrastructure::cli::should_launch_command::run_should_launch_command;
@@ -25,6 +25,7 @@ use crate::shell_integration::infrastructure::shell_integration_module::{
     build_shell_integration_module, ShellIntegrationModule,
 };
 use crate::specs::infrastructure::specs_module::build_specs_module;
+use crate::terminal_session::infrastructure::cli::key_tester_command::run_key_tester_command;
 use crate::terminal_session::infrastructure::cli::pre_cmd_command::run_pre_cmd_command;
 use crate::terminal_session::infrastructure::terminal_session_module::{
     build_terminal_session_module, TerminalSessionModule,
@@ -81,10 +82,22 @@ enum Command {
     Completion(CompletionArgs),
     /// Debug tabsmith
     #[command(subcommand)]
-    Debug(cli::DebugCmd),
+    Debug(DebugCmd),
     /// Internal subcommands used by the shell integrations
     #[command(name = "_", alias = "internal", hide = true, subcommand)]
     Internal(InternalCmd),
+}
+
+#[derive(Subcommand)]
+enum DebugCmd {
+    /// Print the bytes of every key press (Ctrl-D exits)
+    KeyTester,
+    /// Start a shell with only the tabsmith integration loaded
+    Shell {
+        shell: Option<ShellArg>,
+    },
+    /// Show log file paths and the end of pty.log
+    Logs,
 }
 
 #[derive(Subcommand)]
@@ -147,7 +160,11 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         }
         Some(Command::Diagnostic(a)) => cli::diagnostic(a),
         Some(Command::Completion(a)) => completion(a),
-        Some(Command::Debug(c)) => cli::debug(c, &terminal_session_module()),
+        Some(Command::Debug(c)) => match c {
+            DebugCmd::KeyTester => run_key_tester_command(),
+            DebugCmd::Shell { shell } => cli::debug_shell(shell.map(Into::into), &terminal_session_module()),
+            DebugCmd::Logs => cli::debug_logs(),
+        },
         Some(Command::Internal(c)) => match c {
             InternalCmd::Pty { shell, cmd } => Ok(pty::run(shell, cmd, &terminal_session_module())),
             InternalCmd::ShouldLaunch => run_should_launch_command(&shell_integration_module()),
