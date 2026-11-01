@@ -1,4 +1,5 @@
 pub(crate) mod completion_engine_starter;
+pub(crate) mod fallback_shell;
 #[cfg(unix)]
 pub(crate) mod platform_unix;
 #[cfg(windows)]

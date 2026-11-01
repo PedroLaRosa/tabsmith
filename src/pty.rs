@@ -33,6 +33,8 @@ use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::terminal_session::infrastructure::pty::completion_engine_starter::CompletionEngineStarter;
+use crate::terminal_session::infrastructure::pty::fallback_shell::run_fallback_shell;
+use crate::bootstrap::bridges::GeneratorProcessBridge;
 use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
 use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, PROBE, PROBE_TIMEOUT};
 use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
@@ -78,38 +80,11 @@ pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStart
     if let Some(m) = modes {
         m.restore();
     }
-    fallback(&err, command.argv())
+    run_fallback_shell(&err, command.argv(), &GeneratorProcessBridge)
 }
 
 fn env_nonempty(k: &str) -> Option<String> {
     std::env::var(k).ok().filter(|v| !v.is_empty())
-}
-
-/// Run the plain shell with `TABSMITH_TERM_DISABLED=1` so its pre block does not loop (SPEC §4.4 fallback).
-fn fallback(err: &anyhow::Error, argv: &[String]) -> i32 {
-    logger::error(&format!("pty: {err:#}"));
-    eprintln!("tabsmith had an error: {err:#}");
-    crate::specs::infrastructure::adapters::process_executor::kill_live_children(); // exec skips atexit
-
-    let argv = if argv.is_empty() {
-        vec![if cfg!(windows) { "pwsh" } else { "/bin/sh" }.to_string()]
-    } else {
-        argv.to_vec()
-    };
-    let mut c = std::process::Command::new(&argv[0]);
-    c.args(&argv[1..])
-        .env("TABSMITH_TERM_DISABLED", "1")
-        .env_remove("TABSMITH_SHELL")
-        .env_remove("TABSMITH_IS_LOGIN_SHELL");
-    #[cfg(unix)]
-    let err = std::os::unix::process::CommandExt::exec(&mut c); // returns only on error
-    #[cfg(windows)]
-    let err = match c.status() {
-        Ok(s) => return s.code().unwrap_or(1),
-        Err(e) => e,
-    };
-    eprintln!("tabsmith: could not start {}: {err}", argv[0]);
-    1
 }
 
 fn session_id() -> String {
