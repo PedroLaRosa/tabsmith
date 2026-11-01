@@ -9,6 +9,7 @@ use crate::dropdown::domain::value_objects::key_code::KeyCode;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
 use crate::dropdown::domain::value_objects::modifiers::Modifiers;
 use crate::shared::infrastructure::logger;
+use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::dropdown::domain::entities::menu::Menu;
 use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
@@ -16,6 +17,9 @@ use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeRepository;
 use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
+use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
+use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
+use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
@@ -29,7 +33,6 @@ use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
 use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
-use crate::tracker::Tracker;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
@@ -49,6 +52,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -339,9 +343,14 @@ struct Session {
     /// Dropped after the child exits on Windows to unblock the ConPTY reader.
     master: Option<Box<dyn MasterPty + Send>>,
     modes: sys::Modes,
-    tracker: Tracker,
+    /// Splits the shell's output into bytes, window names and OSC 697 markers; keeps the cut sequences between reads.
+    splitter: MarkerSplitter,
+    /// Shell-integration state of the session (SPEC 5.1).
+    marker: MarkerTracker,
     /// The model, the filter and the renderer of the session, behind the screen port.
     screen: Rc<dyn TerminalScreen>,
+    /// Drives the splitter, the marker tracker and the screen over one PTY batch.
+    feeder: ShellOutputFeeder,
     menu: Menu,
     /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
     themes: Rc<dyn ThemeRepository>,
@@ -446,13 +455,18 @@ impl Session {
             Rc::new(FileThemeRepository::new(data_directory_from_env()));
         let renderer = OverlayRenderer::new(resolve_theme(&settings, terminal_bg, &*themes), truecolor)
             .with_images(kitty_graphics::detect());
-        let tracker = Tracker::new(sid.clone(), Shell::from_name(program));
+        let marker = MarkerTracker::new(
+            SessionId::new(sid.clone()).expect("generated ids are valid"),
+            Shell::from_name(program),
+            cfg!(windows),
+        );
         let screen = AlacrittyTerminalScreen::new(cols as usize, rows as usize, renderer, lf_to_ind);
         // Sync the model with the real cursor, through the same parser as the shell's output.
         if let Some((r, c)) = cpr {
             screen.advance_model(format!("\x1b[{r};{c}H").as_bytes());
         }
         let screen: Rc<dyn TerminalScreen> = Rc::new(screen);
+        let feeder = ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock));
         let (menu, keymap) = (Menu::new(), Keymap::from_settings(&settings));
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;
@@ -528,8 +542,10 @@ impl Session {
             credits,
             master: Some(pair.master),
             modes: m,
-            tracker,
+            splitter: MarkerSplitter::default(),
+            marker,
             screen,
+            feeder,
             menu,
             themes,
             keymap,
@@ -738,8 +754,7 @@ impl Session {
     }
 
     fn cwd(&self) -> PathBuf {
-        self.tracker
-            .marker
+        self.marker
             .cwd()
             .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())
@@ -747,7 +762,7 @@ impl Session {
     }
 
     fn shell(&self) -> Shell {
-        self.tracker.marker.shell().unwrap_or(self.shell)
+        self.marker.shell().unwrap_or(self.shell)
     }
 
     /// PTY batch (SPEC §4.5): clear, bytes (markers stripped), frame — one stdout write.
@@ -757,8 +772,10 @@ impl Session {
         }
         let was_alt = self.alt();
         let mut body = Vec::new();
-        self.tracker.feed(&*self.screen, batch, &mut body);
-        for ev in std::mem::take(&mut self.tracker.events) {
+        let events = self
+            .feeder
+            .feed(&mut self.splitter, &mut self.marker, batch, &mut body);
+        for ev in events {
             self.on_event(ev);
         }
         if was_alt && !self.alt() {
@@ -805,12 +822,15 @@ impl Session {
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
     fn refresh(&mut self) {
-        // Off the command line the cursor is in a widget's inline TUI (fzf, fish's pager; see Tracker::extract). Live
+        // Off the command line the cursor is in a widget's inline TUI (fzf, fish's pager; see TerminalScreen::edit_buffer). Live
         // UI only: pre_exec still scrapes after a transient prompt, which is redrawn without markers.
         let new = if self.alt() {
             None
         } else {
-            self.tracker.extract(&*self.screen).filter(|e| e.at_prompt())
+            self.marker
+                .edit_buffer_context()
+                .and_then(|context| self.screen.edit_buffer(&context))
+                .filter(|e| e.at_prompt())
         };
         if !self.unechoed.is_empty() {
             let base = self
@@ -908,7 +928,7 @@ impl Session {
     /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
     /// their echo (what accepting it must add), else after the buffer on screen (what is drawn).
     fn ghost_text(&self, typed: bool) -> Option<String> {
-        if !self.settings.bool(INLINE_ENABLED) || self.tracker.marker.preexec() || self.alt() {
+        if !self.settings.bool(INLINE_ENABLED) || self.marker.preexec() || self.alt() {
             return None;
         }
         let e = self.cur.as_ref()?;
@@ -972,7 +992,7 @@ impl Session {
     }
 
     fn suppressed_in(&self, screen: &ScreenState) -> bool {
-        !self.tracker.marker.at_prompt()
+        !self.marker.at_prompt()
             // The cursor is off the command line (an inline TUI's rows: fzf, fish's pager): a menu for the line
             // stays hidden and keeps its hands off the keys.
             || self.cur.is_none()
@@ -981,7 +1001,7 @@ impl Session {
             || screen.in_string()
             || self.redraw_until.is_some()
             // PSReadLine's ListView predictions own the rows below a non-empty line.
-            || (self.tracker.marker.pwsh_list_view() && self.cur.as_ref().is_some_and(|e| !e.buffer().is_empty()))
+            || (self.marker.pwsh_list_view() && self.cur.as_ref().is_some_and(|e| !e.buffer().is_empty()))
     }
 
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
@@ -1057,7 +1077,7 @@ impl Session {
             // Two or more printable keys in one read are a paste (pwsh has no bracketed paste) or typeahead the menu
             // was not computed for: the rest of the read reaches the shell as is.
             // Off the command line (an inline TUI's rows) keys belong to the TUI, as on the alternate screen.
-            let prompt = !self.tracker.marker.preexec() && !self.alt() && self.cur.is_some() && typed < 2;
+            let prompt = !self.marker.preexec() && !self.alt() && self.cur.is_some() && typed < 2;
             // A logically shown menu acts on keys only while the render guards let it be seen.
             let shown = prompt && self.menu.intercepting(&self.settings);
             let intercepting = shown && self.drawable();
@@ -1103,8 +1123,8 @@ impl Session {
                             redraw = true;
                         }
                         None => {
-                            if key.code() == KeyCode::Enter && self.tracker.marker.at_prompt() {
-                                self.tracker.marker.set_submitted(self.basis()); // history: the line, not what follows it
+                            if key.code() == KeyCode::Enter && self.marker.at_prompt() {
+                                self.marker.set_submitted(self.basis()); // history: the line, not what follows it
                             }
                             fwd.extend_from_slice(&chunk[ev.bytes()]);
                             typed += usize::from(
@@ -1129,8 +1149,8 @@ impl Session {
                 match e {
                     MenuEffect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
                     MenuEffect::Write(b) => {
-                        if b == b"\r" && self.tracker.marker.at_prompt() {
-                            self.tracker.marker.set_submitted(self.basis()); // `execute`
+                        if b == b"\r" && self.marker.at_prompt() {
+                            self.marker.set_submitted(self.basis()); // `execute`
                         }
                         fwd.extend(b);
                         self.unechoed.clear();
@@ -1158,7 +1178,7 @@ impl Session {
 
     /// Insertion with reconciliation + lock (SPEC §7.3). Dropped while a command runs.
     fn insert(&mut self, ins: &Insertion, record: Option<(String, String)>, fwd: &mut Vec<u8>) {
-        if self.tracker.marker.preexec() {
+        if self.marker.preexec() {
             return;
         }
         let from = self.menu.last().map(|c| (c.buffer().to_string(), c.cursor()));
@@ -1175,7 +1195,7 @@ impl Session {
         if ins.executes() {
             // As for Enter: preferred over a scrape with a transient prompt in front of the line; pre_exec still
             // reads a line the shell rewrote from the screen.
-            self.tracker.marker.set_submitted(Some(expected.clone()));
+            self.marker.set_submitted(Some(expected.clone()));
         }
         let before = self
             .cur
@@ -1784,7 +1804,12 @@ mod tests {
     fn session(json: &str) -> (Session, Receiver<Vec<u8>>) {
         let settings = settings(json);
         let (writer, wrx) = mpsc::channel();
-        let tracker = Tracker::with_defer(SID.into(), Some(Shell::Bash), false);
+        let marker = MarkerTracker::new(
+            SessionId::new(SID.to_string()).unwrap(),
+            Some(Shell::Bash),
+            false,
+        );
+        let screen: Rc<dyn TerminalScreen> = Rc::new(AlacrittyTerminalScreen::for_tests(80, 24));
         let s = Session {
             rx: mpsc::channel().1,
             engine: Rc::new(RecordingCompletionEngine::new(mpsc::channel().0)),
@@ -1792,8 +1817,10 @@ mod tests {
             credits: mpsc::sync_channel(PTY_CREDITS).0,
             master: None,
             modes: sys::Modes::default(),
-            tracker,
-            screen: Rc::new(AlacrittyTerminalScreen::for_tests(80, 24)),
+            splitter: MarkerSplitter::default(),
+            marker,
+            feeder: ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock)),
+            screen,
             menu: Menu::new(),
             themes: Rc::new(InMemoryThemeRepository::default()),
             keymap: Keymap::from_settings(&settings),
@@ -2236,7 +2263,7 @@ mod tests {
         let (mut s, _) = session("{}");
         prompt(&mut s, "echo !");
         s.on_input(b"!\r");
-        assert_eq!(s.tracker.marker.submitted(), Some("echo !!"));
+        assert_eq!(s.marker.submitted(), Some("echo !!"));
         // transient-prompt-execute-insertion-pollutes-history: an insertion that executes (the ↪ row) records the line
         // it builds, not the transient prompt (p10k, oh-my-posh) redrawn without markers in front of it.
         let (mut s, _) = session("{}");
@@ -2244,13 +2271,13 @@ mod tests {
         s.engine = Rc::new(RecordingCompletionEngine::new(tx));
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        s.tracker.marker.set_submitted(Some("stale".into()));
+        s.marker.set_submitted(Some("stale".into()));
         let fx = s.menu.handle(KeyAction::InsertSelectedAndExecute, &s.settings);
         let Some(MenuEffect::Insert { ins, .. }) = fx.into_iter().next() else {
             panic!("no insertion")
         };
         s.insert(&ins, None, &mut Vec::new());
-        assert_eq!(s.tracker.marker.submitted(), Some("git cherry-pick"));
+        assert_eq!(s.marker.submitted(), Some("git cherry-pick"));
         let run = format!("\r\x1b[K\u{276f} git cherry-pick\r\n\x1b]697;OSCLock={SID}\x07\x1b]697;PreExec\x07x\r\n");
         s.on_output(format!("{run}\x1b]697;OSCUnlock={SID}\x07").as_bytes());
         prompt(&mut s, "");
@@ -2348,7 +2375,7 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        s.tracker.marker.set_pwsh_list_view(true);
+        s.marker.set_pwsh_list_view(true);
         assert!(!s.drawable());
         s.sink.clear();
         s.redraw();
@@ -2361,7 +2388,7 @@ mod tests {
         let (mut s, _) = session("{}");
         prompt(&mut s, "");
         s.redraw_until = None;
-        s.tracker.marker.set_pwsh_list_view(true);
+        s.marker.set_pwsh_list_view(true);
         assert!(s.drawable(), "an empty line has no list");
     }
 

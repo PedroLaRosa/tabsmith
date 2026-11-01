@@ -17,7 +17,6 @@ mod shared;
 mod shell_integration;
 mod specs;
 mod terminal_session;
-mod tracker;
 mod types;
 
 fn main() {

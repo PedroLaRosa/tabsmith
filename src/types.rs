@@ -24,6 +24,3 @@ pub fn now_ms() -> u64 {
 pub fn now_secs() -> u64 {
     SystemClock.now_secs()
 }
-
-/// The headless terminal model the wrapper feeds with PTY output (alacritty_terminal, SPEC D4).
-pub type Model = alacritty_terminal::Term<alacritty_terminal::event::VoidListener>;
