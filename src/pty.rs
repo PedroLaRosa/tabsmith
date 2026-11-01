@@ -33,7 +33,6 @@ use crate::terminal_session::domain::value_objects::terminal_background::Termina
 use crate::terminal_session::infrastructure::adapters::kitty_graphics;
 use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
-use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
@@ -432,11 +431,7 @@ impl Session {
     }
 
     fn cwd(&self) -> PathBuf {
-        self.session
-            .tracked_cwd()
-            .map(|p| p.to_path_buf())
-            .or_else(|| self.working_directory.current())
-            .unwrap_or_default()
+        self.use_cases.requester().working_directory_of(&self.session)
     }
 
     fn shell(&self) -> Shell {
@@ -477,27 +472,7 @@ impl Session {
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
     fn refresh(&mut self) {
-        let screen = self.screen.state();
-        let extracted = if screen.alt_screen() {
-            None
-        } else {
-            self.session
-                .tracker()
-                .edit_buffer_context()
-                .and_then(|context| self.screen.edit_buffer(&context))
-        };
-        let Some(query) = self.session.refresh(&screen, extracted, Instant::now()) else {
-            return;
-        };
-        let req = CompletionRequest {
-            id: query.request(),
-            buffer: query.buffer().to_string(),
-            cursor: query.cursor(),
-            cwd: self.cwd(),
-            shell: self.shell(),
-            history_mode: query.history_mode(),
-        };
-        self.engine.complete(req);
+        self.use_cases.requester().refresh(&mut self.session);
     }
 
     fn on_completion(&mut self, c: CompletionResult) {
@@ -721,6 +696,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::completion::application::completion_request::CompletionRequest;
     use std::sync::mpsc::Sender;
     use std::time::Duration;
 
@@ -829,6 +805,23 @@ mod tests {
             }),
         };
         (s, Taps { shell_input, stdout })
+    }
+
+    /// The use cases hold the ports they were built over: a test that swaps a port of the session builds them again.
+    fn rewire_use_cases(s: &mut Session) {
+        s.use_cases = SessionUseCases::new(SessionPortsParts {
+            engine: s.engine.clone(),
+            screen: s.screen.clone(),
+            writer: s.output.clone(),
+            shell: s.pty.clone(),
+            reaper: s.generator_processes.clone(),
+            modes: s.modes.clone(),
+            live_settings: s.live_settings.clone(),
+            session_contexts: s.session_contexts.clone(),
+            themes: s.themes.clone(),
+            working_directory: s.working_directory.clone(),
+            clock: Arc::new(SystemClock),
+        });
     }
 
     /// A bash prompt `$ ` with the integration markers, then `text` echoed.
@@ -1575,6 +1568,7 @@ mod tests {
             let (mut s, pty) = session(settings_json);
             let (calls, engine) = mpsc::channel();
             s.engine = Rc::new(RecordingCompletionEngine::new(calls));
+            rewire_use_cases(&mut s);
             let (inbox, rx) = mpsc::channel();
             let (credits, credit_returns) = mpsc::sync_channel(PTY_CREDITS);
             s.rx = rx;
@@ -1586,6 +1580,7 @@ mod tests {
             self.s.live_settings = Rc::new(LenientLiveSettings::new(Rc::new(JsonFileSettingsRepository::new(
                 DataDirectory::new(Some(temp_dir.path().to_path_buf()), None),
             ))));
+            rewire_use_cases(&mut self.s);
         }
 
         fn sent(&self) -> Vec<u8> {
@@ -2187,6 +2182,7 @@ mod tests {
 
         fn panic_when_the_engine_is_asked(&mut self) {
             self.rig.s.engine = Rc::new(PanickingCompletionEngine);
+            rewire_use_cases(&mut self.rig.s);
         }
 
         fn panic_in_key_handling(&mut self) {

@@ -1,3 +1,4 @@
+pub(crate) mod completion_requester;
 pub(crate) mod frame_input;
 pub(crate) mod overlay_painter;
 pub(crate) mod ports;
