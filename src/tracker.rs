@@ -1037,6 +1037,7 @@ mod tests {
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::term::test::TermSize;
     use alacritty_terminal::term::{Config, Term};
+    use crate::shared::infrastructure::testing::fixture_log::assert_matches_fixture;
 
     const SID: &str = "0123456789abcdef0123456789abcdef";
     const SP: &str = "\x1b]697;StartPrompt\x07";
@@ -2206,5 +2207,168 @@ mod tests {
         assert_eq!(filter(&mut f, b"a\nb\r\n"), b"a\nb\r\n");
         f.lf_to_ind = true;
         assert_eq!(filter(&mut f, b"a\nb\r\n\n"), b"a\x1bDb\r\n\x1bD");
+    }
+
+    // --- Characterisation of the tracker at the start of Phase 9: scripted chunks, frozen text fixtures. ----------
+
+    /// A tracker and its model, built the way the three characterisation scenarios need them.
+    struct TrackerRig {
+        t: Tracker,
+        m: Model,
+    }
+
+    fn tracker_rig(cols: usize, rows: usize, shell: Shell, defer: bool) -> TrackerRig {
+        let (mut t, m) = setup(cols, rows, shell);
+        t.defer = defer;
+        TrackerRig { t, m }
+    }
+
+    /// The hyperlink runs of the model, as ` row<r>:<from>..<to>=<uri>`.
+    fn tags(m: &Model) -> String {
+        use alacritty_terminal::grid::Dimensions;
+        use alacritty_terminal::index::{Column, Line};
+        let mut out = String::new();
+        for r in 0..m.screen_lines() {
+            let mut run: Option<(usize, usize, String)> = None;
+            for c in 0..=m.columns() {
+                let uri = (c < m.columns())
+                    .then(|| {
+                        m.grid()[Line(r as i32)][Column(c)]
+                            .hyperlink()
+                            .map(|h| h.uri().to_string())
+                    })
+                    .flatten();
+                match (&mut run, uri) {
+                    (Some((_, end, u)), Some(n)) if *u == n => *end = c + 1,
+                    (_, n) => {
+                        if let Some((a, b, u)) = run.take() {
+                            out += &format!(" row{r}:{a}..{b}={u}");
+                        }
+                        run = n.map(|u| (c, c + 1, u));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn describe_event(e: &Event) -> String {
+        match e {
+            Event::NewCmd(None) => "NewCmd(None)".into(),
+            Event::NewCmd(Some(h)) => {
+                let p = h.to_primitives();
+                format!(
+                    "NewCmd(command={:?} shell={:?} pid={:?} session_id={:?} cwd={:?} exit_code={:?} hostname={:?} end_time_set={})",
+                    p.command,
+                    p.shell,
+                    p.pid,
+                    p.session_id,
+                    p.cwd,
+                    p.exit_code,
+                    p.hostname,
+                    p.end_time.is_some()
+                )
+            }
+            Event::CommandEnded => "CommandEnded".into(),
+            Event::PreExec => "PreExec".into(),
+        }
+    }
+
+    /// Feeds `chunks` one by one and logs, per chunk: the filtered bytes for the terminal, the events, the cycle
+    /// state, the extract tuple and the hyperlink runs of the model.
+    fn transcript<S: AsRef<str>>(rig: &mut TrackerRig, chunks: &[S]) -> String {
+        let mut log = String::new();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let chunk = chunk.as_ref();
+            let out = feed(&mut rig.t, &mut rig.m, chunk);
+            let events: Vec<String> = std::mem::take(&mut rig.t.events)
+                .iter()
+                .map(describe_event)
+                .collect();
+            let extract = rig
+                .t
+                .extract(&rig.m)
+                .map(|e| (e.buffer, e.cursor, e.shell_ghost, e.at_prompt));
+            log += &format!(
+                "#{i} in={chunk:?}\n  out={}\n  events={events:?}\n  at_prompt={} preexec={} cycle={:?} cwd={:?}\n  extract={extract:?}\n  tags={}\n",
+                out.escape_ascii(),
+                rig.t.at_prompt(),
+                rig.t.preexec,
+                rig.t.cycle,
+                rig.t.cwd,
+                tags(&rig.m)
+            );
+        }
+        log
+    }
+
+    #[test]
+    fn should_filter_and_track_a_bash_cycle_exactly_as_at_the_phase_9_start() {
+        let long = "x".repeat(40);
+        let chunks = [
+            format!("{}{}{}", osc("Shell=bash"), osc("PID=7"), osc("Dir=/work")),
+            prompt("$ "),
+            "ls -la ".to_string(),
+            format!("{long}\x1b[2K"),
+            "\r\n".to_string(),
+            format!(
+                "{}{}hello\x1b]0;title\x07 world\r\n",
+                osc(&format!("OSCLock={SID}")),
+                osc("PreExec")
+            ),
+            "\x1b]697;NoHist".to_string(),
+            "ory\x07".to_string(),
+            precmd(&["ExitCode=3"], "$ "),
+            "\x1b[?2004h\x1b[>4;1m\x1b[?9001h\x1b[=1;1u\x1b[u\x1b[>c\x1b[1;5r\x1b[r".to_string(),
+        ];
+        let mut rig = tracker_rig(30, 8, Shell::Bash, false);
+
+        let log = transcript(&mut rig, &chunks);
+
+        assert_matches_fixture("terminal_session/characterisation/tracker_bash.log", &log);
+    }
+
+    #[test]
+    fn should_defer_windows_markers_in_order_exactly_as_at_the_phase_9_start() {
+        let chunks = [
+            format!("{SP}PS> {EP}{}", nc()),
+            osc("Dir=/x"),
+            "\x1b[?25h".to_string(),
+            "ls".to_string(),
+            format!("\r\n{}", osc("PreExec")),
+            format!("{}{}", osc("NoHistory"), "out\r\n"),
+            format!("{}{SP}PS> {EP}{}", osc(&format!("OSCUnlock={SID}")), nc()),
+            "\x1b[?25h".to_string(),
+            "sleep".to_string(),
+            format!("\r\n{}", osc("PreExec")),
+            format!("{EP}{}{}", nc(), osc("PreExec")),
+            "\x1b[?25h".to_string(),
+        ];
+        let mut rig = tracker_rig(30, 5, Shell::Pwsh, true);
+
+        let log = transcript(&mut rig, &chunks);
+
+        assert_matches_fixture("terminal_session/characterisation/tracker_defer.log", &log);
+    }
+
+    #[test]
+    fn should_track_zsh_colours_and_a_nested_shell_exactly_as_at_the_phase_9_start() {
+        let chunks = [
+            osc("Shell=zsh"),
+            osc("ZshAutosuggestionColor=fg=8"),
+            prompt("% "),
+            "ec".to_string(),
+            "\x1b[90mho hi\x1b[0m\x1b[6D".to_string(),
+            "\r\n".to_string(),
+            format!("{}{}", osc(&format!("OSCLock={SID}")), osc("PreExec")),
+            format!("{}{}", osc("PID=99"), prompt("inner> ")),
+            "exit\r\n".to_string(),
+            format!("{}{}", osc(&format!("OSCUnlock={SID}")), prompt("% ")),
+        ];
+        let mut rig = tracker_rig(40, 6, Shell::Zsh, false);
+
+        let log = transcript(&mut rig, &chunks);
+
+        assert_matches_fixture("terminal_session/characterisation/tracker_zsh.log", &log);
     }
 }
