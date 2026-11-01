@@ -8,6 +8,7 @@ pub(crate) mod marker_reaction;
 pub(crate) mod output_piece;
 pub(crate) mod pwsh_prediction_color;
 pub(crate) mod screen_command;
+pub(crate) mod screen_state;
 pub(crate) mod session_id;
 pub(crate) mod shell_event;
 pub(crate) mod shell_marker;
