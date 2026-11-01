@@ -147,7 +147,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
-| `GhostText` | VO | Gray continuation computed for one buffer: what is still to show after the typed buffer (none when empty or holding a control character), and the next word Alt-f accepts. Which key accepts it is key routing (`ghost_key`, in the pty until Phase 9). | `(String, String)` tuples + `pty::{next_word, ghost_rest}` |
+| `GhostText` | VO | Gray continuation computed for one buffer: what is still to show after the typed buffer (none when empty or holding a control character), and the next word Alt-f accepts. Which key accepts it is key routing (`ghost_key`, in `KeyRouter`). | `(String, String)` tuples + `pty::{next_word, ghost_rest}` |
 | `GhostTextSource` | VO | history, specs, history+specs, or an LLM profile. | `inline::Source` |
 | `LlmProfile` / `LlmProvider` | VO | Provider (`openai`, `anthropic`), model, base URL, API key env var, max tokens, effort; read from an `inline.profiles.<name>` setting, or a reason text when invalid. | `Profile` + `parse_profile`, `Provider`, `cli::provider_name` |
 | `LlmPrompt` | VO | System + user text sent to the provider: the OS, shell and cwd above the privacy-filtered, numbered history. | `SYSTEM` + `history_prompt` output |
@@ -193,31 +193,53 @@ Not in the table: the `*Parts` structs (`ThemeParts`, `MenuLayoutParts`, `FigPal
 | `DropdownError` | Domain error | Settings (printed as itself), data directory, invalid theme file, theme not found. | the `bail!`s of `cli::theme` |
 
 ## terminal_session
-Not in the table: `icon_assets` (the embedded PNGs and the template RGBA; `tinted`, `kitty_image`) and `kitty_graphics` (the transmit/place bytes, `CLEAR_PLACEMENTS`, `detect`), adapters in `infrastructure/adapters/`.
+Not in the table: `icon_assets` (the embedded PNGs and the template RGBA; `tinted`, `kitty_image`) and `kitty_graphics` (the transmit/place bytes, `CLEAR_PLACEMENTS`, `detect`), adapters in `infrastructure/adapters/`; `EditBufferExtractor` (`edit_buffer_extractor.rs`) and `CellTagger` (`cell_tagger.rs`), the free functions that read the command line off the model and tag its cells; `headless_model` (the alias of the alacritty model); `DeferredMarker` and `LockSettlement` (return types of `MarkerTracker` and `InsertionLock`); `InMemory`/`Recording`/`Capturing` doubles of the ports; `TerminalSessionHarness` (`application/test_fixtures.rs`, the test arrangement every use-case test shares); `FrameInput` is a DTO of the application layer; and the `*Parts` structs (`TerminalSessionParts`, `EditBufferContextParts`, `ScreenStateParts`, `KeyFactsParts`, `SessionPortsParts`, `SessionRunnerParts`, `ProcessShellOutputParts`: named fields for a constructor that would otherwise take many parameters).
 
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
 | `KeyEvent` | VO | A decoded `Key` with the byte range of the stdin chunk it came from; every byte of a chunk belongs to exactly one event. | `keys::KeyEvent` |
-| `StdinKeyDecoder` | Adapter | Decodes stdin bytes (UTF-8, `ESC`, SS3, CSI, bracketed paste) into `KeyEvent`s; keeps only the paste state between chunks. | `keys::Decoder`, `decode*` |
-| `OverlayRenderer` / `FrameInput` | Adapter / DTO | Draws the menu, description and ghost over the alacritty model as bytes, and the clear that restores the cells; the per-frame inputs (`FrameInput` stays in the renderer's file until Phase 9). | `render::{Renderer, FrameInput}` |
+| `KeyDecoder` | Entity | Decodes stdin bytes (UTF-8, `ESC`, SS3, CSI, bracketed paste) into `KeyEvent`s; keeps only the paste state between chunks; reset when keys are held. | `StdinKeyDecoder` (the Phase 8 adapter), `keys::Decoder` |
+| `OverlayRenderer` / `FrameInput` | Adapter / DTO | Draws the menu, description and ghost over the alacritty model as bytes, and the clear that restores the cells / the per-frame inputs, with the instant the spinner is judged at (an application DTO, `application/frame_input.rs`). | `render::{Renderer, FrameInput}` |
 | `KittyImage` / `KittyPixels` | Adapter type | The id and the PNG or RGBA bytes of one icon, as the kitty graphics protocol transmits them. | `icons::{Image, Source}` |
-| `TerminalSession` | Aggregate | The wrapper's view of the running shell: request counter, menu, insertion lock, echo hold, ghost, timers, exit state. | `pty::Session` (minus plumbing) |
-| `SessionId` | VO | Session identifier shared with the shell scripts: the `TABSMITH_SESSION_ID` the wrapper exports and the `run/<id>.json` file name. Valid when non-empty and made only of ASCII letters, digits, `-` and `_`, exactly what `_ pre-cmd` accepts; not narrowed to the hex ids the wrapper generates (D1). | `session_id()` + the `_ pre-cmd` id filter |
+| `TerminalSession` | Aggregate | The wrapper's view of the running shell: the latest request, the menu, the insertion lock, the echo hold, the ghost texts, the timers, the exit state; owns the `MarkerTracker`, the `MarkerSplitter` and the `KeyDecoder`. It decides and never acts: time and screen facts come in, values go out. | `pty::Session` (minus plumbing) |
+| `SessionId` | VO | + `from_entropy(nanos, pid)`: 32 lowercase hex digits, the shape the shell scripts echo in `NewCmd=`. | `session_id()` |
 | `SessionContext` | Entity | The env (UTF-8 entries only) and alias text a shell last reported through `_ pre-cmd`, stamped with the report time in ms. Identity `SessionId` (the file name, not a field of the file). An empty env means 'use the wrapper's env'; an empty alias text means no aliases. | `types::SessionCtx` |
 | `MarkerSplitter` | Entity | Stateful splitter of PTY bytes into output and OSC 697 markers. | `tracker::Splitter` |
-| `ShellMarker` / `OutputPiece` | VO | A parsed OSC 697 marker; bytes / marker / window name. | marker strings, `Piece` |
-| `MarkerTracker` | Entity | Prompt/command cycle from markers: cwd, shell, pid, exit code, integration lock, pending commands, deferral. | `tracker::Tracker` state |
-| `ShellEvent` | VO | NewCommand(Option<HistoryEntry>), CommandEnded, PreExec. | `tracker::Event` |
-| `EditBuffer` | VO | Command-line text, cursor, at-prompt flag, shell-autosuggestion flag. | `Extracted` |
+| `ShellMarker` / `OutputPiece` | VO | A parsed OSC 697 marker (total parse; each key keeps its own trimming; `Ignored` for empty values, unknown keys and the keys that set nothing) / what the splitter cuts a PTY batch into: bytes, a marker string, a window name. | marker strings, `Piece` |
+| `MarkerTracker` | Entity | Prompt/command cycle from markers: cwd, shell, pid, exit code, integration lock, pending commands, deferral. Driven by the application: it takes the parsed marker, the cursor column and the wall-clock seconds, and answers with `MarkerEffects`. | `tracker::Tracker` state |
+| `MarkerEffects` / `MarkerReaction` | VO | What one tracker step asks of its caller: the screen commands to apply now, in order, and the events to hand on after the batch / `Handled`, or `EditBufferNeeded` (the `PreExec` handshake). | |
+| `ShellEvent` | VO | `NewCommand(Option<HistoryEntry>)`, `CommandEnded`, `PreExec`. | `tracker::Event` |
+| `EditBuffer` | VO | + private fields; `cursor` is a byte offset; `at_prompt` means the cursor is on the command line, not `MarkerTracker::at_prompt`. | `Extracted` |
+| `EditBufferContext` | VO | What reading the command line off the screen needs of the tracker (open cycle, shell, line start, list view, pwsh prompts, three colours), borrowed. | the `Tracker` fields `extract` read |
 | `ShellSuggestionColor` | VO | Colours the shell uses for its own autosuggestion. | `SuggestionColor` |
-| `ScreenCommand` | VO | Tag cells from the cursor, clear tag, mark line start. | inline `tag` / `mark_line_start` calls |
-| `ScreenState` | VO | Alt screen, origin/insert mode, pending wrap, size, scroll region, in-string. | ad-hoc reads in `suppressed` / `drawable` |
+| `PwshPredictionColor` / `TextEmphasis` | VO | PSReadLine's reported prediction colour and the dim/italic it requires. | `(SuggestionColor, Flags)` |
+| `CellTag` | VO | Which cells are the prompt or the command line of cycle `n`: the `tabsmith:p` / `tabsmith:c{n}` URIs. | `TAG_PROMPT`, `format!("tabsmith:c{n}")` |
+| `ScreenCommand` | VO | `Tag(CellTag)`, `ClearTag`, `MarkLineStart { redrawn_cycle }`. | inline `tag` / `mark_line_start` calls |
+| `ScreenState` | VO | A fresh `Copy` snapshot of what the render guards read: alternate screen, origin and insert mode, pending wrap, size, scroll region, open string. | ad-hoc reads in `suppressed` / `drawable` |
+| `GhostCandidates` | Entity | The local and the LLM ghost text, the LLM request id and its debounce deadline. | `ghost`, `llm`, `llm_req`, `llm_at` |
+| `ResizeDebounce` | Entity | The quiet spell after a resize and the pending repaint (SPEC 7.6). | `resize_at`, `repaint` |
+| `ShellExit` | Entity | Exit code, end of the output, the exit grace. | `exit_code`, `eof`, `exit_at` |
+| `ReloadWatch` | Entity | When the settings and session-context files are looked at and the modification times seen. | `poll_at`, `settings_mtime`, `session_mtime` |
 | `InsertionLock` | Entity | Hold the menu until the shell echoes an insertion (deadline, cap, expected buffer). | `lock` tuple |
 | `EchoHold` | Entity | Typeahead not yet echoed + keys held until a reply arrives. | `unechoed`, `echo_pending`, `held` |
-| `KeyRoute` | VO | Decision for one keystroke: forward, menu action, accept ghost, … | branches of `on_keys` |
-| `WrappedShellCommand` | VO | argv + env changes for the child shell. | `pty::argv` + env setup |
-| `TerminalBackground` | VO | Background colour reported by OSC 11 (for the `system` theme). | `terminal_bg` |
+| `KeyRoute` / `KeyFacts` | VO | `Hold`, `MenuAction`, `Swallow`, `ShowOnTab`, `AcceptGhost`, `Forward` / what the router needs besides the key. | branches of `on_keys` |
+| `CompletionQuery` | VO | What a refreshed line asks of the engine (request id, buffer, byte cursor, history mode); the service adds directory and shell. | the `CompletionRequest` literal |
+| `KeyRouter` / `RenderGuard` / `SessionDeadlines` / `InsertionReconciler` | Domain service | Routes one key / whether the screen allows drawing / the nearest wake-up and the timer durations / the bytes and the expected buffer of an insertion. | `on_keys` arms, `drawable`, `next_deadline`, `insertion_bytes` |
+| `WrappedShellCommand` | VO | The wrapped launch: argv, the five env changes of a session, the window title. | `pty::argv` + env setup |
+| `TerminalBackground` | VO | A thin newtype over dropdown's `Rgb`: the background colour OSC 11 reported. | `terminal_bg` |
 | `CompletionEngine` | Port | What the terminal session asks of completion: complete, a finished or ended command, an inserted suggestion, an LLM ghost text, settings, the session context, the fuzzy toggle, shut down. Never fails. | `Sender<EngineMsg>` in `pty.rs` |
+| `TerminalScreen` | Port | The wrapper's mirror of the real terminal: pass shell output through the model and the filter, tag cells, read the command line and the render-guard state, resize, draw and clear the overlay. | `term`, `renderer`, `tracker.filter` |
+| `TerminalWriter` / `WrappedShell` | Port | The user's terminal (stdout) / the wrapped shell's input and window size. | `emit`, `write_stdout`, `sink` / `writer`, `master` |
+| `GeneratorProcessReaper` / `TerminalModes` | Port | Kills generator processes still running at the end / restores the terminal modes. | `kill_live_children` / `modes.restore` |
+| `LiveSettings` (`LenientLiveSettings`) | Port | The settings a running session follows: the file's modification time and the lenient load (defaults and a warning when they cannot be loaded). | `load_or_defaults`, `settings_mtime` |
+| `WorkingDirectory` (`ProcessWorkingDirectory`) | Port | The wrapper process's own directory, read at every request. | `std::env::current_dir()` in `Session::cwd` |
+| `AlacrittyTerminalScreen` / `OutputFilter` | Adapter | The headless alacritty model (2000 lines of scrollback), its long-lived parser, the output filter and the session's ONE overlay renderer / filters the bytes written to the real terminal (keyboard-protocol upgrades, scroll region, open strings, held UTF-8). | `types::Model` + `Tracker::{proc, filter}` / `OutFilter` |
+| `StdoutTerminalWriter`, `PtyWrappedShell`, `ConsoleTerminalModes`, `GeneratorProcessBridge` (bootstrap) | Adapter | The port implementations. | |
+| `ShellOutputFeeder` | Application service | Feeds one PTY batch through the splitter, the tracker and the screen in stream order and returns the events. | `Tracker::feed` |
+| `KeystrokeHandler` / `CompletionRequester` / `OverlayPainter` / `SessionFilePoller` | Application service | The key loop and the replay of held keys / the edit-buffer refresh and the request / drawing, redrawing and repainting the overlay / reloading settings and the session context. Shared by several use cases; never use cases themselves. | `on_keys`+`release_held` / `refresh` / `frame`+`redraw`+`take_repaint` / `poll_files` |
+| `HandleKeystrokesUseCase`, `ProcessShellOutputUseCase`, `ApplyCompletionResultUseCase`, `ApplyLlmGhostTextUseCase`, `ResizeTerminalUseCase`, `HandleShellExitUseCase`, `HandleTimerTickUseCase`, `ApplyTerminalBackgroundUseCase`, `EndSessionUseCase`, `PrepareSessionLaunchUseCase` | Use case | One per event of the session (table in plan section 4, amended). | `Session::on_*`, `step`, `cleanup`, `run`'s resolution |
+| `ShellEnd` / `LaunchRequest` / `LaunchEnvironment` / `SessionPortsParts` | DTO | How a shell ended / what the launch resolves a shell from / the env facts / the runtime ports one session runs on. | |
+| `SessionRunner` / `SessionMessage` | Adapter (driver) | The event loop, the panic pass-through and the batching / the messages of its one inbox. | `pty::Session` (driver half) / `types::Msg` |
 
 ## diagnostics
 | Term | Kind | Meaning | Replaces |
@@ -239,6 +261,9 @@ Not in the table: `icon_assets` (the embedded PNGs and the template RGBA; `tinte
 | ghost | `GhostText` (ours) · shell autosuggestion (zsh/fish/PSReadLine's own) |
 | history | `HistoryEntry` / `HistoryRepository` (store) · `SuggestionKind::History` (rows) · history mode (Ctrl-R in `Menu`) |
 | session | `TerminalSession` · `SessionContext` · `SessionId` · `CompletionSession` |
+| at prompt | `MarkerTracker::at_prompt` (a command cycle is open and no command runs) · `EditBuffer::at_prompt` (the cursor is on the command line, not in an inline TUI's rows) |
+| shell | the launched shell (`launched_shell`: the program the wrapper spawns) · the tracker's `Shell` (what the prompt reported with `Shell=`; it wins once known and can be `None`) |
+| screen | the real terminal · the model (the headless alacritty `Term`) · `TerminalScreen` (the port over the model, the filter and the renderer) |
 | suggestion | `SpecSuggestion` (declared) · `SuggestionCandidate` (pipeline) · `Suggestion` (shown) |
 | completion | the module/feature · `CompletionResult` (one reply) |
 | host / pump | gone. `QuickJsSpecRuntime` replaces the js Host, which becomes its task registry; `SpecRepository` + `SpecRuntime` replace the parser `Host` trait. `EngineInbox` (`bootstrap/engine_inbox.rs`) implements `RuntimeEventSource`; the `EngineServer` reads `EngineMessage`s from it, which `ChannelCompletionEngine` sends for the pty. The pumps become `pty_reader`, `ProgressGeneratorsUseCase` + `GeneratorRunner`, and runtime internals. |
