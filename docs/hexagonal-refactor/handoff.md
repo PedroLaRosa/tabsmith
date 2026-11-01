@@ -171,6 +171,6 @@ plan's section 9 "Phase 9 notes". Phase 8's O1-O8 are in the Phase 8 notes.
   (728 lines), the query-named methods that mutate, plus Phase 8's list. `#![allow(dead_code)]` stays in `main.rs` until
   Phase 11, and `LEGACY_MODULES` keeps every dead name.
 - Commit `7a81d7f` (8.5a) alone has 4 clippy warnings; `5783c4b` fixes it, so a bisect landing on `7a81d7f` sees a red gate.
-- `session_runner/tests.rs` is 771 lines and `launch_session` about 150 body lines (a line-for-line port by design); neither
+- `session_runner/tests.rs` is 800 lines and `launch_session` about 150 body lines (a line-for-line port by design); neither
   is split.
 - rust-analyzer reports errors from half-edited files while a workflow runs: trust only cargo and the gate.

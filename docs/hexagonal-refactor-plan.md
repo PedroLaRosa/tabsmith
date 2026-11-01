@@ -130,7 +130,7 @@ pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) 
    `std`/`core`/`alloc`/`unicode_width`, or `println!`/`eprintln!`/`logger::`;
 2. a file in `*/application/` that uses `::infrastructure`, `crate::bootstrap`, a legacy flat module, or external crates
    (same allow-list);
-3. a module other than `bootstrap` that references another module's use case (a `*_use_case` file or `*UseCase` type
+3. a module other than `bootstrap` that references another module's use case (a `*_use_case`/`*_use_cases` file or `*UseCase`/`*UseCases` type
    segment anywhere under it, so a module root or legacy shim re-exporting it under its own name is caught too) or its
    `::infrastructure`; a use case re-exported under another name, an `as` rename, a `super::` path and an adapter
    re-exported by a legacy file or a legacy module root still pass;
@@ -1044,7 +1044,7 @@ which cites the code behind each):
   crate an `extern crate .. as ..` line links. Its second round added rule 8 (`#[path]`, `include!`, `#[macro_export]`
   and `#[macro_use]`). The checker reads only the registered modules and `src/main.rs`, so a macro exported from
   bootstrap or a legacy file still passes, as do `#[cfg_attr(.., path = ..)]` and a space after `#[` or before
-  `!`. Rule 3 flags only another module's use cases (a `*_use_case` file or a `*UseCase` type, on any path under it
+  `!`. Rule 3 flags only another module's use cases (a `*_use_case(s)` file or a `*UseCase(s)` type, on any path under it
   since Phase 5) and `infrastructure` paths, so it cannot see the `IntegrationInstaller` application service;
   legacy `doctor.rs` builds one (P14), so Phase 10 greps diagnostics for it by hand. The rules still do not check
   the `anyhow` rule: at the end of Phase 4 a grep finds it in shell_integration only in `infrastructure/cli` and test
@@ -1787,7 +1787,7 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
   Run 6: 9.6d (`git mv src/pty.rs src/terminal_session/infrastructure/pty/session_runner.rs`; `Session` became
   `SessionRunner`), 9.6e (`probe_terminal`, `run_pty_session`, `launch_session`), 9.6f (the tests moved, the legacy fixture
   deleted, five comments repointed) and this close. The interim composites (the legacy `Tracker` 9.1e-9.2f, the aggregate's
-  `pub(crate)` fields 9.3g-9.3i, the `Session` delegates and the accessors that served them, `src/pty.rs` itself) are all gone;
+  `pub(crate)` fields 9.3g-9.3i, the `Session` delegates, `src/pty.rs` itself) are all gone; the four `#[cfg(test)]` accessors of `SessionUseCases` stay (see As built);
   no `pub(crate) use` exists at any commit (R4; grep B6).
 - **Tracker** (deviations 4, 5, 7, 18, 19): `MarkerTracker::on_marker(marker, cursor_column, now_secs)` answers with
   `MarkerEffects` or `MarkerReaction::EditBufferNeeded` (a `PreExec` takes two calls: `complete_pre_exec` finishes it),
@@ -1839,10 +1839,10 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
     builds a `SessionId` straight from `SessionId::from_entropy`.
   - 9.6f swapped the order of the brief's first two commits (`57b564b` moved the scenarios to the use cases before
     `a1d3cd8` moved the runner tests), because two modules named `tests` could not coexist in `session_runner.rs`.
-    `SessionPortsParts` derives `Clone` in production code for the sake of the harness (the harness keeps its ports and
+    `SessionPortsParts` derives `Clone` under `cfg_attr(test)` for the sake of the harness (the harness keeps its ports and
     swaps one with `rewire`); `application/test_fixtures.rs` also holds `ScenarioLog`, `describe_engine_call` and
     `use_cases_over(ports)`, the one place tests build `SessionUseCases`. The runner's own fixture swaps the harness's
-    shell for a channel-backed `PtyWrappedShell`. `session_runner/tests.rs` is 771 lines (driver tests, loop tests,
+    shell for a channel-backed `PtyWrappedShell`. `session_runner/tests.rs` is 800 lines (driver tests, loop tests,
     scenarios 11, 12 and 14 in one file).
   - Both rigs write `assert_matches_fixture(&format!("terminal_session/characterisation/{fixture}.log"), ..)` in their
     `finish`; the helper cannot move into `test_fixtures.rs` without a `shared::infrastructure` import the architecture test
@@ -1967,7 +1967,7 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
     itself (728 lines: `route_key`, `insert` and `forward_key` could become a keystroke-specific domain object), the
     query-looking methods that mutate (`ReloadWatch::poll_due`, `context_changed`, `settings_changed`,
     `ShellExit::output_ended` and the aggregate's forwarders: `take_due_poll`, `note_context_time`, `note_settings_time`,
-    `note_output_ended` are candidate names), the 771-line `session_runner/tests.rs` and the 150-line body of
+    `note_output_ended` are candidate names), the 800-line `session_runner/tests.rs` and the 150-line body of
     `launch_session` (a line-for-line port by design). The architecture test does not forbid std I/O, env, clock, threads
     in domain or application; `phase9-greps.sh` (B8, B13-B17) checks them by hand. A module-edge rule
     (`ALLOWED_EDGES`; about 60 lines and four tests of checker code) would turn section 2 into a test; the production
