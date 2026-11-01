@@ -21,6 +21,7 @@ use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes, unechoed_after};
+use crate::terminal_session::domain::services::key_router::{ghost_key, is_ctrl};
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
@@ -159,25 +160,6 @@ fn fallback(err: &anyhow::Error, argv: &[String]) -> i32 {
     };
     eprintln!("tabsmith: could not start {}: {err}", argv[0]);
     1
-}
-
-/// Ghost accept keys (SPEC §8.3): `Some(true)` = whole ghost, `Some(false)` = next word.
-fn ghost_key(k: &Key) -> Option<bool> {
-    let m = k.modifiers();
-    let plain = m == Modifiers::default();
-    let ctrl = m == Modifiers::none().with_ctrl(true);
-    let alt = m == Modifiers::none().with_alt(true);
-    match k.code() {
-        KeyCode::Right | KeyCode::End if plain => Some(true),
-        KeyCode::Char('f' | 'F' | 'e' | 'E') if ctrl => Some(true),
-        KeyCode::Char('f') if alt => Some(false),
-        KeyCode::Right if ctrl => Some(false),
-        _ => None,
-    }
-}
-
-fn is_ctrl(k: &Key, c: char) -> bool {
-    k.modifiers().ctrl() && matches!(k.code(), KeyCode::Char(x) if x.eq_ignore_ascii_case(&c))
 }
 
 fn session_id() -> String {
@@ -1211,18 +1193,6 @@ mod tests {
             s(&["vim", "-u"])
         );
         assert!(argv(None, &[], false).is_empty());
-    }
-
-    #[test]
-    fn ghost_keys_and_words_keys() {
-        let k = |code, mods| Key::new(code, mods);
-        let ctrl = Modifiers::none().with_ctrl(true);
-        let alt = Modifiers::none().with_alt(true);
-        assert_eq!(ghost_key(&k(KeyCode::Right, Modifiers::default())), Some(true));
-        assert_eq!(ghost_key(&k(KeyCode::Char('e'), ctrl)), Some(true));
-        assert_eq!(ghost_key(&k(KeyCode::Char('f'), alt)), Some(false));
-        assert_eq!(ghost_key(&k(KeyCode::Right, ctrl)), Some(false));
-        assert_eq!(ghost_key(&k(KeyCode::Tab, Modifiers::default())), None);
     }
 
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
