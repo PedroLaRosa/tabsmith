@@ -12,11 +12,16 @@ use crate::ghost_text::infrastructure::inline_command_module::{
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::cli::settings_command::{run_settings_command, SettingsArgs};
 use crate::settings::infrastructure::settings_module::build_settings_module;
+use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::terminal_style::epaint;
+use crate::shell_integration::application::render_init_script_use_case::RenderInitScriptUseCase;
+use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
+use crate::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
+use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
 use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
-use crate::shell_integration::infrastructure::cli::init_command::{run_init_command, InitArgs, ShellArg};
+use crate::shell_integration::infrastructure::cli::init_command::{init_script, run_init_command, InitArgs, ShellArg};
 use crate::shell_integration::infrastructure::cli::integrations_command::{run_integrations_command, IntegrationsCmd};
 use crate::shell_integration::infrastructure::cli::setup_command::{run_setup_command, SetupArgs};
 use crate::shell_integration::infrastructure::cli::should_launch_command::run_should_launch_command;
@@ -25,6 +30,7 @@ use crate::shell_integration::infrastructure::shell_integration_module::{
     build_shell_integration_module, ShellIntegrationModule,
 };
 use crate::specs::infrastructure::specs_module::build_specs_module;
+use crate::terminal_session::infrastructure::cli::debug_shell_command::run_debug_shell_command;
 use crate::terminal_session::infrastructure::cli::key_tester_command::run_key_tester_command;
 use crate::terminal_session::infrastructure::cli::pre_cmd_command::run_pre_cmd_command;
 use crate::terminal_session::infrastructure::cli::pty_command::run_pty_command;
@@ -163,7 +169,9 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         Some(Command::Completion(a)) => completion(a),
         Some(Command::Debug(c)) => match c {
             DebugCmd::KeyTester => run_key_tester_command(),
-            DebugCmd::Shell { shell } => cli::debug_shell(shell.map(Into::into), &terminal_session_module()),
+            DebugCmd::Shell { shell } => {
+                run_debug_shell_command(shell.map(Into::into), &terminal_session_module(), debug_shell_post_script)
+            }
             DebugCmd::Logs => cli::debug_logs(),
         },
         Some(Command::Internal(c)) => match c {
@@ -188,6 +196,16 @@ pub(crate) fn terminal_session_module() -> TerminalSessionModule {
         Rc::new(GeneratorProcessBridge),
         start_completion_engine,
     )
+}
+
+/// The debug shell's post-integration script, rendered for the shell it starts.
+pub(crate) fn debug_shell_post_script(shell: Shell) -> Result<String> {
+    init_script(
+        &RenderInitScriptUseCase::new(Rc::new(OsShellEnvironment), Rc::new(EmbeddedShellScripts)),
+        shell,
+        IntegrationPhase::Post,
+    )
+    .map_err(Into::into)
 }
 
 /// The inline command's module over the settings file the environment names (resolved when a command needs it).

@@ -1,6 +1,8 @@
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::shared::application::ports::clock::Clock;
+use crate::shared::domain::shared_error::SharedError;
+use crate::shared::domain::value_objects::data_directory::DataDirectory;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
 use crate::terminal_session::application::ports::live_settings::LiveSettings;
@@ -11,6 +13,7 @@ use crate::terminal_session::infrastructure::adapters::file_session_context_repo
 use crate::terminal_session::infrastructure::adapters::lenient_live_settings::LenientLiveSettings;
 use crate::terminal_session::infrastructure::adapters::process_working_directory::ProcessWorkingDirectory;
 use crate::terminal_session::infrastructure::pty::completion_engine_starter::CompletionEngineStarter;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -25,6 +28,7 @@ pub(crate) struct TerminalSessionModule {
     session_contexts: Rc<dyn SessionContextRepository>,
     start_completion_engine: CompletionEngineStarter,
     clock: Arc<dyn Clock + Send + Sync>,
+    data_directory: DataDirectory,
 }
 
 /// Only builds: the run file's path is resolved when a context is saved, so an unknown home fails only then.
@@ -50,6 +54,7 @@ pub(crate) fn build_terminal_session_module(
         session_contexts,
         start_completion_engine,
         clock: dependencies.clock.clone(),
+        data_directory: dependencies.data_directory.clone(),
     }
 }
 
@@ -81,6 +86,11 @@ impl TerminalSessionModule {
     pub(crate) fn clock(&self) -> Arc<dyn Clock + Send + Sync> {
         self.clock.clone()
     }
+
+    /// The root of the data directory, resolved now: fails when the environment names no home.
+    pub(crate) fn locate_data_root(&self) -> Result<PathBuf, SharedError> {
+        self.data_directory.root()
+    }
 }
 
 #[cfg(test)]
@@ -90,7 +100,6 @@ mod tests {
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::settings::domain::value_objects::settings::Settings;
     use crate::shared::application::ports::clock::FixedClock;
-    use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::terminal_session::application::ports::completion_engine::{CompletionEngine, RecordingCompletionEngine};
     use crate::terminal_session::application::ports::generator_process_reaper::RecordingGeneratorProcessReaper;
@@ -133,6 +142,38 @@ mod tests {
         assert_eq!(
             (saved.alias(), saved.reported_at_ms()),
             (Some("ll='ls -l'"), 7)
+        );
+    }
+
+    fn module_built_over(data_directory: DataDirectory) -> TerminalSessionModule {
+        build_terminal_session_module(
+            &SharedDependencies {
+                data_directory,
+                clock: Arc::new(FixedClock::new(7)),
+            },
+            Rc::new(InMemorySettingsRepository::default()),
+            Rc::new(InMemoryThemeRepository::default()),
+            Rc::new(RecordingGeneratorProcessReaper::new()),
+            start_recording_completion_engine,
+        )
+    }
+
+    /// The debug shell writes its rc files under this root; an unknown home fails with today's message.
+    #[test]
+    fn should_locate_the_data_root_of_the_data_directory_it_was_built_with() {
+        let temp_dir = TempDir::new("session-module-root");
+        let located = module_built_over(DataDirectory::new(Some(temp_dir.path().to_path_buf()), None));
+        let homeless = module_built_over(DataDirectory::new(None, None));
+
+        let found = located.locate_data_root().unwrap();
+        let missing = homeless.locate_data_root().unwrap_err();
+
+        assert_eq!(
+            (found, missing.to_string()),
+            (
+                temp_dir.path().to_path_buf(),
+                "could not determine the home directory (set HOME or TABSMITH_HOME)".to_string()
+            )
         );
     }
 }
