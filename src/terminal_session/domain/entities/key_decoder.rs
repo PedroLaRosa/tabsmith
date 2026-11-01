@@ -5,10 +5,10 @@ use crate::dropdown::domain::value_objects::modifiers::Modifiers;
 use crate::terminal_session::domain::value_objects::key_event::KeyEvent;
 
 /// Split a stdin chunk into keys (SPEC §7.2.1). Every byte belongs to exactly one event.
-/// Stateless: a paste longer than the chunk ends the chunk as `Paste`; use [`StdinKeyDecoder`] to carry it over.
+/// Stateless: a paste longer than the chunk ends the chunk as `Paste`; use [`KeyDecoder`] to carry it over.
 #[cfg(test)]
 pub(crate) fn decode(chunk: &[u8]) -> Vec<KeyEvent> {
-    StdinKeyDecoder::default().decode(chunk)
+    KeyDecoder::default().decode(chunk)
 }
 
 const PASTE_START: &[u8] = b"\x1b[200~";
@@ -16,12 +16,17 @@ const PASTE_END: &[u8] = b"\x1b[201~";
 
 /// Stateful [`decode`]: a bracketed paste split across reads stays opaque (`Paste`) until `ESC[201~`.
 #[derive(Default)]
-pub(crate) struct StdinKeyDecoder {
+pub(crate) struct KeyDecoder {
     /// Inside a paste: how many bytes of `ESC[201~` matched so far.
     paste: Option<usize>,
 }
 
-impl StdinKeyDecoder {
+impl KeyDecoder {
+    /// A held chunk is decoded again from its start, outside a paste.
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
     pub(crate) fn decode(&mut self, chunk: &[u8]) -> Vec<KeyEvent> {
         let mut out = Vec::new();
         let mut i = 0;
@@ -335,7 +340,7 @@ mod tests {
 
     #[test]
     fn paste_across_chunks() {
-        let mut d = StdinKeyDecoder::default();
+        let mut d = KeyDecoder::default();
         let a = d.decode(b"q\x1b[200~line1\r");
         assert_eq!(
             a.iter().map(|e| e.key().code()).collect::<Vec<_>>(),

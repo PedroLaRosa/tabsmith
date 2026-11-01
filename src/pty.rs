@@ -45,7 +45,7 @@ use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
 use crate::terminal_session::infrastructure::adapters::kitty_graphics;
 use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
-use crate::terminal_session::infrastructure::adapters::stdin_key_decoder::StdinKeyDecoder;
+use crate::terminal_session::domain::entities::key_decoder::KeyDecoder;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
@@ -181,7 +181,7 @@ struct Session {
     themes: Rc<dyn ThemeRepository>,
     keymap: Keymap,
     /// Kept across stdin reads: a bracketed paste split over several reads stays one opaque unit (SPEC §7.2.1).
-    decoder: StdinKeyDecoder,
+    decoder: KeyDecoder,
     settings: Settings,
     settings_repository: Box<dyn SettingsRepository>,
     settings_mtime: Option<SystemTime>,
@@ -371,7 +371,7 @@ impl Session {
             menu,
             themes,
             keymap,
-            decoder: StdinKeyDecoder::default(),
+            decoder: KeyDecoder::default(),
             settings_mtime: settings_repository.last_modified(),
             settings_repository,
             settings,
@@ -912,7 +912,7 @@ impl Session {
                 // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
                 self.held.extend_from_slice(&chunk[ev.bytes().start..]);
                 self.held_at = Some(Instant::now() + INSERT_LOCK);
-                self.decoder = StdinKeyDecoder::default(); // held bytes start outside a paste and are decoded again
+                self.decoder.reset(); // held bytes start outside a paste and are decoded again
                 break;
             }
             let effects = match binding {
@@ -1192,7 +1192,7 @@ mod tests {
             menu: Menu::new(),
             themes: Rc::new(InMemoryThemeRepository::default()),
             keymap: Keymap::from_settings(&settings),
-            decoder: StdinKeyDecoder::default(),
+            decoder: KeyDecoder::default(),
             settings,
             settings_repository: Box::new(InMemorySettingsRepository::default()),
             settings_mtime: None,
