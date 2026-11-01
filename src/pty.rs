@@ -6,8 +6,11 @@ use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::terminal_session::application::frame_input::FrameInput;
+use crate::terminal_session::application::ports::live_settings::LiveSettings;
+use crate::terminal_session::application::ports::terminal_modes::TerminalModes;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::ports::terminal_writer::TerminalWriter;
+use crate::terminal_session::application::ports::working_directory::WorkingDirectory;
 use crate::terminal_session::application::ports::wrapped_shell::WrappedShell;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
@@ -16,11 +19,10 @@ use crate::terminal_session::domain::services::key_router::plain_char;
 use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
+use crate::terminal_session::infrastructure::adapters::console_terminal_modes::ConsoleTerminalModes;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
 use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::PtyWrappedShell;
 use crate::terminal_session::infrastructure::adapters::stdout_terminal_writer::StdoutTerminalWriter;
-use crate::settings::domain::repositories::settings_repository::SettingsRepository;
-use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::shared::domain::value_objects::shell::Shell;
@@ -110,14 +112,16 @@ struct Session {
     pty: Rc<PtyWrappedShell>,
     /// The user's terminal.
     output: Rc<dyn TerminalWriter>,
-    modes: sys::Modes,
+    modes: Rc<dyn TerminalModes>,
     /// The model, the filter and the renderer of the session, behind the screen port.
     screen: Rc<dyn TerminalScreen>,
     /// Drives the splitter, the marker tracker and the screen over one PTY batch.
     feeder: ShellOutputFeeder,
     /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
     themes: Rc<dyn ThemeRepository>,
-    settings_repository: Rc<dyn SettingsRepository>,
+    live_settings: Rc<dyn LiveSettings>,
+    /// The directory the wrapper runs in, for a request the shell has not reported a directory for.
+    working_directory: Rc<dyn WorkingDirectory>,
     session_contexts: Rc<dyn SessionContextRepository>,
     /// Kills the generators still running when the session ends.
     generator_processes: Rc<dyn GeneratorProcessReaper>,
@@ -127,7 +131,7 @@ struct Session {
 
 impl Session {
     /// SPEC §4.4 steps 1–9. `modes` receives the saved terminal modes as soon as they change.
-    fn start(command: &WrappedShellCommand, modes: &mut Option<sys::Modes>, module: &TerminalSessionModule) -> Result<Session> {
+    fn start(command: &WrappedShellCommand, modes: &mut Option<Rc<dyn TerminalModes>>, module: &TerminalSessionModule) -> Result<Session> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             bail!("stdin/stdout is not a terminal");
         }
@@ -135,10 +139,11 @@ impl Session {
             .program()
             .context("no shell to run (set SHELL or pass --shell)")?;
         let output: Rc<dyn TerminalWriter> = Rc::new(StdoutTerminalWriter);
-        let settings_repository = module.settings_repository();
-        let settings = load_or_defaults(&*settings_repository);
-        let (m, lf_to_ind) = sys::enter()?;
-        *modes = Some(m);
+        let live_settings = module.live_settings();
+        let settings = live_settings.load();
+        let (saved_modes, lf_to_ind) = sys::enter()?;
+        let terminal_modes: Rc<dyn TerminalModes> = Rc::new(ConsoleTerminalModes::new(saved_modes));
+        *modes = Some(terminal_modes.clone());
         let (cols, rows) = crossterm::terminal::size().context("terminal size")?;
         let (cols, rows) = (cols.max(1), rows.max(1));
         let sid = session_id();
@@ -256,7 +261,7 @@ impl Session {
             settings,
             tracker: marker,
             terminal_background: terminal_bg.map(TerminalBackground::new),
-            settings_modified: settings_repository.last_modified(),
+            settings_modified: live_settings.last_modified(),
             now: Instant::now(),
         });
         if let Some(probe_ended_at) = probe_ended_at {
@@ -268,11 +273,12 @@ impl Session {
             credits,
             pty,
             output,
-            modes: m,
+            modes: terminal_modes,
             screen,
             feeder,
             themes,
-            settings_repository,
+            live_settings,
+            working_directory: module.working_directory(),
             session_contexts,
             generator_processes: module.generator_processes(),
             session,
@@ -409,7 +415,7 @@ impl Session {
         self.session
             .tracked_cwd()
             .map(|p| p.to_path_buf())
-            .or_else(|| std::env::current_dir().ok())
+            .or_else(|| self.working_directory.current())
             .unwrap_or_default()
     }
 
@@ -682,11 +688,11 @@ impl Session {
                     .apply_session_context(ctx.env().clone(), ctx.alias().map(str::to_owned));
             }
         }
-        let m = self.settings_repository.last_modified();
+        let m = self.live_settings.last_modified();
         if !self.session.settings_changed(m) {
             return false;
         }
-        self.session.apply_settings(load_or_defaults(&*self.settings_repository));
+        self.session.apply_settings(self.live_settings.load());
         self.screen
             .set_theme(resolve_theme(
                 self.session.settings(),
@@ -721,7 +727,10 @@ mod tests {
     use crate::completion::domain::test_fixtures::{comp, item, settings};
     use crate::dropdown::domain::value_objects::key_action::KeyAction;
     use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
-    use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
+    use crate::terminal_session::application::ports::live_settings::InMemoryLiveSettings;
+    use crate::terminal_session::application::ports::terminal_modes::RecordingTerminalModes;
+    use crate::terminal_session::application::ports::working_directory::FixedWorkingDirectory;
+    use crate::terminal_session::infrastructure::adapters::lenient_live_settings::LenientLiveSettings;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
     use crate::settings::domain::value_objects::settings::Settings;
@@ -773,11 +782,12 @@ mod tests {
             credits: mpsc::sync_channel(PTY_CREDITS).0,
             pty: Rc::new(PtyWrappedShell::new(input, Box::new(RecordingMasterPty::new()))),
             output: stdout.clone(),
-            modes: sys::Modes::default(),
+            modes: Rc::new(RecordingTerminalModes::new()),
             feeder: ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock)),
             screen,
             themes: Rc::new(InMemoryThemeRepository::default()),
-            settings_repository: Rc::new(InMemorySettingsRepository::default()),
+            live_settings: Rc::new(InMemoryLiveSettings::new(Settings::default())),
+            working_directory: Rc::new(FixedWorkingDirectory::new(std::env::current_dir().ok())),
             session_contexts: Rc::new(InMemorySessionContextRepository::default()),
             generator_processes: Rc::new(RecordingGeneratorProcessReaper::new()),
             session: TerminalSession::new(TerminalSessionParts {
@@ -1545,8 +1555,9 @@ mod tests {
         }
 
         fn read_settings_from(&mut self, temp_dir: &TempDir) {
-            self.s.settings_repository =
-                Rc::new(JsonFileSettingsRepository::new(DataDirectory::new(Some(temp_dir.path().to_path_buf()), None)));
+            self.s.live_settings = Rc::new(LenientLiveSettings::new(Rc::new(JsonFileSettingsRepository::new(
+                DataDirectory::new(Some(temp_dir.path().to_path_buf()), None),
+            ))));
         }
 
         fn sent(&self) -> Vec<u8> {

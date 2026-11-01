@@ -3,9 +3,13 @@ use crate::settings::domain::repositories::settings_repository::SettingsReposito
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
+use crate::terminal_session::application::ports::live_settings::LiveSettings;
+use crate::terminal_session::application::ports::working_directory::WorkingDirectory;
 use crate::terminal_session::application::report_session_context_use_case::ReportSessionContextUseCase;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
+use crate::terminal_session::infrastructure::adapters::lenient_live_settings::LenientLiveSettings;
+use crate::terminal_session::infrastructure::adapters::process_working_directory::ProcessWorkingDirectory;
 use crate::terminal_session::infrastructure::pty::completion_engine_starter::CompletionEngineStarter;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -14,7 +18,8 @@ use std::sync::Arc;
 /// runner is handed instead of building them.
 pub(crate) struct TerminalSessionModule {
     pub(crate) report_session_context: ReportSessionContextUseCase,
-    settings: Rc<dyn SettingsRepository>,
+    live_settings: Rc<dyn LiveSettings>,
+    working_directory: Rc<dyn WorkingDirectory>,
     themes: Rc<dyn ThemeRepository>,
     generator_processes: Rc<dyn GeneratorProcessReaper>,
     session_contexts: Rc<dyn SessionContextRepository>,
@@ -38,7 +43,8 @@ pub(crate) fn build_terminal_session_module(
             session_contexts.clone(),
             dependencies.clock.clone(),
         ),
-        settings,
+        live_settings: Rc::new(LenientLiveSettings::new(settings)),
+        working_directory: Rc::new(ProcessWorkingDirectory),
         themes,
         generator_processes,
         session_contexts,
@@ -48,9 +54,12 @@ pub(crate) fn build_terminal_session_module(
 }
 
 impl TerminalSessionModule {
-    /// Interim: the live settings port replaces it.
-    pub(crate) fn settings_repository(&self) -> Rc<dyn SettingsRepository> {
-        self.settings.clone()
+    pub(crate) fn live_settings(&self) -> Rc<dyn LiveSettings> {
+        self.live_settings.clone()
+    }
+
+    pub(crate) fn working_directory(&self) -> Rc<dyn WorkingDirectory> {
+        self.working_directory.clone()
     }
 
     pub(crate) fn themes(&self) -> Rc<dyn ThemeRepository> {
