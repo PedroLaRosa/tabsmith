@@ -29,7 +29,7 @@ use crate::terminal_session::domain::value_objects::wrapped_shell_command::Wrapp
 use crate::terminal_session::infrastructure::terminal_session_module::TerminalSessionModule;
 use crate::terminal_session::infrastructure::pty::fallback_shell::run_fallback_shell;
 use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
-use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, PROBE, PROBE_TIMEOUT};
+use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, probe_terminal, PROBE_TIMEOUT};
 use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use anyhow::{anyhow, bail, Context, Result};
 use portable_pty::{CommandBuilder, PtySize};
@@ -168,17 +168,7 @@ impl SessionRunner {
         });
 
         // Sync the model with the real cursor; always ask for the background, the theme may become `system` later.
-        output.write(PROBE);
-        let deadline = Instant::now() + PROBE_TIMEOUT;
-        let mut replies = Vec::new();
-        let (cpr, terminal_bg, typeahead) = loop {
-            let parsed = parse_probe(&replies);
-            let now = Instant::now();
-            if parsed.0.is_some() || now >= deadline {
-                break parsed;
-            }
-            replies.extend(sys::read_timeout(deadline - now));
-        };
+        let (cpr, terminal_bg, typeahead) = probe_terminal(&*output, PROBE_TIMEOUT, sys::read_timeout);
         // ponytail: a reply cut by the timeout is forwarded as typeahead; only a whole late reply is dropped.
         let probe_ended_at = cpr.is_none().then(Instant::now);
         if cpr.is_none() {
