@@ -2,12 +2,18 @@
 //! extraction from the model (SPEC §5.1, §5.6), and the filter for bytes sent to the real terminal (SPEC §7.5.4).
 //! OWNER: wrapper agent.
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntryPrimitives};
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
+use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::value_objects::cell_tag::CellTag;
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
+use crate::terminal_session::domain::value_objects::edit_buffer_context::EditBufferContext;
+use crate::terminal_session::domain::value_objects::marker_effects::MarkerEffects;
+use crate::terminal_session::domain::value_objects::marker_reaction::MarkerReaction;
 use crate::terminal_session::domain::value_objects::output_piece::OutputPiece;
-use crate::terminal_session::domain::value_objects::pwsh_prediction_color::PwshPredictionColor;
+use crate::terminal_session::domain::value_objects::screen_command::ScreenCommand;
+use crate::terminal_session::domain::value_objects::session_id::SessionId;
+use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
+use crate::terminal_session::domain::value_objects::shell_marker::ShellMarker;
 use crate::terminal_session::domain::value_objects::shell_suggestion_color::{
     rgb_to_256, ShellSuggestionColor,
 };
@@ -17,8 +23,6 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, Handler, Hyperlink, Processor};
-use std::collections::VecDeque;
-use std::path::PathBuf;
 
 /// An unfinished CSI/ESC sequence longer than this passes through instead of being carried (no quadratic rescans).
 const SEQ_MAX: usize = 4096;
@@ -240,23 +244,6 @@ impl OutFilter {
 // ---------------------------------------------------------------------------------------------------------------
 // Tracker (SPEC §5.1, §5.1.2, §5.1.4)
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Deferred {
-    EndPrompt,
-    NewCmd,
-}
-
-/// What the wrapper must react to after a batch.
-#[derive(Debug, PartialEq)]
-pub enum Event {
-    /// New prompt: menu error-reset, settings re-check; carries the finished command, if any (SPEC §3.5).
-    NewCmd(Option<HistoryEntry>),
-    /// New prompt after a command that must not be recorded (`NoHistory`): finished like `NewCmd(Some)`.
-    CommandEnded,
-    /// A command started: hide menu + ghost, cancel the insertion lock.
-    PreExec,
-}
-
 /// What `extract` collects while it scans the cells; the `EditBuffer` is built from it once, at the end.
 #[derive(Default)]
 struct Scraped {
@@ -270,83 +257,35 @@ struct Scraped {
     at_prompt: bool,
 }
 
-/// Shell-integration state of one wrapper session; owns the PTY output path (splitter → model → filter).
+/// Column the model's cursor is on (raw: a pending wrap counts as the last column).
+fn cursor_column(model: &Model) -> usize {
+    model.grid().cursor.point.column.0
+}
+
+/// Shell-integration state of one wrapper session; owns the PTY output path (splitter → model → filter). The marker
+/// state lives in the domain's `MarkerTracker`; this composite applies its effects to the model (interim, until the
+/// screen port replaces it).
 pub struct Tracker {
-    sid: String,
-    /// Windows ConPTY deferral of EndPrompt/NewCmd (SPEC §5.1.4); `cfg!(windows)`, switchable for tests.
-    pub defer: bool,
-    pub osc_lock: bool,
-    pub has_seen_prompt: bool,
-    pub preexec: bool,
-    /// Current command cycle `n` (None before the first NewCmd).
-    pub cycle: Option<u64>,
-    /// The last NewCmd came at column 0 (a prompt ending in a newline): its line has no prompt cell.
-    line_col0: bool,
-    pub cwd: Option<PathBuf>,
-    pub shell: Option<Shell>,
-    pub shell_name: Option<String>,
-    pub shell_path: Option<String>,
-    pub pid: Option<i32>,
-    pub tty: Option<String>,
-    pub user: Option<String>,
-    pub zsh_color: Option<ShellSuggestionColor>,
-    pub fish_color: Option<ShellSuggestionColor>,
+    pub marker: MarkerTracker,
     /// Drained by the wrapper after every batch.
-    pub events: Vec<Event>,
+    pub events: Vec<ShellEvent>,
     pub filter: OutFilter,
-    /// Buffer the user submitted with Enter (set by the wrapper); preferred over a scrape that has shell output
-    /// (`!!` echo, zsh correction prompt) after it. Cleared on NewCmd.
-    pub submitted: Option<String>,
-    /// The shell keeps the next command out of its history (`NoHistory` marker): tabsmith does too. Reset on NewCmd.
-    pub no_history: bool,
-    /// PSReadLine ListView predictions own the rows below the prompt (`PwshListView=1`/`0`, every pwsh prompt).
-    /// Cleared when a command starts, not on NewCmd: the marker may precede NewCmd in the same prompt.
-    pub pwsh_list_view: bool,
-    /// PSReadLine `InlinePredictionColor` (colour + required DIM/ITALIC); None = PSReadLine's default dim/italic test.
-    pwsh_color: Option<PwshPredictionColor>,
-    /// PSReadLine ContinuationPrompt and PromptText(s): drawn after EndPrompt, so stripped from the buffer.
-    pwsh_cont: String,
-    pwsh_prompt_text: Vec<String>,
-    /// Running commands, innermost last: nested integrated shells share the session id (finished by PID).
-    pending: Vec<HistoryEntry>,
-    exit_code: Option<i32>,
-    deferred: VecDeque<Deferred>,
-    batch_markers: usize,
     splitter: MarkerSplitter,
     proc: Processor,
 }
 
 impl Tracker {
+    /// `cfg!(windows)` decides the ConPTY deferral of EndPrompt/NewCmd (SPEC §5.1.4).
     pub fn new(sid: String, shell: Option<Shell>, rows: usize) -> Tracker {
+        Tracker::with_defer(sid, shell, rows, cfg!(windows))
+    }
+
+    pub fn with_defer(sid: String, shell: Option<Shell>, rows: usize, defer: bool) -> Tracker {
+        let session_id = SessionId::new(sid).expect("generated ids are valid");
         Tracker {
-            sid,
-            defer: cfg!(windows),
-            osc_lock: false,
-            has_seen_prompt: false,
-            preexec: false,
-            cycle: None,
-            line_col0: false,
-            cwd: None,
-            shell,
-            shell_name: shell.map(|s| s.name().to_string()),
-            shell_path: None,
-            pid: None,
-            tty: None,
-            user: None,
-            zsh_color: None,
-            fish_color: None,
+            marker: MarkerTracker::new(session_id, shell, defer),
             events: Vec::new(),
             filter: OutFilter::new(rows),
-            submitted: None,
-            no_history: false,
-            pwsh_list_view: false,
-            pwsh_color: None,
-            pwsh_cont: ">> ".into(), // PSReadLine's default, until the prompt reports it
-            pwsh_prompt_text: Vec::new(),
-            pending: Vec::new(),
-            exit_code: None,
-            deferred: VecDeque::new(),
-            batch_markers: 0,
             splitter: MarkerSplitter::default(),
             proc: Processor::new(),
         }
@@ -362,14 +301,43 @@ impl Tracker {
                     self.filter.feed(&b, out);
                 }
                 OutputPiece::WindowName(b) => self.filter.feed(&b, out),
-                OutputPiece::Marker(p) => self.on_marker(&p, model),
+                OutputPiece::Marker(p) => self.handle_marker(&p, model),
             }
         }
         // Windows: apply deferred markers once a batch brings no new ones (FIFO).
-        if self.batch_markers == 0 {
-            self.flush_deferred(model);
+        let effects = self.marker.end_batch(cursor_column(model), now_secs());
+        self.apply(model, effects);
+    }
+
+    fn handle_marker(&mut self, payload: &str, model: &mut Model) {
+        let marker = ShellMarker::parse(payload);
+        match self
+            .marker
+            .on_marker(marker, cursor_column(model), now_secs())
+        {
+            MarkerReaction::Handled(effects) => self.apply(model, effects),
+            MarkerReaction::EditBufferNeeded(effects) => {
+                self.apply(model, effects);
+                let scraped = self.extract(model);
+                let effects = self.marker.complete_pre_exec(scraped.as_ref(), now_secs());
+                self.apply(model, effects);
+            }
         }
-        self.batch_markers = 0;
+    }
+
+    /// The screen commands reach the model right away and in order; the events wait for the wrapper.
+    fn apply(&mut self, model: &mut Model, effects: MarkerEffects) {
+        for command in effects.screen_commands() {
+            match command {
+                ScreenCommand::Tag(cell_tag) => tag(model, Some(cell_tag.uri())),
+                ScreenCommand::ClearTag => tag(model, None),
+                ScreenCommand::MarkLineStart { redrawn_cycle } => mark_line_start(
+                    model,
+                    redrawn_cycle.map(|n| CellTag::Cycle(n).uri()).as_deref(),
+                ),
+            }
+        }
+        self.events.extend(effects.into_events());
     }
 
     /// Feed bytes to the model only. Synchronized updates are applied at once: the model mirrors terminal state.
@@ -382,157 +350,15 @@ impl Tracker {
 
     /// At a prompt with a known command cycle (an edit buffer exists).
     pub fn at_prompt(&self) -> bool {
-        self.cycle.is_some() && !self.preexec
-    }
-
-    pub fn on_marker(&mut self, payload: &str, model: &mut Model) {
-        self.batch_markers += 1;
-        let (key, val) = match payload.split_once('=') {
-            Some((k, v)) => (k, Some(v)),
-            None => (payload, None),
-        };
-        if val == Some("") {
-            return; // empty values are ignored
-        }
-        if self.osc_lock
-            && !matches!(
-                key,
-                "NewCmd" | "PreExec" | "NoHistory" | "OSCLock" | "OSCUnlock" | "User"
-            )
-        {
-            return;
-        }
-        let v = val.unwrap_or("").trim();
-        match key {
-            "StartPrompt" => {
-                self.has_seen_prompt = true;
-                tag(model, Some(CellTag::PROMPT_URI.to_string()));
-            }
-            "EndPrompt" if self.defer => self.deferred.push_back(Deferred::EndPrompt),
-            "EndPrompt" => self.end_prompt(model),
-            // A nested session's, or a bare one (any program output could forge it; our scripts always send the sid).
-            "NewCmd" if val != Some(self.sid.as_str()) => {}
-            "NewCmd" if self.defer => self.deferred.push_back(Deferred::NewCmd),
-            "NewCmd" => self.new_cmd(model),
-            "PreExec" if !self.preexec => self.pre_exec(model),
-            "NoHistory" if !self.preexec => {
-                self.flush_deferred(model); // a queued NewCmd (which resets the flag) belongs before it
-                self.no_history = true;
-            }
-            "OSCLock" if v == self.sid => self.osc_lock = true,
-            "OSCUnlock" if v == self.sid => self.osc_lock = false,
-            "Dir" => self.cwd = Some(PathBuf::from(val.unwrap_or(""))),
-            "ExitCode" => self.exit_code = v.parse().ok(),
-            "Shell" => {
-                self.shell = Shell::from_name(v);
-                self.shell_name = Some(v.to_string());
-            }
-            "ShellPath" => self.shell_path = Some(v.to_string()),
-            "PID" => self.pid = v.parse().ok(),
-            "TTY" => self.tty = Some(v.to_string()),
-            "User" => self.user = Some(v.to_string()),
-            "ZshAutosuggestionColor" => self.zsh_color = ShellSuggestionColor::parse_zsh(v),
-            "FishSuggestionColor" => self.fish_color = ShellSuggestionColor::parse_fish(v),
-            "PwshPredictionColor" => self.pwsh_color = PwshPredictionColor::parse(v),
-            "PwshListView" => self.pwsh_list_view = v == "1",
-            "PwshPrompts" => {
-                // `<ContinuationPrompt>\x1f<PromptText>…` (untrimmed: the prompts end in spaces).
-                let mut it = val.unwrap_or("").split('\x1f').map(String::from);
-                self.pwsh_cont = it.next().unwrap_or_default();
-                self.pwsh_prompt_text = it.filter(|p| !p.is_empty()).collect();
-            }
-            _ => {}
-        }
-    }
-
-    fn end_prompt(&mut self, model: &mut Model) {
-        let open = self.cycle.filter(|_| !self.preexec);
-        tag(model, open.map(|n| CellTag::Cycle(n).uri()));
-    }
-
-    fn new_cmd(&mut self, model: &mut Model) {
-        let redraw = self.cycle.filter(|_| !self.preexec);
-        let n = self.cycle.map_or(1, |n| n + 1);
-        self.cycle = Some(n);
-        self.preexec = false;
-        self.no_history = false;
-        tag(model, Some(CellTag::Cycle(n).uri()));
-        mark_line_start(model, redraw.map(|o| CellTag::Cycle(o).uri()).as_deref());
-        self.line_col0 = model.grid().cursor.point.column.0 == 0;
-        // The prompt finishes this shell's command (and those of nested shells that exited under it); a nested
-        // shell's first prompt leaves the outer command running.
-        let exit = self.exit_code.take();
-        let Some(k) = self.pending.iter().rposition(|p| p.pid() == self.pid) else {
-            return self.events.push(Event::NewCmd(None));
-        };
-        self.submitted = None; // not on a redraw: a transient prompt redraws between Enter and PreExec
-        for mut h in self.pending.drain(k..).rev() {
-            h.finish(exit, now_secs());
-            // ponytail: an empty command (NoHistory, or nothing scraped) is the "do not record" mark.
-            self.events.push(if h.command().is_empty() {
-                Event::CommandEnded
-            } else {
-                Event::NewCmd(Some(h))
-            });
-        }
-    }
-
-    fn pre_exec(&mut self, model: &mut Model) {
-        self.flush_deferred(model); // a queued NewCmd belongs before this PreExec
-        let scraped = self
-            .extract(model)
-            .map(|e| e.buffer().trim().to_string())
-            .unwrap_or_default();
-        // Lines the shell printed after Enter (`!!` echo, correction prompt) are not part of the command, nor is a
-        // transient prompt redrawn without markers before it; a line the shell rewrote (abbreviation, PS2 loop) is
-        // taken from the screen.
-        let then_output = |s: &str| {
-            scraped.match_indices(s).any(|(i, _)| {
-                let rest = scraped[i + s.len()..].trim_start_matches(' ');
-                (i == 0 || scraped[..i].ends_with(' '))
-                    && (rest.is_empty() || rest.starts_with('\n'))
-            })
-        };
-        let command = match self.submitted.take().map(|s| s.trim().to_string()) {
-            Some(s) if !s.is_empty() && then_output(&s) => s,
-            _ => scraped,
-        };
-        // Still pending (its prompt finishes it, SPEC §3.5), but blank: not recorded.
-        let command = if std::mem::take(&mut self.no_history) {
-            String::new()
-        } else {
-            command
-        };
-        self.pending.push(HistoryEntry::new(HistoryEntryPrimitives {
-            command,
-            shell: self.shell_name.clone().unwrap_or_default(),
-            pid: self.pid,
-            session_id: self.sid.clone(),
-            cwd: self.cwd.as_ref().map(|p| p.display().to_string()),
-            start_time: now_secs(),
-            ..Default::default()
-        }));
-        self.preexec = true;
-        self.pwsh_list_view = false; // a nested shell does not inherit it; the next pwsh prompt re-reports it
-        tag(model, None);
-        self.events.push(Event::PreExec);
-    }
-
-    fn flush_deferred(&mut self, model: &mut Model) {
-        while let Some(d) = self.deferred.pop_front() {
-            match d {
-                Deferred::EndPrompt => self.end_prompt(model),
-                Deferred::NewCmd => self.new_cmd(model),
-            }
-        }
+        self.marker.at_prompt()
     }
 
     /// Suggestion-coloured cell (SPEC §5.1.3; pwsh: the reported prediction colour, else dim or italic).
-    fn suggestion(&self, cell: &Cell) -> bool {
-        match self.shell {
-            Some(Shell::Zsh) => self.zsh_color.as_ref().is_some_and(|c| matches_cell(c, cell)),
-            Some(Shell::Fish) => self.fish_color.as_ref().is_some_and(|c| matches_cell(c, cell)),
-            Some(Shell::Pwsh) => match &self.pwsh_color {
+    fn suggestion(context: &EditBufferContext, cell: &Cell) -> bool {
+        match context.shell() {
+            Some(Shell::Zsh) => context.zsh_color().is_some_and(|c| matches_cell(c, cell)),
+            Some(Shell::Fish) => context.fish_color().is_some_and(|c| matches_cell(c, cell)),
+            Some(Shell::Pwsh) => match context.pwsh_color() {
                 Some(c) => c.matches(cell_col(cell.fg), cell_col(cell.bg), cell_emphasis(cell.flags)),
                 None => cell_emphasis(cell.flags).is_dim_or_italic(),
             },
@@ -542,7 +368,13 @@ impl Tracker {
 
     /// Edit buffer + cursor from the tagged cells around the cursor (SPEC §5.6). None while no cycle is open.
     pub fn extract(&self, model: &Model) -> Option<EditBuffer> {
-        let n = self.cycle.filter(|_| !self.preexec)?;
+        self.marker
+            .edit_buffer_context()
+            .and_then(|context| Tracker::extract_with(&context, model))
+    }
+
+    fn extract_with(context: &EditBufferContext, model: &Model) -> Option<EditBuffer> {
+        let n = context.cycle();
         let tag = CellTag::Cycle(n).uri();
         let grid = model.grid();
         let cols = grid.columns();
@@ -580,9 +412,9 @@ impl Tracker {
         }
         // Below the cursor only wrap continuations and PS2 rows count (not zsh completion listings, not PSReadLine's
         // ListView, whose padded rows can look like wrap continuations).
-        let pwsh = self.shell == Some(Shell::Pwsh);
+        let pwsh = context.shell() == Some(Shell::Pwsh);
         let mut end = cl;
-        while !(pwsh && self.pwsh_list_view)
+        while !(pwsh && context.pwsh_list_view())
             && end < grid.bottommost_line().0
             && (wraps(end) || (has(&row(end + 1)[0], CellTag::PROMPT_URI) && tagged(end + 1)))
         {
@@ -607,7 +439,7 @@ impl Tracker {
         // A prompt filling its row to the margin (zsh then moves on with its own CRLF): like a PS1 ending in a newline.
         let full_prompt =
             |r: i32| r >= grid.topmost_line().0 && row(r).iter().all(|c| has(c, CellTag::PROMPT_URI));
-        let cont = self.pwsh_cont.chars().count();
+        let cont = context.pwsh_continuation().chars().count();
         let below = end < grid.bottommost_line().0 && tagged(end + 1);
         let at_prompt = (top..=cl).any(prompt_row)
             || (pwsh
@@ -616,8 +448,8 @@ impl Tracker {
                     .iter()
                     .take(cont)
                     .map(|c| c.c)
-                    .eq(self.pwsh_cont.chars()))
-            || ((self.line_col0 || full_prompt(top - 1))
+                    .eq(context.pwsh_continuation().chars()))
+            || ((context.line_starts_at_column_zero() || full_prompt(top - 1))
                 && top > grid.topmost_line().0
                 && prompt_row(top - 1)
                 && !below);
@@ -654,7 +486,7 @@ impl Tracker {
                 }
                 let after = (r, c) >= (cl, cc);
                 let cmd = has(cell, &tag);
-                if cmd && !(after && self.suggestion(cell)) {
+                if cmd && !(after && Tracker::suggestion(context, cell)) {
                     if line_has_cmd {
                         e.buffer.extend(std::iter::repeat_n(' ', pad));
                     }
@@ -677,7 +509,7 @@ impl Tracker {
         }
         e.cursor = cursor.unwrap_or(e.buffer.len());
         if pwsh {
-            self.strip_pwsh_prompts(&mut e);
+            Tracker::strip_pwsh_prompts(context, &mut e);
         }
         // Blank command cells after the cursor are drawing leftovers.
         let keep = e.buffer.trim_end().len().max(e.cursor);
@@ -688,16 +520,19 @@ impl Tracker {
     /// PSReadLine draws its ContinuationPrompt (each line after a real `\n`) and a re-rendered PromptText (first
     /// line) after EndPrompt, so they carry the command tag: drop them, keeping the cursor on the same character.
     /// ponytail: a first line the user typed starting with the PromptText loses it too.
-    fn strip_pwsh_prompts(&self, e: &mut Scraped) {
+    fn strip_pwsh_prompts(context: &EditBufferContext, e: &mut Scraped) {
         let (mut out, mut off, mut shift) = (String::with_capacity(e.buffer.len()), 0, 0);
         for (i, line) in e.buffer.split('\n').enumerate() {
             let p = if i == 0 {
-                self.pwsh_prompt_text
+                context
+                    .pwsh_prompt_text()
                     .iter()
                     .find(|p| line.starts_with(p.as_str()))
                     .map_or(0, |p| p.len())
-            } else if !self.pwsh_cont.is_empty() && line.starts_with(&self.pwsh_cont) {
-                self.pwsh_cont.len()
+            } else if !context.pwsh_continuation().is_empty()
+                && line.starts_with(context.pwsh_continuation())
+            {
+                context.pwsh_continuation().len()
             } else {
                 0
             };
@@ -759,6 +594,8 @@ fn mark_line_start(model: &mut Model, from: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_session::domain::value_objects::deferred_marker::DeferredMarker;
+    use std::path::Path;
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::term::test::TermSize;
     use alacritty_terminal::term::{Config, Term};
@@ -777,10 +614,8 @@ mod tests {
     }
 
     fn setup(cols: usize, rows: usize, shell: Shell) -> (Tracker, Model) {
-        let mut t = Tracker::new(SID.into(), Some(shell), rows);
-        t.defer = false;
         (
-            t,
+            Tracker::with_defer(SID.into(), Some(shell), rows, false),
             Term::new(Config::default(), &TermSize::new(cols, rows), VoidListener),
         )
     }
@@ -815,7 +650,7 @@ mod tests {
             &format!("{}\x1b]0;t\x07{}x", osc("Dir=/tmp"), prompt("% ")),
         );
         assert_eq!(out, b"\x1b]0;t\x07% x");
-        assert_eq!(t.cwd, Some(PathBuf::from("/tmp")));
+        assert_eq!(t.marker.cwd(), Some(Path::new("/tmp")));
         assert_eq!(buf(&t, &m), ("x".into(), 1));
     }
 
@@ -840,8 +675,8 @@ mod tests {
             &mut m,
             &format!("{}{}", osc("OSCLock=other"), osc("Dir=/a")),
         );
-        assert!(!t.osc_lock);
-        assert_eq!(t.cwd, Some(PathBuf::from("/a")));
+        assert!(!t.marker.osc_lock());
+        assert_eq!(t.marker.cwd(), Some(Path::new("/a")));
         feed(
             &mut t,
             &mut m,
@@ -852,25 +687,25 @@ mod tests {
                 osc("OSCUnlock=other")
             ),
         );
-        assert!(t.osc_lock);
-        assert_eq!(t.cwd, Some(PathBuf::from("/a")));
+        assert!(t.marker.osc_lock());
+        assert_eq!(t.marker.cwd(), Some(Path::new("/a")));
         feed(
             &mut t,
             &mut m,
             &format!("{}{}", osc(&format!("OSCUnlock={SID}")), osc("Dir=/c")),
         );
-        assert!(!t.osc_lock);
-        assert_eq!(t.cwd, Some(PathBuf::from("/c")));
+        assert!(!t.marker.osc_lock());
+        assert_eq!(t.marker.cwd(), Some(Path::new("/c")));
         // Empty values are ignored.
         feed(&mut t, &mut m, &osc("Dir="));
-        assert_eq!(t.cwd, Some(PathBuf::from("/c")));
+        assert_eq!(t.marker.cwd(), Some(Path::new("/c")));
         // NewCmd from a nested session, or without a sid, is ignored; only ours opens a cycle.
         feed(&mut t, &mut m, &osc("NewCmd=ffff"));
-        assert_eq!(t.cycle, None);
+        assert_eq!(t.marker.cycle(), None);
         feed(&mut t, &mut m, &osc("NewCmd"));
-        assert_eq!(t.cycle, None);
+        assert_eq!(t.marker.cycle(), None);
         feed(&mut t, &mut m, &nc());
-        assert_eq!(t.cycle, Some(1));
+        assert_eq!(t.marker.cycle(), Some(1));
     }
 
     #[test]
@@ -886,11 +721,11 @@ mod tests {
                 osc("PreExec")
             ),
         );
-        assert!(t.preexec);
+        assert!(t.marker.preexec());
         // `cat` of untrusted output prints a bare NewCmd: the command keeps running.
         feed(&mut t, &mut m, "\x1b]697;NewCmd\x07");
-        assert!(t.preexec && !t.at_prompt());
-        assert_eq!(t.cycle, Some(1));
+        assert!(t.marker.preexec() && !t.at_prompt());
+        assert_eq!(t.marker.cycle(), Some(1));
     }
 
     #[test]
@@ -901,7 +736,7 @@ mod tests {
             &mut m,
             &format!("{}{}{}", osc("Shell=zsh"), osc("PID=42"), prompt("% ")),
         );
-        assert_eq!(t.events, [Event::NewCmd(None)]);
+        assert_eq!(t.events, [ShellEvent::NewCommand(None)]);
         t.events.clear();
         feed(&mut t, &mut m, "ls -l");
         feed(
@@ -913,7 +748,7 @@ mod tests {
                 osc("PreExec")
             ),
         );
-        assert_eq!(t.events, [Event::PreExec]);
+        assert_eq!(t.events, [ShellEvent::PreExec]);
         assert!(t.extract(&m).is_none());
         t.events.clear();
         feed(
@@ -926,7 +761,7 @@ mod tests {
                 prompt("% ")
             ),
         );
-        let [Event::NewCmd(Some(h))] = &t.events[..] else {
+        let [ShellEvent::NewCommand(Some(h))] = &t.events[..] else {
             panic!("{:?}", t.events)
         };
         let h = h.to_primitives();
@@ -1129,12 +964,12 @@ mod tests {
         // r3-nohistory-skips-command-finish: it still ends (the engine resets its generator results).
         assert_eq!(
             run(&mut t, &mut m, " set -l TOKEN hunter2", true),
-            [Event::PreExec, Event::CommandEnded]
+            [ShellEvent::PreExec, ShellEvent::CommandEnded]
         );
-        assert!(!t.no_history);
+        assert!(!t.marker.no_history());
         let ev = run(&mut t, &mut m, "ls", false);
         assert!(
-            matches!(&ev[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command() == "ls"),
+            matches!(&ev[..], [ShellEvent::PreExec, ShellEvent::NewCommand(Some(h))] if h.command() == "ls"),
             "{ev:?}"
         );
         // A running command printing the marker cannot hide itself or the next command.
@@ -1153,7 +988,7 @@ mod tests {
             &format!("{}{}", osc("NoHistory"), precmd(&[], "> ")),
         );
         assert!(
-            matches!(&t.events[..], [Event::PreExec, Event::NewCmd(Some(h))] if h.command() == "make"),
+            matches!(&t.events[..], [ShellEvent::PreExec, ShellEvent::NewCommand(Some(h))] if h.command() == "make"),
             "{:?}",
             t.events
         );
@@ -1166,7 +1001,7 @@ mod tests {
             t.events.clear();
             feed(t, m, &prompt("$ "));
             feed(t, m, screen);
-            t.submitted = Some(submitted.into());
+            t.marker.set_submitted(Some(submitted.into()));
             feed(
                 t,
                 m,
@@ -1177,10 +1012,10 @@ mod tests {
                     precmd(&[], "$ ")
                 ),
             );
-            let Some(Event::NewCmd(Some(h))) = t.events.last() else {
+            let Some(ShellEvent::NewCommand(Some(h))) = t.events.last() else {
                 panic!("{:?}", t.events)
             };
-            assert_eq!(t.submitted, None);
+            assert_eq!(t.marker.submitted(), None);
             h.command().to_string()
         };
         // bash/zsh echo the `!!` expansion (and zsh its correction prompt) before PreExec.
@@ -1421,7 +1256,7 @@ mod tests {
         let (mut t, mut m) = setup(60, 8, Shell::Zsh);
         let run = |t: &mut Tracker, m: &mut Model, typed: &str, finish: &str| {
             feed(t, m, &format!("{}{typed}", prompt("% ")));
-            t.submitted = Some(typed.into());
+            t.marker.set_submitted(Some(typed.into()));
             feed(
                 t,
                 m,
@@ -1432,7 +1267,7 @@ mod tests {
                     precmd(&[], "% ")
                 ),
             );
-            let Some(Event::NewCmd(Some(h))) = std::mem::take(&mut t.events).pop() else {
+            let Some(ShellEvent::NewCommand(Some(h))) = std::mem::take(&mut t.events).pop() else {
                 panic!()
             };
             h.command().to_string()
@@ -1477,7 +1312,7 @@ mod tests {
             std::mem::take(&mut t.events)
                 .into_iter()
                 .filter_map(|e| {
-                    if let Event::NewCmd(h) = e {
+                    if let ShellEvent::NewCommand(h) = e {
                         Some(h.map(|h| (h.command().to_string(), h.exit_code())))
                     } else {
                         None
@@ -1501,10 +1336,10 @@ mod tests {
                 Some(("bash".into(), Some(5)))
             ]
         );
-        assert!(t.pending.is_empty());
+        assert!(t.marker.pending_is_empty());
         // A prompt redraw of the same shell finishes nothing.
         feed(&mut t, &mut m, &format!("\r{}", prompt("> ")));
-        assert_eq!(t.events, [Event::NewCmd(None)]);
+        assert_eq!(t.events, [ShellEvent::NewCommand(None)]);
     }
 
     #[test]
@@ -1557,17 +1392,17 @@ mod tests {
             &mut m,
             &format!("{}{screen}", osc("PwshListView=1")),
         );
-        assert!(t.pwsh_list_view);
+        assert!(t.marker.pwsh_list_view());
         assert_eq!(buf(&t, &m), ("git ch".into(), 6));
         feed(&mut t, &mut m, &osc("PwshListView=0"));
-        assert!(!t.pwsh_list_view);
+        assert!(!t.marker.pwsh_list_view());
         feed(
             &mut t,
             &mut m,
             &format!("{}{}", osc("PwshListView=1"), osc("PreExec")),
         );
         assert!(
-            !t.pwsh_list_view,
+            !t.marker.pwsh_list_view(),
             "a command (maybe a nested shell) does not inherit it"
         );
     }
@@ -1592,20 +1427,23 @@ mod tests {
 
     #[test]
     fn windows_deferral_fifo() {
-        let (mut t, mut m) = setup(40, 5, Shell::Pwsh);
-        t.defer = true;
+        let mut t = Tracker::with_defer(SID.into(), Some(Shell::Pwsh), 5, true);
+        let mut m = Term::new(Config::default(), &TermSize::new(40, 5), VoidListener);
         feed(&mut t, &mut m, &format!("{SP}PS> {EP}{}", nc()));
-        assert_eq!(t.cycle, None);
-        assert_eq!(t.deferred, [Deferred::EndPrompt, Deferred::NewCmd]);
+        assert_eq!(t.marker.cycle(), None);
+        assert_eq!(
+            t.marker.deferred(),
+            &[DeferredMarker::EndPrompt, DeferredMarker::NewCmd]
+        );
         // A batch with markers keeps deferring.
         feed(&mut t, &mut m, &osc("Dir=/x"));
-        assert_eq!(t.cycle, None);
+        assert_eq!(t.marker.cycle(), None);
         // A marker-free batch applies the queue in order, at the current cursor.
         feed(&mut t, &mut m, "\x1b[?25h");
-        assert!(t.deferred.is_empty());
+        assert!(t.marker.deferred().is_empty());
         assert_eq!(
-            (t.cycle, &t.events[..]),
-            (Some(1), &[Event::NewCmd(None)][..])
+            (t.marker.cycle(), &t.events[..]),
+            (Some(1), &[ShellEvent::NewCommand(None)][..])
         );
         feed(&mut t, &mut m, "ls");
         assert_eq!(buf(&t, &m), ("ls".into(), 2));
@@ -1759,8 +1597,8 @@ mod tests {
     }
 
     fn tracker_rig(cols: usize, rows: usize, shell: Shell, defer: bool) -> TrackerRig {
-        let (mut t, m) = setup(cols, rows, shell);
-        t.defer = defer;
+        let t = Tracker::with_defer(SID.into(), Some(shell), rows, defer);
+        let m = Term::new(Config::default(), &TermSize::new(cols, rows), VoidListener);
         TrackerRig { t, m }
     }
 
@@ -1793,10 +1631,10 @@ mod tests {
         out
     }
 
-    fn describe_event(e: &Event) -> String {
+    fn describe_event(e: &ShellEvent) -> String {
         match e {
-            Event::NewCmd(None) => "NewCmd(None)".into(),
-            Event::NewCmd(Some(h)) => {
+            ShellEvent::NewCommand(None) => "NewCmd(None)".into(),
+            ShellEvent::NewCommand(Some(h)) => {
                 let p = h.to_primitives();
                 format!(
                     "NewCmd(command={:?} shell={:?} pid={:?} session_id={:?} cwd={:?} exit_code={:?} hostname={:?} end_time_set={})",
@@ -1810,8 +1648,8 @@ mod tests {
                     p.end_time.is_some()
                 )
             }
-            Event::CommandEnded => "CommandEnded".into(),
-            Event::PreExec => "PreExec".into(),
+            ShellEvent::CommandEnded => "CommandEnded".into(),
+            ShellEvent::PreExec => "PreExec".into(),
         }
     }
 
@@ -1834,9 +1672,9 @@ mod tests {
                 "#{i} in={chunk:?}\n  out={}\n  events={events:?}\n  at_prompt={} preexec={} cycle={:?} cwd={:?}\n  extract={extract:?}\n  tags={}\n",
                 out.escape_ascii(),
                 rig.t.at_prompt(),
-                rig.t.preexec,
-                rig.t.cycle,
-                rig.t.cwd,
+                rig.t.marker.preexec(),
+                rig.t.marker.cycle(),
+                rig.t.marker.cwd(),
                 tags(&rig.m)
             );
         }

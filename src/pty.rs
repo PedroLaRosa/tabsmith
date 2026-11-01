@@ -24,7 +24,8 @@ use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
-use crate::tracker::{Event, Tracker};
+use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
+use crate::tracker::Tracker;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
@@ -745,14 +746,15 @@ impl Session {
 
     fn cwd(&self) -> PathBuf {
         self.tracker
-            .cwd
-            .clone()
+            .marker
+            .cwd()
+            .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default()
     }
 
     fn shell(&self) -> Shell {
-        self.tracker.shell.unwrap_or(self.shell)
+        self.tracker.marker.shell().unwrap_or(self.shell)
     }
 
     /// PTY batch (SPEC §4.5): clear, bytes (markers stripped), frame — one stdout write.
@@ -779,26 +781,26 @@ impl Session {
         self.release_held();
     }
 
-    fn on_event(&mut self, ev: Event) {
+    fn on_event(&mut self, ev: ShellEvent) {
         match ev {
             // A prompt redraw (SIGWINCH, `zle reset-prompt`, an empty line) re-emits NewCmd: line, menu and ghost
             // stay, and the unchanged line is not re-requested (its reply would count as a keypress). A cleared line
             // resets through the empty-buffer path in `refresh`, once a line split off into a later read had time.
-            Event::NewCmd(None) => {
+            ShellEvent::NewCommand(None) => {
                 self.redraw_until = Some(Instant::now() + REDRAW_GRACE);
                 self.poll_files();
                 return;
             }
-            Event::NewCmd(Some(_)) | Event::CommandEnded => {
+            ShellEvent::NewCommand(Some(_)) | ShellEvent::CommandEnded => {
                 match ev {
-                    Event::NewCmd(Some(h)) => self.engine.command_finished(h),
+                    ShellEvent::NewCommand(Some(h)) => self.engine.command_finished(h),
                     _ => self.engine.command_ended(), // NoHistory: the end-of-command reset, nothing recorded
                 }
                 self.menu.error_reset();
                 self.sent = None;
                 self.poll_files();
             }
-            Event::PreExec => self.menu.error_reset(),
+            ShellEvent::PreExec => self.menu.error_reset(),
         }
         self.unechoed.clear();
         self.echo_pending = None;
@@ -913,7 +915,7 @@ impl Session {
     /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
     /// their echo (what accepting it must add), else after the buffer on screen (what is drawn).
     fn ghost_text(&self, typed: bool) -> Option<String> {
-        if !self.settings.bool(INLINE_ENABLED) || self.tracker.preexec || self.alt() {
+        if !self.settings.bool(INLINE_ENABLED) || self.tracker.marker.preexec() || self.alt() {
             return None;
         }
         let e = self.cur.as_ref()?;
@@ -973,7 +975,7 @@ impl Session {
     }
 
     fn suppressed(&self) -> bool {
-        !self.tracker.at_prompt()
+        !self.tracker.marker.at_prompt()
             // The cursor is off the command line (an inline TUI's rows: fzf, fish's pager): a menu for the line
             // stays hidden and keeps its hands off the keys.
             || self.cur.is_none()
@@ -982,7 +984,7 @@ impl Session {
             || self.tracker.filter.in_string()
             || self.redraw_until.is_some()
             // PSReadLine's ListView predictions own the rows below a non-empty line.
-            || (self.tracker.pwsh_list_view && self.cur.as_ref().is_some_and(|e| !e.buffer().is_empty()))
+            || (self.tracker.marker.pwsh_list_view() && self.cur.as_ref().is_some_and(|e| !e.buffer().is_empty()))
     }
 
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
@@ -1059,7 +1061,7 @@ impl Session {
             // Two or more printable keys in one read are a paste (pwsh has no bracketed paste) or typeahead the menu
             // was not computed for: the rest of the read reaches the shell as is.
             // Off the command line (an inline TUI's rows) keys belong to the TUI, as on the alternate screen.
-            let prompt = !self.tracker.preexec && !self.alt() && self.cur.is_some() && typed < 2;
+            let prompt = !self.tracker.marker.preexec() && !self.alt() && self.cur.is_some() && typed < 2;
             // A logically shown menu acts on keys only while the render guards let it be seen.
             let shown = prompt && self.menu.intercepting(&self.settings);
             let intercepting = shown && self.drawable();
@@ -1105,8 +1107,8 @@ impl Session {
                             redraw = true;
                         }
                         None => {
-                            if key.code() == KeyCode::Enter && self.tracker.at_prompt() {
-                                self.tracker.submitted = self.basis(); // history: the line, not what follows it
+                            if key.code() == KeyCode::Enter && self.tracker.marker.at_prompt() {
+                                self.tracker.marker.set_submitted(self.basis()); // history: the line, not what follows it
                             }
                             fwd.extend_from_slice(&chunk[ev.bytes()]);
                             typed += usize::from(
@@ -1131,8 +1133,8 @@ impl Session {
                 match e {
                     MenuEffect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
                     MenuEffect::Write(b) => {
-                        if b == b"\r" && self.tracker.at_prompt() {
-                            self.tracker.submitted = self.basis(); // `execute`
+                        if b == b"\r" && self.tracker.marker.at_prompt() {
+                            self.tracker.marker.set_submitted(self.basis()); // `execute`
                         }
                         fwd.extend(b);
                         self.unechoed.clear();
@@ -1160,7 +1162,7 @@ impl Session {
 
     /// Insertion with reconciliation + lock (SPEC §7.3). Dropped while a command runs.
     fn insert(&mut self, ins: &Insertion, record: Option<(String, String)>, fwd: &mut Vec<u8>) {
-        if self.tracker.preexec {
+        if self.tracker.marker.preexec() {
             return;
         }
         let from = self.menu.last().map(|c| (c.buffer().to_string(), c.cursor()));
@@ -1177,7 +1179,7 @@ impl Session {
         if ins.executes() {
             // As for Enter: preferred over a scrape with a transient prompt in front of the line; pre_exec still
             // reads a line the shell rewrote from the screen.
-            self.tracker.submitted = Some(expected.clone());
+            self.tracker.marker.set_submitted(Some(expected.clone()));
         }
         let before = self
             .cur
@@ -1791,8 +1793,7 @@ mod tests {
     fn session(json: &str) -> (Session, Receiver<Vec<u8>>) {
         let settings = settings(json);
         let (writer, wrx) = mpsc::channel();
-        let mut tracker = Tracker::new(SID.into(), Some(Shell::Bash), 24);
-        tracker.defer = false;
+        let tracker = Tracker::with_defer(SID.into(), Some(Shell::Bash), 24, false);
         let s = Session {
             rx: mpsc::channel().1,
             engine: Rc::new(RecordingCompletionEngine::new(mpsc::channel().0)),
@@ -2245,7 +2246,7 @@ mod tests {
         let (mut s, _) = session("{}");
         prompt(&mut s, "echo !");
         s.on_input(b"!\r");
-        assert_eq!(s.tracker.submitted.as_deref(), Some("echo !!"));
+        assert_eq!(s.tracker.marker.submitted(), Some("echo !!"));
         // transient-prompt-execute-insertion-pollutes-history: an insertion that executes (the ↪ row) records the line
         // it builds, not the transient prompt (p10k, oh-my-posh) redrawn without markers in front of it.
         let (mut s, _) = session("{}");
@@ -2253,13 +2254,13 @@ mod tests {
         s.engine = Rc::new(RecordingCompletionEngine::new(tx));
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        s.tracker.submitted = Some("stale".into());
+        s.tracker.marker.set_submitted(Some("stale".into()));
         let fx = s.menu.handle(KeyAction::InsertSelectedAndExecute, &s.settings);
         let Some(MenuEffect::Insert { ins, .. }) = fx.into_iter().next() else {
             panic!("no insertion")
         };
         s.insert(&ins, None, &mut Vec::new());
-        assert_eq!(s.tracker.submitted.as_deref(), Some("git cherry-pick"));
+        assert_eq!(s.tracker.marker.submitted(), Some("git cherry-pick"));
         let run = format!("\r\x1b[K\u{276f} git cherry-pick\r\n\x1b]697;OSCLock={SID}\x07\x1b]697;PreExec\x07x\r\n");
         s.on_output(format!("{run}\x1b]697;OSCUnlock={SID}\x07").as_bytes());
         prompt(&mut s, "");
@@ -2357,7 +2358,7 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        s.tracker.pwsh_list_view = true;
+        s.tracker.marker.set_pwsh_list_view(true);
         assert!(!s.drawable());
         s.sink.clear();
         s.redraw();
@@ -2370,7 +2371,7 @@ mod tests {
         let (mut s, _) = session("{}");
         prompt(&mut s, "");
         s.redraw_until = None;
-        s.tracker.pwsh_list_view = true;
+        s.tracker.marker.set_pwsh_list_view(true);
         assert!(s.drawable(), "an empty line has no list");
     }
 
