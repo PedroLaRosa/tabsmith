@@ -2,7 +2,8 @@
 
 Status: Phases 0, 1, 2, 3, 4, 5, 6, 7, 8 and 9 are done (gate green at `b898db1`, the last code commit of Phase 9).
 Phases 0-7 ran on branch `refactor/hexagonal-architecture`, Phases 8 and 9 on `refactor/hexagonal-dropdown-terminal-session`.
-Phase 10 is next. Nothing of Phase 9 is pushed and no PR is open; the manual smoke of section 8 is the user's and still
+Phase 10 is next. The Phase 9 request authorises no push and no PR (the local remote-tracking ref of the branch is at
+`d1fdd67`, the end of run 5; run 6 and the closing docs are not pushed); the manual smoke of section 8 is the user's and still
 pending. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6, 7, 8 and 9 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
@@ -1943,7 +1944,7 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
   settings change from a second terminal (`tabsmith settings autocomplete.height 3`) takes effect within about 2 s, and
   **P9-S5** (CI-only) pwsh on Windows: the prompt-marker deferral and the ConPTY exit. `session-diff.py` and `pty-diff.py`
   already pin bash under tmux and the real-pty start-up (empty against the baseline binary), not zsh, fish, pwsh,
-  kitty/ghostty/tmux icons or Windows. Nothing is pushed and no PR is open (R43).
+  kitty/ghostty/tmux icons or Windows. Nothing was pushed by the close, and the request authorises no push or PR (R43).
 - **Hand-offs**:
   - Phase 10 (diagnostics): `settings::infrastructure::load_or_defaults` has one caller left, `doctor.rs` (the pty caller went at
     9.4c); `LenientLiveSettings` is the pattern step 2 of Phase 10 repeats in diagnostics' own infrastructure, after
