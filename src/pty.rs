@@ -21,7 +21,6 @@ use crate::terminal_session::domain::services::key_router::{ends_line, is_enter,
 use crate::terminal_session::domain::services::session_deadlines::{REDRAW_GRACE, SPINNER_TICK};
 use crate::terminal_session::domain::value_objects::key_facts::{KeyFacts, KeyFactsParts};
 use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
-use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
@@ -532,62 +531,25 @@ impl Session {
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
     fn refresh(&mut self) {
-        // Off the command line the cursor is in a widget's inline TUI (fzf, fish's pager; see TerminalScreen::edit_buffer). Live
-        // UI only: pre_exec still scrapes after a transient prompt, which is redrawn without markers.
-        let new = if self.alt() {
+        let screen = self.screen.state();
+        let extracted = if screen.alt_screen() {
             None
         } else {
-            self.session.tracker
+            self.session
+                .tracker
                 .edit_buffer_context()
                 .and_then(|context| self.screen.edit_buffer(&context))
-                .filter(|e| e.at_prompt())
         };
-        let base = self
-            .session
-            .lock
-            .as_ref()
-            .map(|l| l.expected())
-            .or(self.session.edit_buffer.as_ref().map(|e| e.buffer()));
-        let n = new.as_ref().map(|e| e.buffer());
-        self.session.echo.consume_echo(base, n, self.session.lock.is_some());
-        self.session.edit_buffer = new;
-        if let Some(lock) = &mut self.session.lock {
-            let shown = self.session.edit_buffer.as_ref().map(|e| e.buffer());
-            match lock.settle(shown, Instant::now()) {
-                LockSettlement::StillHeld => return,
-                LockSettlement::Released => self.session.lock = None,
-            }
-        }
-        let Some(e) = &self.session.edit_buffer else { return };
-        match self.session.redraw_until {
-            Some(t) if e.buffer().trim().is_empty() && Instant::now() < t => return,
-            _ => self.session.redraw_until = None,
-        }
-        if self
-            .session
-            .sent
-            .as_ref()
-            .is_some_and(|(b, c)| *b == e.buffer() && *c == e.cursor())
-        {
+        let Some(query) = self.session.refresh(&screen, extracted, Instant::now()) else {
             return;
-        }
-        let (buffer, cursor) = (e.buffer().to_string(), e.cursor());
-        self.session.request += 1;
-        self.session.sent = Some((buffer.clone(), cursor));
-        self.session.changed_at = Instant::now();
-        self.session.ghost.cancel_llm_schedule();
-        if buffer.trim().is_empty() {
-            self.session.menu.error_reset(); // empty buffer (SPEC §7.1); nothing to ask
-            self.session.echo.forget_pending(); // nothing stale left for held keys to act on
-            return;
-        }
+        };
         let req = CompletionRequest {
-            id: self.session.request,
-            buffer,
-            cursor,
+            id: query.request(),
+            buffer: query.buffer().to_string(),
+            cursor: query.cursor(),
             cwd: self.cwd(),
             shell: self.shell(),
-            history_mode: self.session.menu.history_mode(),
+            history_mode: query.history_mode(),
         };
         self.engine.complete(req);
     }
@@ -645,16 +607,8 @@ impl Session {
         self.session.ghost.rest_after(&buffer)
     }
 
-    /// The buffer once the shell echoed everything already sent: the pending insertion's result (else the extracted
-    /// buffer) plus the printable keys typed ahead of their echo (SPEC §7.3 reconciliation).
     fn basis(&self) -> Option<String> {
-        let b = self
-            .session
-            .lock
-            .as_ref()
-            .map(|l| l.expected())
-            .or(self.session.edit_buffer.as_ref().map(|e| e.buffer()))?;
-        Some(format!("{b}{}", self.session.echo.unechoed()))
+        self.session.basis()
     }
 
     /// Track a forwarded key: a printable char at the end of the line comes back as echo; anything else

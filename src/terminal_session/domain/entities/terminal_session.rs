@@ -13,7 +13,9 @@ use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
 use crate::terminal_session::domain::entities::shell_exit::ShellExit;
 use crate::terminal_session::domain::services::render_guard;
 use crate::terminal_session::domain::services::session_deadlines;
+use crate::terminal_session::domain::value_objects::completion_query::CompletionQuery;
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
+use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
@@ -212,6 +214,73 @@ impl TerminalSession {
         )
     }
 
+    /// The buffer once the shell echoed everything already sent: the pending insertion's result (else the extracted
+    /// buffer) plus the printable keys typed ahead of their echo (SPEC §7.3 reconciliation).
+    pub(crate) fn basis(&self) -> Option<String> {
+        let buffer = self
+            .lock
+            .as_ref()
+            .map(InsertionLock::expected)
+            .or(self.edit_buffer.as_ref().map(EditBuffer::buffer))?;
+        Some(format!("{buffer}{}", self.echo.unechoed()))
+    }
+
+    /// Re-read the edit buffer; the request to send when it changed (SPEC §4.5; held while insertion-locked).
+    /// `extracted` = the command line read from the screen (the caller may skip reading it on the alternate screen;
+    /// it is ignored there either way).
+    pub(crate) fn refresh(
+        &mut self,
+        screen: &ScreenState,
+        extracted: Option<EditBuffer>,
+        now: Instant,
+    ) -> Option<CompletionQuery> {
+        // Off the command line the cursor is in a widget's inline TUI (fzf, fish's pager; see TerminalScreen::edit_buffer). Live
+        // UI only: pre_exec still scrapes after a transient prompt, which is redrawn without markers.
+        let new = if screen.alt_screen() {
+            None
+        } else {
+            extracted.filter(EditBuffer::at_prompt)
+        };
+        let base = self
+            .lock
+            .as_ref()
+            .map(InsertionLock::expected)
+            .or(self.edit_buffer.as_ref().map(EditBuffer::buffer));
+        self.echo
+            .consume_echo(base, new.as_ref().map(EditBuffer::buffer), self.lock.is_some());
+        self.edit_buffer = new;
+        if let Some(lock) = &mut self.lock {
+            let shown = self.edit_buffer.as_ref().map(EditBuffer::buffer);
+            match lock.settle(shown, now) {
+                LockSettlement::StillHeld => return None,
+                LockSettlement::Released => self.lock = None,
+            }
+        }
+        let e = self.edit_buffer.as_ref()?;
+        match self.redraw_until {
+            Some(t) if e.buffer().trim().is_empty() && now < t => return None,
+            _ => self.redraw_until = None,
+        }
+        if self
+            .sent
+            .as_ref()
+            .is_some_and(|(b, c)| *b == e.buffer() && *c == e.cursor())
+        {
+            return None;
+        }
+        let (buffer, cursor) = (e.buffer().to_string(), e.cursor());
+        self.request += 1;
+        self.sent = Some((buffer.clone(), cursor));
+        self.changed_at = now;
+        self.ghost.cancel_llm_schedule();
+        if buffer.trim().is_empty() {
+            self.menu.error_reset(); // empty buffer (SPEC §7.1); nothing to ask
+            self.echo.forget_pending(); // nothing stale left for held keys to act on
+            return None;
+        }
+        Some(CompletionQuery::new(self.request, buffer, cursor, self.menu.history_mode()))
+    }
+
     pub(crate) fn resize_applied(&mut self, now: Instant) {
         self.resize.resized(now);
     }
@@ -279,125 +348,4 @@ impl TerminalSession {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::completion::domain::test_fixtures::settings;
-    use crate::terminal_session::domain::services::session_deadlines::{
-        EXIT_GRACE, FILE_POLL, RESIZE_DEBOUNCE,
-    };
-
-    const SID: &str = "0123456789abcdef0123456789abcdef";
-
-    /// Arms one source of a deadline at the given instant.
-    type Arm = fn(&mut TerminalSession, Instant);
-
-    fn session_at(now: Instant) -> TerminalSession {
-        let id = SessionId::new(SID.into()).unwrap();
-        TerminalSession::new(TerminalSessionParts {
-            id: id.clone(),
-            launched_shell: Shell::Bash,
-            settings: settings("{}"),
-            tracker: MarkerTracker::new(id, Some(Shell::Bash), false),
-            terminal_background: None,
-            settings_modified: None,
-            now,
-        })
-    }
-
-    fn session() -> TerminalSession {
-        session_at(Instant::now())
-    }
-
-    #[test]
-    fn should_prefer_the_shell_the_tracker_saw_over_the_one_the_wrapper_launched() {
-        let id = SessionId::new(SID.into()).unwrap();
-        let session_with = |tracked: Option<Shell>| {
-            TerminalSession::new(TerminalSessionParts {
-                id: id.clone(),
-                launched_shell: Shell::Zsh,
-                settings: settings("{}"),
-                tracker: MarkerTracker::new(id.clone(), tracked, false),
-                terminal_background: None,
-                settings_modified: None,
-                now: Instant::now(),
-            })
-        };
-
-        assert_eq!(
-            (session_with(None).shell(), session_with(Some(Shell::Fish)).shell()),
-            (Shell::Zsh, Shell::Fish)
-        );
-    }
-
-    #[test]
-    fn should_open_the_late_probe_window_until_a_cursor_report_closes_it() {
-        let start = Instant::now();
-        let mut session = session();
-        session.expect_late_probe_reply(start);
-
-        let inside = session.late_probe_open(start + Duration::from_secs(2));
-        let after = session.late_probe_open(start + LATE_PROBE);
-        session.probe_cursor_reported();
-
-        assert_eq!((inside, after, session.late_probe_until()), (true, false, None));
-    }
-
-    #[test]
-    fn should_wake_up_for_the_nearest_deadline_and_only_for_the_exit_in_a_passthrough() {
-        let start = Instant::now();
-        let mut session = session_at(start);
-        session.resize_applied(start);
-        let nearest = session.next_deadline();
-        session.child_exited(0, start);
-        session.enter_passthrough();
-
-        assert_eq!(
-            (nearest, session.next_deadline()),
-            (Some(start + RESIZE_DEBOUNCE), Some(start + EXIT_GRACE))
-        );
-    }
-
-    #[test]
-    fn should_wake_for_each_source_of_a_deadline_on_its_own() {
-        let start = Instant::now();
-        let at = start + Duration::from_secs(1);
-        let sources: [(&str, Arm, Instant); 9] = [
-            ("nothing armed: the file poll", |_, _| {}, start + FILE_POLL),
-            ("resize settle", |s, at| s.resize.expire_settle_at(at), at),
-            (
-                "insertion lock",
-                |s, at| {
-                    let mut lock = InsertionLock::new(at, "git checkout".into(), "git chec".into());
-                    lock.expire_at(at, at + Duration::from_secs(5));
-                    s.lock = Some(lock);
-                },
-                at,
-            ),
-            ("llm schedule", |s, at| s.ghost.schedule_llm(at), at),
-            ("spinner", |s, at| s.spinner_at = Some(at), at),
-            ("file poll", |s, at| s.reload.expire_poll_at(at), at),
-            (
-                "child exit",
-                |s, at| {
-                    s.exit.child_exited(0, at - EXIT_GRACE);
-                },
-                at,
-            ),
-            ("redraw grace", |s, at| s.redraw_until = Some(at), at),
-            ("held keys", |s, at| s.echo.expire_hold_at(at), at),
-        ];
-
-        let woken: Vec<(&str, Option<Instant>)> = sources
-            .iter()
-            .map(|(name, arm, _)| {
-                let mut session = session_at(start);
-                arm(&mut session, at);
-                (*name, session.next_deadline())
-            })
-            .collect();
-
-        let expected: Vec<(&str, Option<Instant>)> =
-            sources.iter().map(|(name, _, wake)| (*name, Some(*wake))).collect();
-        assert_eq!(woken, expected);
-    }
-}
+mod tests;

@@ -1,4 +1,5 @@
 pub(crate) mod cell_tag;
+pub(crate) mod completion_query;
 pub(crate) mod deferred_marker;
 pub(crate) mod edit_buffer;
 pub(crate) mod edit_buffer_context;
