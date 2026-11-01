@@ -7,6 +7,7 @@ use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
 use crate::terminal_session::application::ports::live_settings::LiveSettings;
 use crate::terminal_session::application::ports::working_directory::WorkingDirectory;
+use crate::terminal_session::application::prepare_session_launch_use_case::PrepareSessionLaunchUseCase;
 use crate::terminal_session::application::report_session_context_use_case::ReportSessionContextUseCase;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 /// runner is handed instead of building them.
 pub(crate) struct TerminalSessionModule {
     pub(crate) report_session_context: ReportSessionContextUseCase,
+    pub(crate) prepare_session_launch: PrepareSessionLaunchUseCase,
     live_settings: Rc<dyn LiveSettings>,
     working_directory: Rc<dyn WorkingDirectory>,
     themes: Rc<dyn ThemeRepository>,
@@ -47,6 +49,7 @@ pub(crate) fn build_terminal_session_module(
             session_contexts.clone(),
             dependencies.clock.clone(),
         ),
+        prepare_session_launch: PrepareSessionLaunchUseCase,
         live_settings: Rc::new(LenientLiveSettings::new(settings)),
         working_directory: Rc::new(ProcessWorkingDirectory),
         themes,

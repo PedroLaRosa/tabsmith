@@ -5,6 +5,8 @@ use crate::shared::application::ports::clock::Clock;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
+use crate::terminal_session::application::launch_environment::LaunchEnvironment;
+use crate::terminal_session::application::launch_request::LaunchRequest;
 use crate::terminal_session::application::ports::live_settings::LiveSettings;
 use crate::terminal_session::application::ports::terminal_modes::TerminalModes;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
@@ -54,17 +56,16 @@ use crate::terminal_session::infrastructure::pty::platform_windows as sys;
 pub(crate) fn run(shell: Option<String>, cmd: Vec<String>, module: &TerminalSessionModule) -> i32 {
     // Panics are logged, never printed over the user's screen; the session then falls back to a plain shell.
     std::panic::set_hook(Box::new(|info| logger::error(&format!("panic: {info}"))));
-    let shell = shell
-        .or_else(|| env_nonempty("TABSMITH_SHELL"))
-        .or_else(|| {
-            if cfg!(windows) {
-                Some("pwsh".into())
-            } else {
-                env_nonempty("SHELL")
-            }
-        });
-    let login = std::env::var("TABSMITH_IS_LOGIN_SHELL").as_deref() == Ok("1");
-    let command = WrappedShellCommand::new(shell.as_deref(), &cmd, login);
+    // The environment facts are read before the session starts: the argv also feeds the fallback.
+    let command = module.prepare_session_launch.execute(LaunchRequest {
+        shell,
+        command: cmd,
+        environment: LaunchEnvironment {
+            tabsmith_shell: env_nonempty("TABSMITH_SHELL"),
+            system_shell: env_nonempty("SHELL"),
+            login_shell: std::env::var("TABSMITH_IS_LOGIN_SHELL").as_deref() == Ok("1"),
+        },
+    });
     let mut modes = None;
     let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
         Session::start(&command, &mut modes, module).map(Session::run)
