@@ -14,7 +14,7 @@ use crate::dropdown::domain::entities::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_WIDTH;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
-use crate::types::Model;
+use crate::terminal_session::infrastructure::adapters::headless_model::Model;
 use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
