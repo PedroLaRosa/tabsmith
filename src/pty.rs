@@ -24,11 +24,12 @@ use crate::terminal_session::domain::entities::insertion_lock::InsertionLock;
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
+use crate::terminal_session::domain::entities::shell_exit::ShellExit;
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
 use crate::terminal_session::domain::services::key_router::{ghost_key, is_ctrl};
 use crate::terminal_session::domain::services::render_guard::allows_drawing;
 use crate::terminal_session::domain::services::session_deadlines::{
-    next_deadline, EXIT_GRACE, FILE_POLL, REDRAW_GRACE, SPINNER_TICK,
+    next_deadline, FILE_POLL, REDRAW_GRACE, SPINNER_TICK,
 };
 use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
@@ -214,9 +215,8 @@ struct Session {
     spinner: usize,
     spinner_at: Option<Instant>,
     poll_at: Instant,
-    exit_code: Option<i32>,
-    eof: bool,
-    exit_at: Option<Instant>,
+    /// The exit code, the end of the pty output and the grace the rest of the output gets.
+    exit: ShellExit,
     /// After a panic in a handler: plain pass-through until the child exits (see `guard`).
     passthrough: bool,
     /// Test builds: stdout bytes are captured here instead of written.
@@ -386,9 +386,7 @@ impl Session {
             spinner: 0,
             spinner_at: None,
             poll_at: Instant::now() + FILE_POLL,
-            exit_code: None,
-            eof: false,
-            exit_at: None,
+            exit: ShellExit::default(),
             passthrough: false,
             sink: Vec::new(),
         })
@@ -415,7 +413,7 @@ impl Session {
             if !go {
                 break;
             }
-            if self.exit_at.is_some_and(|d| d <= Instant::now()) {
+            if self.exit.grace_over(Instant::now()) {
                 break;
             }
             if !self.passthrough {
@@ -423,7 +421,7 @@ impl Session {
             }
         }
         self.cleanup();
-        self.exit_code.unwrap_or(0)
+        self.exit.exit_code()
     }
 
     /// One main-loop message; false = leave the loop.
@@ -465,8 +463,7 @@ impl Session {
                 }
             }
             SessionMessage::PtyEof => {
-                self.eof = true;
-                return self.exit_code.is_none();
+                return self.exit.output_ended();
             }
             SessionMessage::Resize(cols, rows) if self.passthrough => {
                 if let Some(m) = &self.master {
@@ -482,19 +479,17 @@ impl Session {
                 self.guard(|s| s.on_resize(c, r));
             }
             SessionMessage::ChildExit(c) => {
-                self.exit_code = Some(c);
                 // ConPTY does not EOF on child exit. Its close may wait until the final frame fits in the pipe, which
                 // the reader drains only with credits from this loop: close it on a helper thread.
                 if let Some(m) = self.master.take_if(|_| cfg!(windows)) {
                     thread::spawn(move || drop(m));
                 }
-                if self.eof {
+                if !self.exit.child_exited(c, Instant::now()) {
                     return false;
                 }
-                self.exit_at = Some(Instant::now() + EXIT_GRACE);
             }
             SessionMessage::Term => {
-                self.exit_code = Some(129);
+                self.exit.terminated();
                 return false;
             }
             SessionMessage::Completion(_) | SessionMessage::Ghost { .. } if self.passthrough => {}
@@ -539,7 +534,7 @@ impl Session {
         let lock = self.lock.as_ref().map(|l| l.deadline());
         next_deadline(
             self.passthrough,
-            self.exit_at,
+            self.exit.deadline(),
             [
                 self.resize.deadline(),
                 lock,
@@ -1163,9 +1158,7 @@ mod tests {
             spinner: 0,
             spinner_at: None,
             poll_at: Instant::now() + FILE_POLL,
-            exit_code: None,
-            eof: false,
-            exit_at: None,
+            exit: ShellExit::default(),
             passthrough: false,
             sink: Vec::new(),
         };
@@ -1415,7 +1408,7 @@ mod tests {
         assert_eq!(sent(&pty), b"\r", "keys reach the shell unintercepted");
         assert!(s.step(SessionMessage::ChildExit(3), &mut stash));
         assert!(!s.step(SessionMessage::PtyEof, &mut stash));
-        assert_eq!((s.exit_code, s.next_deadline().is_some()), (Some(3), true));
+        assert_eq!((s.exit.code(), s.next_deadline().is_some()), (Some(3), true));
     }
 
     #[test]
@@ -2093,7 +2086,7 @@ mod tests {
         }
 
         fn exit_code(&self) -> Option<i32> {
-            self.s.exit_code
+            self.s.exit.code()
         }
 
         fn has_deadline(&self) -> bool {
@@ -2472,8 +2465,8 @@ mod tests {
         fn exit_state(&self) -> ExitState {
             ExitState {
                 code: self.rig.exit_code(),
-                output_ended: self.rig.s.eof,
-                grace_armed: self.rig.s.exit_at.is_some(),
+                output_ended: self.rig.s.exit.has_seen_eof(),
+                grace_armed: self.rig.s.exit.deadline().is_some(),
             }
         }
 
@@ -2481,7 +2474,8 @@ mod tests {
         fn exit_deadline_is_set_after(&self, delay: Duration) -> bool {
             self.rig
                 .s
-                .exit_at
+                .exit
+                .deadline()
                 .is_some_and(|at| at >= self.stepped_before + delay && at <= self.stepped_after + delay)
         }
 
