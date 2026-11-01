@@ -18,10 +18,11 @@ use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeR
 use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
-use crate::terminal_session::domain::entities::insertion_lock::{InsertionLock, INSERT_LOCK};
+use crate::terminal_session::domain::entities::echo_hold::EchoHold;
+use crate::terminal_session::domain::entities::insertion_lock::InsertionLock;
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
-use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes, unechoed_after};
+use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
 use crate::terminal_session::domain::services::key_router::{ghost_key, is_ctrl};
 use crate::terminal_session::domain::services::render_guard::allows_drawing;
 use crate::terminal_session::domain::services::session_deadlines::{
@@ -198,13 +199,8 @@ struct Session {
     cur: Option<EditBuffer>,
     /// Insertion lock (SPEC §7.3), re-armed up to its cap while the shell has echoed nothing of the insertion.
     lock: Option<InsertionLock>,
-    /// Printable keys forwarded but not yet echoed (reconciliation basis, SPEC §7.3).
-    unechoed: String,
-    /// `req` when a key the echo prediction cannot model was forwarded; cleared by a reply for a later request.
-    echo_pending: Option<u64>,
-    /// Keys that would act on the menu or ghost while `echo_pending`: replayed once the reply came, or at `held_at`.
-    held: Vec<u8>,
-    held_at: Option<Instant>,
+    /// What was sent ahead of the shell's echo and the keys held back (SPEC §7.3).
+    echo: EchoHold,
     /// A prompt redraw is in progress (see `REDRAW_GRACE`).
     redraw_until: Option<Instant>,
     /// Ghost candidates (`GhostText`: the buffer each was computed for and its text): local (engine) and LLM.
@@ -383,10 +379,7 @@ impl Session {
             changed_at: Instant::now(),
             cur: None,
             lock: None,
-            unechoed: String::new(),
-            echo_pending: None,
-            held: Vec::new(),
-            held_at: None,
+            echo: EchoHold::default(),
             redraw_until: None,
             ghost: None,
             llm: None,
@@ -561,7 +554,7 @@ impl Session {
                 self.spinner_at,
                 Some(self.poll_at),
                 self.redraw_until,
-                self.held_at,
+                self.echo.deadline(),
             ],
         )
     }
@@ -629,8 +622,7 @@ impl Session {
             }
             ShellEvent::PreExec => self.menu.error_reset(),
         }
-        self.unechoed.clear();
-        self.echo_pending = None;
+        self.echo.reset();
         self.ghost = None;
         self.llm = None;
         self.llm_at = None;
@@ -649,15 +641,13 @@ impl Session {
                 .and_then(|context| self.screen.edit_buffer(&context))
                 .filter(|e| e.at_prompt())
         };
-        if !self.unechoed.is_empty() {
-            let base = self
-                .lock
-                .as_ref()
-                .map(|l| l.expected())
-                .or(self.cur.as_ref().map(|e| e.buffer()));
-            let n = new.as_ref().map(|e| e.buffer());
-            self.unechoed = unechoed_after(&self.unechoed, base, n, self.lock.is_some());
-        }
+        let base = self
+            .lock
+            .as_ref()
+            .map(|l| l.expected())
+            .or(self.cur.as_ref().map(|e| e.buffer()));
+        let n = new.as_ref().map(|e| e.buffer());
+        self.echo.consume_echo(base, n, self.lock.is_some());
         self.cur = new;
         if let Some(lock) = &mut self.lock {
             let shown = self.cur.as_ref().map(|e| e.buffer());
@@ -685,7 +675,7 @@ impl Session {
         self.llm_at = None;
         if buffer.trim().is_empty() {
             self.menu.error_reset(); // empty buffer (SPEC §7.1); nothing to ask
-            self.echo_pending = None; // nothing stale left for held keys to act on
+            self.echo.forget_pending(); // nothing stale left for held keys to act on
             return;
         }
         let req = CompletionRequest {
@@ -703,9 +693,7 @@ impl Session {
         if c.request_id() != self.req {
             return; // only the latest request is served
         }
-        if self.echo_pending.is_some_and(|r| c.request_id() > r) {
-            self.echo_pending = None;
-        }
+        self.echo.answered_by(c.request_id());
         if c.phase() == CompletionPhase::Parse || c.ghost().is_some() {
             self.ghost = c.ghost().map(String::from).map(|g| GhostText::new(c.buffer().to_string(), g));
         }
@@ -764,7 +752,7 @@ impl Session {
             .as_ref()
             .map(|l| l.expected())
             .or(self.cur.as_ref().map(|e| e.buffer()))?;
-        Some(format!("{b}{}", self.unechoed))
+        Some(format!("{b}{}", self.echo.unechoed()))
     }
 
     /// Track a forwarded key: a printable char at the end of the line comes back as echo; anything else
@@ -776,24 +764,17 @@ impl Session {
             .is_some_and(|e| e.cursor() == e.buffer().len());
         match key.code() {
             KeyCode::Char(c) if key.modifiers() == Modifiers::default() && at_end => {
-                self.unechoed.push(c)
+                self.echo.typed_ahead(c)
             }
-            _ => {
-                self.unechoed.clear();
-                self.echo_pending = Some(self.req);
-            }
+            _ => self.echo.forwarded_unmodelled(self.req),
         }
     }
 
     /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
     fn release_held(&mut self) {
-        let timed_out = self.held_at.is_some_and(|t| t <= Instant::now());
-        if self.held.is_empty() || (self.echo_pending.is_some() && !timed_out) {
+        let Some(held) = self.echo.release(Instant::now()) else {
             return;
-        }
-        self.echo_pending = None;
-        self.held_at = None;
-        let held = std::mem::take(&mut self.held);
+        };
         self.on_keys(&held);
     }
 
@@ -862,8 +843,8 @@ impl Session {
     }
 
     fn on_keys(&mut self, chunk: &[u8]) {
-        if !self.held.is_empty() {
-            self.held.extend_from_slice(chunk); // keys keep their order behind held ones
+        if self.echo.is_holding() {
+            self.echo.hold_behind(chunk); // keys keep their order behind held ones
             return;
         }
         let mut fwd = Vec::new();
@@ -898,11 +879,10 @@ impl Session {
             let acts = ghost.is_some()
                 || tab_show
                 || (intercepting && matches!(binding, Some(KeyBinding::Action(_) | KeyBinding::Unknown)));
-            if acts && self.echo_pending.is_some() {
+            if acts && self.echo.is_waiting_for_echo() {
                 // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
                 // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
-                self.held.extend_from_slice(&chunk[ev.bytes().start..]);
-                self.held_at = Some(Instant::now() + INSERT_LOCK);
+                self.echo.hold(&chunk[ev.bytes().start..], Instant::now());
                 self.decoder.reset(); // held bytes start outside a paste and are decoded again
                 break;
             }
@@ -918,7 +898,7 @@ impl Session {
                         Some((full, g)) => {
                             let g = if full { g.as_str() } else { GhostText::next_word(&g) };
                             fwd.extend_from_slice(g.as_bytes());
-                            self.unechoed.push_str(g);
+                            self.echo.accepted_ghost(g);
                             self.ghost = None;
                             self.llm = None;
                             redraw = true;
@@ -954,7 +934,7 @@ impl Session {
                             self.marker.set_submitted(self.basis()); // `execute`
                         }
                         fwd.extend(b);
-                        self.unechoed.clear();
+                        self.echo.forget_unechoed();
                     }
                     MenuEffect::Bell => self.emit(b"\x07"),
                     MenuEffect::Rerequest => rerequest = true,
@@ -991,7 +971,7 @@ impl Session {
         // Against what the shell will show, not the last batch: keys sent ahead of their echo are reconciled too.
         let cur = self.basis().unwrap_or_else(|| ib.clone());
         fwd.extend(insertion_bytes(ins, &ib, &cur));
-        self.unechoed.clear();
+        self.echo.forget_unechoed();
         let expected = expected_buffer(ins, &ib, at);
         if ins.executes() {
             // As for Enter: preferred over a scrape with a transient prompt in front of the line; pre_exec still
@@ -1197,10 +1177,7 @@ mod tests {
             changed_at: Instant::now(),
             cur: None,
             lock: None,
-            unechoed: String::new(),
-            echo_pending: None,
-            held: Vec::new(),
-            held_at: None,
+            echo: EchoHold::default(),
             redraw_until: None,
             ghost: None,
             llm: None,
@@ -1337,7 +1314,7 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.on_input(b"e");
         s.on_output(b"e");
-        assert!(s.unechoed.is_empty());
+        assert!(s.echo.unechoed().is_empty());
         s.on_input(b"\r");
         assert_eq!(shell_line("git ch", &sent(&pty)), "git cherry-pick");
         // `l` + Right in one read: only the rest of the ghost is accepted.
@@ -1586,7 +1563,7 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.on_input(b"\x1bOC\t");
         assert_eq!(sent(&pty), b"\x1bOC");
-        s.held_at = Some(Instant::now());
+        s.echo.expire_hold_at(Instant::now());
         s.on_timers();
         assert_eq!(sent(&pty), b"e", "Tab inserted the common prefix");
     }
@@ -2068,7 +2045,7 @@ mod tests {
         }
 
         fn poke_hold_due(&mut self) {
-            self.s.held_at = Some(Instant::now());
+            self.s.echo.expire_hold_at(Instant::now());
         }
 
         fn poke_spinner_due(&mut self) {

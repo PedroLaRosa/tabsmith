@@ -1,3 +1,4 @@
+pub(crate) mod echo_hold;
 pub(crate) mod insertion_lock;
 pub(crate) mod key_decoder;
 pub(crate) mod marker_splitter;
