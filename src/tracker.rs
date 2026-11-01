@@ -10,7 +10,6 @@ use crate::terminal_session::domain::value_objects::edit_buffer_context::EditBuf
 use crate::terminal_session::domain::value_objects::marker_effects::MarkerEffects;
 use crate::terminal_session::domain::value_objects::marker_reaction::MarkerReaction;
 use crate::terminal_session::domain::value_objects::output_piece::OutputPiece;
-use crate::terminal_session::domain::value_objects::screen_command::ScreenCommand;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::terminal_session::domain::value_objects::shell_marker::ShellMarker;
@@ -18,12 +17,13 @@ use crate::terminal_session::domain::value_objects::shell_suggestion_color::{
     rgb_to_256, ShellSuggestionColor,
 };
 use crate::terminal_session::domain::value_objects::text_emphasis::TextEmphasis;
+use crate::terminal_session::infrastructure::adapters::cell_tagger;
 use crate::terminal_session::infrastructure::adapters::output_filter::OutputFilter;
 use crate::types::{now_secs, Model};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::vte::ansi::{Color, Handler, Hyperlink, Processor};
+use alacritty_terminal::vte::ansi::{Color, Processor};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Suggestion colours (SPEC §5.1.3)
@@ -130,15 +130,8 @@ impl Tracker {
 
     /// The screen commands reach the model right away and in order; the events wait for the wrapper.
     fn apply(&mut self, model: &mut Model, effects: MarkerEffects) {
-        for command in effects.screen_commands() {
-            match command {
-                ScreenCommand::Tag(cell_tag) => tag(model, Some(cell_tag.uri())),
-                ScreenCommand::ClearTag => tag(model, None),
-                ScreenCommand::MarkLineStart { redrawn_cycle } => mark_line_start(
-                    model,
-                    redrawn_cycle.map(|n| CellTag::Cycle(n).uri()).as_deref(),
-                ),
-            }
+        for &command in effects.screen_commands() {
+            cell_tagger::apply(model, command);
         }
         self.events.extend(effects.into_events());
     }
@@ -348,49 +341,6 @@ impl Tracker {
         }
         e.buffer = out;
         e.cursor -= shift;
-    }
-}
-
-/// Inject a cell tag into the model only (OSC 8 hyperlink on the cursor template; SPEC D3).
-fn tag(model: &mut Model, uri: Option<String>) {
-    model.set_hyperlink(uri.map(|uri| Hyperlink { id: None, uri }));
-}
-
-/// NewCmd at the cursor: the line starts here. Before it on its row is prompt: untagged cells too (a prompt drawn
-/// without markers: pwsh re-wraps a foreign prompt at ReadLine) and, on a redraw, the open cycle's (`from`; readline
-/// redraws only a multi-line prompt's last line, without its StartPrompt). A redraw of the prompt alone keeps the
-/// line's cells after it (bash readline: CUF over a vi-mode switch, DCH at the end of an i-search): `from` cells at
-/// and after the cursor (its line and wrap continuations) get the cursor template's tag.
-fn mark_line_start(model: &mut Model, from: Option<&str>) {
-    let prompt = Some(alacritty_terminal::term::cell::Hyperlink::new(
-        None::<String>,
-        CellTag::PROMPT_URI.into(),
-    ));
-    let link = model.grid().cursor.template.hyperlink();
-    let (cols, bottom) = (model.grid().columns(), model.grid().bottommost_line());
-    let (mut line, mut split) = (
-        model.grid().cursor.point.line,
-        model.grid().cursor.point.column.0,
-    );
-    loop {
-        let row = &mut model.grid_mut()[line];
-        for c in 0..cols {
-            let cell = &mut row[Column(c)];
-            let old = cell.hyperlink();
-            let ours = from.is_some_and(|f| old.as_ref().is_some_and(|h| h.uri() == f));
-            if c < split && (ours || old.is_none()) {
-                cell.set_hyperlink(prompt.clone());
-            } else if ours {
-                cell.set_hyperlink(link.clone());
-            }
-        }
-        if from.is_none()
-            || line >= bottom
-            || !row[Column(cols - 1)].flags.contains(Flags::WRAPLINE)
-        {
-            break;
-        }
-        (line, split) = (line + 1, 0);
     }
 }
 

@@ -1,3 +1,4 @@
+pub(crate) mod cell_tagger;
 pub(crate) mod file_session_context_repository;
 pub(crate) mod headless_model;
 pub(crate) mod icon_assets;
