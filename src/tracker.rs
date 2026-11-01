@@ -4,6 +4,7 @@
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntryPrimitives};
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
+use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
 use crate::terminal_session::domain::value_objects::output_piece::OutputPiece;
 use crate::terminal_session::domain::value_objects::pwsh_prediction_color::PwshPredictionColor;
 use crate::terminal_session::domain::value_objects::shell_suggestion_color::{
@@ -256,17 +257,17 @@ pub enum Event {
     PreExec,
 }
 
-/// Edit buffer and cursor read from the model (SPEC §5.6).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Extracted {
-    pub buffer: String,
+/// What `extract` collects while it scans the cells; the `EditBuffer` is built from it once, at the end.
+#[derive(Default)]
+struct Scraped {
+    buffer: String,
     /// Byte offset into `buffer`.
-    pub cursor: usize,
+    cursor: usize,
     /// The shell already draws its own suggestion after the cursor (SPEC §8.1).
-    pub shell_ghost: bool,
+    shell_ghost: bool,
     /// The cursor is on the command line (see `extract`): false on the rows an inline TUI draws below it (fzf
     /// `--height`, fish's pager search field), whose cells carry the open cycle's tag too.
-    pub at_prompt: bool,
+    at_prompt: bool,
 }
 
 /// Shell-integration state of one wrapper session; owns the PTY output path (splitter → model → filter).
@@ -480,7 +481,7 @@ impl Tracker {
         self.flush_deferred(model); // a queued NewCmd belongs before this PreExec
         let scraped = self
             .extract(model)
-            .map(|e| e.buffer.trim().to_string())
+            .map(|e| e.buffer().trim().to_string())
             .unwrap_or_default();
         // Lines the shell printed after Enter (`!!` echo, correction prompt) are not part of the command, nor is a
         // transient prompt redrawn without markers before it; a line the shell rewrote (abbreviation, PS2 loop) is
@@ -540,7 +541,7 @@ impl Tracker {
     }
 
     /// Edit buffer + cursor from the tagged cells around the cursor (SPEC §5.6). None while no cycle is open.
-    pub fn extract(&self, model: &Model) -> Option<Extracted> {
+    pub fn extract(&self, model: &Model) -> Option<EditBuffer> {
         let n = self.cycle.filter(|_| !self.preexec)?;
         let tag = format!("tabsmith:c{n}");
         let grid = model.grid();
@@ -620,14 +621,14 @@ impl Tracker {
                 && top > grid.topmost_line().0
                 && prompt_row(top - 1)
                 && !below);
-        let mut e = Extracted {
+        let mut e = Scraped {
             at_prompt,
-            ..Extracted::default()
+            ..Scraped::default()
         };
         let mut cursor = None;
         let (mut pad, mut line_has_cmd) = (0, false);
         // Blanks between command cells and the cursor are buffer text (zsh skips them with CUF on a redraw).
-        let mut at_cursor = |e: &mut Extracted, pad: &mut usize, line_has_cmd: bool| {
+        let mut at_cursor = |e: &mut Scraped, pad: &mut usize, line_has_cmd: bool| {
             if line_has_cmd {
                 e.buffer.extend(std::iter::repeat_n(' ', *pad));
                 *pad = 0;
@@ -681,13 +682,13 @@ impl Tracker {
         // Blank command cells after the cursor are drawing leftovers.
         let keep = e.buffer.trim_end().len().max(e.cursor);
         e.buffer.truncate(keep);
-        Some(e)
+        Some(EditBuffer::new(e.buffer, e.cursor, e.shell_ghost, e.at_prompt))
     }
 
     /// PSReadLine draws its ContinuationPrompt (each line after a real `\n`) and a re-rendered PromptText (first
     /// line) after EndPrompt, so they carry the command tag: drop them, keeping the cursor on the same character.
     /// ponytail: a first line the user typed starting with the PromptText loses it too.
-    fn strip_pwsh_prompts(&self, e: &mut Extracted) {
+    fn strip_pwsh_prompts(&self, e: &mut Scraped) {
         let (mut out, mut off, mut shift) = (String::with_capacity(e.buffer.len()), 0, 0);
         for (i, line) in e.buffer.split('\n').enumerate() {
             let p = if i == 0 {
@@ -792,7 +793,7 @@ mod tests {
 
     fn buf(t: &Tracker, m: &Model) -> (String, usize) {
         let e = t.extract(m).expect("at prompt");
-        (e.buffer, e.cursor)
+        (e.buffer().to_string(), e.cursor())
     }
 
     fn prompt(p: &str) -> String {
@@ -1017,7 +1018,7 @@ mod tests {
         );
         let e = t.extract(&m).unwrap();
         assert_eq!(
-            (e.buffer.as_str(), e.cursor, e.shell_ghost),
+            (e.buffer(), e.cursor(), e.shell_ghost()),
             ("git st", 6, true)
         );
 
@@ -1033,7 +1034,7 @@ mod tests {
         );
         let e = t.extract(&m).unwrap();
         assert_eq!(
-            (e.buffer.as_str(), e.cursor, e.shell_ghost),
+            (e.buffer(), e.cursor(), e.shell_ghost()),
             ("git st", 6, false)
         );
 
@@ -1046,7 +1047,7 @@ mod tests {
         );
         let e = t.extract(&m).unwrap();
         assert_eq!(
-            (e.buffer.as_str(), e.cursor, e.shell_ghost),
+            (e.buffer(), e.cursor(), e.shell_ghost()),
             ("ls", 2, true)
         );
     }
@@ -1084,7 +1085,7 @@ mod tests {
         );
         let e = t.extract(&m).unwrap();
         assert_eq!(
-            (e.buffer.as_str(), e.cursor, e.shell_ghost),
+            (e.buffer(), e.cursor(), e.shell_ghost()),
             ("git ch", 6, true)
         );
         // The default colour, reported: bright white + dim + italic; a plain bright white cell is typed text.
@@ -1098,7 +1099,7 @@ mod tests {
             ),
         );
         let e = t.extract(&m).unwrap();
-        assert_eq!((e.buffer.as_str(), e.cursor), ("ls        x", 2));
+        assert_eq!((e.buffer(), e.cursor()), ("ls        x", 2));
     }
 
     #[test]
@@ -1242,7 +1243,7 @@ mod tests {
         feed(&mut t, &mut m, &format!("\r[N]> {EP}{}\x1b[5C", nc()));
         let e = t.extract(&m).unwrap();
         assert_eq!(
-            (e.buffer.as_str(), e.cursor, e.at_prompt),
+            (e.buffer(), e.cursor(), e.at_prompt()),
             ("git ch", 5, true)
         );
         // A finished command's cells are not taken over by the next prompt.
@@ -1256,7 +1257,7 @@ mod tests {
 
     #[test]
     fn at_prompt_only_on_the_command_line() {
-        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
+        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer().to_string(), e.at_prompt()));
         let (mut t, mut m) = setup(40, 12, Shell::Zsh);
         // R4-7: fzf Ctrl-T after typed text draws its query row below the line (no wrap, no prompt).
         feed(
@@ -1306,7 +1307,7 @@ mod tests {
     #[test]
     fn soft_wrap_redrawn_with_crlf_is_still_the_line() {
         // fish redraws a wrapped line after an edit on its first row: up to the margin, then CRLF (no WRAPLINE).
-        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
+        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer().to_string(), e.at_prompt()));
         let (mut t, mut m) = setup(20, 8, Shell::Fish);
         feed(
             &mut t,
@@ -1334,7 +1335,7 @@ mod tests {
     #[test]
     fn prompt_ending_in_a_newline_is_at_the_prompt() {
         // r4-newline-terminated-prompt-no-menu: PS1 ends in `\n`, so the line's row holds no prompt cell.
-        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer, e.at_prompt));
+        let at = |t: &Tracker, m: &Model| t.extract(m).map(|e| (e.buffer().to_string(), e.at_prompt()));
         let (mut t, mut m) = setup(20, 12, Shell::Zsh);
         // The prompt's own line wraps too.
         feed(
@@ -1396,7 +1397,7 @@ mod tests {
         );
         let e = t.extract(&m).unwrap();
         assert_eq!(
-            (e.buffer.as_str(), e.cursor, e.at_prompt),
+            (e.buffer(), e.cursor(), e.at_prompt()),
             ("git ch", 6, true)
         );
         // The same after a command ran.
@@ -1412,7 +1413,7 @@ mod tests {
             ),
         );
         let e = t.extract(&m).unwrap();
-        assert_eq!((e.buffer.as_str(), e.at_prompt), ("ls", true));
+        assert_eq!((e.buffer(), e.at_prompt()), ("ls", true));
     }
 
     #[test]
@@ -1828,7 +1829,7 @@ mod tests {
             let extract = rig
                 .t
                 .extract(&rig.m)
-                .map(|e| (e.buffer, e.cursor, e.shell_ghost, e.at_prompt));
+                .map(|e| (e.buffer().to_string(), e.cursor(), e.shell_ghost(), e.at_prompt()));
             log += &format!(
                 "#{i} in={chunk:?}\n  out={}\n  events={events:?}\n  at_prompt={} preexec={} cycle={:?} cwd={:?}\n  extract={extract:?}\n  tags={}\n",
                 out.escape_ascii(),

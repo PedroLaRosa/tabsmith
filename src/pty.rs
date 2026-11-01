@@ -23,7 +23,8 @@ use crate::settings::infrastructure::adapters::json_file_settings_repository::Js
 use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
-use crate::tracker::{Event, Extracted, Tracker};
+use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
+use crate::tracker::{Event, Tracker};
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
@@ -362,7 +363,7 @@ struct Session {
     sent: Option<(String, usize)>,
     changed_at: Instant,
     /// Edit buffer at the last batch.
-    cur: Option<Extracted>,
+    cur: Option<EditBuffer>,
     /// Insertion lock (SPEC §7.3): (deadline, cap, expected buffer, buffer before it). Re-armed up to the cap while
     /// the shell has echoed nothing of the insertion (a slow shell).
     lock: Option<(Instant, Instant, String, String)>,
@@ -814,21 +815,21 @@ impl Session {
         let new = if self.alt() {
             None
         } else {
-            self.tracker.extract(&self.term).filter(|e| e.at_prompt)
+            self.tracker.extract(&self.term).filter(|e| e.at_prompt())
         };
         if !self.unechoed.is_empty() {
             let base = self
                 .lock
                 .as_ref()
                 .map(|l| l.2.as_str())
-                .or(self.cur.as_ref().map(|e| e.buffer.as_str()));
-            let n = new.as_ref().map(|e| e.buffer.as_str());
+                .or(self.cur.as_ref().map(|e| e.buffer()));
+            let n = new.as_ref().map(|e| e.buffer());
             self.unechoed = unechoed_after(&self.unechoed, base, n, self.lock.is_some());
         }
         self.cur = new;
         if let Some((until, cap, expected, before)) = &mut self.lock {
             let now = Instant::now();
-            let buf = self.cur.as_ref().map(|e| e.buffer.as_str());
+            let buf = self.cur.as_ref().map(|e| e.buffer());
             let applied = buf == Some(expected.as_str());
             if !applied && now < *until {
                 return;
@@ -842,17 +843,17 @@ impl Session {
         }
         let Some(e) = &self.cur else { return };
         match self.redraw_until {
-            Some(t) if e.buffer.trim().is_empty() && Instant::now() < t => return,
+            Some(t) if e.buffer().trim().is_empty() && Instant::now() < t => return,
             _ => self.redraw_until = None,
         }
         if self
             .sent
             .as_ref()
-            .is_some_and(|(b, c)| *b == e.buffer && *c == e.cursor)
+            .is_some_and(|(b, c)| *b == e.buffer() && *c == e.cursor())
         {
             return;
         }
-        let (buffer, cursor) = (e.buffer.clone(), e.cursor);
+        let (buffer, cursor) = (e.buffer().to_string(), e.cursor());
         self.req += 1;
         self.sent = Some((buffer.clone(), cursor));
         self.changed_at = Instant::now();
@@ -916,13 +917,13 @@ impl Session {
             return None;
         }
         let e = self.cur.as_ref()?;
-        if e.buffer.is_empty() || e.cursor != e.buffer.len() || e.shell_ghost {
+        if e.buffer().is_empty() || e.cursor() != e.buffer().len() || e.shell_ghost() {
             return None;
         }
         let buffer = if typed {
             self.basis()?
         } else {
-            e.buffer.clone()
+            e.buffer().to_string()
         };
         [&self.ghost, &self.llm]
             .into_iter()
@@ -937,7 +938,7 @@ impl Session {
             .lock
             .as_ref()
             .map(|l| l.2.as_str())
-            .or(self.cur.as_ref().map(|e| e.buffer.as_str()))?;
+            .or(self.cur.as_ref().map(|e| e.buffer()))?;
         Some(format!("{b}{}", self.unechoed))
     }
 
@@ -947,7 +948,7 @@ impl Session {
         let at_end = self
             .cur
             .as_ref()
-            .is_some_and(|e| e.cursor == e.buffer.len());
+            .is_some_and(|e| e.cursor() == e.buffer().len());
         match key.code() {
             KeyCode::Char(c) if key.modifiers() == Modifiers::default() && at_end => {
                 self.unechoed.push(c)
@@ -981,7 +982,7 @@ impl Session {
             || self.tracker.filter.in_string()
             || self.redraw_until.is_some()
             // PSReadLine's ListView predictions own the rows below a non-empty line.
-            || (self.tracker.pwsh_list_view && self.cur.as_ref().is_some_and(|e| !e.buffer.is_empty()))
+            || (self.tracker.pwsh_list_view && self.cur.as_ref().is_some_and(|e| !e.buffer().is_empty()))
     }
 
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
@@ -1164,7 +1165,7 @@ impl Session {
         }
         let from = self.menu.last().map(|c| (c.buffer().to_string(), c.cursor()));
         let Some((ib, at)) =
-            from.or_else(|| self.cur.as_ref().map(|e| (e.buffer.clone(), e.cursor)))
+            from.or_else(|| self.cur.as_ref().map(|e| (e.buffer().to_string(), e.cursor())))
         else {
             return;
         };
@@ -1181,7 +1182,7 @@ impl Session {
         let before = self
             .cur
             .as_ref()
-            .map_or_else(|| ib.clone(), |e| e.buffer.clone());
+            .map_or_else(|| ib.clone(), |e| e.buffer().to_string());
         let now = Instant::now();
         self.lock = Some((now + INSERT_LOCK, now + LOCK_CAP, expected, before));
         if let Some((cmd, name)) = record {
