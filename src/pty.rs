@@ -22,6 +22,9 @@ use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes, unechoed_after};
 use crate::terminal_session::domain::services::key_router::{ghost_key, is_ctrl};
+use crate::terminal_session::domain::services::session_deadlines::{
+    next_deadline, EXIT_GRACE, FILE_POLL, REDRAW_GRACE, RESIZE_DEBOUNCE, SPINNER_TICK,
+};
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
@@ -66,18 +69,11 @@ use crate::terminal_session::infrastructure::pty::platform_unix as sys;
 #[cfg(windows)]
 use crate::terminal_session::infrastructure::pty::platform_windows as sys;
 
-const RESIZE_DEBOUNCE: Duration = Duration::from_millis(150);
 const INSERT_LOCK: Duration = Duration::from_millis(100);
 /// A shell that has echoed nothing of an insertion keeps it in the basis this long at most.
 const LOCK_CAP: Duration = Duration::from_secs(1);
-/// A prompt redraw whose line arrives in a later read: its empty line is not acted on before this.
-const REDRAW_GRACE: Duration = Duration::from_millis(50);
-const SPINNER_TICK: Duration = Duration::from_millis(80);
-const FILE_POLL: Duration = Duration::from_secs(2);
 /// After a probe timeout, a late reply arriving within this window is dropped instead of typed into the shell.
 const LATE_PROBE: Duration = Duration::from_secs(3);
-/// After the child exits, wait this long for the rest of its output (PTY EOF) before leaving.
-const EXIT_GRACE: Duration = Duration::from_millis(200);
 
 /// Run the wrapper; returns the exit code to exit with. Never leaves the user without a shell (fallback, SPEC §4.4).
 pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStarter) -> i32 {
@@ -574,23 +570,20 @@ impl Session {
     }
 
     fn next_deadline(&self) -> Option<Instant> {
-        if self.passthrough {
-            return self.exit_at;
-        }
         let lock = self.lock.as_ref().map(|l| l.0);
-        [
-            self.resize_at,
-            lock,
-            self.llm_at,
-            self.spinner_at,
-            Some(self.poll_at),
+        next_deadline(
+            self.passthrough,
             self.exit_at,
-            self.redraw_until,
-            self.held_at,
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+            [
+                self.resize_at,
+                lock,
+                self.llm_at,
+                self.spinner_at,
+                Some(self.poll_at),
+                self.redraw_until,
+                self.held_at,
+            ],
+        )
     }
 
     fn alt(&self) -> bool {
