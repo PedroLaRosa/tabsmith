@@ -388,11 +388,7 @@ impl Session {
                 self.guard(|s| s.on_completion(*c));
             }
             SessionMessage::Ghost { req, text } => {
-                self.guard(|s| {
-                    if s.session.accept_llm_reply(req, text) {
-                        s.redraw();
-                    }
-                });
+                self.guard(|s| s.use_cases.apply_llm_ghost_text.execute(&mut s.session, req, text));
             }
         }
         true
@@ -439,11 +435,7 @@ impl Session {
     }
 
     fn on_completion(&mut self, c: CompletionResult) {
-        if !self.session.apply_completion(c, Instant::now()) {
-            return; // a stale reply changes nothing: no redraw, no release of held keys
-        }
-        self.redraw();
-        self.release_held();
+        self.use_cases.apply_completion_result.execute(&mut self.session, c);
     }
 
     /// Ghost text (SPEC §8.1): `typed` = after the keys typed ahead of their echo, else after the buffer on screen.

@@ -1,7 +1,9 @@
 #[cfg(test)]
 use crate::completion::application::completion_request::CompletionRequest;
 #[cfg(test)]
-use crate::completion::domain::test_fixtures::{item, settings};
+use crate::completion::domain::test_fixtures::{comp, item, settings};
+#[cfg(test)]
+use crate::completion::domain::value_objects::completion_result::CompletionResult;
 #[cfg(test)]
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 #[cfg(test)]
@@ -28,6 +30,8 @@ use crate::terminal_session::application::ports::generator_process_reaper::Recor
 use crate::terminal_session::application::ports::live_settings::InMemoryLiveSettings;
 #[cfg(test)]
 use crate::terminal_session::application::ports::terminal_modes::RecordingTerminalModes;
+#[cfg(test)]
+use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 #[cfg(test)]
 use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
 #[cfg(test)]
@@ -219,9 +223,61 @@ impl TerminalSessionHarness {
         self.use_cases.process_shell_output.execute(&mut self.session, batch);
     }
 
+    /// A bash prompt `$ ` with the integration markers, then `text` echoed.
+    pub(crate) fn prompt(&mut self, text: &str) {
+        self.output(format!("\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}").as_bytes());
+    }
+
+    /// The shell redraws its prompt (SIGWINCH, `zle reset-prompt`): PS1 with NewCmd=<sid>, then `text`.
+    pub(crate) fn redraw_prompt(&mut self, text: &str) {
+        self.output(
+            format!("\r\x1b[K\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}").as_bytes(),
+        );
+    }
+
+    /// The engine's reply arrives.
+    pub(crate) fn complete(&mut self, result: CompletionResult) {
+        self.use_cases.apply_completion_result.execute(&mut self.session, result);
+    }
+
+    /// Engine reply for the latest request (twice: the first one after a reset only arms the menu).
+    pub(crate) fn reply(&mut self, items: Vec<Suggestion>, ghost: Option<&str>) {
+        let (buffer, _) = self.session.sent().expect("a request was sent");
+        let result = comp(buffer, 1, items)
+            .with_request_id(self.session.request_id())
+            .with_ghost(ghost.map(String::from));
+        self.complete(result.clone());
+        self.complete(result);
+    }
+
+    /// The LLM's ghost text for `request` arrives.
+    pub(crate) fn llm_reply(&mut self, request: u64, text: Option<&str>) {
+        self.use_cases.apply_llm_ghost_text.execute(&mut self.session, request, text.map(String::from));
+    }
+
     /// State-only change: draw the frame again.
     pub(crate) fn redraw(&mut self) {
         self.use_cases.painter().redraw(&self.session);
+    }
+
+    /// What the shell was sent since the last call.
+    pub(crate) fn sent(&self) -> Vec<u8> {
+        self.shell.take_input()
+    }
+
+    /// The calls to the engine since the last call, in order.
+    pub(crate) fn engine_calls(&self) -> Vec<CompletionEngineCall> {
+        self.engine_calls.try_iter().collect()
+    }
+
+    /// No render guard holds, so a menu or ghost can be on screen and keys may act on it.
+    pub(crate) fn drawable(&self) -> bool {
+        self.session.drawable(&self.screen.state())
+    }
+
+    /// The ghost text: `typed` = after the keys typed ahead of their echo, else after the buffer on screen.
+    pub(crate) fn ghost_text(&self, typed: bool) -> Option<String> {
+        self.session.ghost_text(typed, &self.screen.state())
     }
 
     /// What the user's terminal got since the last `clear_written`.
