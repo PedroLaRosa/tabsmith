@@ -27,7 +27,7 @@ mod tests {
     use crate::terminal_session::application::ports::completion_engine::CompletionEngineCall;
     use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
     use crate::terminal_session::application::test_fixtures::{
-        set_panic_in_key_handling, subs, Io, TerminalSessionHarness, SID,
+        set_panic_in_key_handling, shell_line, subs, Io, TerminalSessionHarness, SID,
     };
     use std::time::Instant;
 
@@ -366,5 +366,180 @@ mod tests {
         scene.harness.input(b"\r");
 
         assert!(scene.shell_writes().is_empty());
+    }
+
+    #[test]
+    fn split_paste_is_never_intercepted() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        assert!(h.session.menu().intercepting(h.session.settings()));
+        h.input(b"\x1b[200~ONE");
+        h.input(b"\rTWO\tx\x1b[A\x1b[201~");
+        assert_eq!(h.sent(), b"\x1b[200~ONE\rTWO\tx\x1b[A\x1b[201~");
+    }
+
+    #[test]
+    fn menu_hidden_by_render_guards_does_not_intercept() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), Some("erry-pick"));
+        h.input(b"\t");
+        assert!(!h.sent().contains(&b'\t'), "drawn: Tab is intercepted");
+        // A crashed TUI left a scroll region: nothing is drawn, so Enter and End reach the shell.
+        h.output(b"\x1b7\x1b[2;20r\x1b8");
+        assert!(h.session.menu().intercepting(h.session.settings()) && !h.drawable());
+        h.input(b"\r\x1b[F");
+        assert_eq!(h.sent(), b"\r\x1b[F");
+    }
+
+    #[test]
+    fn disabled_menu_lets_tab_through() {
+        let mut h = TerminalSessionHarness::new(r#"{"autocomplete.disable": true, "autocomplete.onlyShowOnTab": true}"#);
+        h.prompt("cat ");
+        let mut c = comp(
+            "cat ",
+            1,
+            vec![
+                item("a.txt", SuggestionKind::File, ""),
+                item("b.txt", SuggestionKind::File, ""),
+            ],
+        );
+        c = c.with_request_id(h.session.request_id());
+        h.complete(c.clone());
+        c = c.with_arg_key(2); // a new argument: hidden until Tab, with items
+        h.complete(c);
+        assert!(h.session.menu().has_items());
+        h.input(b"\t\t");
+        assert_eq!(h.sent(), b"\t\t");
+    }
+
+    #[test]
+    fn insertions_build_on_keys_not_yet_echoed() {
+        // Tab + Enter (and Tab + Tab) in one read: the second insertion builds on the first one's result.
+        let files = || {
+            vec![
+                item("abcd1.txt", SuggestionKind::File, "ab"),
+                item("abcd2.txt", SuggestionKind::File, "ab"),
+            ]
+        };
+        for (keys, want) in [(&b"\t\r"[..], "cat abcd1.txt"), (b"\t\t", "cat abcd")] {
+            let mut h = TerminalSessionHarness::new("{}");
+            h.prompt("cat ab");
+            h.reply(files(), None);
+            h.input(keys);
+            assert_eq!(shell_line("cat ab", &h.sent()), want, "{keys:?}");
+        }
+        // `e` + Enter in one read: the typed-ahead `e` is erased before the selection is inserted.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.input(b"e\r");
+        assert_eq!(shell_line("git ch", &h.sent()), "git cherry-pick");
+        // Same, with the echo arriving in between (consumed, not counted twice).
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.input(b"e");
+        h.output(b"e");
+        assert!(h.session.unechoed().is_empty());
+        h.input(b"\r");
+        assert_eq!(shell_line("git ch", &h.sent()), "git cherry-pick");
+        // `l` + Right in one read: only the rest of the ghost is accepted.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("echo hel");
+        h.reply(vec![], Some("lo"));
+        h.input(b"l\x1b[C");
+        assert_eq!(shell_line("echo hel", &h.sent()), "echo hello");
+    }
+
+    #[test]
+    fn unbracketed_paste_is_not_intercepted() {
+        // pwsh never enables bracketed paste: a pasted line arrives as keys in one read.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ");
+        h.reply(subs(""), None);
+        assert!(h.session.menu().intercepting(h.session.settings()));
+        h.input(b"checkout main\r");
+        assert_eq!(h.sent(), b"checkout main\r");
+    }
+
+    #[test]
+    fn enter_records_the_submitted_line() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("echo !");
+        h.input(b"!\r");
+        assert_eq!(h.session.tracker().submitted(), Some("echo !!"));
+        // transient-prompt-execute-insertion-pollutes-history: an insertion that executes (the ↪ row) records the line
+        // it builds, not the transient prompt (p10k, oh-my-posh) redrawn without markers in front of it.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.session.tracker_mut().set_submitted(Some("stale".into()));
+        let fx = h.session.run_menu_action(KeyAction::InsertSelectedAndExecute);
+        let Some(MenuEffect::Insert { ins, .. }) = fx.into_iter().next() else {
+            panic!("no insertion")
+        };
+        h.use_cases.keystroke_handler().insert(&mut h.session, &ins, None, &mut Vec::new());
+        assert_eq!(h.session.tracker().submitted(), Some("git cherry-pick"));
+        let run = format!("\r\x1b[K\u{276f} git cherry-pick\r\n\x1b]697;OSCLock={SID}\x07\x1b]697;PreExec\x07x\r\n");
+        h.output(format!("{run}\x1b]697;OSCUnlock={SID}\x07").as_bytes());
+        h.prompt("");
+        let done: Vec<_> = h
+            .engine_calls()
+            .into_iter()
+            .filter_map(|m| {
+                if let CompletionEngineCall::CommandFinished(entry) = m {
+                    Some(entry.command().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(done, ["git cherry-pick"]);
+    }
+
+    #[test]
+    fn enter_clears_the_menu_before_the_line_runs() {
+        // enter-redraws-stale-menu-below-line: the newline echo must not re-anchor the menu one row below the line.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("echo one");
+        h.reply(vec![], None);
+        assert!(
+            h.session.menu().shown(h.session.settings()) && !h.session.menu().intercepting(h.session.settings()),
+            "the argument hint row"
+        );
+        h.input(b"\r");
+        assert_eq!(h.sent(), b"\r");
+        assert!(!h.session.menu().shown(h.session.settings()));
+        h.clear_written();
+        h.output(b"\r\n");
+        assert!(
+            !String::from_utf8_lossy(&h.written()).contains("path"),
+            "{:?}",
+            String::from_utf8_lossy(&h.written())
+        );
+    }
+
+    #[test]
+    fn pwsh_list_view_owns_the_rows_below() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.session.tracker_mut().set_pwsh_list_view(true);
+        assert!(!h.drawable());
+        h.clear_written();
+        h.redraw();
+        assert!(
+            !String::from_utf8_lossy(&h.written()).contains("checkout"),
+            "menu not drawn"
+        );
+        h.input(b"\r");
+        assert_eq!(h.sent(), b"\r");
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("");
+        h.session.set_redraw_until(None);
+        h.session.tracker_mut().set_pwsh_list_view(true);
+        assert!(h.drawable(), "an empty line has no list");
     }
 }

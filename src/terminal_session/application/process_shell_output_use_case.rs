@@ -81,7 +81,7 @@ mod tests {
     use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
     use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
     use crate::terminal_session::application::test_fixtures::{
-        Io, PanickingCompletionEngine, TerminalSessionHarness, SID,
+        subs, Io, PanickingCompletionEngine, TerminalSessionHarness, SID,
     };
     use crate::terminal_session::domain::entities::session_context::SessionContext;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
@@ -291,5 +291,127 @@ mod tests {
         let repaint = position(written, "git");
         let frame = position(written, "erry-pick");
         assert!(repaint.is_some() && frame.is_some() && repaint < frame, "{:?}", String::from_utf8_lossy(written));
+    }
+
+    #[test]
+    fn prompt_redraw_keeps_the_menu() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        // SIGWINCH: the shell redraws PS1 (with NewCmd=<sid>) and the line, in one write.
+        let redraw = format!("\r\x1b[K\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch");
+        h.output(redraw.as_bytes());
+        assert!(h.session.menu().intercepting(h.session.settings()));
+        // A command that ran does reset it.
+        h.output(b"\r\n\x1b]697;PreExec\x07");
+        h.prompt("");
+        assert!(!h.session.menu().has_items());
+    }
+
+    #[test]
+    fn no_frame_inside_an_open_dcs() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.clear_written();
+        h.output(b"\x1bP+q");
+        assert!(
+            h.written().ends_with(b"\x1bP+q"),
+            "{:?}",
+            String::from_utf8_lossy(&h.written())
+        );
+        h.input(b"\x1b[D");
+        assert_eq!(h.sent(), b"\x1b[D");
+        h.output(b"696e\x1b\\");
+        assert!(h.written().ends_with(b"\x1b[?2026l"), "frame back after ST");
+    }
+
+    #[test]
+    fn prompt_redraw_does_not_reshow_a_hidden_menu() {
+        // Up at the top hides the menu until the next key; a redraw is not a key.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.input(b"\x1b[A");
+        assert!(!h.session.menu().intercepting(h.session.settings()));
+        let req = h.session.request_id();
+        h.redraw_prompt("git ch");
+        assert_eq!(
+            h.session.request_id(), req,
+            "the unchanged line is not re-requested (its reply would show the menu)"
+        );
+        h.input(b"\r");
+        assert_eq!(h.sent(), b"\r");
+        // A recalled line (a large change) stays hidden over a resize redraw: Enter runs it.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.output(b"\x08\x08\x1b[Kstatus --short ");
+        let mut c = comp(
+            "git status --short ",
+            2,
+            vec![item("my file.txt", SuggestionKind::File, "")],
+        );
+        c = c.with_request_id(h.session.request_id());
+        h.complete(c);
+        assert!(!h.session.menu().intercepting(h.session.settings()));
+        let req = h.session.request_id();
+        h.redraw_prompt("git status --short ");
+        assert_eq!(h.session.request_id(), req);
+        h.input(b"\r");
+        assert_eq!(h.sent(), b"\r");
+    }
+
+    #[test]
+    fn no_history_command_still_ends() {
+        // r3-nohistory-skips-command-finish: the engine's end-of-command reset runs; nothing is recorded.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt(" git branch -D fe");
+        h.output(b"\r\n\x1b]697;NoHistory\x07\x1b]697;PreExec\x07Deleted branch\r\n");
+        h.prompt("");
+        let msgs: Vec<_> = h
+            .engine_calls()
+            .into_iter()
+            .filter(|m| !matches!(m, CompletionEngineCall::Complete(_)))
+            .collect();
+        assert!(
+            matches!(&msgs[..], [CompletionEngineCall::CommandEnded]),
+            "{}",
+            msgs.len()
+        );
+    }
+
+    #[test]
+    fn inline_tui_below_the_prompt_is_not_the_line() {
+        // inline-tui-scraped-as-command-line: fzf --height (zsh Ctrl-T) draws its query row below the prompt.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("");
+        let req = h.session.request_id();
+        h.output(b"\r\n  git ch");
+        assert_eq!((h.session.request_id(), h.session.edit_buffer().cloned()), (req, None));
+        // fzf exits; the widget redraws the prompt and the line.
+        h.output(format!("\r\x1b[J\x1b[A\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch").as_bytes());
+        assert_eq!(h.session.sent().map(|(b, _)| b), Some("git ch"));
+        // R4-7: Ctrl-T after typed text, with the line's menu open: hidden over fzf, and fzf gets the keys.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), Some("eckout"));
+        h.clear_written();
+        h.output(b"\r\n  1/2\r\n> rea");
+        assert!(h.session.menu().intercepting(h.session.settings()) && !h.drawable());
+        assert!(
+            !String::from_utf8_lossy(&h.written()).contains("checkout"),
+            "{:?}",
+            String::from_utf8_lossy(&h.written())
+        );
+        h.input(b"\x1b[B\r\x1b[C");
+        assert_eq!(h.sent(), b"\x1b[B\r\x1b[C");
+        // Nor does a hidden menu's show-on-Tab take fzf's Tab.
+        let mut h = TerminalSessionHarness::new(r#"{"autocomplete.onlyShowOnTab": true}"#);
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.output(b"\r\n  1/2\r\n> rea");
+        h.input(b"\t");
+        assert_eq!(h.sent(), b"\t");
     }
 }

@@ -491,17 +491,6 @@ impl Session {
         self.use_cases.handle_keystrokes.execute(&mut self.session, chunk);
     }
 
-    /// Insertion with reconciliation + lock (SPEC §7.3). Dropped while a command runs.
-    #[cfg(test)]
-    fn insert(
-        &mut self,
-        ins: &crate::completion::domain::value_objects::insertion::Insertion,
-        record: Option<(String, String)>,
-        fwd: &mut Vec<u8>,
-    ) {
-        self.use_cases.keystroke_handler().insert(&mut self.session, ins, record, fwd);
-    }
-
     /// SPEC §7.6: resize PTY + model now, repaint after 150 ms of quiet.
     fn on_resize(&mut self, cols: u16, rows: u16) {
         if !self.session.resize_wanted(cols, rows, &self.screen.state()) {
@@ -574,8 +563,6 @@ mod tests {
 
     use crate::terminal_session::infrastructure::pty::pty_reader::PTY_CREDITS;
     use crate::completion::domain::test_fixtures::{comp, item, settings};
-    use crate::dropdown::domain::value_objects::key_action::KeyAction;
-    use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
     use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
     use crate::terminal_session::application::ports::live_settings::InMemoryLiveSettings;
     use crate::terminal_session::application::ports::terminal_modes::RecordingTerminalModes;
@@ -728,92 +715,6 @@ mod tests {
     }
 
     #[test]
-    fn split_paste_is_never_intercepted() {
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        assert!(s.session.menu().intercepting(s.session.settings()));
-        s.on_input(b"\x1b[200~ONE");
-        s.on_input(b"\rTWO\tx\x1b[A\x1b[201~");
-        assert_eq!(sent(&pty), b"\x1b[200~ONE\rTWO\tx\x1b[A\x1b[201~");
-    }
-
-    #[test]
-    fn menu_hidden_by_render_guards_does_not_intercept() {
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), Some("erry-pick"));
-        s.on_input(b"\t");
-        assert!(!sent(&pty).contains(&b'\t'), "drawn: Tab is intercepted");
-        // A crashed TUI left a scroll region: nothing is drawn, so Enter and End reach the shell.
-        s.on_output(b"\x1b7\x1b[2;20r\x1b8");
-        assert!(s.session.menu().intercepting(s.session.settings()) && !s.drawable());
-        s.on_input(b"\r\x1b[F");
-        assert_eq!(sent(&pty), b"\r\x1b[F");
-    }
-
-    #[test]
-    fn disabled_menu_lets_tab_through() {
-        let (mut s, pty) =
-            session(r#"{"autocomplete.disable": true, "autocomplete.onlyShowOnTab": true}"#);
-        prompt(&mut s, "cat ");
-        let mut c = comp(
-            "cat ",
-            1,
-            vec![
-                item("a.txt", SuggestionKind::File, ""),
-                item("b.txt", SuggestionKind::File, ""),
-            ],
-        );
-        c = c.with_request_id(s.session.request_id());
-        s.on_completion(c.clone());
-        c = c.with_arg_key(2); // a new argument: hidden until Tab, with items
-        s.on_completion(c);
-        assert!(s.session.menu().has_items());
-        s.on_input(b"\t\t");
-        assert_eq!(sent(&pty), b"\t\t");
-    }
-
-    #[test]
-    fn insertions_build_on_keys_not_yet_echoed() {
-        // Tab + Enter (and Tab + Tab) in one read: the second insertion builds on the first one's result.
-        let files = || {
-            vec![
-                item("abcd1.txt", SuggestionKind::File, "ab"),
-                item("abcd2.txt", SuggestionKind::File, "ab"),
-            ]
-        };
-        for (keys, want) in [(&b"\t\r"[..], "cat abcd1.txt"), (b"\t\t", "cat abcd")] {
-            let (mut s, pty) = session("{}");
-            prompt(&mut s, "cat ab");
-            reply(&mut s, files(), None);
-            s.on_input(keys);
-            assert_eq!(shell_line("cat ab", &sent(&pty)), want, "{keys:?}");
-        }
-        // `e` + Enter in one read: the typed-ahead `e` is erased before the selection is inserted.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        s.on_input(b"e\r");
-        assert_eq!(shell_line("git ch", &sent(&pty)), "git cherry-pick");
-        // Same, with the echo arriving in between (consumed, not counted twice).
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        s.on_input(b"e");
-        s.on_output(b"e");
-        assert!(s.session.unechoed().is_empty());
-        s.on_input(b"\r");
-        assert_eq!(shell_line("git ch", &sent(&pty)), "git cherry-pick");
-        // `l` + Right in one read: only the rest of the ghost is accepted.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "echo hel");
-        reply(&mut s, vec![], Some("lo"));
-        s.on_input(b"l\x1b[C");
-        assert_eq!(shell_line("echo hel", &sent(&pty)), "echo hello");
-    }
-
-    #[test]
     fn llm_ghost_requested_for_commands_without_spec() {
         let (mut s, _) = session(
             r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
@@ -878,39 +779,6 @@ mod tests {
     }
 
     #[test]
-    fn prompt_redraw_keeps_the_menu() {
-        let (mut s, _) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        // SIGWINCH: the shell redraws PS1 (with NewCmd=<sid>) and the line, in one write.
-        let redraw = format!("\r\x1b[K\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch");
-        s.on_output(redraw.as_bytes());
-        assert!(s.session.menu().intercepting(s.session.settings()));
-        // A command that ran does reset it.
-        s.on_output(b"\r\n\x1b]697;PreExec\x07");
-        prompt(&mut s, "");
-        assert!(!s.session.menu().has_items());
-    }
-
-    #[test]
-    fn no_frame_inside_an_open_dcs() {
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        pty.stdout.clear();
-        s.on_output(b"\x1bP+q");
-        assert!(
-            pty.stdout.written().ends_with(b"\x1bP+q"),
-            "{:?}",
-            String::from_utf8_lossy(&pty.stdout.written())
-        );
-        s.on_input(b"\x1b[D");
-        assert_eq!(sent(&pty), b"\x1b[D");
-        s.on_output(b"696e\x1b\\");
-        assert!(pty.stdout.written().ends_with(b"\x1b[?2026l"), "frame back after ST");
-    }
-
-    #[test]
     fn panic_turns_the_session_into_a_pass_through() {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
@@ -958,42 +826,6 @@ mod tests {
     }
 
     #[test]
-    fn prompt_redraw_does_not_reshow_a_hidden_menu() {
-        // Up at the top hides the menu until the next key; a redraw is not a key.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        s.on_input(b"\x1b[A");
-        assert!(!s.session.menu().intercepting(s.session.settings()));
-        let req = s.session.request_id();
-        redraw(&mut s, "git ch");
-        assert_eq!(
-            s.session.request_id(), req,
-            "the unchanged line is not re-requested (its reply would show the menu)"
-        );
-        s.on_input(b"\r");
-        assert_eq!(sent(&pty), b"\r");
-        // A recalled line (a large change) stays hidden over a resize redraw: Enter runs it.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        s.on_output(b"\x08\x08\x1b[Kstatus --short ");
-        let mut c = comp(
-            "git status --short ",
-            2,
-            vec![item("my file.txt", SuggestionKind::File, "")],
-        );
-        c = c.with_request_id(s.session.request_id());
-        s.on_completion(c);
-        assert!(!s.session.menu().intercepting(s.session.settings()));
-        let req = s.session.request_id();
-        redraw(&mut s, "git status --short ");
-        assert_eq!(s.session.request_id(), req);
-        s.on_input(b"\r");
-        assert_eq!(sent(&pty), b"\r");
-    }
-
-    #[test]
     fn split_prompt_redraw_keeps_the_menu() {
         let (mut s, _) = session("{}");
         prompt(&mut s, "git ch");
@@ -1011,17 +843,6 @@ mod tests {
         s.session.set_redraw_until(Some(Instant::now()));
         s.on_timers();
         assert!(!s.session.menu().has_items());
-    }
-
-    #[test]
-    fn unbracketed_paste_is_not_intercepted() {
-        // pwsh never enables bracketed paste: a pasted line arrives as keys in one read.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ");
-        reply(&mut s, subs(""), None);
-        assert!(s.session.menu().intercepting(s.session.settings()));
-        s.on_input(b"checkout main\r");
-        assert_eq!(sent(&pty), b"checkout main\r");
     }
 
     #[test]
@@ -1079,142 +900,6 @@ mod tests {
         s.session.expire_insertion_lock(Instant::now(), Instant::now());
         s.on_timers();
         assert!(!s.session.has_insertion_lock());
-    }
-
-    #[test]
-    fn enter_records_the_submitted_line() {
-        let (mut s, _) = session("{}");
-        prompt(&mut s, "echo !");
-        s.on_input(b"!\r");
-        assert_eq!(s.session.tracker().submitted(), Some("echo !!"));
-        // transient-prompt-execute-insertion-pollutes-history: an insertion that executes (the ↪ row) records the line
-        // it builds, not the transient prompt (p10k, oh-my-posh) redrawn without markers in front of it.
-        let (mut s, _) = session("{}");
-        let (tx, rx) = mpsc::channel();
-        s.engine = Rc::new(RecordingCompletionEngine::new(tx));
-        rewire_use_cases(&mut s);
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        s.session.tracker_mut().set_submitted(Some("stale".into()));
-        let fx = s.session.run_menu_action(KeyAction::InsertSelectedAndExecute);
-        let Some(MenuEffect::Insert { ins, .. }) = fx.into_iter().next() else {
-            panic!("no insertion")
-        };
-        s.insert(&ins, None, &mut Vec::new());
-        assert_eq!(s.session.tracker().submitted(), Some("git cherry-pick"));
-        let run = format!("\r\x1b[K\u{276f} git cherry-pick\r\n\x1b]697;OSCLock={SID}\x07\x1b]697;PreExec\x07x\r\n");
-        s.on_output(format!("{run}\x1b]697;OSCUnlock={SID}\x07").as_bytes());
-        prompt(&mut s, "");
-        let done: Vec<_> = rx
-            .try_iter()
-            .filter_map(|m| {
-                if let CompletionEngineCall::CommandFinished(h) = m {
-                    Some(h.command().to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        assert_eq!(done, ["git cherry-pick"]);
-    }
-
-    #[test]
-    fn enter_clears_the_menu_before_the_line_runs() {
-        // enter-redraws-stale-menu-below-line: the newline echo must not re-anchor the menu one row below the line.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "echo one");
-        reply(&mut s, vec![], None);
-        assert!(
-            s.session.menu().shown(s.session.settings()) && !s.session.menu().intercepting(s.session.settings()),
-            "the argument hint row"
-        );
-        s.on_input(b"\r");
-        assert_eq!(sent(&pty), b"\r");
-        assert!(!s.session.menu().shown(s.session.settings()));
-        pty.stdout.clear();
-        s.on_output(b"\r\n");
-        assert!(
-            !String::from_utf8_lossy(&pty.stdout.written()).contains("path"),
-            "{:?}",
-            String::from_utf8_lossy(&pty.stdout.written())
-        );
-    }
-
-    #[test]
-    fn no_history_command_still_ends() {
-        // r3-nohistory-skips-command-finish: the engine's end-of-command reset runs; nothing is recorded.
-        let (mut s, _) = session("{}");
-        let (tx, rx) = mpsc::channel();
-        s.engine = Rc::new(RecordingCompletionEngine::new(tx));
-        rewire_use_cases(&mut s);
-        prompt(&mut s, " git branch -D fe");
-        s.on_output(b"\r\n\x1b]697;NoHistory\x07\x1b]697;PreExec\x07Deleted branch\r\n");
-        prompt(&mut s, "");
-        let msgs: Vec<_> = rx
-            .try_iter()
-            .filter(|m| !matches!(m, CompletionEngineCall::Complete(_)))
-            .collect();
-        assert!(
-            matches!(&msgs[..], [CompletionEngineCall::CommandEnded]),
-            "{}",
-            msgs.len()
-        );
-    }
-
-    #[test]
-    fn inline_tui_below_the_prompt_is_not_the_line() {
-        // inline-tui-scraped-as-command-line: fzf --height (zsh Ctrl-T) draws its query row below the prompt.
-        let (mut s, _) = session("{}");
-        prompt(&mut s, "");
-        let req = s.session.request_id();
-        s.on_output(b"\r\n  git ch");
-        assert_eq!((s.session.request_id(), s.session.edit_buffer().cloned()), (req, None));
-        // fzf exits; the widget redraws the prompt and the line.
-        s.on_output(format!("\r\x1b[J\x1b[A\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch").as_bytes());
-        assert_eq!(s.session.sent().map(|(b, _)| b), Some("git ch"));
-        // R4-7: Ctrl-T after typed text, with the line's menu open: hidden over fzf, and fzf gets the keys.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), Some("eckout"));
-        pty.stdout.clear();
-        s.on_output(b"\r\n  1/2\r\n> rea");
-        assert!(s.session.menu().intercepting(s.session.settings()) && !s.drawable());
-        assert!(
-            !String::from_utf8_lossy(&pty.stdout.written()).contains("checkout"),
-            "{:?}",
-            String::from_utf8_lossy(&pty.stdout.written())
-        );
-        s.on_input(b"\x1b[B\r\x1b[C");
-        assert_eq!(sent(&pty), b"\x1b[B\r\x1b[C");
-        // Nor does a hidden menu's show-on-Tab take fzf's Tab.
-        let (mut s, pty) = session(r#"{"autocomplete.onlyShowOnTab": true}"#);
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        s.on_output(b"\r\n  1/2\r\n> rea");
-        s.on_input(b"\t");
-        assert_eq!(sent(&pty), b"\t");
-    }
-
-    #[test]
-    fn pwsh_list_view_owns_the_rows_below() {
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        s.session.tracker_mut().set_pwsh_list_view(true);
-        assert!(!s.drawable());
-        pty.stdout.clear();
-        s.redraw();
-        assert!(
-            !String::from_utf8_lossy(&pty.stdout.written()).contains("checkout"),
-            "menu not drawn"
-        );
-        s.on_input(b"\r");
-        assert_eq!(sent(&pty), b"\r");
-        let (mut s, _) = session("{}");
-        prompt(&mut s, "");
-        s.session.set_redraw_until(None);
-        s.session.tracker_mut().set_pwsh_list_view(true);
-        assert!(s.drawable(), "an empty line has no list");
     }
 
     #[cfg(windows)]
