@@ -14,7 +14,8 @@ use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeRepository;
-use crate::terminal_session::infrastructure::adapters::overlay_renderer::{FrameInput, OverlayRenderer};
+use crate::terminal_session::application::frame_input::FrameInput;
+use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
 };
@@ -1010,6 +1011,7 @@ impl Session {
             spinner: self.spinner,
             suppress: self.suppressed(),
             scroll_region: self.tracker.filter.scroll_region(),
+            now: Instant::now(),
         };
         self.renderer.frame(&self.term, &self.menu, &input)
     }

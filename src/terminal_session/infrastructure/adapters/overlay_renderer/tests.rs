@@ -1,4 +1,6 @@
 use super::*;
+use crate::settings::domain::value_objects::settings::Settings;
+use std::time::{Duration, Instant};
 use crate::completion::domain::test_fixtures::{comp, item, settings};
 use crate::dropdown::infrastructure::adapters::theme_json_mapper::theme_palette_from_json;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
@@ -95,6 +97,7 @@ fn input<'a>(s: &'a Settings, ghost: Option<&'a str>) -> FrameInput<'a> {
         spinner: 3,
         suppress: false,
         scroll_region: false,
+        now: Instant::now(),
     }
 }
 
@@ -229,6 +232,28 @@ fn round_trip_arg_hint_spinner_and_wide_ghost() {
         &input(&s, Some("中文中文中文")),
         true,
     );
+}
+
+#[test]
+fn should_show_the_spinner_only_after_the_menu_has_been_loading_for_more_than_200_ms_at_the_given_instant() {
+    let s = Settings::default();
+    let t0 = Instant::now();
+    let mut m = Menu::new();
+    m.on_completion(comp("c", 1, vec![]).with_loading(true), &s, t0);
+    let a = model(40, 10, &[b"$ c"]);
+    let glyph = SPINNER[3 % SPINNER.len()];
+    let drawn_at = |after_ms: u64| {
+        let at = FrameInput {
+            now: t0 + Duration::from_millis(after_ms),
+            ..input(&s, None)
+        };
+        let mut r = OverlayRenderer::new(Theme::light(), true);
+        String::from_utf8(r.frame(&a, &m, &at)).unwrap().contains(glyph)
+    };
+
+    let shown = (drawn_at(199), drawn_at(201));
+
+    assert_eq!(shown, (false, true));
 }
 
 #[test]

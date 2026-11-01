@@ -12,8 +12,8 @@ use crate::dropdown::domain::value_objects::theme::Theme;
 use crate::terminal_session::infrastructure::adapters::{icon_assets, kitty_graphics};
 use crate::dropdown::domain::entities::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_WIDTH;
-use crate::settings::domain::value_objects::settings::Settings;
 use crate::completion::domain::value_objects::suggestion::Suggestion;
+use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::infrastructure::adapters::headless_model::Model;
 use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
@@ -23,20 +23,6 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::ops::Range;
-use std::time::Instant;
-
-/// Inputs to a frame besides the model and menu.
-pub(crate) struct FrameInput<'a> {
-    pub(crate) settings: &'a Settings,
-    /// Ghost text to draw at the cursor (already decided by the wrapper), if any.
-    pub(crate) ghost: Option<&'a str>,
-    /// Spinner frame counter (advanced every 80 ms by the wrapper while loading).
-    pub(crate) spinner: usize,
-    /// Wrapper-level suppression (preexec, resize repaint pending, insertion lock …).
-    pub(crate) suppress: bool,
-    /// Non-full scroll region active (tracked by the wrapper; alacritty keeps it private).
-    pub(crate) scroll_region: bool,
-}
 
 pub(crate) struct OverlayRenderer {
     theme: Theme,
@@ -304,7 +290,7 @@ impl OverlayRenderer {
             }
         } else {
             let spin = menu
-                .loading(Instant::now())
+                .loading(input.now)
                 .then(|| SPINNER[input.spinner % SPINNER.len()]);
             let (s, pad) = self.desc_row(menu, l.width(), spin);
             out.push(Patch {
