@@ -1,23 +1,24 @@
 //! `tabsmith _ pty`: the PTY wrapper session (SPEC §4.3–4.5, §7.2.4, §7.3, §7.6, §8).
 //! OWNER: wrapper agent.
 use crate::shared::infrastructure::logger;
+use crate::shared::application::ports::clock::Clock;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
-use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::live_settings::LiveSettings;
 use crate::terminal_session::application::ports::terminal_modes::TerminalModes;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::ports::terminal_writer::TerminalWriter;
 use crate::terminal_session::application::ports::working_directory::WorkingDirectory;
 use crate::terminal_session::application::ports::wrapped_shell::WrappedShell;
+use crate::terminal_session::application::session_ports_parts::SessionPortsParts;
+use crate::terminal_session::application::session_use_cases::SessionUseCases;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
 use crate::terminal_session::domain::services::key_router::plain_char;
 use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
-use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::console_terminal_modes::ConsoleTerminalModes;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
@@ -125,6 +126,8 @@ struct Session {
     session_contexts: Rc<dyn SessionContextRepository>,
     /// Kills the generators still running when the session ends.
     generator_processes: Rc<dyn GeneratorProcessReaper>,
+    /// What the wrapper does with the ports above; the legacy methods delegate to it one by one.
+    use_cases: SessionUseCases,
     /// What the wrapper knows of the shell it runs; the ports and plumbing around it stay here.
     session: TerminalSession,
 }
@@ -191,7 +194,8 @@ impl Session {
             screen.advance_model(format!("\x1b[{r};{c}H").as_bytes());
         }
         let screen: Rc<dyn TerminalScreen> = Rc::new(screen);
-        let feeder = ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock));
+        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
+        let feeder = ShellOutputFeeder::new(screen.clone(), clock.clone());
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;
         let engine = module.start_completion_engine()(tx.clone(), settings.clone());
@@ -267,6 +271,21 @@ impl Session {
         if let Some(probe_ended_at) = probe_ended_at {
             session.expect_late_probe_reply(probe_ended_at);
         }
+        let working_directory = module.working_directory();
+        let generator_processes = module.generator_processes();
+        let use_cases = SessionUseCases::new(SessionPortsParts {
+            engine: engine.clone(),
+            screen: screen.clone(),
+            writer: output.clone(),
+            shell: pty.clone(),
+            reaper: generator_processes.clone(),
+            modes: terminal_modes.clone(),
+            live_settings: live_settings.clone(),
+            session_contexts: session_contexts.clone(),
+            themes: themes.clone(),
+            working_directory: working_directory.clone(),
+            clock,
+        });
         Ok(Session {
             rx,
             engine,
@@ -278,9 +297,10 @@ impl Session {
             feeder,
             themes,
             live_settings,
-            working_directory: module.working_directory(),
+            working_directory,
             session_contexts,
-            generator_processes: module.generator_processes(),
+            generator_processes,
+            use_cases,
             session,
         })
     }
@@ -489,6 +509,7 @@ impl Session {
     }
 
     /// Ghost text (SPEC §8.1): `typed` = after the keys typed ahead of their echo, else after the buffer on screen.
+    #[cfg(test)]
     fn ghost_text(&self, typed: bool) -> Option<String> {
         self.session.ghost_text(typed, &self.screen.state())
     }
@@ -501,10 +522,6 @@ impl Session {
         self.on_keys(&held);
     }
 
-    fn suppressed_in(&self, screen: &ScreenState) -> bool {
-        self.session.suppressed(screen)
-    }
-
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
     #[cfg(test)]
     fn drawable(&self) -> bool {
@@ -512,24 +529,13 @@ impl Session {
     }
 
     fn frame(&mut self) -> Vec<u8> {
-        let ghost = self.ghost_text(false);
-        let screen = self.screen.state();
-        let input = FrameInput {
-            settings: self.session.settings(),
-            ghost: ghost.as_deref(),
-            spinner: self.session.spinner_frame(),
-            suppress: self.suppressed_in(&screen),
-            scroll_region: screen.scroll_region(),
-            now: Instant::now(),
-        };
-        self.screen.draw_overlay(self.session.menu(), &input)
+        self.use_cases.painter().frame(&self.session)
     }
 
     /// State-only change: the renderer clears a changed frame in the same write and skips an identical one
     /// (SPEC §7.5.3).
     fn redraw(&mut self) {
-        let out = self.frame();
-        self.emit(&out);
+        self.use_cases.painter().redraw(&self.session);
     }
 
     /// Stdin chunk (SPEC §7.2.4): intercept bound keys while the menu is shown, accept ghost text, else forward.
@@ -643,10 +649,7 @@ impl Session {
 
     /// Full repaint once the resize settled (postponed while on the alternate screen).
     fn take_repaint(&mut self) -> Vec<u8> {
-        if !self.session.take_repaint(&self.screen.state()) {
-            return Vec::new();
-        }
-        self.screen.full_repaint()
+        self.use_cases.painter().take_repaint(&mut self.session)
     }
 
     fn on_timers(&mut self) {
@@ -776,20 +779,45 @@ mod tests {
             false,
         );
         let screen: Rc<dyn TerminalScreen> = Rc::new(AlacrittyTerminalScreen::for_tests(80, 24));
+        let engine: Rc<dyn CompletionEngine> = Rc::new(RecordingCompletionEngine::new(mpsc::channel().0));
+        let pty = Rc::new(PtyWrappedShell::new(input, Box::new(RecordingMasterPty::new())));
+        let modes: Rc<dyn TerminalModes> = Rc::new(RecordingTerminalModes::new());
+        let themes: Rc<dyn ThemeRepository> = Rc::new(InMemoryThemeRepository::default());
+        let live_settings: Rc<dyn LiveSettings> = Rc::new(InMemoryLiveSettings::new(Settings::default()));
+        let working_directory: Rc<dyn WorkingDirectory> =
+            Rc::new(FixedWorkingDirectory::new(std::env::current_dir().ok()));
+        let session_contexts: Rc<dyn SessionContextRepository> =
+            Rc::new(InMemorySessionContextRepository::default());
+        let generator_processes: Rc<dyn GeneratorProcessReaper> = Rc::new(RecordingGeneratorProcessReaper::new());
+        let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
+        let use_cases = SessionUseCases::new(SessionPortsParts {
+            engine: engine.clone(),
+            screen: screen.clone(),
+            writer: stdout.clone(),
+            shell: pty.clone(),
+            reaper: generator_processes.clone(),
+            modes: modes.clone(),
+            live_settings: live_settings.clone(),
+            session_contexts: session_contexts.clone(),
+            themes: themes.clone(),
+            working_directory: working_directory.clone(),
+            clock: clock.clone(),
+        });
         let s = Session {
             rx: mpsc::channel().1,
-            engine: Rc::new(RecordingCompletionEngine::new(mpsc::channel().0)),
+            engine,
             credits: mpsc::sync_channel(PTY_CREDITS).0,
-            pty: Rc::new(PtyWrappedShell::new(input, Box::new(RecordingMasterPty::new()))),
+            pty,
             output: stdout.clone(),
-            modes: Rc::new(RecordingTerminalModes::new()),
-            feeder: ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock)),
+            modes,
+            feeder: ShellOutputFeeder::new(screen.clone(), clock),
             screen,
-            themes: Rc::new(InMemoryThemeRepository::default()),
-            live_settings: Rc::new(InMemoryLiveSettings::new(Settings::default())),
-            working_directory: Rc::new(FixedWorkingDirectory::new(std::env::current_dir().ok())),
-            session_contexts: Rc::new(InMemorySessionContextRepository::default()),
-            generator_processes: Rc::new(RecordingGeneratorProcessReaper::new()),
+            themes,
+            live_settings,
+            working_directory,
+            session_contexts,
+            generator_processes,
+            use_cases,
             session: TerminalSession::new(TerminalSessionParts {
                 id: SessionId::new(id.to_string()).unwrap(),
                 launched_shell: Shell::Bash,
