@@ -1,5 +1,6 @@
 use crate::terminal_session::application::apply_completion_result_use_case::ApplyCompletionResultUseCase;
 use crate::terminal_session::application::apply_llm_ghost_text_use_case::ApplyLlmGhostTextUseCase;
+use crate::terminal_session::application::apply_terminal_background_use_case::ApplyTerminalBackgroundUseCase;
 use crate::terminal_session::application::completion_requester::CompletionRequester;
 use crate::terminal_session::application::end_session_use_case::EndSessionUseCase;
 use crate::terminal_session::application::handle_keystrokes_use_case::HandleKeystrokesUseCase;
@@ -30,6 +31,7 @@ pub(crate) struct SessionUseCases {
     pub(crate) resize_terminal: ResizeTerminalUseCase,
     pub(crate) handle_shell_exit: HandleShellExitUseCase,
     pub(crate) handle_timer_tick: HandleTimerTickUseCase,
+    pub(crate) apply_terminal_background: ApplyTerminalBackgroundUseCase,
     pub(crate) end_session: EndSessionUseCase,
 }
 
@@ -47,7 +49,7 @@ impl SessionUseCases {
             ports.session_contexts.clone(),
             ports.engine.clone(),
             ports.screen.clone(),
-            ports.themes,
+            ports.themes.clone(),
         ));
         let keystroke_handler = Rc::new(KeystrokeHandler::new(
             ports.engine.clone(),
@@ -73,6 +75,7 @@ impl SessionUseCases {
             poller.clone(),
             keystroke_handler.clone(),
         );
+        let apply_terminal_background = ApplyTerminalBackgroundUseCase::new(ports.screen.clone(), ports.themes);
         let end_session = EndSessionUseCase::new(
             ports.screen.clone(),
             ports.writer.clone(),
@@ -104,6 +107,7 @@ impl SessionUseCases {
             resize_terminal,
             handle_shell_exit,
             handle_timer_tick,
+            apply_terminal_background,
             end_session,
         }
     }

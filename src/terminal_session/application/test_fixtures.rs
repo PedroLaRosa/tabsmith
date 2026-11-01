@@ -55,6 +55,8 @@ use crate::terminal_session::domain::repositories::session_context_repository::{
 #[cfg(test)]
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 #[cfg(test)]
+use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
+#[cfg(test)]
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use std::cell::{Cell, RefCell};
 #[cfg(test)]
@@ -238,6 +240,11 @@ impl TerminalSessionHarness {
     /// A timer fires: a deadline of the session may have come.
     pub(crate) fn tick(&mut self) {
         self.use_cases.handle_timer_tick.execute(&mut self.session);
+    }
+
+    /// The terminal answered the background probe late.
+    pub(crate) fn background(&mut self, background: TerminalBackground) {
+        self.use_cases.apply_terminal_background.execute(&mut self.session, background);
     }
 
     /// The loop was left: the session is over.

@@ -431,9 +431,9 @@ impl Session {
         let chunk = if self.session.late_probe_open(Instant::now()) {
             let (cpr, bg, rest) = parse_probe(chunk);
             if let Some(bg) = bg {
-                self.session.probe_background_reported(TerminalBackground::new(bg));
-                self.screen
-                    .set_theme(resolve_theme(self.session.settings(), Some(bg), &*self.themes));
+                self.use_cases
+                    .apply_terminal_background
+                    .execute(&mut self.session, TerminalBackground::new(bg));
             }
             if cpr.is_some() {
                 self.session.probe_cursor_reported();

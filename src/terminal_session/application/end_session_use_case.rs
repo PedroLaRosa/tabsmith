@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn should_clear_the_overlay_and_show_the_cursor_in_one_write() {
-        let mut harness = harness_showing_a_menu();
+        let harness = harness_showing_a_menu();
         let reference = harness_showing_a_menu();
         let mut expected = reference.screen.take_clear();
         expected.extend_from_slice(SHOW_CURSOR);
