@@ -1,5 +1,7 @@
 pub(crate) mod completion_requester;
 pub(crate) mod frame_input;
+pub(crate) mod handle_keystrokes_use_case;
+pub(crate) mod keystroke_handler;
 pub(crate) mod overlay_painter;
 pub(crate) mod ports;
 pub(crate) mod report_session_context_use_case;

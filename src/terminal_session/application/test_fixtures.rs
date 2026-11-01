@@ -1,5 +1,7 @@
 #[cfg(test)]
-use crate::completion::domain::test_fixtures::settings;
+use crate::completion::domain::test_fixtures::{item, settings};
+#[cfg(test)]
+use crate::completion::domain::value_objects::suggestion::Suggestion;
 #[cfg(test)]
 use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
 #[cfg(test)]
@@ -8,6 +10,8 @@ use crate::shared::application::ports::clock::Clock;
 use crate::shared::domain::value_objects::shell::Shell;
 #[cfg(test)]
 use crate::shared::infrastructure::system_clock::SystemClock;
+#[cfg(test)]
+use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 #[cfg(test)]
 use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
 #[cfg(test)]
@@ -38,7 +42,7 @@ use crate::terminal_session::domain::repositories::session_context_repository::{
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 #[cfg(test)]
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::rc::Rc;
 #[cfg(test)]
@@ -48,6 +52,42 @@ use std::sync::Arc;
 
 /// The id of the session of the tests; the shell integration markers of a test carry it.
 pub(crate) const SID: &str = "0123456789abcdef0123456789abcdef";
+
+thread_local!(static PANIC_IN_KEY_HANDLING: Cell<bool> = const { Cell::new(false) });
+
+/// Fault injection: a panic while keys are handled (decoder, menu, insertion). The handler calls it first in the loop
+/// over the keys of a read.
+pub(crate) fn maybe_panic() {
+    if PANIC_IN_KEY_HANDLING.with(|on| on.get()) {
+        panic!("injected");
+    }
+}
+
+/// Switches the fault injection of `maybe_panic` on or off for the current thread.
+pub(crate) fn set_panic_in_key_handling(on: bool) {
+    PANIC_IN_KEY_HANDLING.with(|switch| switch.set(on));
+}
+
+/// The two subcommands the tests complete `query` to.
+pub(crate) fn subs(query: &str) -> Vec<Suggestion> {
+    ["cherry-pick", "checkout"]
+        .iter()
+        .map(|name| item(name, SuggestionKind::Subcommand, query))
+        .collect()
+}
+
+/// The shell line after `line` receives what the wrapper wrote (DEL erases, printable bytes append).
+pub(crate) fn shell_line(line: &str, bytes: &[u8]) -> String {
+    let mut shown = line.to_string();
+    for &byte in bytes {
+        match byte {
+            0x7f => drop(shown.pop()),
+            0x20..=0x7e => shown.push(byte as char),
+            _ => {}
+        }
+    }
+    shown
+}
 
 /// One thing the session sent out, in the order the doubles saw it.
 #[derive(Clone, Debug, PartialEq)]
@@ -146,6 +186,11 @@ impl TerminalSessionHarness {
             now: clock.now_instant(),
         });
         TerminalSessionHarness { session, screen, writer, shell, journal, engine_calls, live_settings, reaper, clock, use_cases }
+    }
+
+    /// A stdin read arrives.
+    pub(crate) fn input(&mut self, bytes: &[u8]) {
+        self.use_cases.handle_keystrokes.execute(&mut self.session, bytes);
     }
 
     /// State-only change: draw the frame again.
