@@ -1,3 +1,4 @@
+pub(crate) mod alacritty_terminal_screen;
 pub(crate) mod cell_tagger;
 pub(crate) mod edit_buffer_extractor;
 pub(crate) mod file_session_context_repository;
