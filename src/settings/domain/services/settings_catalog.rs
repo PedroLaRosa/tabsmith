@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(literal, Some(if cfg!(windows) { "20000" } else { "5000" }));
     }
 
-    /// menu.rs max_rows: `f64("autocomplete.height", 7.0)`.
+    /// dropdown/domain/entities/menu.rs max_rows: `f64("autocomplete.height", 7.0)`.
     #[test]
     fn should_default_the_menu_height_to_7_rows() {
         let settings = Settings::default();
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(read, 7.0);
     }
 
-    /// render.rs: `f64("autocomplete.width", 40.0)`.
+    /// overlay_renderer.rs (`menu_patches`): `f64("autocomplete.width", 40.0)`.
     #[test]
     fn should_default_the_menu_width_to_40_columns() {
         let settings = Settings::default();
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(read, 49);
     }
 
-    /// pty.rs: `i64("inline.debounceMs", 300)`.
+    /// terminal_session/domain/entities/terminal_session.rs: `i64("inline.debounceMs", 300)`.
     #[test]
     fn should_default_the_llm_debounce_to_300_ms() {
         let settings = Settings::default();
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(read, 300);
     }
 
-    /// get_inline_status_use_case.rs, doctor.rs, suggest_local_ghost_text_use_case.rs and pty.rs: `bool("inline.enabled", true)`.
+    /// get_inline_status_use_case.rs, doctor.rs, suggest_local_ghost_text_use_case.rs and terminal_session/domain/entities/terminal_session.rs: `bool("inline.enabled", true)`.
     #[test]
     fn should_default_ghost_text_to_enabled() {
         let settings = Settings::default();
@@ -372,7 +372,7 @@ mod tests {
         assert!(read);
     }
 
-    /// doctor.rs, menu.rs and pty.rs: `bool("autocomplete.disable", false)`.
+    /// doctor.rs, dropdown/domain/entities/menu.rs and terminal_session/domain/entities/terminal_session.rs: `bool("autocomplete.disable", false)`.
     #[test]
     fn should_default_autocomplete_to_not_disabled() {
         let settings = Settings::default();
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// completion_result_builder.rs, menu.rs and pty.rs: `bool("autocomplete.onlyShowOnTab", false)`.
+    /// completion_result_builder.rs, dropdown/domain/entities/menu.rs and terminal_session/domain/entities/terminal_session.rs: `bool("autocomplete.onlyShowOnTab", false)`.
     #[test]
     fn should_default_to_opening_the_menu_without_tab() {
         let settings = Settings::default();
@@ -503,7 +503,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// menu.rs: `bool("autocomplete.alwaysShowDescription", false)`.
+    /// dropdown/domain/entities/menu.rs: `bool("autocomplete.alwaysShowDescription", false)`.
     #[test]
     fn should_default_the_description_pop_out_to_closed() {
         let settings = Settings::default();
@@ -516,7 +516,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// menu.rs: `bool("autocomplete.scrollWrapAround", false)`.
+    /// dropdown/domain/entities/menu.rs: `bool("autocomplete.scrollWrapAround", false)`.
     #[test]
     fn should_default_the_menu_to_not_wrap_around() {
         let settings = Settings::default();
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// menu.rs: `bool("autocomplete.navigateToHistory", false)`.
+    /// dropdown/domain/entities/menu.rs: `bool("autocomplete.navigateToHistory", false)`.
     #[test]
     fn should_default_to_hiding_the_menu_instead_of_navigating_to_history() {
         let settings = Settings::default();
@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// render.rs: `string("autocomplete.theme").unwrap_or("dark")`; the theme command prints `dark` too.
+    /// theme_resolver.rs: `string("autocomplete.theme").unwrap_or("dark")`; the theme command prints `dark` too.
     #[test]
     fn should_default_the_theme_to_dark() {
         let settings = Settings::default();

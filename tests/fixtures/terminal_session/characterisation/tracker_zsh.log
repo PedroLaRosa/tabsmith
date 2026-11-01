@@ -1,0 +1,60 @@
+#0 in="\u{1b}]697;Shell=zsh\u{1b}\\"
+  out=
+  events=[]
+  at_prompt=false preexec=false cycle=None cwd=None
+  extract=None
+  tags=
+#1 in="\u{1b}]697;ZshAutosuggestionColor=fg=8\u{1b}\\"
+  out=
+  events=[]
+  at_prompt=false preexec=false cycle=None cwd=None
+  extract=None
+  tags=
+#2 in="\u{1b}]697;StartPrompt\u{7}% \u{1b}]697;EndPrompt\u{7}\u{1b}]697;NewCmd=0123456789abcdef0123456789abcdef\u{7}"
+  out=% 
+  events=["NewCmd(None)"]
+  at_prompt=true preexec=false cycle=Some(1) cwd=None
+  extract=Some(("", 0, false, true))
+  tags= row0:0..2=tabsmith:p
+#3 in="ec"
+  out=ec
+  events=[]
+  at_prompt=true preexec=false cycle=Some(1) cwd=None
+  extract=Some(("ec", 2, false, true))
+  tags= row0:0..2=tabsmith:p row0:2..4=tabsmith:c1
+#4 in="\u{1b}[90mho hi\u{1b}[0m\u{1b}[6D"
+  out=\x1b[90mho hi\x1b[0m\x1b[6D
+  events=[]
+  at_prompt=true preexec=false cycle=Some(1) cwd=None
+  extract=Some(("ec", 1, true, true))
+  tags= row0:0..2=tabsmith:p row0:2..9=tabsmith:c1
+#5 in="\r\n"
+  out=\r\n
+  events=[]
+  at_prompt=true preexec=false cycle=Some(1) cwd=None
+  extract=Some(("echo hi\n", 8, false, false))
+  tags= row0:0..2=tabsmith:p row0:2..9=tabsmith:c1
+#6 in="\u{1b}]697;OSCLock=0123456789abcdef0123456789abcdef\u{1b}\\\u{1b}]697;PreExec\u{1b}\\"
+  out=
+  events=["PreExec"]
+  at_prompt=false preexec=true cycle=Some(1) cwd=None
+  extract=None
+  tags= row0:0..2=tabsmith:p row0:2..9=tabsmith:c1
+#7 in="\u{1b}]697;PID=99\u{1b}\\\u{1b}]697;StartPrompt\u{7}inner> \u{1b}]697;EndPrompt\u{7}\u{1b}]697;NewCmd=0123456789abcdef0123456789abcdef\u{7}"
+  out=inner> 
+  events=["NewCmd(command=\"echo hi\" shell=\"zsh\" pid=None session_id=\"0123456789abcdef0123456789abcdef\" cwd=None exit_code=None hostname=None end_time_set=true)"]
+  at_prompt=true preexec=false cycle=Some(2) cwd=None
+  extract=Some(("", 0, false, true))
+  tags= row0:0..2=tabsmith:p row0:2..9=tabsmith:c1 row1:0..7=tabsmith:p
+#8 in="exit\r\n"
+  out=exit\r\n
+  events=[]
+  at_prompt=true preexec=false cycle=Some(2) cwd=None
+  extract=Some(("exit\n", 5, false, false))
+  tags= row0:0..2=tabsmith:p row0:2..9=tabsmith:c1 row1:0..7=tabsmith:p row1:7..11=tabsmith:c2
+#9 in="\u{1b}]697;OSCUnlock=0123456789abcdef0123456789abcdef\u{1b}\\\u{1b}]697;StartPrompt\u{7}% \u{1b}]697;EndPrompt\u{7}\u{1b}]697;NewCmd=0123456789abcdef0123456789abcdef\u{7}"
+  out=% 
+  events=["NewCmd(None)"]
+  at_prompt=true preexec=false cycle=Some(3) cwd=None
+  extract=Some(("", 0, false, true))
+  tags= row0:0..2=tabsmith:p row0:2..9=tabsmith:c1 row1:0..7=tabsmith:p row1:7..11=tabsmith:c2 row2:0..2=tabsmith:p

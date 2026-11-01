@@ -8,19 +8,14 @@ mod bootstrap;
 mod cli;
 mod completion;
 mod doctor;
+mod dropdown;
 mod ghost_text;
 mod history;
-mod icons;
-mod keys;
-mod menu;
-mod pty;
-mod render;
 mod settings;
 mod shared;
 mod shell_integration;
 mod specs;
 mod terminal_session;
-mod tracker;
 mod types;
 
 fn main() {

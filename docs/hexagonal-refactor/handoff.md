@@ -1,173 +1,176 @@
-# Hexagonal refactor: handoff (2026-10-30)
+# Hexagonal refactor: handoff (2026-11-01, after Phase 9: how to start Phase 10)
 
-Where the refactor stands after Phase 7, and how to start Phase 8. Read this first, then [`README.md`](README.md),
-[`agent-brief.md`](agent-brief.md), [`phase-7-ghost-text.md`](phase-7-ghost-text.md) and the plan's section 9
-"Phase 7 notes".
+Where the refactor stands, and how to continue in a new session. Read this first, then [`README.md`](README.md),
+[`agent-brief.md`](agent-brief.md), [`phase-9-terminal-session.md`](phase-9-terminal-session.md) (the Phase 9 research: traps,
+decisions R1-R46, deviations, module map, hand-off notes) and the plan's section 9 "Phase 9 notes" for the conventions.
+**Phase 9 is done (last code commit `b898db1`); Phase 10 is not started.** This file replaces the earlier Phase 8 handoff
+(Phases 0-9 are in the plan's section 9).
 
 ## The task
 
-The user asked for phases 6 and 7 of [the plan](../hexagonal-refactor-plan.md), using the `hexagonal-architecture`
-skill as reference (Phase 7 in a second session: "continue working on the plan (so far phases 0-6 are done),
-implements the refactor for phase 7"). It is a refactor: behaviour must not change, and tests change only when they
-have to be moved or restructured. During Phase 6 the user said: "once you finish the phase 6, stop."
-**Phase 7 is done. Phase 8 is not started and has no research yet** (see "Next: Phase 8"). Start Phase 8 only when the
-user asks for it.
+The Phase 9 request was to implement the plan's Phase 9 (`terminal_session`: `pty.rs`, `tracker.rs`, `types::{Msg, Model}`
+and the pty parts of `cli.rs`) on the existing branch, as a refactor: tests locked, behaviour unchanged. **That request names
+no push and no pull request, so none is authorised.** The 9.7 close pushed nothing: the local remote-tracking ref
+`origin/refactor/hexagonal-dropdown-terminal-session` is at `d1fdd67` (the end of run 5), so run 6 and the three docs commits
+are unpushed, and no tag is pushed. Whether a PR exists for the branch was not checked (the `gh` GraphQL route is blocked
+in these sessions).
+**Phase 10 (diagnostics) is NOT started and must not be started without the user asking for it.** Before it, the user owes the
+manual smoke below.
 
-The user turned ultracode on for the session: every substantive task runs as a Workflow.
+The Phase 8 request asked for a separate PR for this branch, stacked on PR #1 (`refactor/hexagonal-architecture` → `main`,
+still open when it was written). The branch now carries Phases 8 and 9. Ask the user before any push or PR, and say in the PR
+that the manual smoke is pending and that Phase 9 is in it.
+
+## Where the work lives
+
+- Branch **`refactor/hexagonal-dropdown-terminal-session`**, created off `refactor/hexagonal-architecture`. Stay on it; never
+  commit on `main`.
+- Local tags (not pushed): `phase4-start` … `phase8-start`, **`phase9-start` = `858b7b5`** (the testlock baseline of every
+  Phase 9 step; `src/` equals the Phase 8 end) and **`phase9-guards` = `3fdb6e5`** (the end of run 1, the third baseline).
+  A Phase 10 tag `phase10-start` would be set at the commit that starts it.
+- Code ends at `b898db1`; three `docs:` commits follow (the plan, the glossary, this hand-off with the README and the
+  research's Status line). `git diff b898db1 HEAD -- src` is empty.
 
 ## Binding rules
 
-- Load the skills `xp-tdd`, `testing-standard`, `coding-standards` and `hexagonal-architecture` before working
+- Load the skills `xp-tdd`, `testing-standard`, `coding-standards` and `hexagonal-architecture` before touching code
   (AGENTS.md). Commit after each finished task.
-- Work on branch `refactor/hexagonal-architecture`, never `main`. **Never push**; ask the user first. Nothing is
-  pushed, including the local tags `phase4-start` (`cec000e`), `phase5-start` (`1a466e2`), `phase6-start` (`c38596c`)
-  and `phase7-start` (`eef4c88`).
-- Never rewrite committed history: no amend, rebase, reset of a commit, filter-branch or force. Fix forward.
-- Commit subjects: `refactor(<module>): <why>`, `test(<module>): …`, `docs: …` / `docs(<module>): …` or
-  `chore(scripts): …`, at most 72 characters, ending with the trailer of the model that writes the commit. Phases 1-6
-  used `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; Phase 7 used
-  `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` (the session ran Sonnet 5.5; the Phase 7 preambles say
-  so, and agent-brief.md's Opus line is superseded for them). docs/git-convention.md (named in AGENTS.md) does not
-  exist; agent-brief.md's commit rules apply.
-- **Commit with `git commit -F <file>`, not `-m`.** The RTK command hook rewrites words inside a quoted `-m` string
-  (`f8e6055`). Let a long subject stop the commit:
-  `[ "$(head -1 <file> | awk '{print length}')" -le 72 ] && git commit -F <file>`. Phase 7 still let one 76-character
-  subject through (`fe4b320`, a review fix): measure it before the commit, in every agent's preamble.
+- Never rewrite committed history (no amend, rebase, reset of a commit, filter-branch, force). Fix forward.
+- Commit subjects: `refactor(<module>): <why>`, `test(<module>): …`, `docs: …`, `chore(scripts): …`, at most 72 characters,
+  ending with the two trailer lines `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` and
+  `Claude-Session: <the session link>` (agent-brief.md's Opus line is superseded). `docs/git-convention.md` (named in
+  AGENTS.md) does not exist.
+- **Commit with `git commit -F <file>`, not `-m`**: the RTK command hook rewrites words inside a quoted `-m` string. Measure
+  the subject first: `[ "$(head -1 <file> | awk '{print length}')" -le 72 ] && git commit -F <file>`. Two Phase 9 subjects
+  are over 72 (`21f1de7`, `c8629c2`); history is not rewritten.
 - Exact dependency versions only; no new crates.
-- Tests are locked against `ef807c1`: never weaken, delete, rename or `#[ignore]` one. MISSING must stay 0 and
-  DUPLICATE 0 (testlock keys tests by fn name, so a duplicate name hides one copy).
-- Do not edit or commit in the main working tree while a workflow's agents are committing there, and never
-  `SendMessage` an agent that runs inside a workflow.
-- zsh is the shell here: an unquoted `=====` or `--include=*.rs` in a command fails with "not found" / "no matches".
+- **Tests are locked** against `ef807c1`: never weaken, delete, rename or `#[ignore]` one. MISSING must stay 0 and DUPLICATE 0
+  (testlock keys tests by fn name). Only restructuring is allowed in a test: paths, glossary renames, moving it, splitting it
+  into parts that assert the same, building the same scenario through a new constructor.
+- **Behaviour must not change.** Where the plan's letter would change it, keep the behaviour and record a deviation (D1).
+  Known behaviours kept in Phase 9 and reported, not fixed: P9-N1 to P9-N6 (the plan's section 9 "Phase 9 notes").
+- Never edit or commit in the main working tree while a workflow's agents are committing there, and never `SendMessage` an
+  agent that runs inside a workflow. Draft docs under `target/` (git-ignored) meanwhile.
+- Never run cargo from outside the repo root with a relative `CARGO_TARGET_DIR`, and never leave cargo output outside
+  `target/`.
+- **Pushing:** nothing is authorised. A push, a tag push or a PR needs the user's explicit word.
 
-## Tools
+## Tools (all run from the repo root)
 
-- `scripts/hexagonal-refactor/gate.sh` (`--fast` skips the golden capture): build, tests, clippy (budget 3 warnings,
-  all 3 used), the 131-command golden CLI capture, and the test lock against `ef807c1`.
-- `python3 scripts/hexagonal-refactor/testlock.py . <rev> [--diff]`. Delete `scripts/hexagonal-refactor/__pycache__`
-  afterwards. Its loose form strips `Type::` path prefixes, so a rename confined to an enum path shows as PATH-ONLY,
-  not CHANGED: judge restructurings by reading the diff.
-- `integrations-diff.sh <bin>`, `precmd-diff.sh <bin>` and, from Phase 7, `inline-diff.sh <bin>` (scripts/hexagonal-refactor):
-  diff each one's output for the baseline binary `target/hexagonal-refactor/baseline-tree/target/debug/tabsmith`
-  against `target/debug/tabsmith` (after `cargo build --locked`). All three diffs must be empty. `inline-diff.sh` covers
-  what the golden capture misses of `tabsmith inline` and doctor's Inline check (valid and invalid profiles, the numbered
-  chooser on a pty, a corrupted settings.json, no home).
-- `cargo test --locked --release -- --ignored all_bundle_modules` (must print `1 passed`) and
-  `cargo check --locked --no-default-features --all-targets`.
-- The failing-extraction sandbox on both binaries (phase-5-specs.md, "Error texts reach three sinks").
-- Fitness: `completion`, `ghost_text`, `history`, `settings`, `shared`, `shell_integration` and `specs` are registered
-  in the committed `src/architecture_tests.rs`, so `cargo test --locked architecture` checks them at HEAD. To check a
-  module before its registration step, copy the tree (`git archive HEAD | tar -x -C <dir>` under
-  `target/hexagonal-refactor/review-tmp/`), add it to `REGISTERED_MODULES` there, and run the test in the copy;
-  `target/hexagonal-refactor/fitness.sh` does this for `ghost_text` (edit the module name for the next one).
-- [`phase-workflow.js`](phase-workflow.js): the per-phase Workflow. Args are `{phase, startRev, steps:[{id,title,
-  prompt}], reviewNotes}`. One implementer per step (gate + commit each, stopping on red), then four review lenses
-  (behaviour, test-lock, architecture, completeness), a skeptic per finding, and fix rounds (up to 3). The args can stay
-  small: a short pointer per step to its brief, and a `reviewNotes` that tells the reviewers to `cat` a file.
-- Local, git-ignored helpers in `target/hexagonal-refactor/tools/` (they survive the session but not `cargo clean`):
-  - `verify-run.sh <label> [guard full paths…]`, with `PHASE_TAG=phaseN-start` and `GUARD20=<suite filter>`: build,
-    integrations/precmd diffs, the sandbox, the release bundle test, the no-default-features check, both test locks
-    (writes `target/hexagonal-refactor/testlock-<label>.diff`), 50 runs of each guard, 20 serial runs of the suite,
-    and the fitness test on a copy. Run `gate.sh` first, and `inline-diff.sh` by hand (it is not in the script). It
-    takes a while: start it detached and wait on `== DONE` in its log.
-  - `make_p6run.py` and `make_p7run.py <run> <startRev> <out.json>`: build a run's Workflow args (a pointer per step
-    to its brief in the args file, plus `target/hexagonal-refactor/phase<N>-run<K>-since.md` as a binding preamble and
-    `phase<N>-run<K>-review-full.md` as the review notes). Copy and adapt `make_p7run.py` for Phase 8.
+Committed, in `scripts/hexagonal-refactor/`:
+- `gate.sh` (`--fast` skips the golden capture): build, tests, clippy, the `cfg(windows)` check, the 131-command golden CLI
+  capture and the test lock against `ef807c1`. **On Linux run `BASELINE_CLIPPY=4 scripts/hexagonal-refactor/gate.sh`** (the
+  container's clippy 1.97 counts one lint more than macOS; the tree has 3 now). It needs `make-baseline.sh` once per machine.
+  `GATE PASS` is required to commit.
+- `testlock.py . <rev> [--diff]` (use `ef807c1`, `phase9-start` and, until Phase 10 starts, `phase9-guards`); delete
+  `scripts/hexagonal-refactor/__pycache__` afterwards (or run `python3 -B`).
+- `integrations-diff.sh`, `precmd-diff.sh`, `inline-diff.sh`, `theme-diff.sh`, and, new in Phase 9, **`pty-diff.py`** and
+  **`session-diff.py`**: each prints a scrubbed transcript; diff the baseline binary
+  `target/hexagonal-refactor/baseline-tree/target/debug/tabsmith` against `target/debug/tabsmith` (after `cargo build
+  --locked`): all six diffs must be empty. On Linux put `scripts/hexagonal-refactor/compat` on PATH (the gate does it
+  itself, so do not export it before calling `gate.sh`).
+- `phase9-greps.sh [base-rev]` (the Phase 9 acceptance greps; a model for a `phase10-greps.sh`) and `fitness-mod.sh`.
+- `cargo test --locked --release -- --ignored all_bundle_modules` (`1 passed`), `cargo check --locked --no-default-features
+  --all-targets`, and `cargo test --locked debug_shell_survives_closed_terminal` alone x3 (the only automated start-up of
+  the wrapper).
+
+Committed, in `docs/hexagonal-refactor/`: `phase-workflow.js` (the per-run Workflow: one implementer per step with gate +
+commit, four review lenses, a skeptic per finding, fix rounds up to 3; it takes `args.branch`), the research files and
+`*.args.json` of Phases 3-9, `phase-8-run-notes/` and `phase-9-run-notes/` (the binding preambles of every run and the
+review notes), `source-map/`.
+
+Local, git-ignored, under `target/hexagonal-refactor/` (they survive the session but NOT `cargo clean`, which deletes the
+whole `target/`, the baseline tree included: rebuild it with `scripts/hexagonal-refactor/make-baseline.sh`): `baseline-tree/`
+(the `af1b304` worktree and its binary, needed by every diff script), `baseline/` (the golden capture), `p9/` (the Phase 9
+researchers' raw notes `recon-*.md` with their compiled prototypes, the step gate logs and commit message files).
 
 ## Done
 
 | Phase | Range | Result |
 |---|---|---|
-| 0 baseline | `af1b304` | |
-| 1 composition root, fitness test, shared kernel | `af1b304..52dcf85` | |
-| 2 settings | `52dcf85..c7b796e` | |
-| 3 history | `a3953cf..f485ea7` | gate green |
-| 4 shell_integration | `6f38da1..ab7052b` | gate green |
-| 5 specs | `1a466e2..d7079b9` | gate green |
-| 6 completion | `c38596c..7f48161` (registration at `f3fc30a`) | gate green, 943 passed |
-| 7 ghost_text | `eef4c88..fe4b320` (registration at `353faaa`) | gate green, 986 passed |
+| 0-8 | up to `da2f950` | see the plan, section 9 |
+| 9, guards (run 1: 9.0a-9.0d) | up to `3fdb6e5` | `terminal_session` registered, four scripts, 17 frozen fixtures, 14 loop and id tests; tag `phase9-guards` |
+| 9, tracker (run 2: 9.1a-9.1e, 9.2a-9.2f) | up to `e9bf107` | `MarkerTracker`, the pure tracker domain, `OutputFilter`, `CellTagger`, `EditBufferExtractor`, the `TerminalScreen` port, `AlacrittyTerminalScreen`, `ShellOutputFeeder`; `tracker.rs` and `types::Model` gone |
+| 9, session domain (run 3: 9.6a, 9.6b, 9.3a-9.3i) | up to `c8629c2` | `types::Msg` gone (`SessionMessage`), the reader, probe parsers and platform code moved; the `TerminalSession` aggregate and its entities |
+| 9, ports and CLI (run 4: 9.4a-9.4c, 9.6c) | up to `6780aea` | the six runtime ports with adapters, the module injects the collaborators, the three commands out of `cli.rs` and `bootstrap/cli.rs` |
+| 9, services and use cases (run 5: 9.5a-9.5h) | up to `b7338e1` | five services, ten use cases, `SessionUseCases`, the harness |
+| 9, runner and close (run 6: 9.6d-9.6f, 9.7) | `f5921cb..b898db1`, then the docs | `pty.rs` became `session_runner.rs`; `probe_terminal`, `run_pty_session`, `launch_session`; tests moved; docs written from the as-built tree |
 
-### Phase 7 (recorded in plan section 9, "Phase 7 notes")
+State at `b898db1` (the docs commits after it change no code; numbers measured in 9.7): full gate `GATE PASS`, 1414 passed,
+0 failed, 1 ignored (`all_bundle_modules`, release run `1 passed`), clippy 3 warnings (Linux budget 4), build warnings 0, golden
+identical, `windows: ok`; testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 210, NEW 1133, PATH-ONLY 31; against
+`phase9-start` MISSING 0, DUPLICATE 0, CHANGED 59, NEW 324, PATH-ONLY 12; against `phase9-guards` MISSING 0, DUPLICATE 0, CHANGED
+61 (the 59 plus `should_generate_a_session_id_of_32_lowercase_hex_digits` and the Rig-helper rename `step_ghost` -> `llm_reply` in `should_debounce_and_show_the_llm_ghost_text_exactly_as_at_the_phase_9_start`), NEW 290; the 17 fixtures identical to `phase9-guards`;
+the six diff scripts empty; `debug_shell_survives_closed_terminal` x3 green; 20 serial runs of `pty::` and
+`exactly_as_at_the_phase_9_start` (44 tests) 0 failures; `cargo check --locked --no-default-features --all-targets` passes;
+`phase9-greps.sh`: every A, B1-B3, B5-B7, B9-B13, E1 and F label OK, Z lists 118 files (the design's 116 plus two sliced test
+modules). The dead-code scan (the `#![allow(dead_code)]` line deleted in a copy) reports 7 warnings (the 7 of the start) and 0 under
+`terminal_session`.
 
-The 11 step briefs ran in three Workflow runs, after a re-check of the parked research against `058bebd` (four read-only
-auditors; no claim blocked a step, and the binding corrections are the last section of `phase-7-ghost-text.md`).
-After each run I re-ran the gate and every check myself, and read the riskiest moves against the old code (the
-`GhostText` accept rules, the `Llm` request path's ordering, the moved inline command).
+## Next: Phase 10 (diagnostics), only if the user asks
 
-| Run | Steps | Range | Gate |
-|---|---|---|---|
-| 1 | 7.0-7.4 (guards, the `ghost_text` domain) | `eef4c88..612d3a0` | 950 passed |
-| 2 | 7.5-7.7 (ports, adapters, the engine switch, `inline.rs` deleted) | `612d3a0..83e9728` | 970 passed |
-| 3 | 7.8-7.10 (inline use cases, the inline command, registration, docs) | `83e9728..fe4b320` | 986 passed |
-
-State at `fe4b320`: gate green (986 passed, 1 ignored, clippy 3, golden identical); testlock vs `ef807c1` MISSING 0,
-DUPLICATE 0, CHANGED 154 (150 plus 4 new: `cd_validation` was already CHANGED); vs `phase7-start` MISSING 0,
-DUPLICATE 0, CHANGED 5 (`ghost_keys_and_words`, `ghost_with_control_chars_is_never_shown_or_accepted`,
-`profiles_and_source`, `request_bodies`, `cd_validation`), NEW 43. integrations, precmd and inline diffs empty; the
-sandbox identical; release `all_bundle_modules` 1 passed; `bootstrap::engine_server::tests` 20/20; the two inbox
-tests, `debug_shell_survives_closed_terminal`, `inline_show_customizations` and the seven ghost guards 50/50;
-`REGISTERED_MODULES` = completion, ghost_text, history, settings, shared, shell_integration, specs. `src/inline.rs`
-is gone and `cli.rs` holds no inline code; the engine server dispatches to ghost_text's use cases through
-`GhostTextModule`, and the inline command is `ghost_text/infrastructure/cli/inline_command.rs` over
-`InlineCommandModule`, with the settings repository injected by bootstrap.
-
-History deviations, recorded in the plan, not rewritten: `fe4b320` has a 76-character subject; the Phase 7 trailer is
-the Sonnet 5.5 one. Phase 6's two 73-character subjects (`0d1ea43`, `87dc339`) and `1f18684` (typed `test(completion)`,
-rewrites a production doc comment) stand as deviation 38.
+Phase 10 has no research file yet. Its inputs are the plan's section 5 "Phase 10" and section 4 `diagnostics`,
+[`source-map/doctor.md`](source-map/doctor.md) and `source-map/cli.md`, the plan's section 9 "Phase 9 notes" (the Phase 10
+hand-off at its end) and the research's "Hand-off notes". Do what was done for Phases 8 and 9: recon agents per legacy area, a
+planner, per-step briefs, five audit lenses, then runs, each with a binding SINCE preamble (`phase-9-run-notes/` holds the model
+files). What Phase 10 starts from:
+- `doctor.rs` is the one caller of `settings::infrastructure::load_or_defaults` and of `types::now_secs`. Phase 10 step 2 repeats
+  `LenientLiveSettings` (terminal_session's adapter) in diagnostics' own infrastructure and deletes `load_or_defaults`; the
+  `now_secs` caller may take the `Clock` port.
+- `cli.rs` holds `DiagnosticArgs`, `diagnostic`, `diagnostics`, `to_toml`, `Section`, `debug_logs` (now `pub fn`, called from
+  `bootstrap/cli.rs`) and the test `diagnostic_toml`; `main.rs` declares `mod cli;` and `mod doctor;` until Phase 10 deletes
+  them. `debug_logs` reads `data_directory_from_env().logs_dir()`: the `logs/{cli,pty}.log` contract with
+  `shared/infrastructure/logger.rs` is unchanged.
+- `bootstrap::cli::terminal_session_module()` and `GeneratorProcessBridge` exist; doctor needs neither. The doctor checks that
+  read the session context or the `run/` files keep their own raw checks (Phase 4 hand-off). `debug_shell_post_script`
+  builds a fresh `RenderInitScriptUseCase` per call (a third wiring place).
+- `terminal_session` is registered; `diagnostics` is the one module still to register (`REGISTERED_MODULES`).
+- The stale rows of `docs/SPEC.md` (§4.1 `pty.rs` and `tracker.rs`, §4.3, §5.1 `has_seen_prompt` and the `ShellPath`/`TTY`/
+  `User` fields, §10) are Phase 11's: do not edit SPEC.md before it.
 
 ## Waiting on the user
 
-- **Manual smoke** (plan section 8, items 1-9, plus the three Phase 7 checks in the plan's Phase 7 notes): due now,
-  never run, and agents cannot drive a terminal. With `TABSMITH_HOME=$(mktemp -d)`, run `cargo run -- debug shell zsh`
-  (and bash and fish): `echo hi` then `ec` shows the ghost `ho hi` and → accepts it (Alt-f one word); with
-  `tabsmith settings inline.source '"specs"'`, `git ch` ghosts a subcommand; with an `inline.profiles.fake` on
-  `127.0.0.1:8765`, `zzz sta` shows `tus` after the debounce.
-- **Push**: nothing is pushed. The plan's end step pushes the branch for the CI matrix (ubuntu, macos, windows); ask
-  first. The `cfg(windows)` code (`cd_target_validator`'s two `cfg!(windows)`, `platform_windows`) is checked only by
-  hand until CI runs.
+**The manual smoke has never been run** (agents cannot drive a terminal). Ask the user to run, with
+`TABSMITH_HOME=$(mktemp -d) cargo run -- debug shell zsh` (and bash, and fish):
+1. `git ch` shows the menu; Tab inserts and branches appear, a shared prefix inserts; Esc hides it.
+2. `echo hi` then `ec` shows the ghost `ho hi`; Right accepts it, Alt-f one word.
+3. A prompt on the bottom row draws the menu above; a resize leaves no artefacts.
+4. `vim` draws no overlay; `exit 3` returns 3; `tabsmith doctor` passes.
+5. Phase 8's P8-S1 (a spec whose generator runs `sleep 1` shows the spinner after about 200 ms) and P8-S2 (with a session
+   running, `tabsmith theme light` and back from a second terminal with the same `TABSMITH_HOME` recolours the menu; with
+   `system` in a terminal that answers OSC 11 late, the theme follows the late reply), icons in kitty or ghostty and in tmux.
+6. Phase 9's P9-S1 (closing the terminal window of a `debug shell` ends it cleanly and removes the rc dir), P9-S2 (`kill -TERM`
+   of the wrapper exits 129), P9-S3 (typing during start-up reaches the shell), P9-S4 (`tabsmith settings autocomplete.height
+   3` from a second terminal takes effect within about 2 s) and, CI-only, P9-S5 (pwsh on Windows: the prompt-marker deferral
+   and the ConPTY exit).
 
-## Next: Phase 8 (dropdown)
+`session-diff.py` and `pty-diff.py` already pin bash under tmux and the real-pty start-up; the smoke covers zsh, fish, pwsh,
+the icons and Windows. Phase 7's own smoke (item 4 and the LLM fake-server check) is listed in the plan's section 9 "Phase 7 notes".
 
-Not started and not researched. Phases 3-7 each had a research pass first: the source maps in
-[`source-map/`](source-map/) (`keys`, `menu`, `render`, `icons`, `cli`) hold the traps and plan gaps for it (the two
-theme parsers, icon bytes versus icon ids, `comp`/`item` test fixtures that move to
-`completion/domain/test_fixtures.rs`, the theme command's `{:#}` print of a non-string `autocomplete.theme`). Do the
-same as Phase 7: re-check the plan's Phase 8 steps against `fe4b320`, write step briefs, a research file and
-`phase-8-dropdown.args.json`, commit them as `docs: hand Phase 8 over with its research`, tag `phase8-start`, then run
-it in a few runs with a binding preamble per run (`make_p7run.py` is the template). Phase 8's guards will include the
-golden `theme` captures and a new `theme-diff.sh` in the style of `inline-diff.sh`.
+## Open questions and the defaults applied (the user did not answer; record them in a PR)
 
-## After each run, verify it yourself
-
-- `git status` clean. Every subject is at most 72 characters and carries the trailer.
-- Full `gate.sh`: GATE PASS, the pass count only grows, clippy 3, golden identical, MISSING 0, DUPLICATE 0.
-- `verify-run.sh` (above) with the phase tag and the guards, plus the phase's output-diff script.
-- Every new CHANGED test against the phase tag is in the run's briefs; every NEW test is in the briefs or reported.
-- Read the run's deviations, concerns and review findings, hand-check the riskiest moves against the old code, and
-  carry what a later step must know into the next run's preamble (and correct any earlier instruction a step proved
-  wrong: Phase 7 run 1 showed that an import-removal rule I had written was too broad).
+Phase 9's O1-O18 (services are not use cases, one aggregate of 728 lines, `Rc` ports, no module-edge rule, `TerminalModes` as a
+port, the screen built after the probe, `FrameInput.now`, a bootstrap callback for the debug shell's post script, the diff scripts
+outside the gate, `LEGACY_MODULES` keeping `pty` and `tracker`, the smoke asked once, ...) are listed with their defaults in the
+plan's section 9 "Phase 9 notes". Phase 8's O1-O8 are in the Phase 8 notes.
 
 ## Open risks
 
-- pwsh is not installed locally: the pwsh tests and every `cfg(windows)` path are checked only by hand and in CI.
-- `integrations_zsh_powerlevel10k_prompt_wrapped` is flaky under parallel load; rerun it alone with `-- --exact`.
-- Clippy is at its budget of 3 with no headroom. `CompleteCommandLineUseCase::new`, `GeneratorRun::new` and
-  `LlmGhostTextJob::new` are at clippy's 7-parameter limit.
-- Fitness rule 3 does not flag a use case naming a sibling use case of its module, nor another module's application
-  service (completion's `CommandLineParser`, `GeneratorRunner`). Both are covered by hand greps, recorded in the plan
-  (the `completion::application::(command_line_parser|generator_runner|test_fixtures)` grep stays on every step of
-  Phases 8-9). The older ceilings (`as` renames, globs, `super::` paths, `pub use` outside mod.rs, the anyhow rule,
-  std::io output) still stand.
-- `LEGACY_MODULES` still lists modules that no longer exist (`engine`, `inline`, `js`, `parser`, `shell_parser`,
-  `spec`, `suggest`, `integrations`): harmless, for the Phase 11 sweep.
-- `CompletionEngine::request_llm_ghost_text` (terminal_session's port, `ChannelCompletionEngine`) and `doctor.rs`'s
-  `inline_outcome` (with its `Err(_)`/`Ok(_)` catch-alls) still name ghost text through legacy paths: Phases 9 and 10.
-- `StdinSourceChooser` and the Enable/Disable/Status/SetCustomization/ShowCustomizations arms of `run_inline_command`
-  have no unit test of their own: golden, `inline-diff.sh` and its pty groups cover them.
-- `EngineInbox::next_msg`'s doc still ends "`None` when all senders are gone", which cannot happen (the inbox keeps
-  its own sender). Reword it when the inbox is next touched.
-- `git log --follow src/completion/domain/entities/generator_cache.rs` walks into `suggest.rs`'s history (git pairs
-  them at 56%).
-- While a workflow runs, rust-analyzer reports errors from half-edited files; trust only the gate.
-- The worktrees `target/hexagonal-refactor/prep-tree` (`a3953cf`) and `prep6-tree` (`c2f0825`) are old research
-  copies and can be removed; `baseline-tree` (`af1b304`) is needed by the diffs.
+- pwsh is not installed locally: pwsh tests and every `cfg(windows)` path are checked by the gate's compile check and by CI only.
+  `should_resize_only_the_pty_while_passing_through` opens a real pty and is not gated by `#[cfg(unix)]`: if it fails on
+  windows-latest, gate it or switch to a fake `MasterPty` (that adds cfg lines, phase9-greps C1).
+- Environmental flakes under gate load, never caused by the code: `integrations_zsh_powerlevel10k_prompt_wrapped` and every test
+  that spawns an exec child (`specs::infrastructure::adapters::process_executor::tests::*`, a 100 ms spawn timeout). Rerun
+  a lone failure by itself with `cargo test --locked <full path> -- --exact`, then the gate.
+- Clippy: 3 warnings on Linux against a budget of 4, so one lint of headroom here; on macOS the baseline is one lower.
+  Prune imports a move leaves unused in the same commit.
+- The hash tests bake FNV values generated on macOS aarch64; they read no clock, env, file or platform code, so ubuntu and
+  windows should agree, but that is reasoned, not run, until CI runs.
+- Phase 11 dead-code watch list (D7): the plan's section 9 "Phase 9 notes", hand-off "Phase 11": the four `#[cfg(test)]`
+  accessors and `Rc` fields of `SessionUseCases`, `SessionPortsParts: Clone` (`#[cfg(test)]`), `TerminalSession`
+  (728 lines), the query-named methods that mutate, plus Phase 8's list. `#![allow(dead_code)]` stays in `main.rs` until
+  Phase 11, and `LEGACY_MODULES` keeps every dead name.
+- Commit `7a81d7f` (8.5a) alone has 4 clippy warnings; `5783c4b` fixes it, so a bisect landing on `7a81d7f` sees a red gate.
+- `session_runner/tests.rs` is 800 lines and `launch_session` about 150 body lines (a line-for-line port by design); neither
+  is split.
+- rust-analyzer reports errors from half-edited files while a workflow runs: trust only cargo and the gate.

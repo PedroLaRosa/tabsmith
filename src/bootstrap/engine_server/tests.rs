@@ -188,7 +188,7 @@ fn run_engine<T: Send + 'static>(
     settings: Settings,
     history: Vec<HistoryEntry>,
     first: Vec<EngineMessage>,
-    watch: impl FnOnce(mpsc::Receiver<Msg>, mpsc::Sender<EngineMessage>) -> T + Send + 'static,
+    watch: impl FnOnce(mpsc::Receiver<SessionMessage>, mpsc::Sender<EngineMessage>) -> T + Send + 'static,
 ) -> T {
     let (to_engine, from_senders) = mpsc::channel();
     let inbox = Rc::new(EngineInbox::new(from_senders, to_engine.clone()));
@@ -230,7 +230,7 @@ fn serve(
         let mut stopped = false;
         loop {
             match from_engine.recv_timeout(shutdown_at.saturating_duration_since(Instant::now())) {
-                Ok(Msg::Completion(c)) => {
+                Ok(SessionMessage::Completion(c)) => {
                     seen.push(observe(&c));
                     if stopped {
                         continue;
@@ -252,7 +252,7 @@ fn serve(
                 Err(RecvTimeoutError::Timeout) => {
                     let _ = to_engine.send(shutdown());
                     seen.extend(from_engine.iter().filter_map(|m| match m {
-                        Msg::Completion(c) => Some(observe(&c)),
+                        SessionMessage::Completion(c) => Some(observe(&c)),
                         _ => None,
                     }));
                     return seen;
@@ -263,7 +263,7 @@ fn serve(
     })
 }
 
-/// What a test reads of the LLM ghost texts an engine answered: `Msg::Ghost { req, text }` as `(req, text)`.
+/// What a test reads of the LLM ghost texts an engine answered: `SessionMessage::Ghost { req, text }` as `(req, text)`.
 type GhostReply = (u64, Option<String>);
 
 /// Like `serve`, for the LLM path: returns the completion replies and the ghost replies the engine sent, in
@@ -280,8 +280,8 @@ fn serve_ghosts(
         let mut stopped = false;
         loop {
             match from_engine.recv_timeout(stop_at.saturating_duration_since(Instant::now())) {
-                Ok(Msg::Completion(c)) => completions.push(observe(&c)),
-                Ok(Msg::Ghost { req, text }) => {
+                Ok(SessionMessage::Completion(c)) => completions.push(observe(&c)),
+                Ok(SessionMessage::Ghost { req, text }) => {
                     ghosts.push((req, text));
                     if !stopped && done(&ghosts) {
                         stopped = true;

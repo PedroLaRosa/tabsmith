@@ -1,0 +1,60 @@
+#0 in="\u{1b}]697;Shell=bash\u{1b}\\\u{1b}]697;PID=7\u{1b}\\\u{1b}]697;Dir=/work\u{1b}\\"
+  out=
+  events=[]
+  at_prompt=false preexec=false cycle=None cwd=Some("/work")
+  extract=None
+  tags=
+#1 in="\u{1b}]697;StartPrompt\u{7}$ \u{1b}]697;EndPrompt\u{7}\u{1b}]697;NewCmd=0123456789abcdef0123456789abcdef\u{7}"
+  out=$ 
+  events=["NewCmd(None)"]
+  at_prompt=true preexec=false cycle=Some(1) cwd=Some("/work")
+  extract=Some(("", 0, false, true))
+  tags= row0:0..2=tabsmith:p
+#2 in="ls -la "
+  out=ls -la 
+  events=[]
+  at_prompt=true preexec=false cycle=Some(1) cwd=Some("/work")
+  extract=Some(("ls -la ", 7, false, true))
+  tags= row0:0..2=tabsmith:p row0:2..9=tabsmith:c1
+#3 in="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\u{1b}[2K"
+  out=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\x1b[2K
+  events=[]
+  at_prompt=true preexec=false cycle=Some(1) cwd=Some("/work")
+  extract=Some(("ls -la xxxxxxxxxxxxxxxxxxxxx                   ", 47, false, true))
+  tags= row0:0..2=tabsmith:p row0:2..30=tabsmith:c1
+#4 in="\r\n"
+  out=\r\n
+  events=[]
+  at_prompt=true preexec=false cycle=Some(1) cwd=Some("/work")
+  extract=Some(("", 0, false, false))
+  tags= row0:0..2=tabsmith:p row0:2..30=tabsmith:c1
+#5 in="\u{1b}]697;OSCLock=0123456789abcdef0123456789abcdef\u{1b}\\\u{1b}]697;PreExec\u{1b}\\hello\u{1b}]0;title\u{7} world\r\n"
+  out=hello\x1b]0;title\x07 world\r\n
+  events=["PreExec"]
+  at_prompt=false preexec=true cycle=Some(1) cwd=Some("/work")
+  extract=None
+  tags= row0:0..2=tabsmith:p row0:2..30=tabsmith:c1
+#6 in="\u{1b}]697;NoHist"
+  out=
+  events=[]
+  at_prompt=false preexec=true cycle=Some(1) cwd=Some("/work")
+  extract=None
+  tags= row0:0..2=tabsmith:p row0:2..30=tabsmith:c1
+#7 in="ory\u{7}"
+  out=
+  events=[]
+  at_prompt=false preexec=true cycle=Some(1) cwd=Some("/work")
+  extract=None
+  tags= row0:0..2=tabsmith:p row0:2..30=tabsmith:c1
+#8 in="\u{1b}]697;OSCUnlock=0123456789abcdef0123456789abcdef\u{1b}\\\u{1b}]697;ExitCode=3\u{1b}\\\u{1b}]697;StartPrompt\u{7}$ \u{1b}]697;EndPrompt\u{7}\u{1b}]697;NewCmd=0123456789abcdef0123456789abcdef\u{7}"
+  out=$ 
+  events=["CommandEnded"]
+  at_prompt=true preexec=false cycle=Some(2) cwd=Some("/work")
+  extract=Some(("", 0, false, true))
+  tags= row0:0..2=tabsmith:p row0:2..30=tabsmith:c1 row3:0..2=tabsmith:p
+#9 in="\u{1b}[?2004h\u{1b}[>4;1m\u{1b}[?9001h\u{1b}[=1;1u\u{1b}[u\u{1b}[>c\u{1b}[1;5r\u{1b}[r"
+  out=\x1b[?2004h\x1b[u\x1b[>c\x1b[1;5r\x1b[r
+  events=[]
+  at_prompt=true preexec=false cycle=Some(2) cwd=Some("/work")
+  extract=Some(("", 0, false, true))
+  tags= row0:0..2=tabsmith:p row0:2..30=tabsmith:c1 row3:0..2=tabsmith:p

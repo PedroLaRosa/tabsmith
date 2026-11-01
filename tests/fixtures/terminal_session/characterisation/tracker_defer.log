@@ -1,0 +1,72 @@
+#0 in="\u{1b}]697;StartPrompt\u{7}PS> \u{1b}]697;EndPrompt\u{7}\u{1b}]697;NewCmd=0123456789abcdef0123456789abcdef\u{7}"
+  out=PS> 
+  events=[]
+  at_prompt=false preexec=false cycle=None cwd=None
+  extract=None
+  tags= row0:0..4=tabsmith:p
+#1 in="\u{1b}]697;Dir=/x\u{1b}\\"
+  out=
+  events=[]
+  at_prompt=false preexec=false cycle=None cwd=Some("/x")
+  extract=None
+  tags= row0:0..4=tabsmith:p
+#2 in="\u{1b}[?25h"
+  out=\x1b[?25h
+  events=["NewCmd(None)"]
+  at_prompt=true preexec=false cycle=Some(1) cwd=Some("/x")
+  extract=Some(("", 0, false, true))
+  tags= row0:0..4=tabsmith:p
+#3 in="ls"
+  out=ls
+  events=[]
+  at_prompt=true preexec=false cycle=Some(1) cwd=Some("/x")
+  extract=Some(("ls", 2, false, true))
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1
+#4 in="\r\n\u{1b}]697;PreExec\u{1b}\\"
+  out=\r\n
+  events=["PreExec"]
+  at_prompt=false preexec=true cycle=Some(1) cwd=Some("/x")
+  extract=None
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1
+#5 in="\u{1b}]697;NoHistory\u{1b}\\out\r\n"
+  out=out\r\n
+  events=[]
+  at_prompt=false preexec=true cycle=Some(1) cwd=Some("/x")
+  extract=None
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1
+#6 in="\u{1b}]697;OSCUnlock=0123456789abcdef0123456789abcdef\u{1b}\\\u{1b}]697;StartPrompt\u{7}PS> \u{1b}]697;EndPrompt\u{7}\u{1b}]697;NewCmd=0123456789abcdef0123456789abcdef\u{7}"
+  out=PS> 
+  events=[]
+  at_prompt=false preexec=true cycle=Some(1) cwd=Some("/x")
+  extract=None
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1 row2:0..4=tabsmith:p
+#7 in="\u{1b}[?25h"
+  out=\x1b[?25h
+  events=["NewCmd(command=\"ls\" shell=\"pwsh\" pid=None session_id=\"0123456789abcdef0123456789abcdef\" cwd=Some(\"/x\") exit_code=None hostname=None end_time_set=true)"]
+  at_prompt=true preexec=false cycle=Some(2) cwd=Some("/x")
+  extract=Some(("", 0, false, true))
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1 row2:0..4=tabsmith:p
+#8 in="sleep"
+  out=sleep
+  events=[]
+  at_prompt=true preexec=false cycle=Some(2) cwd=Some("/x")
+  extract=Some(("sleep", 5, false, true))
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1 row2:0..4=tabsmith:p row2:4..9=tabsmith:c2
+#9 in="\r\n\u{1b}]697;PreExec\u{1b}\\"
+  out=\r\n
+  events=["PreExec"]
+  at_prompt=false preexec=true cycle=Some(2) cwd=Some("/x")
+  extract=None
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1 row2:0..4=tabsmith:p row2:4..9=tabsmith:c2
+#10 in="\u{1b}]697;EndPrompt\u{7}\u{1b}]697;NewCmd=0123456789abcdef0123456789abcdef\u{7}\u{1b}]697;PreExec\u{1b}\\"
+  out=
+  events=[]
+  at_prompt=false preexec=true cycle=Some(2) cwd=Some("/x")
+  extract=None
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1 row2:0..4=tabsmith:p row2:4..9=tabsmith:c2
+#11 in="\u{1b}[?25h"
+  out=\x1b[?25h
+  events=["NewCmd(command=\"sleep\" shell=\"pwsh\" pid=None session_id=\"0123456789abcdef0123456789abcdef\" cwd=Some(\"/x\") exit_code=None hostname=None end_time_set=true)"]
+  at_prompt=true preexec=false cycle=Some(3) cwd=Some("/x")
+  extract=Some(("", 0, false, true))
+  tags= row0:0..4=tabsmith:p row0:4..6=tabsmith:c1 row2:0..4=tabsmith:p row2:4..9=tabsmith:c2

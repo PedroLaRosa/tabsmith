@@ -90,6 +90,25 @@ impl CompletionEngine for RecordingCompletionEngine {
     }
 }
 
+/// Test double: panics when it is asked for completions and ignores everything else.
+#[cfg(test)]
+pub(crate) struct PanickingCompletionEngine;
+
+#[cfg(test)]
+impl CompletionEngine for PanickingCompletionEngine {
+    fn complete(&self, _request: CompletionRequest) {
+        panic!("the engine was asked");
+    }
+    fn command_finished(&self, _entry: HistoryEntry) {}
+    fn command_ended(&self) {}
+    fn record_insertion(&self, _command: String, _name: String) {}
+    fn request_llm_ghost_text(&self, _request: u64, _buffer: String, _cwd: PathBuf, _shell: Shell) {}
+    fn apply_settings(&self, _settings: Settings) {}
+    fn apply_session_context(&self, _env: HashMap<String, String>, _alias: Option<String>) {}
+    fn toggle_fuzzy_search(&self) {}
+    fn shut_down(&self) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

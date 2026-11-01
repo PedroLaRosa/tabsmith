@@ -22,14 +22,14 @@ use crate::history::application::record_command_use_case::RecordCommandUseCase;
 use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::bootstrap::engine_inbox::EngineInbox;
 use crate::bootstrap::engine_message::EngineMessage;
-use crate::types::Msg;
+use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 
-/// Spawn the engine thread. Replies go to `tx` as `Msg::Completion` / `Msg::Ghost`.
+/// Spawn the engine thread. Replies go to `tx` as `SessionMessage::Completion` / `SessionMessage::Ghost`.
 /// Returns the engine's inbox. The thread exits on `EngineMessage::Shutdown`; the inbox keeps a sender, so its
 /// channel never disconnects.
-pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMessage> {
+pub(crate) fn spawn(tx: Sender<SessionMessage>, settings: Settings) -> Sender<EngineMessage> {
     let (etx, erx) = mpsc::channel();
     let inner = etx.clone();
     let spawned = std::thread::Builder::new()
@@ -79,7 +79,7 @@ pub(crate) fn spawn(tx: Sender<Msg>, settings: Settings) -> Sender<EngineMessage
 }
 
 struct EngineServer {
-    replies: Sender<Msg>,
+    replies: Sender<SessionMessage>,
     session: CompletionSession,
     completion: CompletionModule,
     record_command: RecordCommandUseCase,
@@ -88,7 +88,7 @@ struct EngineServer {
 
 impl EngineServer {
     fn new(
-        replies: Sender<Msg>,
+        replies: Sender<SessionMessage>,
         session: CompletionSession,
         completion: CompletionModule,
         history_module: HistoryModule,
@@ -177,7 +177,7 @@ impl EngineServer {
     /// The one place a completion result is sent: with the local ghost text for its buffer (Q15).
     fn send_reply(&self, result: CompletionResult) {
         let ghost = self.ghost_text.suggest_local_ghost_text.execute(self.session.settings(), &result);
-        let _ = self.replies.send(Msg::Completion(Box::new(result.with_ghost(ghost))));
+        let _ = self.replies.send(SessionMessage::Completion(Box::new(result.with_ghost(ghost))));
     }
 
     /// LLM ghost text (SPEC §8.4): answered at once, or by the `llm` thread running the job.
@@ -190,14 +190,14 @@ impl EngineServer {
         let tx = self.replies.clone();
         match answer {
             LlmGhostTextAnswer::Immediate(text) => {
-                let _ = tx.send(Msg::Ghost { req, text });
+                let _ = tx.send(SessionMessage::Ghost { req, text });
             }
             LlmGhostTextAnswer::Deferred(job) => {
                 let spawned = std::thread::Builder::new()
                     .name("llm".into())
                     .spawn(move || {
                         let text = job.run();
-                        let _ = tx.send(Msg::Ghost { req, text });
+                        let _ = tx.send(SessionMessage::Ghost { req, text });
                     });
                 if let Err(e) = spawned {
                     logger::warn(&format!("engine: llm worker: {e}"));

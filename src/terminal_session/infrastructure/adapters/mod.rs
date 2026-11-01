@@ -1,1 +1,14 @@
+pub(crate) mod alacritty_terminal_screen;
+pub(crate) mod cell_tagger;
+pub(crate) mod console_terminal_modes;
+pub(crate) mod edit_buffer_extractor;
 pub(crate) mod file_session_context_repository;
+pub(crate) mod headless_model;
+pub(crate) mod icon_assets;
+pub(crate) mod kitty_graphics;
+pub(crate) mod lenient_live_settings;
+pub(crate) mod output_filter;
+pub(crate) mod overlay_renderer;
+pub(crate) mod process_working_directory;
+pub(crate) mod pty_wrapped_shell;
+pub(crate) mod stdout_terminal_writer;

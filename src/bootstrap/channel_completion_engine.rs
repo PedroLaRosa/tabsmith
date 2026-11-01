@@ -6,7 +6,7 @@ use crate::history::domain::entities::history_entry::HistoryEntry;
 use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
-use crate::types::Msg;
+use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -20,7 +20,7 @@ pub(crate) struct ChannelCompletionEngine {
 
 /// Starts the engine thread, its replies going to `replies`, and returns the port over its inbox. The inbox keeps a
 /// sender of its own, so dropping this port never ends the engine: only `shut_down` does.
-pub(crate) fn start_completion_engine(replies: Sender<Msg>, settings: Settings) -> Rc<dyn CompletionEngine> {
+pub(crate) fn start_completion_engine(replies: Sender<SessionMessage>, settings: Settings) -> Rc<dyn CompletionEngine> {
     Rc::new(ChannelCompletionEngine {
         sender: crate::bootstrap::engine_server::spawn(replies, settings),
     })

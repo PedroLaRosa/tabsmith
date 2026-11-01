@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 
 /// Modules that follow the hexagonal layout; each phase registers the module it finishes. `bootstrap` is the
 /// composition root and is never registered.
-const REGISTERED_MODULES: &[&str] =
-    &["completion", "ghost_text", "history", "settings", "shared", "shell_integration", "specs"];
+const REGISTERED_MODULES: &[&str] = &[
+    "completion", "dropdown", "ghost_text", "history", "settings", "shared", "shell_integration", "specs",
+    "terminal_session",
+];
 
 /// The flat files the refactor is emptying (`src/<name>.rs`). Domain and application never use them: they reach
 /// serde, I/O and the QuickJS runtime by the back door.
@@ -57,7 +59,7 @@ impl Rule {
                 "application uses infrastructure, bootstrap, a legacy module, an external crate or an output macro (print!, \
                  dbg!, ..)"
             }
-            Rule::ModuleBoundary => "uses another module's use case or infrastructure, or bootstrap",
+            Rule::ModuleBoundary => "uses another module's use case (or use case container) or infrastructure, or bootstrap",
             Rule::SharedKernel => "shared uses a crate module other than shared",
             Rule::ModuleDeclarations => "a mod.rs imports, re-exports or holds an item; it only declares its children",
             Rule::SplicedCode => {
@@ -367,13 +369,14 @@ fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
 
 /// Another module's use cases and adapters are reached only through bootstrap. The shared kernel is open to every
 /// module; rules 1-2 still keep its infrastructure out of domain and application files. A use case is its file
-/// (`*_use_case`) or its type (`*UseCase`) anywhere under another module, so a use case re-exported under its own
+/// (`*_use_case`, `*_use_cases`) or its type (`*UseCase`, `*UseCases`, the container of a module's use cases)
+/// anywhere under another module, so a use case re-exported under its own
 /// type name is caught at the module root (`crate::specs::InstallSpecBundleUseCase`) or in a legacy shim
 /// (`crate::types::InstallSpecBundleUseCase`) too. An adapter has no name suffix, so only its `infrastructure`
 /// segment gives it away.
 // ponytail: a use case re-exported under another name (`type Installer = ..UseCase;`, a wrapper fn), an `as` rename,
-// a `super::` path, and an adapter re-exported by a legacy file (`crate::pty::X` from a
-// `pub(crate) use crate::specs::infrastructure::..` in src/pty.rs) still pass; read every file of the module for
+// a `super::` path, and an adapter re-exported by a legacy file (`crate::cli::X` from a
+// `pub(crate) use crate::specs::infrastructure::..` in src/cli.rs) still pass; read every file of the module for
 // those, as rule 6 reads mod.rs, and the legacy files for `pub(crate) use crate::<module>::..`, if one shows up.
 fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| match path.as_slice() {
@@ -381,7 +384,7 @@ fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
         ["crate", module, "infrastructure", ..] => *module != own_module,
         ["crate", module, rest @ ..] => {
             *module != own_module
-                && rest.iter().any(|segment| segment.ends_with("_use_case") || segment.ends_with("UseCase"))
+                && rest.iter().any(|segment| segment.contains("_use_case") || segment.contains("UseCase"))
         }
         _ => false,
     })
@@ -755,6 +758,15 @@ mod tests {
         let source = "use crate::specs::application::install_spec_bundle_use_case;\n";
 
         let found = violations_in("shell_integration/infrastructure/shell_integration_module.rs", source);
+
+        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+    }
+
+    #[test]
+    fn should_flag_a_module_that_uses_another_modules_use_case_container() {
+        let source = "use crate::terminal_session::application::session_use_cases::SessionUseCases;\n";
+
+        let found = violations_in("completion/infrastructure/completion_module.rs", source);
 
         assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
     }

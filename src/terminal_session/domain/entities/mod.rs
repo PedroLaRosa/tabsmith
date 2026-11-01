@@ -1,1 +1,11 @@
+pub(crate) mod echo_hold;
+pub(crate) mod ghost_candidates;
+pub(crate) mod insertion_lock;
+pub(crate) mod key_decoder;
+pub(crate) mod marker_splitter;
+pub(crate) mod marker_tracker;
+pub(crate) mod reload_watch;
+pub(crate) mod resize_debounce;
 pub(crate) mod session_context;
+pub(crate) mod shell_exit;
+pub(crate) mod terminal_session;

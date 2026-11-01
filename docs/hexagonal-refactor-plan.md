@@ -1,7 +1,10 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2, 3, 4, 5, 6 and 7 are done on branch `refactor/hexagonal-architecture` (gate green at
-`353faaa`). Phase 8 is next. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6 and 7 research are in
+Status: Phases 0, 1, 2, 3, 4, 5, 6, 7, 8 and 9 are done (gate green at `b898db1`, the last code commit of Phase 9).
+Phases 0-7 ran on branch `refactor/hexagonal-architecture`, Phases 8 and 9 on `refactor/hexagonal-dropdown-terminal-session`.
+Phase 10 is next. The Phase 9 request authorises no push and no PR (the local remote-tracking ref of the branch is at
+`d1fdd67`, the end of run 5; run 6 and the closing docs are not pushed); the manual smoke of section 8 is the user's and still
+pending. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6, 7, 8 and 9 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -127,7 +130,7 @@ pub(crate) fn run_settings_command(args: SettingsArgs, module: &SettingsModule) 
    `std`/`core`/`alloc`/`unicode_width`, or `println!`/`eprintln!`/`logger::`;
 2. a file in `*/application/` that uses `::infrastructure`, `crate::bootstrap`, a legacy flat module, or external crates
    (same allow-list);
-3. a module other than `bootstrap` that references another module's use case (a `*_use_case` file or `*UseCase` type
+3. a module other than `bootstrap` that references another module's use case (a `*_use_case`/`*_use_cases` file or `*UseCase`/`*UseCases` type
    segment anywhere under it, so a module root or legacy shim re-exporting it under its own name is caught too) or its
    `::infrastructure`; a use case re-exported under another name, an `as` rename, a `super::` path and an adapter
    re-exported by a legacy file or a legacy module root still pass;
@@ -189,9 +192,10 @@ calling the other module's use case or adapter.
 | `shell_integration::SpecBundleInstaller` | `specs::InstallSpecBundleUseCase` |
 | `diagnostics::CheckFixer` | shell_integration install/reinstall use cases, settings repository reset, `specs::InstallSpecBundleUseCase`, data-dir creation |
 | `terminal_session::CompletionEngine` | `bootstrap::ChannelCompletionEngine` (sends `EngineMessage` to the engine server thread) |
-| `terminal_session::GeneratorProcessReaper` | `specs` `ProcessExecutor::kill_live_children` |
+| `terminal_session::GeneratorProcessReaper` | `bootstrap::GeneratorProcessBridge` (`bridges.rs`), which calls `specs`' `kill_live_children` (built in Phase 9) |
 | `specs::RuntimeEventSource` | `bootstrap::EngineInbox` (`engine_inbox.rs`, the engine server's single channel; keeps today's abort-on-newer-request semantics) |
-| theme and settings repositories used by `terminal_session` | `dropdown::FileThemeRepository`, `settings::JsonFileSettingsRepository` (injected as trait objects) |
+| theme and settings repositories used by `terminal_session` | `dropdown::FileThemeRepository` (the `themes` of `build_dropdown_module`) and `settings::JsonFileSettingsRepository`, built by `bootstrap::cli::terminal_session_module()` and injected into `build_terminal_session_module` as trait objects; the settings one is wrapped by terminal_session's own `LenientLiveSettings` (built in Phase 9) |
+| the `debug shell` post-integration script | a function of `bootstrap/cli.rs`, `debug_shell_post_script`, handed to `run_debug_shell_command` as a callback, so terminal_session never imports `shell_integration` (built in Phase 9) |
 
 ---
 
@@ -240,8 +244,9 @@ application/{get_setting, set_setting, delete_settings, list_settings, list_sett
              open_settings_file}_use_case.rs
 application/ports/settings_editor.rs
 infrastructure/settings_module.rs
-infrastructure/load_or_defaults.rs        the legacy pty.rs/doctor.rs lenient load: defaults + the old warning
-                                          (no caller once Phases 9-10 move it into their own infrastructure)
+infrastructure/load_or_defaults.rs        the legacy doctor.rs lenient load: defaults + the old warning
+                                          (doctor.rs only until Phase 10; the pty caller went in Phase 9, where
+                                          terminal_session's LenientLiveSettings does the same load)
 infrastructure/adapters/{json_file_settings_repository.rs, setting_value_json.rs (SettingValue ↔ serde_json,
                          "JSON else string" parsing), system_settings_editor.rs ← cli::open_settings}
 infrastructure/cli/settings_command.rs    ← cli::{SettingsArgs, SettingsCmd, settings, render_get, render_list,
@@ -393,7 +398,7 @@ infrastructure/adapters/{fs_directory_lister ← list_dir, path_executable_catal
 ### ghost_text
 ```
 domain/entities/ghost_text_cache.rs       ← GhostCache
-domain/value_objects/{ghost_text ← pty next_word/ghost_rest (ghost_key stays in pty.rs until Phase 9),
+domain/value_objects/{ghost_text ← pty next_word/ghost_rest (ghost_key moved to terminal_session/domain/services/key_router.rs in Phase 9),
                       ghost_text_source ← Source + BUILTIN_SOURCES,
                       llm_profile ← Profile + parse_profile (from SettingValue), llm_provider ← Provider,
                       llm_prompt (carries SYSTEM)}.rs
@@ -417,55 +422,90 @@ infrastructure/cli/inline_command.rs      ← InlineCmd, inline, render_sources,
 
 ### dropdown
 ```
-domain/entities/menu.rs                   ← menu::Menu (Instant passed in, never read inside)
-domain/value_objects/{menu_visibility, menu_effect, key, key_action, key_binding, keymap, theme, rgb,
-                      theme_choice, theme_definition, menu_layout, icon_slot, icon_id, graphics_support}.rs
-domain/services/{common_prefix ← menu, keystroke_parser ← parse_keystroke/normalize,
-                 menu_layout_calculator ← render::layout, color_parser ← parse_color/xterm256,
-                 theme_resolver ← Theme::from_settings rules (dark/light/system luma/custom),
-                 icon_resolver ← icons::{slot, spec_image, type_image, ascii_slot, wide_emoji, tint maths},
+domain/entities/menu.rs                   ← menu::Menu (Instant passed in, never read inside; max_rows stays here;
+                                            the tests are in menu/tests.rs)
+domain/value_objects/{menu_visibility, menu_effect, key, key_code, modifiers, key_action, key_binding, keymap,
+                      common_prefix_outcome, theme (ThemeParts), rgb (a tuple alias), theme_choice, theme_definition,
+                      theme_author, theme_palette (FigPaletteParts, Base16PaletteParts), menu_layout (MenuLayoutParts),
+                      menu_side, icon_slot, icon_id (holds ICON_NAMES, placeholders, color), graphics_support}.rs
+domain/services/{common_prefix, keystroke_parser ← parse_keystroke/normalize (two free functions),
+                 menu_layout_calculator ← render::layout, menu_describer ← render::describe,
+                 color_parser ← parse_color/xterm256,
+                 theme_resolver ← Theme::from_settings rules (resolve_theme: dark/light/system luma/custom; takes the
+                 ThemeRepository trait object),
+                 icon_resolver ← icons::{slot, spec_image, type_image, ascii_slot, wide_emoji},
                  text_fitting ← render::{clean, cw, width, fit, wrap}}.rs
-domain/repositories/theme_repository.rs   trait {find, list} + InMemory
+domain/repositories/theme_repository.rs   trait {folder, find, list, find_palette} + InMemoryThemeRepository
 domain/dropdown_error.rs
 application/{select_theme, list_themes, show_theme}_use_case.rs
+application/{theme_selection, current_theme}.rs (DTOs)
 infrastructure/dropdown_module.rs
-infrastructure/adapters/file_theme_repository.rs + theme_json_mapper.rs ← cli::{parse_theme, ThemeFile, ThemeAuthor},
-                                           render::Theme::from_json (one parser, not two)
-infrastructure/cli/theme_command.rs       ← ThemeArgs, theme, theme_banner, BUILTIN_THEMES (deduped with ThemeChoice)
+infrastructure/adapters/{file_theme_repository,
+                         theme_json_mapper ← cli::{parse_theme, ThemeFile, ThemeAuthor} (the strict entry) and
+                                             render::Theme::from_json (the lenient entry): two entry points, not one parser,
+                         theme_file_error ← ThemeFileError, the strict entry's error}.rs
+infrastructure/cli/theme_command.rs       ← ThemeArgs, theme, theme_banner, BUILTIN_THEMES (the names live in ThemeChoice)
 ```
 
-### terminal_session
+### terminal_session (built in Phase 9: 118 files, as built)
 ```
-domain/entities/{terminal_session (aggregate), marker_splitter ← Splitter, marker_tracker ← Tracker state +
-                 on_marker/end_prompt/new_cmd/pre_exec/flush_deferred (cursor column in, ShellEvents +
-                 ScreenCommands out), insertion_lock, echo_hold, session_context ← SessionCtx}.rs
-domain/value_objects/{session_id, shell_marker, output_piece, shell_event, edit_buffer, shell_suggestion_color,
-                      screen_command, screen_state, key_route, wrapped_shell_command, terminal_background}.rs
-domain/services/{insertion_reconciler ← insertion_bytes/expected_buffer/unechoed_after, key_router ← on_keys
-                 1046-1110, render_guard ← suppressed/drawable, session_deadlines ← next_deadline}.rs
-domain/repositories/session_context_repository.rs trait {save, find, remove, prune_older_than} + InMemory
+domain/entities/{terminal_session (the aggregate; it decides and never acts: time and screen facts come in, values go
+                 out; owns the MarkerTracker, the MarkerSplitter and the KeyDecoder) + terminal_session/tests.rs,
+                 marker_splitter ← Splitter,
+                 marker_tracker ← Tracker state + on_marker/end_batch/complete_pre_exec (the parsed marker, the cursor
+                 column and the wall-clock seconds in; MarkerEffects out) + marker_tracker/tests.rs,
+                 key_decoder (the Phase 8 adapter stdin_key_decoder, a domain entity since 9.3b),
+                 insertion_lock, echo_hold, ghost_candidates, resize_debounce, shell_exit, reload_watch,
+                 session_context ← SessionCtx (Phase 4)}.rs
+domain/value_objects/{session_id (+ from_entropy), key_event (Phase 8), shell_marker, output_piece, shell_event,
+                      deferred_marker, edit_buffer, edit_buffer_context, shell_suggestion_color,
+                      pwsh_prediction_color, text_emphasis, screen_command, marker_effects, marker_reaction, cell_tag,
+                      screen_state, key_route, key_facts, completion_query, lock_settlement, wrapped_shell_command,
+                      terminal_background}.rs
+domain/services/{insertion_reconciler ← insertion_bytes/expected_buffer/unechoed_after, key_router ← the on_keys arms,
+                 render_guard ← suppressed/drawable, session_deadlines ← next_deadline + the five durations}.rs
+domain/repositories/session_context_repository.rs trait {save, find, remove, prune_older_than} + InMemory (Phase 4)
 domain/terminal_session_error.rs
-application/  one use case per event (table below) + report_session_context_use_case.rs (`_ pre-cmd`)
-application/ports/{terminal_screen.rs (pass_through bytes → stdout bytes, apply ScreenCommand, cursor_column,
-                   edit_buffer, state, resize, draw_overlay, take_clear, full_repaint),
-                   terminal_writer.rs, wrapped_shell.rs (write input, resize),
-                   completion_engine.rs (+ RecordingCompletionEngine), generator_process_reaper.rs}
+application/ports/{terminal_screen (eleven methods: pass_through, pass_window_name_through, apply, cursor_column,
+                   edit_buffer, state, resize, draw_overlay, take_clear, full_repaint, set_theme), terminal_writer, wrapped_shell (write input, resize),
+                   completion_engine (+ RecordingCompletionEngine, PanickingCompletionEngine), generator_process_reaper,
+                   terminal_modes, live_settings, working_directory}.rs      each trait with its #[cfg(test)] double
+application/services (shared by several events, never use cases): shell_output_feeder ← Tracker::feed, keystroke_handler
+                   ← on_keys/insert/release_held, completion_requester ← refresh, overlay_painter ← frame/redraw/
+                   take_repaint, session_file_poller ← poll_files
+application/use cases, one per event (table below): handle_keystrokes (+ handle_keystrokes_use_case/tests.rs),
+                   process_shell_output, apply_completion_result, apply_llm_ghost_text, resize_terminal,
+                   handle_shell_exit, handle_timer_tick, apply_terminal_background, end_session,
+                   prepare_session_launch, report_session_context (`_ pre-cmd`, Phase 4)
+application/{frame_input (moved from the renderer, gained `now`), launch_request, launch_environment, shell_end,
+             session_ports_parts (eleven ports), session_use_cases (wires the use cases once, in production and in tests)
+             + session_use_cases/tests.rs (characterisation scenarios 1-10 and 13),
+             test_fixtures (#[cfg(test)]: TerminalSessionHarness, IoJournal, ScenarioLog, use_cases_over)}.rs
 infrastructure/terminal_session_module.rs
-infrastructure/pty/{session_runner ← run/start/run/step/guard/emit (event loop, panic pass-through, batching,
-                    credits, ONE stdout write per batch), session_message ← types::Msg, pty_reader ← pump,
-                    terminal_probe ← PROBE/parse_probe/parse_cpr/parse_osc11, fallback_shell ← fallback,
-                    platform_unix, platform_windows ← sys}.rs
-infrastructure/adapters/{alacritty_terminal_screen (implements TerminalScreen; owns Term = types::Model),
-                         output_filter ← OutFilter, edit_buffer_extractor ← extract/strip_pwsh_prompts/cell colours,
-                         cell_tagger ← tag/mark_line_start, overlay_renderer ← render::Renderer + frame/restore code,
-                         kitty_graphics ← icons::{transmit, place, base64, tmux_graphics, detect},
-                         icon_assets ← PNGS/TEMPLATE_RGBA, stdin_key_decoder ← keys::Decoder/decode*,
-                         stdout_terminal_writer, pty_wrapped_shell,
-                         file_session_context_repository ← SessionCtx::path/load, pre_cmd writer, prune_run_files,
-                         + SessionContextRecord (serde)}.rs
-infrastructure/cli/{pty_command, pre_cmd_command, debug_shell_command ← cli::debug_shell/debug_shell_files,
-                    key_tester_command ← cli::key_tester/key_line}.rs
+infrastructure/pty/{session_runner (+ session_runner/tests.rs) ← the event loop, the panic pass-through, the batching
+                    and the credits (SessionRunner, SessionRunnerParts; the legacy pty.rs by git mv),
+                    session_launcher ← Session::start (launch_session, generate_session_id),
+                    pty_session ← the free run (run_pty_session: panic hook, launch preparation, fallback shell;
+                    attempt, env_nonempty), session_message ← types::Msg, pty_reader ← pump,
+                    terminal_probe ← PROBE/parse_probe/parse_cpr/parse_osc11 + probe_terminal,
+                    fallback_shell ← fallback, completion_engine_starter, platform_unix, platform_windows ← sys}.rs
+infrastructure/adapters/{alacritty_terminal_screen (implements TerminalScreen; owns the model) + tests.rs,
+                         headless_model ← types::Model, output_filter ← OutFilter,
+                         edit_buffer_extractor ← extract/strip_pwsh_prompts/cell colours, cell_tagger ← tag/mark_line_start,
+                         overlay_renderer ← render::Renderer (Phase 8) + overlay_renderer/tests.rs,
+                         kitty_graphics, icon_assets (Phase 8),
+                         stdout_terminal_writer, pty_wrapped_shell, console_terminal_modes, lenient_live_settings,
+                         process_working_directory,
+                         file_session_context_repository (Phase 4: SessionCtx::path/load, the pre_cmd writer,
+                         prune_run_files, SessionContextRecord)}.rs
+infrastructure/cli/{pty_command ← bootstrap's pty arm, debug_shell_command ← cli::debug_shell/debug_shell_files,
+                    key_tester_command ← cli::key_tester/key_line, pre_cmd_command (Phase 4)}.rs
 ```
+Beyond the first draft of this section: the `*Parts` structs (`TerminalSessionParts`, `EditBufferContextParts`,
+`ScreenStateParts`, `KeyFactsParts`, `SessionPortsParts`, `SessionRunnerParts`, `ProcessShellOutputParts`), the three
+sliced test modules `handle_keystrokes_use_case/tests.rs`, `marker_tracker/tests.rs` and `overlay_renderer/tests.rs`,
+`PanickingCompletionEngine`, and the types listed in the glossary. The domain uses no external crate (`std`
+only).
 
 ### diagnostics
 ```
@@ -487,7 +527,9 @@ infrastructure/cli/{doctor_command, diagnostic_command ← diagnostic/diagnostic
 ```
 main.rs                    Cli::parse → logger init → bootstrap::run → exit code
 bootstrap/cli.rs           ← main.rs Cli/Command/InternalCmd + dispatch to module cli handlers; cli::completion,
-                             version, cli::print_error
+                             version, cli::print_error; DebugCmd (the clap type spans modules, D4);
+                             terminal_session_module() (built for every `debug`, `pty` and `pre-cmd` command, reads
+                             no file); debug_shell_post_script (the callback of `debug shell`)
 bootstrap/engine_server.rs ← engine.rs by git mv: spawn (builds the inbox, the runtime and the modules on the engine
                              thread), EngineServer {run, the dispatch table below, send_reply, log_notice}, owns the
                              inbox instance
@@ -495,23 +537,27 @@ bootstrap/engine_message.rs ← types::EngineMsg, renamed EngineMessage
 bootstrap/engine_inbox.rs  EngineInbox, the engine thread's one channel; implements specs::RuntimeEventSource
 bootstrap/channel_completion_engine.rs  implements terminal_session::CompletionEngine over Sender<EngineMessage>
                              + start_completion_engine, the starter the pty receives
-bootstrap/bridges.rs       cross-module port implementations (section 2)
+bootstrap/bridges.rs       cross-module port implementations (section 2): SpecBundleBridge, GeneratorProcessBridge
 ```
 
 ### Event → use case tables
 
-PTY session (`terminal_session/infrastructure/pty/session_runner.rs`). The driver only decodes, routes and writes.
-| Event (today's `Msg`) | Use case |
+PTY session (`terminal_session/infrastructure/pty/session_runner.rs`, as built in Phase 9). `launch_session` starts it and
+`run_pty_session` wraps it in the panic hook and the fallback shell. The runner reads its one inbox, calls the use case of
+each message under `guard` (a panic turns the session into a pass-through) and writes nothing of its own except the raw
+batch after a panic. The use cases write their own stdout and PTY bytes through the `TerminalWriter` and `WrappedShell`
+ports and return `()`, except `HandleShellExitUseCase`, which returns whether the loop goes on.
+| Event (`SessionMessage`) | Use case |
 |---|---|
-| startup | `PrepareSessionLaunchUseCase` (argv, env, title) |
-| `Stdin(bytes)`: keys decoded and late probe replies stripped by the driver | `HandleKeystrokesUseCase` |
-| `Pty(batch)` | `ProcessShellOutputUseCase` (markers → events → refresh → request → frame; one write) |
+| startup (`launch_session`) | `PrepareSessionLaunchUseCase` (resolves the shell from a `LaunchRequest`; the env changes and the title are `WrappedShellCommand` calls made once the session id exists), then `probe_terminal` |
+| `Stdin(bytes)` | the runner strips late probe replies inside the same guard (`parse_probe`; a late OSC 11 reply goes to `ApplyTerminalBackgroundUseCase`), then `HandleKeystrokesUseCase` (the aggregate's `KeyDecoder` decodes) |
+| `Pty(batch)` | `ProcessShellOutputUseCase` (markers → events → refresh → request → frame). The runner first joins the queued batches; the use case writes one `emit` per event and replays the held keys after it (`release_held`) |
 | `Resize(c, r)` | `ResizeTerminalUseCase` |
 | `Completion(c)` | `ApplyCompletionResultUseCase` |
 | `Ghost{req, text}` | `ApplyLlmGhostTextUseCase` |
-| `ChildExit(code)` / `PtyEof` | `HandleShellExitUseCase` |
+| `ChildExit(code)` / `PtyEof` / `Term` | `HandleShellExitUseCase` (records the exit, 129 for `Term`, and says whether the loop goes on; the runner releases the ConPTY master first) |
 | timeout | `HandleTimerTickUseCase` (resize repaint, redraw grace, held keys, lock expiry, LLM debounce, spinner, settings/session reload) |
-| `Term` and loop end | `EndSessionUseCase` (engine shutdown, reap generator processes, remove session context) |
+| loop end, every exit | `EndSessionUseCase`, run once after the loop (engine shutdown, reap generator processes, remove session context, restore the terminal modes) |
 | `_ pre-cmd` (separate process) | `ReportSessionContextUseCase` |
 
 Completion engine (`bootstrap/engine_server.rs`). The `ghost_text::` steps are `ghost_text`'s use cases, held by
@@ -704,7 +750,7 @@ in `ghost_text` (7.9), gate green (986 passed). The phase ran in 11 steps (`7.0`
 HTTP client, the split cd check and `inline.rs`'s deletion in 7.7 became deviations. See the Phase 7 notes in
 section 9.
 
-### Phase 8: dropdown
+### Phase 8: dropdown (done: [research](hexagonal-refactor/phase-8-dropdown.md))
 1. Move the keys VOs, `Keymap` and `KeystrokeParser` (`keys.rs` tests). The `Decoder` goes to
    `terminal_session/infrastructure/adapters/stdin_key_decoder.rs`.
 2. Move `Menu` with `MenuVisibility`, `MenuEffect` and `CommonPrefix`, and its 12 tests. `now` is passed in. The
@@ -720,9 +766,15 @@ section 9.
      which dropdown may not import (rule 3), so dropdown's infrastructure does that `SettingValue` to JSON conversion
      itself, with the same output.
 5. Move `Renderer`, the kitty graphics code and the icon assets to the terminal_session infrastructure adapters, with
-   the round-trip tests unchanged. Delete `keys.rs`, `menu.rs`, `render.rs` and `icons.rs`.
+   the round-trip tests unchanged. `keys.rs`, `menu.rs`, `icons.rs` and `render.rs` were deleted file by file with their
+   last items (8.1b, 8.2b, 8.4b, 8.6).
 
-### Phase 9: terminal_session (the biggest phase; one commit per step)
+Done at `da2f950`: `dropdown` registered in the architecture test, `keys.rs`, `menu.rs`, `icons.rs` and `render.rs`
+gone, the theme command in `dropdown` (8.5c), the renderer, the kitty graphics, the icon assets and the stdin decoder in
+`terminal_session`'s adapters, gate green (1091 passed). The phase ran in 19 steps (`8.0a` … `8.7`) in three runs. See
+the Phase 8 notes in section 9.
+
+### Phase 9: terminal_session (done: [research](hexagonal-refactor/phase-9-terminal-session.md))
 1. Pure domain from `tracker.rs`: `MarkerSplitter` (7 tests), `ShellMarker`, `OutputPiece`, `ShellEvent`, `EditBuffer`,
    `ShellSuggestionColor` and `ScreenCommand`. Build the `MarkerTracker` entity test-first: it takes the cursor
    column in and returns events + screen commands.
@@ -742,13 +794,20 @@ section 9.
      one-write-per-batch rule;
    - `platform_unix` / `platform_windows`, `terminal_probe` (`probe_replies`), `fallback_shell` and the adapters;
    - the commands `pty_command`, `debug_shell_command` and `key_tester_command`, with their tests from `cli.rs`.
-   - The `#[cfg(test)]` panic injection stays at the driver's call site.
+   - The `#[cfg(test)]` panic injection stays inside `KeystrokeHandler`'s per-key loop, not at the driver's call site
+     (deviation 12 of the research).
    - The settings repository comes from bootstrap as a trait object (section 2), and the lenient load (at start and
      on every reload) moves into terminal_session's own infrastructure: on a load error it logs the same warn-level
      `settings: <error>: <cause>…` text as `settings::infrastructure::load_or_defaults` (D5) and uses
      `Settings::default()`. Importing
      `load_or_defaults` or `JsonFileSettingsRepository` from a registered module breaks fitness rule 3.
-7. Delete `pty.rs`. `types::Msg` and `types::Model` are gone.
+7. Delete `pty.rs`. `types::Msg` and `types::Model` are gone. (`tracker.rs` and `types::Model` went at 9.2f, `types::Msg` at
+   9.6a, and `pty.rs` at 9.6d, where `git mv` made it `session_runner.rs`; no step 7 was left to do.)
+
+Done at `b898db1`: `terminal_session` registered in the architecture test (at 9.0a, the first step), `pty.rs` and
+`tracker.rs` gone, `types.rs` down to `now_ms` and `now_secs`, the aggregate, the entities, seven new ports, five services, ten
+use cases and the runner in place, gate green (1414 passed). The phase ran in 42 steps (`9.0a` … `9.7`) in six runs. See
+the Phase 9 notes in section 9.
 
 ### Phase 10: diagnostics
 1. Domain:
@@ -787,9 +846,9 @@ section 9.
 | `menu.rs` | dropdown `Menu` + `CommonPrefix`; fixtures → `completion/domain/test_fixtures.rs` |
 | `render.rs` | dropdown domain (theme, colour, layout, text fitting), dropdown theme mapper, terminal_session `overlay_renderer` |
 | `icons.rs` | dropdown (icon slot/resolver), terminal_session (`kitty_graphics`, `icon_assets`) |
-| `pty.rs` | terminal_session/* |
-| `tracker.rs` | terminal_session/* |
-| `types.rs` | split across shared, specs, completion, history, terminal_session, bootstrap; deleted |
+| `pty.rs` | terminal_session/* (done in Phase 9) |
+| `tracker.rs` | terminal_session/* (done in Phase 9) |
+| `types.rs` | split across shared, specs, completion, history, terminal_session, bootstrap; deleted (Phase 9 moved `Msg` and `Model`; `now_ms` and `now_secs` stay until Phase 11) |
 | `shell_parser.rs` | completion tokenizer + Token / CommandLine / AliasTable |
 | `spec.rs` | specs domain model + `fig_spec_mapper` |
 | `specs.rs` | specs domain (index, locator, retention), `embedded_spec_bundle`, shared temp_dir |
@@ -809,9 +868,9 @@ section 9.
 | Typed `SpecRuntime` replaces JSON results. This is the largest semantic change. | Its own step (5.3); 18 js tests + parser and engine tests green; `{"$fn"}` wire format unchanged; `all_bundle_modules` ignored test run |
 | Abort-on-newer-request semantics when the inbox moves to bootstrap | Single channel kept; `wait_aborts_and_defers_on_complete`, `cli_version_detection_survives_an_aborted_parse` |
 | `Rc`-address identity (`GeneratorKey`, arg key, spec cache by JSON) | Encapsulated in `GeneratorKey::for_arg`, not redesigned; identity tests listed in 5.4 and `generator_keys_differ_per_index` |
-| Latency and the one-write-per-batch rule in the PTY loop | `ProcessShellOutputUseCase` returns one byte buffer; the driver writes once; round-trip render tests |
+| Latency and the stdout order in the PTY loop | As built: `ProcessShellOutputUseCase` writes its own stdout bytes, one `emit` per event, and `release_held` writes the PTY after it, because one returned buffer would reorder stdout against that PTY write (deviation 8 of the Phase 9 research); the 17 characterisation fixtures, `session-diff.py`, round-trip render tests |
 | Setting defaults drift when call-site literals go | Per-key equality tests (Phase 2.2) |
-| Windows-only code (`platform_windows`, job objects, console) | Compiles and tests on the CI `windows-latest` job; moved verbatim, no logic edits |
+| Windows-only code (`platform_windows`, job objects, console) | Compiles and tests on the CI `windows-latest` job; moved verbatim, no logic edits; since Phase 9 the gate also compiles it here (`cargo check --all-targets --target x86_64-pc-windows-gnu`) |
 | Real-shell tests need zsh/fish/pwsh | Unchanged skips when a shell is absent; CI Linux installs zsh and fish |
 | Doctor rewrite from closures to facts | New per-check tests before the old code is deleted |
 
@@ -832,7 +891,11 @@ section 9.
     a capture taken in Phase 0.
 - **Manual smoke** (SPEC §10 checklist) after Phases 6, 9 and 11 (after Phase 7 the user runs item 4 plus the LLM
   fake-server check of [`phase-7-ghost-text.md`](hexagonal-refactor/phase-7-ghost-text.md), "Output-equivalence
-  guard"), with `TABSMITH_HOME=$(mktemp -d)`, using
+  guard"; after Phase 8 items 1-3, 5 and 6 plus a custom theme file, the `system` theme in a light terminal, icons in a
+  kitty, a ghostty and a tmux pane (the overlay has no golden coverage), a slow generator (the spinner after about 200 ms:
+  P8-S1) and the two `pty.rs` theme moments no test reaches (a settings reload with `tabsmith theme light` from a second
+  terminal, and a late OSC 11 reply with `system`: P8-S2), see [`phase-8-dropdown.md`](hexagonal-refactor/phase-8-dropdown.md),
+  "Manual smoke"), with `TABSMITH_HOME=$(mktemp -d)`, using
   `cargo run -- debug shell zsh` (and bash and fish):
   1. `git ch` shows the menu.
   2. Tab inserts and branches appear.
@@ -843,6 +906,12 @@ section 9.
   7. `vim` draws no overlay.
   8. `exit` code is propagated.
   9. `tabsmith doctor` passes.
+- **Phase 9 smoke (due now, the user's; agents cannot drive a terminal):** items 1-9 above on zsh, bash and fish, plus
+  Phase 8's P8-S1 and P8-S2 (still pending) and P9-S1..S5 (listed in the Phase 9 notes of section 9). The committed
+  `session-diff.py` and `pty-diff.py` already compare the old and the new binary on bash under tmux (menu, ghost,
+  bottom row and resize, `vim` and `exit 3`, settings reload, key tester, failures, files) and on a real pty
+  (probe answered or not, typeahead, env and cwd, SIGTERM, no shell, corrupt settings); both are empty. They do not
+  cover zsh, fish, pwsh, kitty/ghostty/tmux icons or Windows.
 - **End:** push the branch and let the CI matrix (ubuntu, macos, windows) run. Ask the user before pushing.
 
 ---
@@ -887,7 +956,8 @@ shape above does, while `Settings::{get, with, without}` keep `&str` keys becaus
 callers pass them. `Settings` exposes `entries()` (key-ordered pairs) as its
 primitives view in place of `to_primitives()`. `infrastructure/load_or_defaults.rs` gives the legacy pty.rs and
 doctor.rs the defaults plus the old `settings: <error>` warning when settings cannot be loaded; the settings commands
-stay strict. It is reachable only while those files are unregistered (Phase 9 step 6 and Phase 10 step 2 replace it).
+stay strict. Its pty caller went in Phase 9 (terminal_session's `LenientLiveSettings` does the same load); `doctor.rs` is the
+one caller left until Phase 10 step 2 replaces it.
 `cli::matching_keys` is inlined into `DeleteSettingsUseCase::execute(pattern, announce)`, which hands the matching
 keys to `announce` before it saves, so `Removing …` still prints even when the save then fails;
 `settings_delete_wildcards` is split between that use case and `settings_command.rs` (D6). The render tests moved to
@@ -974,7 +1044,7 @@ which cites the code behind each):
   crate an `extern crate .. as ..` line links. Its second round added rule 8 (`#[path]`, `include!`, `#[macro_export]`
   and `#[macro_use]`). The checker reads only the registered modules and `src/main.rs`, so a macro exported from
   bootstrap or a legacy file still passes, as do `#[cfg_attr(.., path = ..)]` and a space after `#[` or before
-  `!`. Rule 3 flags only another module's use cases (a `*_use_case` file or a `*UseCase` type, on any path under it
+  `!`. Rule 3 flags only another module's use cases (a `*_use_case(s)` file or a `*UseCase(s)` type, on any path under it
   since Phase 5) and `infrastructure` paths, so it cannot see the `IntegrationInstaller` application service;
   legacy `doctor.rs` builds one (P14), so Phase 10 greps diagnostics for it by hand. The rules still do not check
   the `anyhow` rule: at the end of Phase 4 a grep finds it in shell_integration only in `infrastructure/cli` and test
@@ -1522,3 +1592,390 @@ which cites the code behind each; the phase ran as 11 steps, `7.0` … `7.10`, i
     `GhostTextSource` (and `Err(_)`/`Ok(_)`) get explicit arms (D8).
   - Phase 11: `LEGACY_MODULES` keeps `inline`; `types::Msg::Ghost` dies with `Msg` in Phase 9; `cli::settings_repository()`
     stays for `theme` until Phase 8. `#![allow(dead_code)]` stays until then.
+
+Phase 8 notes (decisions R1-R30 and deviations 1-25 of [`phase-8-dropdown.md`](hexagonal-refactor/phase-8-dropdown.md),
+which cites the code behind each; the phase ran as 19 steps, `8.0a` … `8.7`, in three runs; where the notes differ from
+the briefs, the notes win):
+
+- **Guards first** (deviation 1): step 8.0a added `scripts/hexagonal-refactor/theme-diff.sh` (groups A-I: the listing over
+  every kind of file and folder, `--folder`, valid custom themes with the banner and the saved `settings.json`, every
+  `invalid theme file` text of the strict parser, built-in names against theme files of the same name, every
+  `settings.json` state, the save-after-banner failure, the display of non-string values, the bold escapes on a pty and the
+  clap conflicts) and three tests of the lenient theme read; 8.0b added the byte-hash tests as data (FNV-1a):
+  `should_render_every_icon_exactly_as_at_the_phase_8_start` (92 rows) and
+  `should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start` (10 scenarios), whose values no later step changed, and
+  seven keymap and menu characterisation tests. The local tag `phase8-start` (`7aafcef`) is the second `testlock.py`
+  baseline.
+- **Steps, runs and deletions** (deviation 2, 23, R1, R2, R22): the plan's five steps ran as 19 (`8.0a`, `8.0b`,
+  `8.1a-c`, `8.2a-c`, `8.3a-c`, `8.4a-b`, `8.5a-d`, `8.6`, `8.7`) in three runs: 8.0a-8.2c and 8.4a; 8.4b alone (one
+  commit by design: `slot()` stops returning bytes); 8.3a-8.7. `keys.rs`, `menu.rs`, `icons.rs` and `render.rs` went with
+  their last items (8.1b, 8.2b, 8.4b, 8.6), so step 5's last sentence was edited in place. The one temporary shim
+  (R13), `impl Theme { from_settings, from_json }` in `render.rs`, lived from 8.3b to 8.5d and went with its last
+  caller; no shim and no `pub(crate) use` remains.
+- **Keys** (deviations 3-6): `KeyEvent` is `terminal_session/domain/value_objects/key_event.rs`; the `Decoder` is
+  `StdinKeyDecoder`; `KeyCode` and `Modifiers` have their own files; `Mods`, `Action` and `Binding` took their glossary
+  names. The key value objects have private fields behind `const fn` builders and accessors (8.1c, after the verbatim
+  move). `keymap_defaults_and_overrides` was not D6-split: it stays whole in the decoder's tests (R5, O4).
+  `KeystrokeParser` is two free functions, `parse_keystroke` and `normalize`.
+- **Menu** (deviations 7-10): `Menu::on_completion` and `Menu::loading` take `now`; `pty.rs` passes `Instant::now()`
+  at both sites and the renderer still reads `Instant::now()` itself in `menu_patches` (R7, O2). `common_prefix` is a
+  service returning the new `CommonPrefixOutcome`; `Menu::common_prefix` only applies it. The catch-all arms of
+  `Menu::on_completion` and `handle` became explicit (D8). `item`, `comp` and `settings` moved to
+  `completion/domain/test_fixtures.rs` (`settings` with `#[cfg(test)]`); `max_rows` stays in `menu.rs`; `Menu::vis()` is
+  `#[cfg(test)]`; the 12 menu tests moved to `menu/tests.rs`.
+- **Theme** (deviations 11-16, 19): `Rgb` is a tuple alias. `Theme` has private fields behind eight accessors and a
+  `ThemeParts` constructor argument. `ThemeRepository` has four methods, `{folder, find, list, find_palette}`, and two
+  results: the strict `ThemeDefinition` (the author, for the banner) and the lenient `ThemePalette` (the colour roles),
+  so `theme_json_mapper.rs` has two entry points, `parse_theme_definition` and `theme_palette_from_json` /
+  `parse_theme_palette`: the strict and the lenient parser differ on about 16 inputs and were kept apart (D1); the
+  plan's "one parser, not two" was not followed. `ThemeChoice` shares only the built-in name list with the CLI;
+  `built_in("")` is none and `from_name("")` is dark. `resolve_theme` is a domain service that takes the
+  `ThemeRepository` trait object (the skill gives ports to use cases): the custom branch is its only reader of the theme
+  file and three call sites in `pty.rs` would otherwise carry the same glue, a precedent Phase 9 may turn into a use
+  case. The theme CLI has no use case for `--folder`; `ThemeSelection` and `CurrentTheme` are the DTOs, and
+  `ThemeSelection` holds domain value objects (`ThemeDefinition`, `ThemeChoice`), an exception like `SettingValue` and
+  Phase 7's `GhostTextSources`. `DropdownError` carries the settings error (printed as itself), the data directory, the
+  invalid theme file and theme-not-found texts. The `SettingValue` to JSON conversion of `theme` with no argument is
+  copied into `theme_command.rs` (the settings adapter is off limits to dropdown) and pinned by a parity test against the
+  adapter. `SelectThemeUseCase` announces the choice before it saves, as the legacy command printed the banner first.
+  `describe` became `MenuDescriber` (`menu_describer.rs`, deviation 16), `layout` stays `menu_layout_calculator::layout`
+  with `MenuLayout` and `MenuSide` value objects.
+- **Icons and the renderer** (deviations 17, 18, 24): icons cross the layers as ids: `IconId`, `IconSlot` and the
+  42-name `ICON_NAMES` are domain, `PNGS`, `TEMPLATE_RGBA`, `kitty_image` and `tinted` are in `icon_assets.rs`, and
+  `placeholders` and `color` in `icon_id.rs`; the byte types are `KittyImage` and `KittyPixels`. `tinted` now runs at
+  transmit time, once per colour per session (performance only, P8-T35). `FrameInput` stays in `overlay_renderer.rs` with
+  no clock field (O7). The renderer's test module stays inline: `overlay_renderer.rs` is 1147 lines, 551 of them tests,
+  a pure move over section 1's "about 500" that Phase 9.4 may slice when `FrameInput` moves.
+- **Files beyond section 4 and repointed comments** (deviations 20, 21): `key_code.rs`, `modifiers.rs`, `key_event.rs`,
+  `common_prefix_outcome.rs`, `menu_side.rs`, `menu_describer.rs`, `theme_palette.rs`, `theme_author.rs`,
+  `theme_selection.rs`, `current_theme.rs`, `entities/menu/tests.rs` and `infrastructure/adapters/theme_file_error.rs`
+  (`ThemeFileError` is `pub(crate)` because the strict entry returns it); `KittyImage` and `KittyPixels` share
+  `kitty_graphics.rs` as the adapter's own parameter types (precedent: `ShellArg` and `InitArgs` in `init_command.rs`).
+  The `autocomplete.*` doc comments of `settings_catalog.rs` name `dropdown/domain/entities/menu.rs`,
+  `overlay_renderer.rs` and `theme_resolver.rs`.
+- **A test-only edge** (deviation 25): the moved icon hash test and the renderer tests import `SuggestionKind` and
+  `completion::domain::test_fixtures::item`, an edge `terminal_session -> specs` and `completion` that section 2 does not
+  list; it sits under `#[cfg(test)]` (D2). Phase 9, when `terminal_session` registers, either allows test-only edges
+  explicitly or adds a section 2 edge check.
+- **Fitness rules** (deviation 22): `dropdown` is registered at `da2f950`, the end of the phase, by one line in
+  `REGISTERED_MODULES`; the architecture test passes (55 tests) with no rule weakened and no checker test touched.
+  `LEGACY_MODULES` keeps `icons keys menu render` whose files are gone (Phase 11 sweep), and `terminal_session` stays
+  unregistered until Phase 9, so its new adapters are not rule-checked yet (`stdin_key_decoder` has unpaired `[` in byte
+  literals to check then; P8-T49: the scanner reads string and char literals as code, but only an unpaired `{` or `}`
+  in one shifts the use-group tracking, and no moved domain file has one). Rule 3 never flags a legacy module reached
+  from infrastructure, a grouped `use crate::{` or anything under `terminal_session`, so the hand greps G1-G19 ran and
+  found nothing outside `#[cfg(test)]` code: a legacy module, `shell_integration`, `history`, `ghost_text`,
+  `terminal_session`, `diagnostics` or `bootstrap` under `src/dropdown`; a grouped `use crate::{`; a `pub(crate) use` in
+  `dropdown`, `terminal_session`, `pty.rs` and `cli.rs`; `anyhow` or `clap` outside `theme_command.rs` (and the tests of
+  `dropdown_error.rs`); `serde`, `serde_json` or `json!` outside `theme_json_mapper.rs`, `theme_command.rs` and test
+  modules; `print!` or `println!` outside `theme_command.rs`; `logger` or `alacritty_terminal`; `unicode_width` outside
+  `text_fitting.rs`; `crate::settings::infrastructure` outside the parity test of `theme_command.rs`; a `pub` field in
+  the domain outside the `*Parts` structs (`ThemeParts`, `MenuLayoutParts`, `FigPaletteParts`, `Base16PaletteParts`);
+  `std::fs`/`env`/`process`/`thread`/`net`, `SystemTime` or `Instant::now` in dropdown's domain and application;
+  `Theme::from_settings`, `Theme::from_json` or `crate::{keys,menu,render,icons}` anywhere; `SHADES` and `ACCENTS`
+  outside `theme_palette.rs`; a bare `keys.rs`, `menu.rs`, `render.rs` or `icons.rs` in a comment. `grep 'cfg(' src/dropdown`
+  shows only `#[cfg(test)]` and the `#[cfg(unix)]` of the chmod test in `file_theme_repository.rs`; `grep 'cfg!('` is
+  empty, and the diff of `src` against `phase8-start` adds and removes no `cfg(windows)`, `cfg(target_os)`,
+  `cfg(not(..))`, `cfg(all(..))` or `cfg!(`. `grep -rnE
+  'completion::application::(command_line_parser|generator_runner|test_fixtures)' src --exclude-dir=completion` is empty.
+  The legacy names that survive in prose are `KeyBinding::Action` (a variant) and doc-comment words ("Action id", "Slot of
+  a row", "Image ids", "Image covering", "Kitty graphics").
+- **Checks**: test totals at the end of the phase (`da2f950`, the registration; the closing commits change docs only):
+  1091 passed, 0 failed, 1 ignored (`all_bundle_modules`; 986 at `phase8-start`), clippy 3 warnings (budget 3, all used),
+  build warnings 0, golden identical, testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 168 (Phase 7's 154 plus
+  14), NEW 809, PATH-ONLY 23, against `phase8-start` MISSING 0, DUPLICATE 0, PATH-ONLY 10, NEW 105 (99 `should_` names
+  and the six split names `truncation_and_wrap_spinner`, `colours_and_themes_theme_json`,
+  `colours_and_themes_theme_choice`, `tmux_uses_placeholders_passthrough`, `theme_list_order_built_ins` and
+  `theme_file_parsing_banner`) and CHANGED 26, each a restructuring in the research's "Test moves" table:
+  `keystroke_grammar`, `decode_table`, `decode_multi_key_chunk`, `esc_not_last_and_double_esc`, `paste_across_chunks`,
+  `ghost_keys_and_words_keys` (8.1a/8.1c: `Mods {..}` and `Key {..}` literals to builders, field reads to accessors,
+  `Decoder` to `StdinKeyDecoder`), twelve menu tests (8.2a: the new `now: Instant` argument: `typing_and_space`,
+  `full_insertion_reopens_only_for_new_arg_or_retrigger`, `esc_hides_for_the_line`,
+  `backspace_into_previous_token_and_large_change`, `hidden_until_keypress_refreshes_items`,
+  `large_change_counts_skipped_requests`, `error_reset_and_loading`, `only_show_on_tab`,
+  `sticky_selection_across_recompute`, `common_prefix`, `execute_and_record`, `round_trip_arg_hint_spinner_and_wide_ghost`),
+  `colours_and_themes` and `truncation_and_wrap` (8.3a, D6 halves), `layout_decisions` (8.3c, `MenuLayout::new` and
+  accessors), `resolves_like_q`, `tmux_uses_placeholders`, `transmit_chunks` (8.4b: accessors, `ICON_NAMES`, `IconId`,
+  `KittyImage`, `KittyPixels`) and `theme_list_order`, `theme_file_parsing` (8.5c, D6 halves). The four diff scripts
+  (`theme-diff.sh`, `integrations-diff.sh`, `precmd-diff.sh`, `inline-diff.sh`) are empty against the baseline binary,
+  `debug_shell_survives_closed_terminal` (the only automated start-up of `pty::run`) passes,
+  `cargo check --locked --no-default-features --all-targets` passes, and the release `all_bundle_modules` run prints
+  `1 passed`. `integrations_zsh_powerlevel10k_prompt_wrapped` and
+  `specs::infrastructure::adapters::process_executor::tests::exec_status_output_and_timeout` are timing-flaky under the
+  gate's load: a lone failure is rerun alone with `--exact`, never skipped.
+- **Open questions, defaults applied** (O1-O8): private key fields (O1), the renderer reads `Instant::now()` itself and
+  Phase 9 adds `FrameInput.now` (O2), `tinted` stays in `icon_assets.rs` (O3), `keymap_defaults_and_overrides` kept whole
+  (O4), `Rc<dyn ThemeRepository>` in the session (O5), `Image` and `Source` renamed `KittyImage` and `KittyPixels` (O6),
+  `FrameInput` stays in `overlay_renderer.rs` (O7), the user is asked for the smoke once, after 8.7 (O8).
+- **Deviations the runs reported**: 8.3a's commit B body is longer than 72 characters (only subjects are limited);
+  8.3c left two long test lines of `menu_describer.rs` unformatted (`cargo fmt` is not used); 8.5a's commit E
+  (`7a81d7f`) alone has clippy 4 warnings (its test dropped a `must_use` result) and the next commit `5783c4b`
+  fixed it forward, so a bisect landing exactly on E sees a red gate; 8.5b added tests beyond the research list (a
+  non-UTF-8 theme file, no home, two banner cases, a module test) and its chmod test is unix-only (23 of 24 tests off
+  unix); `ThemeArgs` and `run_theme_command` have no unit test (precedent `run_inline_command`; `theme-diff.sh` guards
+  them); 8.5d added `parse_theme_palette` as a second lenient entry and ran a throwaway differential test between the
+  old and the new theme code (13 values, 14 names against 5 backgrounds, the default settings and no home: all equal;
+  deleted, not committed); the two late `resolve_theme` sites of `pty.rs` (OSC 11 reply, settings reload) have no
+  automated test.
+- **History**: no Phase 8 subject is over 72 characters, and every commit has the Sonnet 5.5 trailer
+  (`git log --format='%h %s' phase8-start..HEAD`: 49 commits up to the registration, counting the research hand-over and the run
+  hand-offs, plus the docs commits of this close). Every message went through `git commit -F`; none was rewritten.
+- **Manual smoke pending** (the user's, after the phase; section 8): with `TABSMITH_HOME=$(mktemp -d) cargo run -- debug
+  shell zsh` (and bash, fish): (1) `git ch` shows the menu; (2) Tab inserts and branches appear, a shared prefix
+  inserts; (3) Esc hides it; (5) a prompt on the bottom row draws the menu above; (6) a resize leaves no artefacts;
+  icons in kitty or ghostty (direct placements) and in tmux with `allow-passthrough on` (placeholders);
+  `tabsmith theme light`, a custom theme file under `$TABSMITH_HOME/themes/` and the `system` theme in a light terminal
+  show the right colours; `tabsmith theme` with no argument prints the saved value; (P8-S1) a spec whose generator runs
+  `sleep 1` (saved as `$TABSMITH_HOME/specs/user/<name>.js`, SPEC section 6.3) shows the spinner on the description bar
+  after about 200 ms and drops it when the reply arrives; (P8-S2) with a session running, `tabsmith theme light` and back
+  to `dark` from a second terminal with the same `TABSMITH_HOME` recolours the menu, and with `system` in a terminal that
+  answers OSC 11 late the theme follows the late reply. These are not the plan's items 7 and 8 (`vim`, `exit`), which
+  Phase 8 does not touch.
+- **Hand-offs** (details in the research's "Hand-off notes for Phase 9"):
+  - Phase 9: `pty.rs` now imports, from dropdown, `Key`, `KeyAction`, `KeyBinding`, `KeyCode`, `Keymap`, `Modifiers`,
+    `MenuEffect`, `Menu`, `ThemeRepository`, `resolve_theme` and `FileThemeRepository`, and from
+    `terminal_session`'s adapters `StdinKeyDecoder`, `FrameInput`, `OverlayRenderer` and `kitty_graphics::detect`; its
+    fields are `keymap`, `decoder`, `renderer` and `themes: Rc<dyn ThemeRepository>` (built in `Session::start`;
+    `InMemoryThemeRepository` and `Theme` in the test `Session`). `KeyRouter` takes `ghost_key`, `is_ctrl`, `note_forwarded`'s key
+    rule and the `on_keys` arms with explicit D8 arms over `Option<KeyBinding>` in the guard order of P8-T10;
+    `StdinKeyDecoder` becomes a port or a domain service and the session owns it (the held raw bytes replay through
+    `on_keys` from three non-stdin use cases, so decode once per chunk); `HandleKeystrokesUseCase` interprets
+    `MenuEffect`. `Menu` takes `now` from `Clock::now_instant()`; `OverlayRenderer::menu_patches` and
+    `Session::on_completion` still read `Instant::now()`, so the screen adapter adds `now` to `FrameInput`. The
+    `TerminalScreen` port also needs `set_theme` (unconditional), `drop_clear` and `with_images(detect())`; ONE
+    `OverlayRenderer` per session. `DropdownModule::themes` is what bootstrap hands to `terminal_session`; the three
+    `resolve_theme` sites (start-up, late OSC 11, settings reload) become use cases; `Rc` holds only while the session
+    stays on one thread (O5). The renderer's one legacy import is `crate::types::Model`, retargeted when `Model` moves
+    (9.7). `tracker.rs` and `types.rs` are untouched by Phase 8.
+  - Phase 11: `LEGACY_MODULES` keeps `icons keys menu render`; `types::Model` lives to 9.7; the watch list (D7): `Menu::vis()`,
+    `show_on_tab`'s unused `settings` parameter, `MenuEffect::Insert.full`, the two dead-code fields `version` and
+    `theme` of the mapper's private `ThemeFile` (they validate), `Theme::description_border()` (read only by
+    `theme_palette.rs`), `KeyCode::F(0)`, the `Hash` derives, `MenuLayout::side()` (`#[cfg(test)]`), `IconId::Png(usize)`
+    unvalidated, and the setting-value-to-JSON copy in `theme_command.rs`; `cli::settings_repository()` is gone.
+    `#![allow(dead_code)]` stays until then.
+
+Phase 9 notes (traps P9-T1..T101, decisions R1-R46, deviations 1-30 and open questions O1-O18 of
+[`phase-9-terminal-session.md`](hexagonal-refactor/phase-9-terminal-session.md), which cites the code behind each; the phase
+ran as 42 steps, `9.0a` … `9.7`, in six runs; where the notes differ from the briefs, the notes win. The per-run accepted
+deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phase-9-run-notes/)):
+
+- **Guards first** (deviation 1, R1, R34, R35): run 1 changed no production code. 9.0a registered `terminal_session` in the
+  architecture test (the first step, not the last: deviation 3; the test-only edges `terminal_session -> specs`,
+  `completion`, `bootstrap`, `settings` and `dropdown` are allowed by D2 and no module-edge rule was added, closing Phase 8's
+  deviation 25) and committed four scripts under `scripts/hexagonal-refactor/`: `fitness-mod.sh` (the architecture test on a
+  copy with other modules registered), `phase9-greps.sh` (the acceptance greps A-F and Z below), `pty-diff.py` (ten
+  scenarios of `tabsmith _ pty` on a real pty) and `session-diff.py` (`debug shell bash` under tmux: startup, menu, ghost,
+  bottom row and resize, `vim` and `exit 3`, settings reload, key tester, failures, files). 9.0b added a fixture-log
+  helper in `shared` and three tracker characterisation tests; 9.0c fourteen session scenarios; 9.0d thirteen loop tests
+  and `should_generate_a_session_id_of_32_lowercase_hex_digits`. The 17 characterisation tests
+  (`..._exactly_as_at_the_phase_9_start`) compare text fixtures written once, under
+  `tests/fixtures/terminal_session/characterisation/` (17 `.log` files); `git diff phase9-guards -- tests/fixtures/terminal_session/characterisation`
+  has been empty since the end of run 1. Local tags (not pushed): `phase9-start` (`858b7b5`, the last commit that touched
+  `src/` before the phase, the testlock baseline of every step) and `phase9-guards` (`3fdb6e5`, the end of run 1; the
+  third baseline). The whole-ghost accept is not pinned by `ghost.log` (its last key is forwarded raw): `lock.log` and
+  `ghost_keys_and_words_keys` pin it. `should_resize_only_the_pty_while_passing_through` opens a real pty (it is not gated by
+  `#[cfg(unix)]`, so it also runs against ConPTY on windows-latest CI).
+- **Steps, runs and deletions** (deviations 2, 29; R2, R4, R38): the plan's seven steps ran as 42, in this order, and the
+  legacy files left with their last item. Run 1: 9.0a-9.0d. Run 2 (tracker): 9.1a-9.1e (the pure tracker domain and the
+  `MarkerTracker`, driven through a legacy `Tracker` composite) and 9.2a-9.2f (`OutputFilter`, `CellTagger`,
+  `EditBufferExtractor`, `FrameInput`, `ScreenState`, the `TerminalScreen` port, `AlacrittyTerminalScreen`,
+  `ShellOutputFeeder`): `tracker.rs` and `types::Model` went at 9.2f. Run 3 (session domain): 9.6a (`types::Msg` became
+  `SessionMessage`, the reader and the probe parsers moved), 9.6b (the `sys` modules split into `platform_unix.rs` and
+  `platform_windows.rs`), 9.3a-9.3i (the pure rules, the entities, the `TerminalSession` aggregate). Run 4: 9.4a-9.4c (the ports `GeneratorProcessReaper`, `TerminalWriter`, `WrappedShell`, `TerminalModes`,
+  `LiveSettings`, `WorkingDirectory` with their adapters, the module that injects them) and 9.6c (the three commands out
+  of `cli.rs` and `bootstrap/cli.rs`). Run 5: 9.5a-9.5h (five services and ten use cases, `SessionUseCases`, the harness).
+  Run 6: 9.6d (`git mv src/pty.rs src/terminal_session/infrastructure/pty/session_runner.rs`; `Session` became
+  `SessionRunner`), 9.6e (`probe_terminal`, `run_pty_session`, `launch_session`), 9.6f (the tests moved, the legacy fixture
+  deleted, five comments repointed) and this close. The interim composites (the legacy `Tracker` 9.1e-9.2f, the aggregate's
+  `pub(crate)` fields 9.3g-9.3i, the `Session` delegates, `src/pty.rs` itself) are all gone; the four `#[cfg(test)]` accessors of `SessionUseCases` stay (see As built);
+  no `pub(crate) use` exists at any commit (R4; grep B6).
+- **Tracker** (deviations 4, 5, 7, 18, 19): `MarkerTracker::on_marker(marker, cursor_column, now_secs)` answers with
+  `MarkerEffects` or `MarkerReaction::EditBufferNeeded` (a `PreExec` takes two calls: `complete_pre_exec` finishes it),
+  and `end_batch` flushes the deferral; `ShellMarker::parse` is total. The four dead fields (`has_seen_prompt`,
+  `shell_path`, `tty`, `user`) and the `ShellPath`/`TTY`/`User` markers were deleted at 9.1e, so `docs/SPEC.md` §5.1 is stale
+  until Phase 11. `now_secs` is read per tracker call. `ShellOutputFeeder` is an application service the plan does not
+  list. The tracker value objects beyond section 4 are `EditBufferContext`, `TextEmphasis`, `PwshPredictionColor`,
+  `CellTag`, `MarkerEffects` and `MarkerReaction`. The screen is built after the probe (`Term::new`, the tracker and the
+  CUP replay moved after it; every observable action keeps its order). `rgb_to_256` stays in `shell_suggestion_color.rs`
+  (deviation 25): it equals `dropdown`'s `xterm256` for all 2^24 inputs, and the dedupe is a Phase 11 call.
+- **Session domain** (deviations 11, 15-17, 20): `TerminalSession` decides and never acts (728 lines; it owns the
+  `MarkerTracker`, the `MarkerSplitter` and the `KeyDecoder`). `KeyDecoder` is a domain entity (the Phase 8 adapter
+  `StdinKeyDecoder` was `git mv`ed). The entities and value objects beyond section 4 are `GhostCandidates`,
+  `ResizeDebounce`, `ShellExit`, `ReloadWatch`, `KeyFacts`, `CompletionQuery`, `DeferredMarker` and `LockSettlement`.
+  The fields are private; only the `*Parts` structs are `pub(crate)`. `SessionId::from_entropy(nanos, pid)` is a domain
+  constructor and the aggregate's id is required. `LATE_PROBE` lives in the aggregate, `parse_probe` in
+  infrastructure; the clock reads collapsed as designed (one `now` per refresh or reply, microsecond differences,
+  unobservable).
+- **Ports, services and use cases** (deviations 6, 8-10, 13, 14, 21, 22, 28): seven ports are new
+  (`TerminalScreen` with eleven methods, `TerminalWriter`, `WrappedShell`, `GeneratorProcessReaper`, `TerminalModes`,
+  `LiveSettings`, `WorkingDirectory`) with `InMemory`/`Recording`/`Capturing` doubles; `PrepareSessionLaunchUseCase`
+  resolves the shell from a `LaunchRequest`. The use cases write their own stdout and PTY bytes and return `()`
+  (`HandleShellExitUseCase` returns whether the loop goes on); `ApplyTerminalBackgroundUseCase` is the late OSC 11
+  theme moment. `SessionUseCases::new(SessionPortsParts)` wires everything once for production and for tests;
+  `SessionPortsParts` has eleven ports. One harness, `TerminalSessionHarness`, lives in `application/test_fixtures.rs`;
+  `ProcessShellOutputUseCase::new` takes a `ProcessShellOutputParts` (nine collaborators).
+- **Driver and CLI** (deviations 19, 27; R23, R30, R33): `SessionRunner` (built by `SessionRunnerParts`; its fields are in
+  the old drop order: inbox, credits, shell, session, screen, output, use cases, clock, so a ConPTY close never waits for a
+  reader that waits for a credit) runs the loop, the panic pass-through (`guard`) and the batching; the ConPTY master
+  release stays in the runner. `launch_session` is the old `Session::start` line for line (about 150 body lines;
+  `probe_terminal` is its probe loop, over the `TerminalWriter` port), and `run_pty_session` is the old free `run` (the
+  panic hook, `prepare_session_launch` before the catch, the modes restore, `run_fallback_shell`; `attempt` is its
+  `catch_unwind`, tested). `DebugCmd` lives in `bootstrap/cli.rs`, the debug shell's post script reaches
+  `debug_shell_command.rs` as a callback, and `debug_logs` stays `pub fn` in the legacy `cli.rs` until Phase 10.
+- **As built, where the tree differs from the research** (the tree wins):
+  - `Session` delegates (`on_output`, `on_keys`, `on_resize`, `on_completion`, `on_timers`, `cleanup`, `release_held`)
+    and four interim `#[cfg(test)]` accessors of `SessionUseCases` were planned to die at 9.5h. The delegates lived until
+    9.6d, where `run` and `step` call the use cases directly. The accessors (`painter()`, `requester()`, `poller()`,
+    `keystroke_handler()`) and their `Rc` fields did NOT die: about 30 locked test bodies still use them (`poller().poll(..)`,
+    `requester().refresh`, `keystroke_handler().release_held/insert`, `painter()` in the harness's `redraw`), and the
+    design's own final shape of `SessionUseCases` is private `Rc` services with `#[cfg(test)]` accessors. They are
+    documented as final, not interim. Phase 11 watch item.
+  - `SessionRunner::new` and `SessionRunner::run` are `pub(crate)` (the design says private): the launcher and
+    `run_pty_session` sit in sibling files. `SessionRunner` reads its `clock` field where the legacy loop called
+    `Instant::now()` (three sites; `SystemClock::now_instant()` is `Instant::now()`, and the golden output, `pty-diff.py`
+    and `session-diff.py` confirm it).
+  - `attempt` returns the outcome of the closure unchanged (the legacy `Ok(Ok(c))` and `Ok(Err(e))` arms collapsed; same
+    result), and `launch_session` has no `.expect("generated ids are valid")` any more because `generate_session_id()`
+    builds a `SessionId` straight from `SessionId::from_entropy`.
+  - 9.6f swapped the order of the brief's first two commits (`57b564b` moved the scenarios to the use cases before
+    `a1d3cd8` moved the runner tests), because two modules named `tests` could not coexist in `session_runner.rs`.
+    `SessionPortsParts` derives `Clone` under `cfg_attr(test)` for the sake of the harness (the harness keeps its ports and
+    swaps one with `rewire`); `application/test_fixtures.rs` also holds `ScenarioLog`, `describe_engine_call` and
+    `use_cases_over(ports)`, the one place tests build `SessionUseCases`. The runner's own fixture swaps the harness's
+    shell for a channel-backed `PtyWrappedShell`. `session_runner/tests.rs` is 800 lines (driver tests, loop tests,
+    scenarios 11, 12 and 14 in one file).
+  - Both rigs write `assert_matches_fixture(&format!("terminal_session/characterisation/{fixture}.log"), ..)` in their
+    `finish`; the helper cannot move into `test_fixtures.rs` without a `shared::infrastructure` import the architecture test
+    flags.
+  - Files beyond the design's 116: `application/handle_keystrokes_use_case/tests.rs` and
+    `domain/entities/marker_tracker/tests.rs` (each test module passed ~500 lines); `PanickingCompletionEngine` sits next to
+    `RecordingCompletionEngine` in `ports/completion_engine.rs`. `git ls-files src/terminal_session` lists 118 files.
+  - The four doc comments of `settings_catalog.rs` that named `pty.rs` now name
+    `terminal_session/domain/entities/terminal_session.rs`, the file that reads those four keys; `architecture_tests.rs`'s
+    comment example names `src/cli.rs`.
+  - `LenientLiveSettings` repeats the three-line warning text of `settings::load_or_defaults` on purpose (D5; a test pins
+    the wording). `debug_shell_post_script` builds a fresh `RenderInitScriptUseCase` per call, a third wiring place of that
+    use case (Phase 10).
+- **Fitness rules** (deviation 3, R3, R37): `terminal_session` is in `REGISTERED_MODULES` from 9.0a, no rule was weakened
+  and no checker test touched; the moved `pty.rs` is read by the test since 9.6d with 0 rule-3 hits. `LEGACY_MODULES` keeps
+  `pty` and `tracker` (O13), harmless. The greps of `phase9-greps.sh` run on the final tree: A1-A6, B1-B3, B5-B7, B9-B13, E1
+  and F1-F5 are all OK. The REVIEW lines were read: B4 is only `CompletionRequest`; B8 lists only `*Parts` fields
+  (`TerminalSessionParts`, `EditBufferContextParts`); B14 shows the `Arc<dyn Clock + Send + Sync>` of the use cases and
+  services (the clock port is `Send + Sync` by design) and no thread or channel outside `infrastructure/pty`; B15 shows
+  `Rc<dyn ..>` holders that are use cases, services, the module and the runner; B16 lists the `*Parts` pairs and `KittyImage`/`KittyPixels` (Phase 8's precedent); D1
+  is one `maybe_panic` call in `KeystrokeHandler`'s per-key loop; D2 is the one `#[ignore]` (`all_bundle_modules`); D3 is
+  the D9 string of `debug_shell_survives_closed_terminal`. The cfg lines of the touched files are 23 at `phase9-start`
+  and 31 now (phase9-greps C1): the platform module declarations and the `use .. as sys` pair moved, the console modes
+  gained their platform alias pair, the `RecordingMasterPty` double gained three `#[cfg(unix)]` methods, the two
+  platform tests of `prepare_session_launch_use_case.rs` carry `#[cfg(not(windows))]` and `#[cfg(windows)]`, and the
+  `if cfg!(test)` of the old `emit` is gone because the writer is a port. `cargo check --target x86_64-pc-windows-gnu`
+  (inside the gate) compiles every `cfg(windows)` item and prints `windows: ok`. The hand greps
+  `completion::application::(command_line_parser|generator_runner|test_fixtures)` outside `completion` and a `pub use` /
+  `pub(crate) use` outside `architecture_tests.rs` print nothing. The dead-code scan (the `#![allow(dead_code)]` line
+  deleted in a copy, `cargo check --locked --bin tabsmith`) reports 7 warnings, the 7 that were there at the start (two in `logger.rs`, one each in
+  `completion_result.rs`, `parsed_command_line.rs`, `suggestion.rs`, `data_directory.rs`, and `types.rs`' `now_ms`), and 0 under
+  `terminal_session`: `launch_session` takes the clock from `module.clock()`, so the module's `clock` field and getter are read
+  (the review of run 6 found the launcher building its own `SystemClock`; the same clock in production, one line).
+- **Checks**: totals at the end of the phase (`b898db1` plus the review-fix commits, which add two runner tests and one architecture test; the other closing commits change docs only): 1414 passed, 0 failed, 1 ignored (`all_bundle_modules`, whose release run prints `1 passed`;
+  1091 at `phase9-start`), clippy 3 warnings on this Linux container (clippy 1.97 reports one lint more than macOS, so the
+  gate runs with `BASELINE_CLIPPY=4`; the lint on the pty's `Modes::default()` went at 9.4c), build warnings 0, golden
+  identical (131 commands), `windows: ok`. Test lock against `ef807c1`: MISSING 0, DUPLICATE 0, CHANGED 210 (the 168 at
+  the start of Phase 9 plus 42), NEW 1133, PATH-ONLY 31. Against `phase9-start`: MISSING 0, DUPLICATE 0, NEW 324, CHANGED
+  59, PATH-ONLY 12; all 59 are in the research's allowed list of 83 names and each is a restructuring in its "Test moves"
+  tables: the tracker pipeline tests (field reads to accessors, the `(Tracker, Model)` pair to one rig over
+  `AlacrittyTerminalScreen`, `Event` to `ShellEvent`: `extract_*`, `pwsh_*`, `prompt_*`, `at_prompt_only_on_the_command_line`,
+  `bash_redraw_of_the_prompt_alone_keeps_the_line`, `soft_wrap_redrawn_with_crlf_is_still_the_line`,
+  `markers_stripped_from_output`, `lock_and_foreign_session_ids`, `bare_newcmd_cannot_fake_a_prompt_while_locked`,
+  `command_cycle_produces_history`, `no_history_marker_drops_the_command`,
+  `submitted_line_drops_shell_output_before_preexec`, `transient_prompt_before_preexec_keeps_the_submitted_line`,
+  `nested_shell_prompt_keeps_outer_command_running`, `windows_deferral_fifo`,
+  `window_name_reaches_the_terminal_but_is_not_printed`), the two D6 halves
+  `suggestion_colors` and `pwsh_reported_prediction_colour` (their other halves are the NEW `suggestion_colors_cell_matching`
+  and `pwsh_reported_prediction_colour_sgr`), `child_argv` (through `WrappedShellCommand::new`),
+  `pty_reader_waits_for_credits` (`Msg` to `SessionMessage`), the `Session` tests that moved to the use cases or to
+  `session_runner/tests.rs` (the sink to the capturing writer, `s.field` to aggregate accessors and setters, `s.step(..)`
+  and `s.on_*` to the harness or the use cases: `identical_redraw_writes_nothing`, `no_frame_inside_an_open_dcs`,
+  `split_paste_is_never_intercepted`, `menu_hidden_by_render_guards_does_not_intercept`, `disabled_menu_lets_tab_through`,
+  `insertions_build_on_keys_not_yet_echoed`, `unbracketed_paste_is_not_intercepted`, `enter_records_the_submitted_line`,
+  `enter_clears_the_menu_before_the_line_runs`, `pwsh_list_view_owns_the_rows_below`,
+  `inline_tui_below_the_prompt_is_not_the_line`, `llm_ghost_requested_for_commands_without_spec`, the LLM ghost test, `prompt_redraw_keeps_the_menu`,
+  `prompt_redraw_does_not_reshow_a_hidden_menu`, `split_prompt_redraw_keeps_the_menu`, `no_history_command_still_ends`,
+  `keys_after_an_unmodelled_key_wait_for_its_echo`, `slow_echo_keeps_the_insertion_in_the_basis`, the five session-context
+  tests, `late_probe_reply_is_not_typed`, `panic_turns_the_session_into_a_pass_through`,
+  `panic_while_handling_keys_still_forwards_them`, `conpty_is_closed_off_the_main_loop`),
+  `debug_shell_survives_closed_terminal` (the D9 string; the child branch builds the module) and the module test
+  `should_report_the_context_into_the_run_files_of_the_data_directory_it_was_built_with`; no assertion changed. Against
+  `phase9-guards`: MISSING 0, DUPLICATE 0, NEW 290, CHANGED 61: the same 59 plus two guard tests: `should_generate_a_session_id_of_32_lowercase_hex_digits`, which calls
+  `generate_session_id()` after the move (same three assertions), and `should_debounce_and_show_the_llm_ghost_text_exactly_as_at_the_phase_9_start`,
+  whose Rig helper `step_ghost` was renamed `llm_reply` (it no longer steps the runner; same calls, same assertions). The fixtures are untouched. `theme-diff.sh`, `inline-diff.sh`, `integrations-diff.sh`, `precmd-diff.sh`,
+  `pty-diff.py` and `session-diff.py` print nothing against the baseline binary; `debug_shell_survives_closed_terminal`
+  alone passes three times in a row; 20 serial runs of `pty::` and `exactly_as_at_the_phase_9_start` (44 tests per run) have
+  0 failures; `cargo check --locked --no-default-features --all-targets` passes. `integrations_zsh_powerlevel10k_prompt_wrapped`
+  and `specs::infrastructure::adapters::process_executor::tests::exec_status_output_and_timeout` stay timing-flaky under load: a
+  lone failure is rerun alone with `--exact`, and so is any test that spawns an exec child, because until 9.4a the guard
+  tests that reached `cleanup` called the process-global `kill_live_children()`
+- **Open questions, defaults applied** (O1-O18; the plan owner did not answer): services are not use cases (O1); one
+  aggregate of 728 lines, a Phase 11 watch item (O2); no `PreExecTicket` (O3); `rgb_to_256` not deduplicated (O4); `Rc<dyn ..>` for
+  the session's ports, since the session runs on one thread (O5); no module-edge rule (O6); `TerminalModes` is a port
+  (O7); `HandleShellExit` records the exit and `EndSession` runs once after the loop (O8); the screen is built after the
+  probe (O9); `FrameInput.now` was added (O10); the debug shell's post script is a bootstrap closure (O11); the two diff
+  scripts are not in the gate (O12); `LEGACY_MODULES` keeps `pty` and `tracker` (O13); the smoke is asked once after 9.7
+  (O14); the marker tests live in `alacritty_terminal_screen/tests.rs` (O15); the spinner scenario waits 250 ms
+  (O16); the aggregate's id is a required `SessionId` (O17); `tick_spinner(now, judged_at)` keeps two instants (O18).
+- **Noticed and not fixed** (agent brief: report; each is behaviour today and was kept): P9-N1 a Windows `PreExec` that
+  arrives in the same batch as its still-queued `NewCmd` is ignored; P9-N2 a bare `Dir` marker sets an empty cwd that `cwd()`
+  does not fall back from, so generators get `""`; P9-N3 the end-of-batch deferred flush can starve while every batch
+  carries a marker; P9-N4 a panic in `release_held` after the emit makes the driver write the batch twice; P9-N5
+  `try_clone_reader` and `take_writer` can fail after the child exists, orphaning it, and a panic in the final frame of the
+  output processing loses the clear it already took; P9-N6 `settings_mtime` is read at the end of `launch_session`, so a
+  settings change during the probe is only seen at the first poll.
+- **History**: 107 commits since `phase9-start` at `b898db1` (the research hand-over, the scripts, the run hand-offs, the
+  steps and the review fixes), plus the three docs commits of this close; two subjects are over 72 characters (`21f1de7`, 73, and
+  `c8629c2`, 76: run 3's 9.3 steps), every commit has the Sonnet 5.5 trailer and the session trailer; every message went through `git commit -F`; none was
+  rewritten. One step (9.6f) swapped the order of its first two commits (see above).
+- **Manual smoke pending** (the user's, asked once after 9.7: R43; agents cannot drive a terminal; section 8): with
+  `TABSMITH_HOME=$(mktemp -d) cargo run -- debug shell zsh` (and bash, fish): items 1-9 of section 8 (the menu on `git ch`,
+  Tab inserts and a shared prefix inserts, Esc hides it, `echo hi` then `ec` shows ghost `ho hi` and Right accepts it, a prompt on
+  the bottom row draws the menu above, a resize leaves no artefacts, `vim` draws no overlay, `exit 3` returns 3,
+  `tabsmith doctor` passes), plus Phase 8's still pending P8-S1 (a slow generator shows the spinner after about 200 ms) and
+  P8-S2 (`tabsmith theme light` from a second terminal recolours the menu; a late OSC 11 reply with `system`), plus
+  **P9-S1** closing the terminal window of a `debug shell` ends it cleanly (the rc dir is removed), **P9-S2** `kill -TERM`
+  of the wrapper exits 129, **P9-S3** typing during start-up reaches the shell (typeahead during the probe), **P9-S4** a
+  settings change from a second terminal (`tabsmith settings autocomplete.height 3`) takes effect within about 2 s, and
+  **P9-S5** (CI-only) pwsh on Windows: the prompt-marker deferral and the ConPTY exit. `session-diff.py` and `pty-diff.py`
+  already pin bash under tmux and the real-pty start-up (empty against the baseline binary), not zsh, fish, pwsh,
+  kitty/ghostty/tmux icons or Windows. Nothing was pushed by the close, and the request authorises no push or PR (R43).
+- **Hand-offs**:
+  - Phase 10 (diagnostics): `settings::infrastructure::load_or_defaults` has one caller left, `doctor.rs` (the pty caller went at
+    9.4c); `LenientLiveSettings` is the pattern step 2 of Phase 10 repeats in diagnostics' own infrastructure, after
+    which `load_or_defaults` is deleted. `cli.rs` after Phase 9 holds `DiagnosticArgs`, `diagnostic`, `diagnostics`,
+    `to_toml`, `Section`, `debug_logs` (now `pub fn`, called from `bootstrap/cli.rs`) and the test `diagnostic_toml`;
+    `main.rs` keeps `mod cli;` until Phase 10 deletes it. `debug_logs` reads `data_directory_from_env().logs_dir()`: the
+    `logs/{cli,pty}.log` contract with `shared/infrastructure/logger.rs` is unchanged.
+    `bootstrap::cli::terminal_session_module()` and `GeneratorProcessBridge` exist; doctor needs neither. The doctor checks
+    that read the session context or `run/` files keep their own raw checks (Phase 4 hand-off), and
+    `debug_shell_post_script` is a third wiring place of `RenderInitScriptUseCase`.
+  - Phase 11: `types.rs` holds only `now_ms` (no caller; the one mention left is a string inside a fixture of
+    `architecture_tests.rs`) and `now_secs` (one caller, `doctor.rs`), so Phase 10 may move the doctor caller to the
+    `Clock` port and Phase 11 deletes the file. `LEGACY_MODULES` keeps every dead name (`pty` and `tracker` join
+    `cli doctor engine icons inline integrations js keys menu parser render shell_parser spec suggest types`). Watch list (D7):
+    the four `#[cfg(test)]` accessors and `Rc` fields of `SessionUseCases`, `SessionPortsParts: Clone` (`#[cfg(test)]`, for the
+    harness), `SessionPortsParts` and `SessionRunner` fields that the use cases also hold, `EditBuffer: Default`,
+    `MenuEffect::Insert.full` and `Menu::vis()` (Phase 8), `MarkerTracker`'s `#[cfg(test)]` accessors,
+    `TerminalSession::tracker_mut` (`#[cfg(test)]`, read by two tests), `TerminalBackground::rgb`, `LockSettlement`,
+    `TerminalSession`
+    itself (728 lines: `route_key`, `insert` and `forward_key` could become a keystroke-specific domain object), the
+    query-looking methods that mutate (`ReloadWatch::poll_due`, `context_changed`, `settings_changed`,
+    `ShellExit::output_ended` and the aggregate's forwarders: `take_due_poll`, `note_context_time`, `note_settings_time`,
+    `note_output_ended` are candidate names), the 800-line `session_runner/tests.rs` and the 150-line body of
+    `launch_session` (a line-for-line port by design). The architecture test does not forbid std I/O, env, clock, threads
+    in domain or application; `phase9-greps.sh` (B8, B13-B17) checks them by hand. A module-edge rule
+    (`ALLOWED_EDGES`; about 60 lines and four tests of checker code) would turn section 2 into a test; the production
+    edges verified by script at 9.0a are `bootstrap -> everything`, `completion -> history settings shared specs`,
+    `dropdown -> completion settings shared specs`, `ghost_text -> completion history settings shared specs`,
+    `history -> shared`, `settings -> shared`, `shell_integration -> shared`, `specs -> settings shared` and
+    `terminal_session -> completion dropdown history settings shared`. `docs/SPEC.md` is stale in §4.1 (the rows `pty.rs`
+    and `tracker.rs`, lines 497-498), §4.3, §5.1 (it still documents `has_seen_prompt` and the `ShellPath`/`TTY`/`User`
+    context fields, lines 679 and 689) and §10 (test locations): Phase 11 rewrites them; Phase 9 did not touch the file.
+    `rgb_to_256` equals `dropdown::color_parser::xterm256` for all 2^24 inputs; the dedupe edits two locked tests
+    (`suggestion_colors`, `pwsh_reported_prediction_colour`).
