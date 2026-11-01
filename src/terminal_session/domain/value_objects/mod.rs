@@ -16,5 +16,6 @@ pub(crate) mod session_id;
 pub(crate) mod shell_event;
 pub(crate) mod shell_marker;
 pub(crate) mod shell_suggestion_color;
+pub(crate) mod terminal_background;
 pub(crate) mod text_emphasis;
 pub(crate) mod wrapped_shell_command;

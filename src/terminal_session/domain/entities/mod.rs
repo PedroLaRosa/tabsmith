@@ -8,3 +8,4 @@ pub(crate) mod reload_watch;
 pub(crate) mod resize_debounce;
 pub(crate) mod session_context;
 pub(crate) mod shell_exit;
+pub(crate) mod terminal_session;
