@@ -23,13 +23,14 @@ use crate::terminal_session::domain::entities::ghost_candidates::GhostCandidates
 use crate::terminal_session::domain::entities::insertion_lock::InsertionLock;
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
+use crate::terminal_session::domain::entities::reload_watch::ReloadWatch;
 use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
 use crate::terminal_session::domain::entities::shell_exit::ShellExit;
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
 use crate::terminal_session::domain::services::key_router::{ghost_key, is_ctrl};
 use crate::terminal_session::domain::services::render_guard::allows_drawing;
 use crate::terminal_session::domain::services::session_deadlines::{
-    next_deadline, FILE_POLL, REDRAW_GRACE, SPINNER_TICK,
+    next_deadline, REDRAW_GRACE, SPINNER_TICK,
 };
 use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
@@ -187,10 +188,10 @@ struct Session {
     decoder: KeyDecoder,
     settings: Settings,
     settings_repository: Box<dyn SettingsRepository>,
-    settings_mtime: Option<SystemTime>,
     session_id: Option<SessionId>,
     session_contexts: Box<dyn SessionContextRepository>,
-    session_mtime: Option<SystemTime>,
+    /// When the settings and the session context files are looked at, and the modification times last seen.
+    watch: ReloadWatch,
     terminal_bg: Option<Rgb>,
     /// Shell of the spawned program (the tracker's `Shell=` wins once known).
     shell: Shell,
@@ -214,7 +215,6 @@ struct Session {
     resize: ResizeDebounce,
     spinner: usize,
     spinner_at: Option<Instant>,
-    poll_at: Instant,
     /// The exit code, the end of the pty output and the grace the rest of the output gets.
     exit: ShellExit,
     /// After a panic in a handler: plain pass-through until the child exits (see `guard`).
@@ -365,10 +365,9 @@ impl Session {
             themes,
             keymap,
             decoder: KeyDecoder::default(),
-            settings_mtime: settings_repository.last_modified(),
+            watch: ReloadWatch::new(Instant::now(), settings_repository.last_modified()),
             settings_repository,
             settings,
-            session_mtime: None,
             session_id,
             session_contexts,
             terminal_bg,
@@ -385,7 +384,6 @@ impl Session {
             resize: ResizeDebounce::default(),
             spinner: 0,
             spinner_at: None,
-            poll_at: Instant::now() + FILE_POLL,
             exit: ShellExit::default(),
             passthrough: false,
             sink: Vec::new(),
@@ -540,7 +538,7 @@ impl Session {
                 lock,
                 self.ghost.llm_due_at(),
                 self.spinner_at,
-                Some(self.poll_at),
+                Some(self.watch.deadline()),
                 self.redraw_until,
                 self.echo.deadline(),
             ],
@@ -1024,8 +1022,7 @@ impl Session {
                 redraw |= self.menu.loading(Instant::now());
             }
         }
-        if now >= self.poll_at {
-            self.poll_at = now + FILE_POLL;
+        if self.watch.poll_due(now) {
             redraw |= self.poll_files();
         }
         let repaint = self.take_repaint();
@@ -1044,8 +1041,7 @@ impl Session {
             .session_id
             .as_ref()
             .and_then(|id| self.session_contexts.last_modified(id));
-        if m.is_some() && m != self.session_mtime {
-            self.session_mtime = m;
+        if self.watch.context_changed(m) {
             if let Some(ctx) = self
                 .session_id
                 .as_ref()
@@ -1056,10 +1052,9 @@ impl Session {
             }
         }
         let m = self.settings_repository.last_modified();
-        if m == self.settings_mtime {
+        if !self.watch.settings_changed(m) {
             return false;
         }
-        self.settings_mtime = m;
         self.settings = load_or_defaults(&*self.settings_repository);
         self.keymap = Keymap::from_settings(&self.settings);
         self.screen
@@ -1139,10 +1134,9 @@ mod tests {
             decoder: KeyDecoder::default(),
             settings,
             settings_repository: Box::new(InMemorySettingsRepository::default()),
-            settings_mtime: None,
+            watch: ReloadWatch::new(Instant::now(), None),
             session_id: None,
             session_contexts: Box::new(InMemorySessionContextRepository::default()),
-            session_mtime: None,
             terminal_bg: None,
             shell: Shell::Bash,
             req: 0,
@@ -1157,7 +1151,6 @@ mod tests {
             resize: ResizeDebounce::default(),
             spinner: 0,
             spinner_at: None,
-            poll_at: Instant::now() + FILE_POLL,
             exit: ShellExit::default(),
             passthrough: false,
             sink: Vec::new(),
@@ -1782,7 +1775,7 @@ mod tests {
         s.poll_files();
 
         assert_eq!(
-            (contexts_sent(&sent_to_engine), s.session_mtime),
+            (contexts_sent(&sent_to_engine), s.watch.context_modified()),
             (Vec::new(), Some(at(1_000)))
         );
     }
@@ -1800,7 +1793,7 @@ mod tests {
         s.poll_files();
 
         assert_eq!(
-            (contexts_sent(&sent_to_engine), s.session_mtime),
+            (contexts_sent(&sent_to_engine), s.watch.context_modified()),
             (Vec::new(), Some(at(2_000)))
         );
     }
@@ -2008,7 +2001,7 @@ mod tests {
         }
 
         fn poke_poll_due(&mut self) {
-            self.s.poll_at = Instant::now();
+            self.s.watch.expire_poll_at(Instant::now());
         }
 
         fn poke_hold_due(&mut self) {
