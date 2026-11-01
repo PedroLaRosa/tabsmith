@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(read, 49);
     }
 
-    /// pty.rs: `i64("inline.debounceMs", 300)`.
+    /// terminal_session/domain/entities/terminal_session.rs: `i64("inline.debounceMs", 300)`.
     #[test]
     fn should_default_the_llm_debounce_to_300_ms() {
         let settings = Settings::default();
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(read, 300);
     }
 
-    /// get_inline_status_use_case.rs, doctor.rs, suggest_local_ghost_text_use_case.rs and pty.rs: `bool("inline.enabled", true)`.
+    /// get_inline_status_use_case.rs, doctor.rs, suggest_local_ghost_text_use_case.rs and terminal_session/domain/entities/terminal_session.rs: `bool("inline.enabled", true)`.
     #[test]
     fn should_default_ghost_text_to_enabled() {
         let settings = Settings::default();
@@ -372,7 +372,7 @@ mod tests {
         assert!(read);
     }
 
-    /// doctor.rs, dropdown/domain/entities/menu.rs and pty.rs: `bool("autocomplete.disable", false)`.
+    /// doctor.rs, dropdown/domain/entities/menu.rs and terminal_session/domain/entities/terminal_session.rs: `bool("autocomplete.disable", false)`.
     #[test]
     fn should_default_autocomplete_to_not_disabled() {
         let settings = Settings::default();
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// completion_result_builder.rs, dropdown/domain/entities/menu.rs and pty.rs: `bool("autocomplete.onlyShowOnTab", false)`.
+    /// completion_result_builder.rs, dropdown/domain/entities/menu.rs and terminal_session/domain/entities/terminal_session.rs: `bool("autocomplete.onlyShowOnTab", false)`.
     #[test]
     fn should_default_to_opening_the_menu_without_tab() {
         let settings = Settings::default();
