@@ -94,7 +94,7 @@ pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStart
     let command = WrappedShellCommand::new(shell.as_deref(), &cmd, login);
     let mut modes = None;
     let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        Session::start(command.argv(), &mut modes, start).map(Session::run)
+        Session::start(&command, &mut modes, start).map(Session::run)
     }));
     let err = match res {
         Ok(Ok(code)) => return code,
@@ -232,12 +232,12 @@ struct Session {
 
 impl Session {
     /// SPEC §4.4 steps 1–9. `modes` receives the saved terminal modes as soon as they change.
-    fn start(argv: &[String], modes: &mut Option<sys::Modes>, start: CompletionEngineStarter) -> Result<Session> {
+    fn start(command: &WrappedShellCommand, modes: &mut Option<sys::Modes>, start: CompletionEngineStarter) -> Result<Session> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             bail!("stdin/stdout is not a terminal");
         }
-        let program = argv
-            .first()
+        let program = command
+            .program()
             .context("no shell to run (set SHELL or pass --shell)")?;
         let settings_repository: Box<dyn SettingsRepository> =
             Box::new(JsonFileSettingsRepository::new(data_directory_from_env()));
@@ -247,6 +247,7 @@ impl Session {
         let (cols, rows) = crossterm::terminal::size().context("terminal size")?;
         let (cols, rows) = (cols.max(1), rows.max(1));
         let sid = session_id();
+        let id = SessionId::new(sid.clone()).expect("generated ids are valid");
         let shell = Shell::from_name(program).unwrap_or(if cfg!(windows) {
             Shell::Pwsh
         } else {
@@ -281,7 +282,7 @@ impl Session {
         let renderer = OverlayRenderer::new(resolve_theme(&settings, terminal_bg, &*themes), truecolor)
             .with_images(kitty_graphics::detect());
         let marker = MarkerTracker::new(
-            SessionId::new(sid.clone()).expect("generated ids are valid"),
+            id.clone(),
             Shell::from_name(program),
             cfg!(windows),
         );
@@ -303,7 +304,10 @@ impl Session {
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        let mut cb = CommandBuilder::from_argv(argv.iter().map(Into::into).collect());
+        let command = command
+            .clone()
+            .in_session(env!("CARGO_PKG_VERSION"), std::env::var_os("TMUX").is_some(), &id);
+        let mut cb = CommandBuilder::from_argv(command.argv().iter().map(Into::into).collect());
         let cwd = std::env::current_dir()
             .ok()
             .filter(|d| d.is_dir())
@@ -311,24 +315,22 @@ impl Session {
         if let Some(cwd) = cwd {
             cb.cwd(cwd);
         }
-        let version = env!("CARGO_PKG_VERSION");
-        cb.env("TABSMITH_TERM", version);
-        if std::env::var_os("TMUX").is_some() {
-            cb.env("TABSMITH_TERM_TMUX", version);
+        for (name, value) in command.env_to_set() {
+            cb.env(name, value);
         }
-        cb.env("TABSMITH_SESSION_ID", &sid);
-        cb.env_remove("TABSMITH_SHELL");
-        cb.env_remove("TABSMITH_IS_LOGIN_SHELL");
+        for name in command.env_to_remove() {
+            cb.env_remove(name);
+        }
         let mut child = pair.slave.spawn_command(cb)?;
         drop(pair.slave);
         let reader = pair.master.try_clone_reader()?;
         let mut pty_writer = pair.master.take_writer()?;
         logger::info(&format!(
-            "pty: {argv:?} {cols}x{rows} sid {sid} cpr {cpr:?}"
+            "pty: {:?} {cols}x{rows} sid {sid} cpr {cpr:?}",
+            command.argv()
         ));
 
-        let base = program.rsplit(['/', '\\']).next().unwrap_or(program);
-        write_stdout(format!("\x1b]0;{base}\x07").as_bytes());
+        write_stdout(&command.window_title());
 
         // Threads (SPEC §4.3).
         let credits = spawn_pty_reader(reader, tx.clone());
