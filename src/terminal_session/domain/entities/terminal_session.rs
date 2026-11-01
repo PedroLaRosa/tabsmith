@@ -234,6 +234,11 @@ impl TerminalSession {
         self.late_probe_until.is_some_and(|t| now < t)
     }
 
+    /// A late reply carried the terminal's background.
+    pub(crate) fn probe_background_reported(&mut self, background: TerminalBackground) {
+        self.terminal_background = Some(background);
+    }
+
     /// A cursor report is the probe's last reply: the window closes (an expired one stays open until then).
     pub(crate) fn probe_cursor_reported(&mut self) {
         self.late_probe_until = None;
@@ -533,8 +538,31 @@ impl TerminalSession {
         self.echo.forget_unechoed();
     }
 
+    /// The terminal was resized to `columns` x `lines`; false for a size to ignore (zero, or the one the model has).
+    pub(crate) fn resize_wanted(&self, columns: u16, lines: u16, screen: &ScreenState) -> bool {
+        self.resize.wants(columns, lines, screen)
+    }
+
     pub(crate) fn resize_applied(&mut self, now: Instant) {
         self.resize.resized(now);
+    }
+
+    pub(crate) fn settle_resize_if_due(&mut self, now: Instant) {
+        self.resize.settle_if_due(now);
+    }
+
+    /// Full repaint once the resize settled (postponed while on the alternate screen).
+    pub(crate) fn take_repaint(&mut self, screen: &ScreenState) -> bool {
+        self.resize.take_repaint(screen.alt_screen())
+    }
+
+    /// The prompt redraw's grace is over: a line that really is empty may be acted on now.
+    pub(crate) fn take_due_redraw_grace(&mut self, now: Instant) -> bool {
+        if self.redraw_until.is_some_and(|d| d <= now) {
+            self.redraw_until = None;
+            return true;
+        }
+        false
     }
 
     pub(crate) fn child_exited(&mut self, code: i32, now: Instant) -> bool {

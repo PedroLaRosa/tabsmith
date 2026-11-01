@@ -586,21 +586,20 @@ impl Session {
     fn on_input(&mut self, chunk: &[u8]) {
         // A probe reply arriving after the startup timeout is dropped, not typed into the shell.
         let late;
-        let chunk = match self.session.late_probe_until {
-            Some(t) if Instant::now() < t => {
-                let (cpr, bg, rest) = parse_probe(chunk);
-                if bg.is_some() {
-                    self.session.terminal_background = bg.map(TerminalBackground::new);
-                    self.screen
-                        .set_theme(resolve_theme(&self.session.settings, bg, &*self.themes));
-                }
-                if cpr.is_some() {
-                    self.session.late_probe_until = None;
-                }
-                late = rest;
-                &late[..]
+        let chunk = if self.session.late_probe_open(Instant::now()) {
+            let (cpr, bg, rest) = parse_probe(chunk);
+            if let Some(bg) = bg {
+                self.session.probe_background_reported(TerminalBackground::new(bg));
+                self.screen
+                    .set_theme(resolve_theme(self.session.settings(), Some(bg), &*self.themes));
             }
-            _ => chunk,
+            if cpr.is_some() {
+                self.session.probe_cursor_reported();
+            }
+            late = rest;
+            &late[..]
+        } else {
+            chunk
         };
         self.on_keys(chunk);
     }
@@ -684,7 +683,7 @@ impl Session {
 
     /// SPEC §7.6: resize PTY + model now, repaint after 150 ms of quiet.
     fn on_resize(&mut self, cols: u16, rows: u16) {
-        if !self.session.resize.wants(cols, rows, &self.screen.state()) {
+        if !self.session.resize_wanted(cols, rows, &self.screen.state()) {
             return;
         }
         if let Some(m) = &self.master {
@@ -696,12 +695,12 @@ impl Session {
             });
         }
         self.screen.resize(cols as usize, rows as usize);
-        self.session.resize.resized(Instant::now());
+        self.session.resize_applied(Instant::now());
     }
 
     /// Full repaint once the resize settled (postponed while on the alternate screen).
     fn take_repaint(&mut self) -> Vec<u8> {
-        if !self.session.resize.take_repaint(self.alt()) {
+        if !self.session.take_repaint(&self.screen.state()) {
             return Vec::new();
         }
         self.screen.full_repaint()
@@ -711,9 +710,8 @@ impl Session {
         let now = Instant::now();
         let due = |d: Option<Instant>| d.is_some_and(|d| d <= now);
         let mut redraw = false;
-        self.session.resize.settle_if_due(now);
-        if due(self.session.redraw_until) {
-            self.session.redraw_until = None;
+        self.session.settle_resize_if_due(now);
+        if self.session.take_due_redraw_grace(now) {
             self.refresh(); // the line really is empty
             redraw = true;
         }
