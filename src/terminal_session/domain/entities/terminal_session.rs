@@ -11,8 +11,10 @@ use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::reload_watch::ReloadWatch;
 use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
 use crate::terminal_session::domain::entities::shell_exit::ShellExit;
+use crate::terminal_session::domain::services::render_guard;
 use crate::terminal_session::domain::services::session_deadlines;
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
+use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
 use std::time::{Duration, Instant, SystemTime};
@@ -111,9 +113,72 @@ impl TerminalSession {
         &self.id
     }
 
+    pub(crate) fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
+    pub(crate) fn menu(&self) -> &Menu {
+        &self.menu
+    }
+
+    pub(crate) fn tracker(&self) -> &MarkerTracker {
+        &self.tracker
+    }
+
+    /// The one place production reaches the tracker mutably: the output path feeds the splitter's pieces to it.
+    pub(crate) fn output_parts(&mut self) -> (&mut MarkerSplitter, &mut MarkerTracker) {
+        (&mut self.splitter, &mut self.tracker)
+    }
+
+    pub(crate) fn terminal_background(&self) -> Option<TerminalBackground> {
+        self.terminal_background
+    }
+
+    pub(crate) fn request_id(&self) -> u64 {
+        self.request
+    }
+
+    /// The buffer and cursor the latest request was sent for.
+    pub(crate) fn sent(&self) -> Option<(&str, usize)> {
+        self.sent.as_ref().map(|(buffer, cursor)| (buffer.as_str(), *cursor))
+    }
+
+    pub(crate) fn edit_buffer(&self) -> Option<&EditBuffer> {
+        self.edit_buffer.as_ref()
+    }
+
+    pub(crate) fn has_insertion_lock(&self) -> bool {
+        self.lock.is_some()
+    }
+
+    pub(crate) fn is_passthrough(&self) -> bool {
+        self.passthrough
+    }
+
     /// The shell the tracker saw, else the one the wrapper spawned.
     pub(crate) fn shell(&self) -> Shell {
         self.tracker.shell().unwrap_or(self.launched_shell)
+    }
+
+    /// The wrapper itself keeps the overlay away (SPEC §7.5.1): off the command line, a resize or a prompt redraw in
+    /// progress, an open string on the terminal, PSReadLine's list view over the line.
+    pub(crate) fn suppressed(&self, screen: &ScreenState) -> bool {
+        !self.tracker.at_prompt()
+            // The cursor is off the command line (an inline TUI's rows: fzf, fish's pager): a menu for the line
+            // stays hidden and keeps its hands off the keys.
+            || self.edit_buffer.is_none()
+            || self.resize.is_settling()
+            || self.resize.repaint_pending()
+            || screen.in_string()
+            || self.redraw_until.is_some()
+            // PSReadLine's ListView predictions own the rows below a non-empty line.
+            || (self.tracker.pwsh_list_view() && self.edit_buffer.as_ref().is_some_and(|e| !e.buffer().is_empty()))
+    }
+
+    /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
+    /// ponytail: mirrors overlay_renderer.rs `compose`'s guards; its no-room-for-the-menu case (3-row terminal) is not covered.
+    pub(crate) fn drawable(&self, screen: &ScreenState) -> bool {
+        !self.suppressed(screen) && render_guard::allows_drawing(screen)
     }
 
     /// The startup probe got no cursor report by `probe_ended_at`: its late reply is dropped for `LATE_PROBE`.
@@ -159,9 +224,57 @@ impl TerminalSession {
         self.passthrough = true;
     }
 
-    #[cfg(test)]
+}
+
+/// Test arrangement and inspection: the fields stay readable only through these once they are private (9.3i).
+#[cfg(test)]
+impl TerminalSession {
+    pub(crate) fn tracker_mut(&mut self) -> &mut MarkerTracker {
+        &mut self.tracker
+    }
+
+    pub(crate) fn unechoed(&self) -> &str {
+        self.echo.unechoed()
+    }
+
+    pub(crate) fn llm_due_at(&self) -> Option<Instant> {
+        self.ghost.llm_due_at()
+    }
+
+    pub(crate) fn cancel_llm_schedule(&mut self) {
+        self.ghost.cancel_llm_schedule();
+    }
+
+    pub(crate) fn expect_llm_reply(&mut self, request: u64) {
+        self.ghost.expect_llm_reply(request);
+    }
+
+    pub(crate) fn set_redraw_until(&mut self, at: Option<Instant>) {
+        self.redraw_until = at;
+    }
+
+    pub(crate) fn expire_hold_at(&mut self, at: Instant) {
+        self.echo.expire_hold_at(at);
+    }
+
+    pub(crate) fn expire_insertion_deadline(&mut self, deadline: Instant) {
+        self.lock.as_mut().expect("an insertion lock").expire_deadline_at(deadline);
+    }
+
+    pub(crate) fn expire_insertion_lock(&mut self, deadline: Instant, cap: Instant) {
+        self.lock.as_mut().expect("an insertion lock").expire_at(deadline, cap);
+    }
+
+    pub(crate) fn reported_exit_code(&self) -> Option<i32> {
+        self.exit.code()
+    }
+
     pub(crate) fn late_probe_until(&self) -> Option<Instant> {
         self.late_probe_until
+    }
+
+    pub(crate) fn context_modified(&self) -> Option<SystemTime> {
+        self.reload.context_modified()
     }
 }
 

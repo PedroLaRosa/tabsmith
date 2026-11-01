@@ -6,7 +6,6 @@ use crate::dropdown::domain::value_objects::key::Key;
 use crate::dropdown::domain::value_objects::keymap::Keymap;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::system_clock::SystemClock;
-use crate::dropdown::domain::entities::menu::Menu;
 use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
@@ -14,20 +13,12 @@ use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeR
 use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
-use crate::terminal_session::domain::entities::echo_hold::EchoHold;
-use crate::terminal_session::domain::entities::ghost_candidates::GhostCandidates;
 use crate::terminal_session::domain::entities::insertion_lock::InsertionLock;
-use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
-use crate::terminal_session::domain::entities::reload_watch::ReloadWatch;
-use crate::terminal_session::domain::entities::resize_debounce::ResizeDebounce;
-use crate::terminal_session::domain::entities::shell_exit::ShellExit;
+use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes};
 use crate::terminal_session::domain::services::key_router::{ends_line, is_enter, plain_char, route};
-use crate::terminal_session::domain::services::render_guard::allows_drawing;
-use crate::terminal_session::domain::services::session_deadlines::{
-    next_deadline, REDRAW_GRACE, SPINNER_TICK,
-};
+use crate::terminal_session::domain::services::session_deadlines::{REDRAW_GRACE, SPINNER_TICK};
 use crate::terminal_session::domain::value_objects::key_facts::{KeyFacts, KeyFactsParts};
 use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
@@ -40,17 +31,15 @@ use crate::settings::domain::services::settings_catalog::{
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
-use crate::settings::domain::value_objects::settings::Settings;
 use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
-use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
 use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
+use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
 use crate::terminal_session::infrastructure::adapters::kitty_graphics;
 use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
-use crate::terminal_session::domain::entities::key_decoder::KeyDecoder;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
@@ -59,7 +48,6 @@ use crate::completion::domain::value_objects::completion_result::CompletionResul
 use crate::terminal_session::infrastructure::pty::completion_engine_starter::CompletionEngineStarter;
 use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
 use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, PROBE, PROBE_TIMEOUT};
-use crate::dropdown::domain::value_objects::rgb::Rgb;
 use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use anyhow::{anyhow, bail, Context, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
@@ -75,9 +63,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::terminal_session::infrastructure::pty::platform_unix as sys;
 #[cfg(windows)]
 use crate::terminal_session::infrastructure::pty::platform_windows as sys;
-
-/// After a probe timeout, a late reply arriving within this window is dropped instead of typed into the shell.
-const LATE_PROBE: Duration = Duration::from_secs(3);
 
 /// Run the wrapper; returns the exit code to exit with. Never leaves the user without a shell (fallback, SPEC §4.4).
 pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStarter) -> i32 {
@@ -170,53 +155,16 @@ struct Session {
     /// Dropped after the child exits on Windows to unblock the ConPTY reader.
     master: Option<Box<dyn MasterPty + Send>>,
     modes: sys::Modes,
-    /// Splits the shell's output into bytes, window names and OSC 697 markers; keeps the cut sequences between reads.
-    splitter: MarkerSplitter,
-    /// Shell-integration state of the session (SPEC 5.1).
-    marker: MarkerTracker,
     /// The model, the filter and the renderer of the session, behind the screen port.
     screen: Rc<dyn TerminalScreen>,
     /// Drives the splitter, the marker tracker and the screen over one PTY batch.
     feeder: ShellOutputFeeder,
-    menu: Menu,
     /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
     themes: Rc<dyn ThemeRepository>,
-    keymap: Keymap,
-    /// Kept across stdin reads: a bracketed paste split over several reads stays one opaque unit (SPEC §7.2.1).
-    decoder: KeyDecoder,
-    settings: Settings,
     settings_repository: Box<dyn SettingsRepository>,
-    session_id: Option<SessionId>,
     session_contexts: Box<dyn SessionContextRepository>,
-    /// When the settings and the session context files are looked at, and the modification times last seen.
-    watch: ReloadWatch,
-    terminal_bg: Option<Rgb>,
-    /// Shell of the spawned program (the tracker's `Shell=` wins once known).
-    shell: Shell,
-    /// Latest completion request id and the buffer/cursor it was sent for.
-    req: u64,
-    sent: Option<(String, usize)>,
-    changed_at: Instant,
-    /// Edit buffer at the last batch.
-    cur: Option<EditBuffer>,
-    /// Insertion lock (SPEC §7.3), re-armed up to its cap while the shell has echoed nothing of the insertion.
-    lock: Option<InsertionLock>,
-    /// What was sent ahead of the shell's echo and the keys held back (SPEC §7.3).
-    echo: EchoHold,
-    /// A prompt redraw is in progress (see `REDRAW_GRACE`).
-    redraw_until: Option<Instant>,
-    /// Ghost candidates (SPEC §8): local (engine) and LLM, with the LLM request id and its debounce deadline.
-    ghost: GhostCandidates,
-    /// The startup probe timed out: drop its late reply from stdin until then.
-    probe_until: Option<Instant>,
-    /// The quiet spell after a resize and the repaint it owes (SPEC §7.6).
-    resize: ResizeDebounce,
-    spinner: usize,
-    spinner_at: Option<Instant>,
-    /// The exit code, the end of the pty output and the grace the rest of the output gets.
-    exit: ShellExit,
-    /// After a panic in a handler: plain pass-through until the child exits (see `guard`).
-    passthrough: bool,
+    /// What the wrapper knows of the shell it runs; the ports and plumbing around it stay here.
+    session: TerminalSession,
     /// Test builds: stdout bytes are captured here instead of written.
     sink: Vec<u8>,
 }
@@ -258,7 +206,7 @@ impl Session {
             replies.extend(sys::read_timeout(deadline - now));
         };
         // ponytail: a reply cut by the timeout is forwarded as typeahead; only a whole late reply is dropped.
-        let probe_until = cpr.is_none().then(|| Instant::now() + LATE_PROBE);
+        let probe_ended_at = cpr.is_none().then(Instant::now);
         if cpr.is_none() {
             write_stdout(b"\x1b[H\x1b[2J");
         }
@@ -284,7 +232,6 @@ impl Session {
         }
         let screen: Rc<dyn TerminalScreen> = Rc::new(screen);
         let feeder = ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock));
-        let (menu, keymap) = (Menu::new(), Keymap::from_settings(&settings));
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;
         let engine = start(tx.clone(), settings.clone());
@@ -346,8 +293,19 @@ impl Session {
             let _ = writer.send(typeahead);
         }
 
-        let session_id = SessionId::new(sid).ok();
         let session_contexts = Box::new(FileSessionContextRepository::new(data_directory_from_env()));
+        let mut session = TerminalSession::new(TerminalSessionParts {
+            id,
+            launched_shell: shell,
+            settings,
+            tracker: marker,
+            terminal_background: terminal_bg.map(TerminalBackground::new),
+            settings_modified: settings_repository.last_modified(),
+            now: Instant::now(),
+        });
+        if let Some(probe_ended_at) = probe_ended_at {
+            session.expect_late_probe_reply(probe_ended_at);
+        }
         Ok(Session {
             rx,
             engine,
@@ -355,35 +313,12 @@ impl Session {
             credits,
             master: Some(pair.master),
             modes: m,
-            splitter: MarkerSplitter::default(),
-            marker,
             screen,
             feeder,
-            menu,
             themes,
-            keymap,
-            decoder: KeyDecoder::default(),
-            watch: ReloadWatch::new(Instant::now(), settings_repository.last_modified()),
             settings_repository,
-            settings,
-            session_id,
             session_contexts,
-            terminal_bg,
-            shell,
-            req: 0,
-            sent: None,
-            changed_at: Instant::now(),
-            cur: None,
-            lock: None,
-            echo: EchoHold::default(),
-            redraw_until: None,
-            ghost: GhostCandidates::default(),
-            probe_until,
-            resize: ResizeDebounce::default(),
-            spinner: 0,
-            spinner_at: None,
-            exit: ShellExit::default(),
-            passthrough: false,
+            session,
             sink: Vec::new(),
         })
     }
@@ -409,27 +344,27 @@ impl Session {
             if !go {
                 break;
             }
-            if self.exit.grace_over(Instant::now()) {
+            if self.session.exit.grace_over(Instant::now()) {
                 break;
             }
-            if !self.passthrough {
+            if !self.session.passthrough {
                 self.guard(Session::on_timers);
             }
         }
         self.cleanup();
-        self.exit.exit_code()
+        self.session.exit.exit_code()
     }
 
     /// One main-loop message; false = leave the loop.
     fn step(&mut self, msg: SessionMessage, stash: &mut Option<SessionMessage>) -> bool {
         match msg {
-            SessionMessage::Stdin(b) if self.passthrough => {
+            SessionMessage::Stdin(b) if self.session.passthrough => {
                 let _ = self.writer.send(b);
             }
             SessionMessage::Stdin(b) => {
                 // on_input writes nothing before its last step: after a panic, keys the menu would not have taken go
                 // out raw (an Enter meant for an item is dropped rather than running the line).
-                let raw = !self.menu.intercepting(&self.settings);
+                let raw = !self.session.menu.intercepting(&self.session.settings);
                 if !self.guard(|s| s.on_input(&b)) && raw {
                     let _ = self.writer.send(b);
                 }
@@ -451,7 +386,7 @@ impl Session {
                     }
                 }
                 // on_output writes nothing before its last step: after a panic the batch goes out raw.
-                if self.passthrough || !self.guard(|s| s.on_output(&b)) {
+                if self.session.passthrough || !self.guard(|s| s.on_output(&b)) {
                     self.emit(&b);
                 }
                 for _ in 0..chunks {
@@ -459,9 +394,9 @@ impl Session {
                 }
             }
             SessionMessage::PtyEof => {
-                return self.exit.output_ended();
+                return self.session.exit.output_ended();
             }
-            SessionMessage::Resize(cols, rows) if self.passthrough => {
+            SessionMessage::Resize(cols, rows) if self.session.passthrough => {
                 if let Some(m) = &self.master {
                     let _ = m.resize(PtySize {
                         rows,
@@ -480,22 +415,22 @@ impl Session {
                 if let Some(m) = self.master.take_if(|_| cfg!(windows)) {
                     thread::spawn(move || drop(m));
                 }
-                if !self.exit.child_exited(c, Instant::now()) {
+                if !self.session.exit.child_exited(c, Instant::now()) {
                     return false;
                 }
             }
             SessionMessage::Term => {
-                self.exit.terminated();
+                self.session.exit.terminated();
                 return false;
             }
-            SessionMessage::Completion(_) | SessionMessage::Ghost { .. } if self.passthrough => {}
+            SessionMessage::Completion(_) | SessionMessage::Ghost { .. } if self.session.passthrough => {}
             SessionMessage::Completion(c) => {
                 self.guard(|s| s.on_completion(*c));
             }
             SessionMessage::Ghost { req, text } => {
                 self.guard(|s| {
-                    let sent_buffer = s.sent.as_ref().map(|x| x.0.as_str());
-                    if s.ghost.accept_llm_reply(req, s.req, text, sent_buffer) {
+                    let sent_buffer = s.session.sent.as_ref().map(|x| x.0.as_str());
+                    if s.session.ghost.accept_llm_reply(req, s.session.request, text, sent_buffer) {
                         s.redraw();
                     }
                 });
@@ -512,7 +447,7 @@ impl Session {
             return true;
         }
         logger::error("pty: internal error; passing the session through until the shell exits");
-        self.passthrough = true;
+        self.session.passthrough = true;
         let clear = self.screen.take_clear();
         self.emit(&clear);
         false
@@ -527,20 +462,7 @@ impl Session {
     }
 
     fn next_deadline(&self) -> Option<Instant> {
-        let lock = self.lock.as_ref().map(|l| l.deadline());
-        next_deadline(
-            self.passthrough,
-            self.exit.deadline(),
-            [
-                self.resize.deadline(),
-                lock,
-                self.ghost.llm_due_at(),
-                self.spinner_at,
-                Some(self.watch.deadline()),
-                self.redraw_until,
-                self.echo.deadline(),
-            ],
-        )
+        self.session.next_deadline()
     }
 
     fn alt(&self) -> bool {
@@ -548,7 +470,7 @@ impl Session {
     }
 
     fn cwd(&self) -> PathBuf {
-        self.marker
+        self.session.tracker
             .cwd()
             .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())
@@ -556,22 +478,21 @@ impl Session {
     }
 
     fn shell(&self) -> Shell {
-        self.marker.shell().unwrap_or(self.shell)
+        self.session.shell()
     }
 
     /// PTY batch (SPEC §4.5): clear, bytes (markers stripped), frame — one stdout write.
     fn on_output(&mut self, batch: &[u8]) {
-        self.resize.output_arrived(Instant::now()); // the shell / ConPTY is still redrawing
+        self.session.resize.output_arrived(Instant::now()); // the shell / ConPTY is still redrawing
         let was_alt = self.alt();
         let mut body = Vec::new();
-        let events = self
-            .feeder
-            .feed(&mut self.splitter, &mut self.marker, batch, &mut body);
+        let (splitter, tracker) = self.session.output_parts();
+        let events = self.feeder.feed(splitter, tracker, batch, &mut body);
         for ev in events {
             self.on_event(ev);
         }
         if was_alt && !self.alt() {
-            self.menu.error_reset();
+            self.session.menu.error_reset();
         }
         self.refresh();
         // Taken late: a panic above leaves the clear cached for `guard`.
@@ -589,7 +510,7 @@ impl Session {
             // stay, and the unchanged line is not re-requested (its reply would count as a keypress). A cleared line
             // resets through the empty-buffer path in `refresh`, once a line split off into a later read had time.
             ShellEvent::NewCommand(None) => {
-                self.redraw_until = Some(Instant::now() + REDRAW_GRACE);
+                self.session.redraw_until = Some(Instant::now() + REDRAW_GRACE);
                 self.poll_files();
                 return;
             }
@@ -598,15 +519,15 @@ impl Session {
                     ShellEvent::NewCommand(Some(h)) => self.engine.command_finished(h),
                     _ => self.engine.command_ended(), // NoHistory: the end-of-command reset, nothing recorded
                 }
-                self.menu.error_reset();
-                self.sent = None;
+                self.session.menu.error_reset();
+                self.session.sent = None;
                 self.poll_files();
             }
-            ShellEvent::PreExec => self.menu.error_reset(),
+            ShellEvent::PreExec => self.session.menu.error_reset(),
         }
-        self.echo.reset();
-        self.ghost.reset();
-        self.lock = None;
+        self.session.echo.reset();
+        self.session.ghost.reset();
+        self.session.lock = None;
     }
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
@@ -616,32 +537,34 @@ impl Session {
         let new = if self.alt() {
             None
         } else {
-            self.marker
+            self.session.tracker
                 .edit_buffer_context()
                 .and_then(|context| self.screen.edit_buffer(&context))
                 .filter(|e| e.at_prompt())
         };
         let base = self
+            .session
             .lock
             .as_ref()
             .map(|l| l.expected())
-            .or(self.cur.as_ref().map(|e| e.buffer()));
+            .or(self.session.edit_buffer.as_ref().map(|e| e.buffer()));
         let n = new.as_ref().map(|e| e.buffer());
-        self.echo.consume_echo(base, n, self.lock.is_some());
-        self.cur = new;
-        if let Some(lock) = &mut self.lock {
-            let shown = self.cur.as_ref().map(|e| e.buffer());
+        self.session.echo.consume_echo(base, n, self.session.lock.is_some());
+        self.session.edit_buffer = new;
+        if let Some(lock) = &mut self.session.lock {
+            let shown = self.session.edit_buffer.as_ref().map(|e| e.buffer());
             match lock.settle(shown, Instant::now()) {
                 LockSettlement::StillHeld => return,
-                LockSettlement::Released => self.lock = None,
+                LockSettlement::Released => self.session.lock = None,
             }
         }
-        let Some(e) = &self.cur else { return };
-        match self.redraw_until {
+        let Some(e) = &self.session.edit_buffer else { return };
+        match self.session.redraw_until {
             Some(t) if e.buffer().trim().is_empty() && Instant::now() < t => return,
-            _ => self.redraw_until = None,
+            _ => self.session.redraw_until = None,
         }
         if self
+            .session
             .sent
             .as_ref()
             .is_some_and(|(b, c)| *b == e.buffer() && *c == e.cursor())
@@ -649,33 +572,33 @@ impl Session {
             return;
         }
         let (buffer, cursor) = (e.buffer().to_string(), e.cursor());
-        self.req += 1;
-        self.sent = Some((buffer.clone(), cursor));
-        self.changed_at = Instant::now();
-        self.ghost.cancel_llm_schedule();
+        self.session.request += 1;
+        self.session.sent = Some((buffer.clone(), cursor));
+        self.session.changed_at = Instant::now();
+        self.session.ghost.cancel_llm_schedule();
         if buffer.trim().is_empty() {
-            self.menu.error_reset(); // empty buffer (SPEC §7.1); nothing to ask
-            self.echo.forget_pending(); // nothing stale left for held keys to act on
+            self.session.menu.error_reset(); // empty buffer (SPEC §7.1); nothing to ask
+            self.session.echo.forget_pending(); // nothing stale left for held keys to act on
             return;
         }
         let req = CompletionRequest {
-            id: self.req,
+            id: self.session.request,
             buffer,
             cursor,
             cwd: self.cwd(),
             shell: self.shell(),
-            history_mode: self.menu.history_mode(),
+            history_mode: self.session.menu.history_mode(),
         };
         self.engine.complete(req);
     }
 
     fn on_completion(&mut self, c: CompletionResult) {
-        if c.request_id() != self.req {
+        if c.request_id() != self.session.request {
             return; // only the latest request is served
         }
-        self.echo.answered_by(c.request_id());
+        self.session.echo.answered_by(c.request_id());
         if c.phase() == CompletionPhase::Parse || c.ghost().is_some() {
-            self.ghost
+            self.session.ghost
                 .replace_local(c.ghost().map(String::from).map(|g| GhostText::new(c.buffer().to_string(), g)));
         }
         // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
@@ -685,21 +608,21 @@ impl Session {
             && c.cursor() == c.buffer().len()
             && self.llm_enabled()
         {
-            let debounce = self.settings.i64(INLINE_DEBOUNCE_MS).max(0) as u64;
-            self.ghost.schedule_llm(self.changed_at + Duration::from_millis(debounce));
+            let debounce = self.session.settings.i64(INLINE_DEBOUNCE_MS).max(0) as u64;
+            self.session.ghost.schedule_llm(self.session.changed_at + Duration::from_millis(debounce));
         }
-        if c.is_loading() && self.spinner_at.is_none() {
-            self.spinner_at = Some(Instant::now() + SPINNER_TICK);
+        if c.is_loading() && self.session.spinner_at.is_none() {
+            self.session.spinner_at = Some(Instant::now() + SPINNER_TICK);
         }
-        self.menu.on_completion(c, &self.settings, Instant::now());
+        self.session.menu.on_completion(c, &self.session.settings, Instant::now());
         self.redraw();
         self.release_held();
     }
 
     fn llm_enabled(&self) -> bool {
-        self.settings.bool(INLINE_ENABLED)
+        self.session.settings.bool(INLINE_ENABLED)
             && matches!(
-                crate::ghost_text::domain::services::ghost_text_source_resolver::source(&self.settings),
+                crate::ghost_text::domain::services::ghost_text_source_resolver::source(&self.session.settings),
                 Ok(GhostTextSource::Profile(_))
             )
     }
@@ -707,10 +630,10 @@ impl Session {
     /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
     /// their echo (what accepting it must add), else after the buffer on screen (what is drawn).
     fn ghost_text(&self, typed: bool) -> Option<String> {
-        if !self.settings.bool(INLINE_ENABLED) || self.marker.preexec() || self.alt() {
+        if !self.session.settings.bool(INLINE_ENABLED) || self.session.tracker.preexec() || self.alt() {
             return None;
         }
-        let e = self.cur.as_ref()?;
+        let e = self.session.edit_buffer.as_ref()?;
         if e.buffer().is_empty() || e.cursor() != e.buffer().len() || e.shell_ghost() {
             return None;
         }
@@ -719,73 +642,64 @@ impl Session {
         } else {
             e.buffer().to_string()
         };
-        self.ghost.rest_after(&buffer)
+        self.session.ghost.rest_after(&buffer)
     }
 
     /// The buffer once the shell echoed everything already sent: the pending insertion's result (else the extracted
     /// buffer) plus the printable keys typed ahead of their echo (SPEC §7.3 reconciliation).
     fn basis(&self) -> Option<String> {
         let b = self
+            .session
             .lock
             .as_ref()
             .map(|l| l.expected())
-            .or(self.cur.as_ref().map(|e| e.buffer()))?;
-        Some(format!("{b}{}", self.echo.unechoed()))
+            .or(self.session.edit_buffer.as_ref().map(|e| e.buffer()))?;
+        Some(format!("{b}{}", self.session.echo.unechoed()))
     }
 
     /// Track a forwarded key: a printable char at the end of the line comes back as echo; anything else
     /// (backspace, arrows, control keys, paste) cannot be modelled and drops the prediction.
     fn note_forwarded(&mut self, key: &Key) {
         let at_end = self
-            .cur
+            .session
+            .edit_buffer
             .as_ref()
             .is_some_and(|e| e.cursor() == e.buffer().len());
         match plain_char(key) {
-            Some(c) if at_end => self.echo.typed_ahead(c),
-            _ => self.echo.forwarded_unmodelled(self.req),
+            Some(c) if at_end => self.session.echo.typed_ahead(c),
+            _ => self.session.echo.forwarded_unmodelled(self.session.request),
         }
     }
 
     /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
     fn release_held(&mut self) {
-        let Some(held) = self.echo.release(Instant::now()) else {
+        let Some(held) = self.session.echo.release(Instant::now()) else {
             return;
         };
         self.on_keys(&held);
     }
 
     fn suppressed_in(&self, screen: &ScreenState) -> bool {
-        !self.marker.at_prompt()
-            // The cursor is off the command line (an inline TUI's rows: fzf, fish's pager): a menu for the line
-            // stays hidden and keeps its hands off the keys.
-            || self.cur.is_none()
-            || self.resize.is_settling()
-            || self.resize.repaint_pending()
-            || screen.in_string()
-            || self.redraw_until.is_some()
-            // PSReadLine's ListView predictions own the rows below a non-empty line.
-            || (self.marker.pwsh_list_view() && self.cur.as_ref().is_some_and(|e| !e.buffer().is_empty()))
+        self.session.suppressed(screen)
     }
 
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
-    /// ponytail: mirrors overlay_renderer.rs `compose`'s guards; its no-room-for-the-menu case (3-row terminal) is not covered.
     fn drawable(&self) -> bool {
-        let screen = self.screen.state();
-        !self.suppressed_in(&screen) && allows_drawing(&screen)
+        self.session.drawable(&self.screen.state())
     }
 
     fn frame(&mut self) -> Vec<u8> {
         let ghost = self.ghost_text(false);
         let screen = self.screen.state();
         let input = FrameInput {
-            settings: &self.settings,
+            settings: &self.session.settings,
             ghost: ghost.as_deref(),
-            spinner: self.spinner,
+            spinner: self.session.spinner,
             suppress: self.suppressed_in(&screen),
             scroll_region: screen.scroll_region(),
             now: Instant::now(),
         };
-        self.screen.draw_overlay(&self.menu, &input)
+        self.screen.draw_overlay(&self.session.menu, &input)
     }
 
     /// State-only change: the renderer clears a changed frame in the same write and skips an identical one
@@ -799,16 +713,16 @@ impl Session {
     fn on_input(&mut self, chunk: &[u8]) {
         // A probe reply arriving after the startup timeout is dropped, not typed into the shell.
         let late;
-        let chunk = match self.probe_until {
+        let chunk = match self.session.late_probe_until {
             Some(t) if Instant::now() < t => {
                 let (cpr, bg, rest) = parse_probe(chunk);
                 if bg.is_some() {
-                    self.terminal_bg = bg;
+                    self.session.terminal_background = bg.map(TerminalBackground::new);
                     self.screen
-                        .set_theme(resolve_theme(&self.settings, bg, &*self.themes));
+                        .set_theme(resolve_theme(&self.session.settings, bg, &*self.themes));
                 }
                 if cpr.is_some() {
-                    self.probe_until = None;
+                    self.session.late_probe_until = None;
                 }
                 late = rest;
                 &late[..]
@@ -819,61 +733,61 @@ impl Session {
     }
 
     fn on_keys(&mut self, chunk: &[u8]) {
-        if self.echo.is_holding() {
-            self.echo.hold_behind(chunk); // keys keep their order behind held ones
+        if self.session.echo.is_holding() {
+            self.session.echo.hold_behind(chunk); // keys keep their order behind held ones
             return;
         }
         let mut fwd = Vec::new();
         let (mut redraw, mut rerequest) = (false, false);
-        let only_tab = self.settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB);
-        let disabled = self.settings.bool(AUTOCOMPLETE_DISABLE);
+        let only_tab = self.session.settings.bool(AUTOCOMPLETE_ONLY_SHOW_ON_TAB);
+        let disabled = self.session.settings.bool(AUTOCOMPLETE_DISABLE);
         let mut typed = 0usize;
-        for ev in self.decoder.decode(chunk) {
+        for ev in self.session.decoder.decode(chunk) {
             #[cfg(test)]
             tests::maybe_panic();
             let key = ev.key();
             // Two or more printable keys in one read are a paste (pwsh has no bracketed paste) or typeahead the menu
             // was not computed for: the rest of the read reaches the shell as is.
             // Off the command line (an inline TUI's rows) keys belong to the TUI, as on the alternate screen.
-            let prompt = !self.marker.preexec() && !self.alt() && self.cur.is_some() && typed < 2;
+            let prompt = !self.session.tracker.preexec() && !self.alt() && self.session.edit_buffer.is_some() && typed < 2;
             let facts = KeyFacts::new(KeyFactsParts {
                 prompt,
-                menu_intercepts: self.menu.intercepting(&self.settings),
+                menu_intercepts: self.session.menu.intercepting(&self.session.settings),
                 drawable: self.drawable(),
-                menu_has_items: self.menu.has_items(),
+                menu_has_items: self.session.menu.has_items(),
                 autocomplete_disabled: disabled,
                 only_show_on_tab: only_tab,
-                waiting_for_echo: self.echo.is_waiting_for_echo(),
+                waiting_for_echo: self.session.echo.is_waiting_for_echo(),
                 ghost_text: self.ghost_text(true),
             });
-            let effects = match route(&key, &self.keymap, &facts) {
+            let effects = match route(&key, &self.session.keymap, &facts) {
                 KeyRoute::Hold => {
                     // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
                     // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
-                    self.echo.hold(&chunk[ev.bytes().start..], Instant::now());
-                    self.decoder.reset(); // held bytes start outside a paste and are decoded again
+                    self.session.echo.hold(&chunk[ev.bytes().start..], Instant::now());
+                    self.session.decoder.reset(); // held bytes start outside a paste and are decoded again
                     break;
                 }
-                KeyRoute::MenuAction(a) => self.menu.handle(a, &self.settings),
+                KeyRoute::MenuAction(a) => self.session.menu.handle(a, &self.session.settings),
                 KeyRoute::Swallow => Vec::new(),
-                KeyRoute::ShowOnTab => self.menu.show_on_tab(&self.settings),
+                KeyRoute::ShowOnTab => self.session.menu.show_on_tab(&self.session.settings),
                 KeyRoute::AcceptGhost(g) => {
                     fwd.extend_from_slice(g.as_bytes());
-                    self.echo.accepted_ghost(&g);
-                    self.ghost.accepted();
+                    self.session.echo.accepted_ghost(&g);
+                    self.session.ghost.accepted();
                     redraw = true;
                     continue;
                 }
                 KeyRoute::Forward => {
-                    if is_enter(&key) && self.marker.at_prompt() {
-                        self.marker.set_submitted(self.basis()); // history: the line, not what follows it
+                    if is_enter(&key) && self.session.tracker.at_prompt() {
+                        self.session.tracker.set_submitted(self.basis()); // history: the line, not what follows it
                     }
                     fwd.extend_from_slice(&chunk[ev.bytes()]);
                     typed += usize::from(plain_char(&key).is_some());
                     self.note_forwarded(&key);
                     // Enter too: its newline echo would re-anchor the stale menu below the line until PreExec.
                     if ends_line(&key) {
-                        self.menu.error_reset();
+                        self.session.menu.error_reset();
                         redraw = true;
                     }
                     continue;
@@ -884,11 +798,11 @@ impl Session {
                 match e {
                     MenuEffect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
                     MenuEffect::Write(b) => {
-                        if b == b"\r" && self.marker.at_prompt() {
-                            self.marker.set_submitted(self.basis()); // `execute`
+                        if b == b"\r" && self.session.tracker.at_prompt() {
+                            self.session.tracker.set_submitted(self.basis()); // `execute`
                         }
                         fwd.extend(b);
-                        self.echo.forget_unechoed();
+                        self.session.echo.forget_unechoed();
                     }
                     MenuEffect::Bell => self.emit(b"\x07"),
                     MenuEffect::Rerequest => rerequest = true,
@@ -900,7 +814,7 @@ impl Session {
             }
         }
         if rerequest {
-            self.sent = None;
+            self.session.sent = None;
             self.refresh();
         }
         if redraw {
@@ -913,31 +827,32 @@ impl Session {
 
     /// Insertion with reconciliation + lock (SPEC §7.3). Dropped while a command runs.
     fn insert(&mut self, ins: &Insertion, record: Option<(String, String)>, fwd: &mut Vec<u8>) {
-        if self.marker.preexec() {
+        if self.session.tracker.preexec() {
             return;
         }
-        let from = self.menu.last().map(|c| (c.buffer().to_string(), c.cursor()));
+        let from = self.session.menu.last().map(|c| (c.buffer().to_string(), c.cursor()));
         let Some((ib, at)) =
-            from.or_else(|| self.cur.as_ref().map(|e| (e.buffer().to_string(), e.cursor())))
+            from.or_else(|| self.session.edit_buffer.as_ref().map(|e| (e.buffer().to_string(), e.cursor())))
         else {
             return;
         };
         // Against what the shell will show, not the last batch: keys sent ahead of their echo are reconciled too.
         let cur = self.basis().unwrap_or_else(|| ib.clone());
         fwd.extend(insertion_bytes(ins, &ib, &cur));
-        self.echo.forget_unechoed();
+        self.session.echo.forget_unechoed();
         let expected = expected_buffer(ins, &ib, at);
         if ins.executes() {
             // As for Enter: preferred over a scrape with a transient prompt in front of the line; pre_exec still
             // reads a line the shell rewrote from the screen.
-            self.marker.set_submitted(Some(expected.clone()));
+            self.session.tracker.set_submitted(Some(expected.clone()));
         }
         let before = self
-            .cur
+            .session
+            .edit_buffer
             .as_ref()
             .map_or_else(|| ib.clone(), |e| e.buffer().to_string());
         let now = Instant::now();
-        self.lock = Some(InsertionLock::new(now, expected, before));
+        self.session.lock = Some(InsertionLock::new(now, expected, before));
         if let Some((cmd, name)) = record {
             self.engine.record_insertion(cmd, name);
         }
@@ -945,7 +860,7 @@ impl Session {
 
     /// SPEC §7.6: resize PTY + model now, repaint after 150 ms of quiet.
     fn on_resize(&mut self, cols: u16, rows: u16) {
-        if !self.resize.wants(cols, rows, &self.screen.state()) {
+        if !self.session.resize.wants(cols, rows, &self.screen.state()) {
             return;
         }
         if let Some(m) = &self.master {
@@ -957,12 +872,12 @@ impl Session {
             });
         }
         self.screen.resize(cols as usize, rows as usize);
-        self.resize.resized(Instant::now());
+        self.session.resize.resized(Instant::now());
     }
 
     /// Full repaint once the resize settled (postponed while on the alternate screen).
     fn take_repaint(&mut self) -> Vec<u8> {
-        if !self.resize.take_repaint(self.alt()) {
+        if !self.session.resize.take_repaint(self.alt()) {
             return Vec::new();
         }
         self.screen.full_repaint()
@@ -972,32 +887,32 @@ impl Session {
         let now = Instant::now();
         let due = |d: Option<Instant>| d.is_some_and(|d| d <= now);
         let mut redraw = false;
-        self.resize.settle_if_due(now);
-        if due(self.redraw_until) {
-            self.redraw_until = None;
+        self.session.resize.settle_if_due(now);
+        if due(self.session.redraw_until) {
+            self.session.redraw_until = None;
             self.refresh(); // the line really is empty
             redraw = true;
         }
         self.release_held();
-        if self.lock.as_ref().is_some_and(|l| l.is_due(now)) {
+        if self.session.lock.as_ref().is_some_and(|l| l.is_due(now)) {
             self.refresh(); // releases the lock and catches up with the buffer
             redraw = true;
         }
-        if self.ghost.take_due_llm(now) {
-            if let Some((buffer, _)) = self.sent.clone() {
-                self.ghost.expect_llm_reply(self.req);
-                self.engine.request_llm_ghost_text(self.req, buffer, self.cwd(), self.shell());
+        if self.session.ghost.take_due_llm(now) {
+            if let Some((buffer, _)) = self.session.sent.clone() {
+                self.session.ghost.expect_llm_reply(self.session.request);
+                self.engine.request_llm_ghost_text(self.session.request, buffer, self.cwd(), self.shell());
             }
         }
-        if due(self.spinner_at) {
-            self.spinner_at = None;
-            if self.menu.last().is_some_and(|c| c.is_loading()) {
-                self.spinner += 1;
-                self.spinner_at = Some(now + SPINNER_TICK);
-                redraw |= self.menu.loading(Instant::now());
+        if due(self.session.spinner_at) {
+            self.session.spinner_at = None;
+            if self.session.menu.last().is_some_and(|c| c.is_loading()) {
+                self.session.spinner += 1;
+                self.session.spinner_at = Some(now + SPINNER_TICK);
+                redraw |= self.session.menu.loading(Instant::now());
             }
         }
-        if self.watch.poll_due(now) {
+        if self.session.reload.poll_due(now) {
             redraw |= self.poll_files();
         }
         let repaint = self.take_repaint();
@@ -1012,33 +927,26 @@ impl Session {
 
     /// Settings (live reload) and the session env file from `_ pre-cmd` (D17). True when settings changed.
     fn poll_files(&mut self) -> bool {
-        let m = self
-            .session_id
-            .as_ref()
-            .and_then(|id| self.session_contexts.last_modified(id));
-        if self.watch.context_changed(m) {
-            if let Some(ctx) = self
-                .session_id
-                .as_ref()
-                .and_then(|id| self.session_contexts.find(id))
-            {
+        let m = self.session_contexts.last_modified(self.session.id());
+        if self.session.reload.context_changed(m) {
+            if let Some(ctx) = self.session_contexts.find(self.session.id()) {
                 self.engine
                     .apply_session_context(ctx.env().clone(), ctx.alias().map(str::to_owned));
             }
         }
         let m = self.settings_repository.last_modified();
-        if !self.watch.settings_changed(m) {
+        if !self.session.reload.settings_changed(m) {
             return false;
         }
-        self.settings = load_or_defaults(&*self.settings_repository);
-        self.keymap = Keymap::from_settings(&self.settings);
+        self.session.settings = load_or_defaults(&*self.settings_repository);
+        self.session.keymap = Keymap::from_settings(&self.session.settings);
         self.screen
             .set_theme(resolve_theme(
-                &self.settings,
-                self.terminal_bg,
+                &self.session.settings,
+                self.session.terminal_background.map(TerminalBackground::rgb),
                 &*self.themes,
             ));
-        self.engine.apply_settings(self.settings.clone());
+        self.engine.apply_settings(self.session.settings.clone());
         true
     }
 
@@ -1050,9 +958,7 @@ impl Session {
         self.engine.shut_down();
         crate::specs::infrastructure::adapters::process_executor::kill_live_children(); // Windows has no atexit hook for running generators
         self.modes.restore();
-        if let Some(id) = &self.session_id {
-            self.session_contexts.remove(id);
-        }
+        self.session_contexts.remove(self.session.id());
     }
 }
 
@@ -1069,6 +975,7 @@ mod tests {
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
+    use crate::settings::domain::value_objects::settings::Settings;
     use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
     use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
@@ -1085,6 +992,11 @@ mod tests {
     }
 
     fn session(json: &str) -> (Session, Receiver<Vec<u8>>) {
+        session_named(json, SID)
+    }
+
+    /// A session whose id is `id` (the shell integration markers keep the id `SID`).
+    fn session_named(json: &str, id: &str) -> (Session, Receiver<Vec<u8>>) {
         let settings = settings(json);
         let (writer, wrx) = mpsc::channel();
         let marker = MarkerTracker::new(
@@ -1100,35 +1012,20 @@ mod tests {
             credits: mpsc::sync_channel(PTY_CREDITS).0,
             master: None,
             modes: sys::Modes::default(),
-            splitter: MarkerSplitter::default(),
-            marker,
             feeder: ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock)),
             screen,
-            menu: Menu::new(),
             themes: Rc::new(InMemoryThemeRepository::default()),
-            keymap: Keymap::from_settings(&settings),
-            decoder: KeyDecoder::default(),
-            settings,
             settings_repository: Box::new(InMemorySettingsRepository::default()),
-            watch: ReloadWatch::new(Instant::now(), None),
-            session_id: None,
             session_contexts: Box::new(InMemorySessionContextRepository::default()),
-            terminal_bg: None,
-            shell: Shell::Bash,
-            req: 0,
-            sent: None,
-            changed_at: Instant::now(),
-            cur: None,
-            lock: None,
-            echo: EchoHold::default(),
-            redraw_until: None,
-            ghost: GhostCandidates::default(),
-            probe_until: None,
-            resize: ResizeDebounce::default(),
-            spinner: 0,
-            spinner_at: None,
-            exit: ShellExit::default(),
-            passthrough: false,
+            session: TerminalSession::new(TerminalSessionParts {
+                id: SessionId::new(id.to_string()).unwrap(),
+                launched_shell: Shell::Bash,
+                settings,
+                tracker: marker,
+                terminal_background: None,
+                settings_modified: None,
+                now: Instant::now(),
+            }),
             sink: Vec::new(),
         };
         (s, wrx)
@@ -1144,9 +1041,9 @@ mod tests {
 
     /// Engine reply for the latest request (twice: the first one after a reset only arms the menu).
     fn reply(s: &mut Session, items: Vec<Suggestion>, ghost: Option<&str>) {
-        let (buffer, _) = s.sent.clone().expect("a request was sent");
-        let mut c = comp(&buffer, 1, items);
-        c = c.with_request_id(s.req).with_ghost(ghost.map(String::from));
+        let (buffer, _) = s.session.sent().expect("a request was sent");
+        let mut c = comp(buffer, 1, items);
+        c = c.with_request_id(s.session.request_id()).with_ghost(ghost.map(String::from));
         s.on_completion(c.clone());
         s.on_completion(c);
     }
@@ -1180,7 +1077,7 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        assert!(s.menu.intercepting(&s.settings));
+        assert!(s.session.menu().intercepting(s.session.settings()));
         s.on_input(b"\x1b[200~ONE");
         s.on_input(b"\rTWO\tx\x1b[A\x1b[201~");
         assert_eq!(sent(&pty), b"\x1b[200~ONE\rTWO\tx\x1b[A\x1b[201~");
@@ -1195,7 +1092,7 @@ mod tests {
         assert!(!sent(&pty).contains(&b'\t'), "drawn: Tab is intercepted");
         // A crashed TUI left a scroll region: nothing is drawn, so Enter and End reach the shell.
         s.on_output(b"\x1b7\x1b[2;20r\x1b8");
-        assert!(s.menu.intercepting(&s.settings) && !s.drawable());
+        assert!(s.session.menu().intercepting(s.session.settings()) && !s.drawable());
         s.on_input(b"\r\x1b[F");
         assert_eq!(sent(&pty), b"\r\x1b[F");
     }
@@ -1213,11 +1110,11 @@ mod tests {
                 item("b.txt", SuggestionKind::File, ""),
             ],
         );
-        c = c.with_request_id(s.req);
+        c = c.with_request_id(s.session.request_id());
         s.on_completion(c.clone());
         c = c.with_arg_key(2); // a new argument: hidden until Tab, with items
         s.on_completion(c);
-        assert!(s.menu.has_items());
+        assert!(s.session.menu().has_items());
         s.on_input(b"\t\t");
         assert_eq!(sent(&pty), b"\t\t");
     }
@@ -1250,7 +1147,7 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.on_input(b"e");
         s.on_output(b"e");
-        assert!(s.echo.unechoed().is_empty());
+        assert!(s.session.unechoed().is_empty());
         s.on_input(b"\r");
         assert_eq!(shell_line("git ch", &sent(&pty)), "git cherry-pick");
         // `l` + Right in one read: only the rest of the ghost is accepted.
@@ -1267,28 +1164,28 @@ mod tests {
             r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
         );
         prompt(&mut s, "zzzcmd foo");
-        s.on_completion(CompletionResult::error(s.req, "zzzcmd foo".into(), 10));
-        assert!(s.ghost.llm_due_at().is_some());
+        s.on_completion(CompletionResult::error(s.session.request_id(), "zzzcmd foo".into(), 10));
+        assert!(s.session.llm_due_at().is_some());
         // Mid-word cursor: still none.
-        s.ghost.cancel_llm_schedule();
-        s.on_completion(CompletionResult::error(s.req, "zzzcmd foo".into(), 3));
-        assert!(s.ghost.llm_due_at().is_none());
+        s.session.cancel_llm_schedule();
+        s.on_completion(CompletionResult::error(s.session.request_id(), "zzzcmd foo".into(), 3));
+        assert!(s.session.llm_due_at().is_none());
     }
 
     #[test]
     fn should_show_the_llm_ghost_text_of_the_current_request_behind_the_local_one() {
         let (mut s, _) = session("{}");
         prompt(&mut s, "git sta");
-        s.ghost.expect_llm_reply(s.req);
+        s.session.expect_llm_reply(s.session.request_id());
         let llm_reply = |req, text: Option<&str>| SessionMessage::Ghost { req, text: text.map(String::from) };
 
-        s.step(llm_reply(s.req, Some("tus")), &mut None);
+        s.step(llm_reply(s.session.request_id(), Some("tus")), &mut None);
         let from_the_current_request = s.ghost_text(false);
-        s.step(llm_reply(s.req + 1, Some("x")), &mut None);
+        s.step(llm_reply(s.session.request_id() + 1, Some("x")), &mut None);
         let after_another_request = s.ghost_text(false);
-        s.step(llm_reply(s.req, None), &mut None);
+        s.step(llm_reply(s.session.request_id(), None), &mut None);
         let after_an_empty_reply = s.ghost_text(false);
-        s.step(llm_reply(s.req, Some("tus")), &mut None);
+        s.step(llm_reply(s.session.request_id(), Some("tus")), &mut None);
         reply(&mut s, Vec::new(), Some("sh"));
         let with_a_local_ghost_text = s.ghost_text(false);
 
@@ -1301,12 +1198,12 @@ mod tests {
     #[test]
     fn late_probe_reply_is_not_typed() {
         let (mut s, pty) = session("{}");
-        s.probe_until = Some(Instant::now() + LATE_PROBE);
+        s.session.expect_late_probe_reply(Instant::now());
         prompt(&mut s, "");
         s.on_input(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\\x1b[5;1Rx");
         assert_eq!(sent(&pty), b"x");
         assert_eq!(
-            (s.terminal_bg, s.probe_until),
+            (s.session.terminal_background().map(TerminalBackground::rgb), s.session.late_probe_until()),
             (Some((255, 255, 255)), None)
         );
     }
@@ -1333,11 +1230,11 @@ mod tests {
         // SIGWINCH: the shell redraws PS1 (with NewCmd=<sid>) and the line, in one write.
         let redraw = format!("\r\x1b[K\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch");
         s.on_output(redraw.as_bytes());
-        assert!(s.menu.intercepting(&s.settings));
+        assert!(s.session.menu().intercepting(s.session.settings()));
         // A command that ran does reset it.
         s.on_output(b"\r\n\x1b]697;PreExec\x07");
         prompt(&mut s, "");
-        assert!(!s.menu.has_items());
+        assert!(!s.session.menu().has_items());
     }
 
     #[test]
@@ -1366,7 +1263,7 @@ mod tests {
         s.sink.clear();
         assert!(!s.guard(|_| panic!("injected")));
         assert!(
-            s.passthrough && s.sink.starts_with(b"\x1b[?2026h"),
+            s.session.is_passthrough() && s.sink.starts_with(b"\x1b[?2026h"),
             "overlay cleared"
         );
         s.sink.clear();
@@ -1377,7 +1274,7 @@ mod tests {
         assert_eq!(sent(&pty), b"\r", "keys reach the shell unintercepted");
         assert!(s.step(SessionMessage::ChildExit(3), &mut stash));
         assert!(!s.step(SessionMessage::PtyEof, &mut stash));
-        assert_eq!((s.exit.code(), s.next_deadline().is_some()), (Some(3), true));
+        assert_eq!((s.session.reported_exit_code(), s.next_deadline().is_some()), (Some(3), true));
     }
 
     #[test]
@@ -1387,7 +1284,7 @@ mod tests {
         PANIC_IN_INPUT.with(|p| p.set(true));
         assert!(s.step(SessionMessage::Stdin(b"BOOM\r".to_vec()), &mut None));
         PANIC_IN_INPUT.with(|p| p.set(false));
-        assert!(s.passthrough);
+        assert!(s.session.is_passthrough());
         assert_eq!(sent(&pty), b"BOOM\r", "the read is not lost");
         // With the menu intercepting it is dropped: an Enter meant for an item never runs the line.
         let (mut s, pty) = session("{}");
@@ -1396,7 +1293,7 @@ mod tests {
         PANIC_IN_INPUT.with(|p| p.set(true));
         s.step(SessionMessage::Stdin(b"\r".to_vec()), &mut None);
         PANIC_IN_INPUT.with(|p| p.set(false));
-        assert!(s.passthrough && sent(&pty).is_empty());
+        assert!(s.session.is_passthrough() && sent(&pty).is_empty());
     }
 
     /// The shell redraws its prompt (SIGWINCH, `zle reset-prompt`): PS1 with NewCmd=<sid>, then `text`.
@@ -1412,11 +1309,11 @@ mod tests {
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         s.on_input(b"\x1b[A");
-        assert!(!s.menu.intercepting(&s.settings));
-        let req = s.req;
+        assert!(!s.session.menu().intercepting(s.session.settings()));
+        let req = s.session.request_id();
         redraw(&mut s, "git ch");
         assert_eq!(
-            s.req, req,
+            s.session.request_id(), req,
             "the unchanged line is not re-requested (its reply would show the menu)"
         );
         s.on_input(b"\r");
@@ -1431,12 +1328,12 @@ mod tests {
             2,
             vec![item("my file.txt", SuggestionKind::File, "")],
         );
-        c = c.with_request_id(s.req);
+        c = c.with_request_id(s.session.request_id());
         s.on_completion(c);
-        assert!(!s.menu.intercepting(&s.settings));
-        let req = s.req;
+        assert!(!s.session.menu().intercepting(s.session.settings()));
+        let req = s.session.request_id();
         redraw(&mut s, "git status --short ");
-        assert_eq!(s.req, req);
+        assert_eq!(s.session.request_id(), req);
         s.on_input(b"\r");
         assert_eq!(sent(&pty), b"\r");
     }
@@ -1449,16 +1346,16 @@ mod tests {
         // The redraw's line arrives in a second read: the empty line in between does not reset the menu.
         redraw(&mut s, "");
         s.on_output(b"git ch");
-        assert!(s.menu.intercepting(&s.settings) && s.drawable());
+        assert!(s.session.menu().intercepting(s.session.settings()) && s.drawable());
         // A line that really is empty resets once the grace passed.
         redraw(&mut s, "");
         assert!(
-            s.menu.has_items() && !s.drawable(),
+            s.session.menu().has_items() && !s.drawable(),
             "held, not drawn, during the grace"
         );
-        s.redraw_until = Some(Instant::now());
+        s.session.set_redraw_until(Some(Instant::now()));
         s.on_timers();
-        assert!(!s.menu.has_items());
+        assert!(!s.session.menu().has_items());
     }
 
     #[test]
@@ -1467,7 +1364,7 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ");
         reply(&mut s, subs(""), None);
-        assert!(s.menu.intercepting(&s.settings));
+        assert!(s.session.menu().intercepting(s.session.settings()));
         s.on_input(b"checkout main\r");
         assert_eq!(sent(&pty), b"checkout main\r");
     }
@@ -1499,7 +1396,7 @@ mod tests {
         reply(&mut s, subs("ch"), None);
         s.on_input(b"\x1bOC\t");
         assert_eq!(sent(&pty), b"\x1bOC");
-        s.echo.expire_hold_at(Instant::now());
+        s.session.expire_hold_at(Instant::now());
         s.on_timers();
         assert_eq!(sent(&pty), b"e", "Tab inserted the common prefix");
     }
@@ -1515,19 +1412,18 @@ mod tests {
             .collect();
         reply(&mut s, items, Some("kout feature-login"));
         s.on_input(b"\t");
-        s.lock.as_mut().unwrap().expire_deadline_at(Instant::now());
+        s.session.expire_insertion_deadline(Instant::now());
         s.on_timers();
-        assert!(s.lock.is_some(), "re-armed: nothing echoed");
+        assert!(s.session.has_insertion_lock(), "re-armed: nothing echoed");
         s.on_input(b"\x1b[C");
         assert_eq!(
             shell_line("git chec", &sent(&pty)),
             "git checkout feature-login"
         );
         // Never past the cap.
-        let l = s.lock.as_mut().unwrap();
-        l.expire_at(Instant::now(), Instant::now());
+        s.session.expire_insertion_lock(Instant::now(), Instant::now());
         s.on_timers();
-        assert!(s.lock.is_none());
+        assert!(!s.session.has_insertion_lock());
     }
 
     #[test]
@@ -1535,7 +1431,7 @@ mod tests {
         let (mut s, _) = session("{}");
         prompt(&mut s, "echo !");
         s.on_input(b"!\r");
-        assert_eq!(s.marker.submitted(), Some("echo !!"));
+        assert_eq!(s.session.tracker().submitted(), Some("echo !!"));
         // transient-prompt-execute-insertion-pollutes-history: an insertion that executes (the ↪ row) records the line
         // it builds, not the transient prompt (p10k, oh-my-posh) redrawn without markers in front of it.
         let (mut s, _) = session("{}");
@@ -1543,13 +1439,13 @@ mod tests {
         s.engine = Rc::new(RecordingCompletionEngine::new(tx));
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        s.marker.set_submitted(Some("stale".into()));
-        let fx = s.menu.handle(KeyAction::InsertSelectedAndExecute, &s.settings);
+        s.session.tracker_mut().set_submitted(Some("stale".into()));
+        let fx = s.session.menu.handle(KeyAction::InsertSelectedAndExecute, &s.session.settings);
         let Some(MenuEffect::Insert { ins, .. }) = fx.into_iter().next() else {
             panic!("no insertion")
         };
         s.insert(&ins, None, &mut Vec::new());
-        assert_eq!(s.marker.submitted(), Some("git cherry-pick"));
+        assert_eq!(s.session.tracker().submitted(), Some("git cherry-pick"));
         let run = format!("\r\x1b[K\u{276f} git cherry-pick\r\n\x1b]697;OSCLock={SID}\x07\x1b]697;PreExec\x07x\r\n");
         s.on_output(format!("{run}\x1b]697;OSCUnlock={SID}\x07").as_bytes());
         prompt(&mut s, "");
@@ -1573,12 +1469,12 @@ mod tests {
         prompt(&mut s, "echo one");
         reply(&mut s, vec![], None);
         assert!(
-            s.menu.shown(&s.settings) && !s.menu.intercepting(&s.settings),
+            s.session.menu().shown(s.session.settings()) && !s.session.menu().intercepting(s.session.settings()),
             "the argument hint row"
         );
         s.on_input(b"\r");
         assert_eq!(sent(&pty), b"\r");
-        assert!(!s.menu.shown(&s.settings));
+        assert!(!s.session.menu().shown(s.session.settings()));
         s.sink.clear();
         s.on_output(b"\r\n");
         assert!(
@@ -1613,19 +1509,19 @@ mod tests {
         // inline-tui-scraped-as-command-line: fzf --height (zsh Ctrl-T) draws its query row below the prompt.
         let (mut s, _) = session("{}");
         prompt(&mut s, "");
-        let req = s.req;
+        let req = s.session.request_id();
         s.on_output(b"\r\n  git ch");
-        assert_eq!((s.req, s.cur.clone()), (req, None));
+        assert_eq!((s.session.request_id(), s.session.edit_buffer().cloned()), (req, None));
         // fzf exits; the widget redraws the prompt and the line.
         s.on_output(format!("\r\x1b[J\x1b[A\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07git ch").as_bytes());
-        assert_eq!(s.sent.as_ref().map(|(b, _)| b.as_str()), Some("git ch"));
+        assert_eq!(s.session.sent().map(|(b, _)| b), Some("git ch"));
         // R4-7: Ctrl-T after typed text, with the line's menu open: hidden over fzf, and fzf gets the keys.
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), Some("eckout"));
         s.sink.clear();
         s.on_output(b"\r\n  1/2\r\n> rea");
-        assert!(s.menu.intercepting(&s.settings) && !s.drawable());
+        assert!(s.session.menu().intercepting(s.session.settings()) && !s.drawable());
         assert!(
             !String::from_utf8_lossy(&s.sink).contains("checkout"),
             "{:?}",
@@ -1647,7 +1543,7 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        s.marker.set_pwsh_list_view(true);
+        s.session.tracker_mut().set_pwsh_list_view(true);
         assert!(!s.drawable());
         s.sink.clear();
         s.redraw();
@@ -1659,8 +1555,8 @@ mod tests {
         assert_eq!(sent(&pty), b"\r");
         let (mut s, _) = session("{}");
         prompt(&mut s, "");
-        s.redraw_until = None;
-        s.marker.set_pwsh_list_view(true);
+        s.session.set_redraw_until(None);
+        s.session.tracker_mut().set_pwsh_list_view(true);
         assert!(s.drawable(), "an empty line has no list");
     }
 
@@ -1671,10 +1567,9 @@ mod tests {
 
     /// A session reading its context from `<temp>/run/abc.json`, and what it sends the engine.
     fn session_reading_context_in(temp_dir: &TempDir) -> (Session, Receiver<CompletionEngineCall>) {
-        let (mut s, _) = session("{}");
+        let (mut s, _) = session_named("{}", "abc");
         let (engine, sent_to_engine) = mpsc::channel();
         s.engine = Rc::new(RecordingCompletionEngine::new(engine));
-        s.session_id = SessionId::new("abc".to_string()).ok();
         s.session_contexts = Box::new(FileSessionContextRepository::new(DataDirectory::new(
             Some(temp_dir.path().to_path_buf()),
             None,
@@ -1751,7 +1646,7 @@ mod tests {
         s.poll_files();
 
         assert_eq!(
-            (contexts_sent(&sent_to_engine), s.watch.context_modified()),
+            (contexts_sent(&sent_to_engine), s.session.context_modified()),
             (Vec::new(), Some(at(1_000)))
         );
     }
@@ -1769,7 +1664,7 @@ mod tests {
         s.poll_files();
 
         assert_eq!(
-            (contexts_sent(&sent_to_engine), s.watch.context_modified()),
+            (contexts_sent(&sent_to_engine), s.session.context_modified()),
             (Vec::new(), Some(at(2_000)))
         );
     }
@@ -1923,17 +1818,17 @@ mod tests {
         }
 
         fn reply_error(&mut self, buffer: &str, cursor: usize) {
-            let request = self.s.req;
+            let request = self.s.session.request_id();
             self.s.on_completion(CompletionResult::error(request, buffer.into(), cursor));
         }
 
         fn reply_loading(&mut self, buffer: &str, items: Vec<Suggestion>) {
-            let loading = comp(buffer, 1, items).with_request_id(self.s.req).with_loading(true);
+            let loading = comp(buffer, 1, items).with_request_id(self.s.session.request_id()).with_loading(true);
             self.s.on_completion(loading);
         }
 
         fn request_id(&self) -> u64 {
-            self.s.req
+            self.s.session.request_id()
         }
 
         fn input(&mut self, bytes: &[u8]) {
@@ -1965,31 +1860,31 @@ mod tests {
         }
 
         fn poke_lock_due(&mut self) {
-            self.s.lock.as_mut().unwrap().expire_deadline_at(Instant::now());
+            self.s.session.expire_insertion_deadline(Instant::now());
         }
 
         fn poke_resize_due(&mut self) {
-            self.s.resize.expire_settle_at(Instant::now());
+            self.s.session.resize.expire_settle_at(Instant::now());
         }
 
         fn poke_llm_due(&mut self) {
-            self.s.ghost.schedule_llm(Instant::now());
+            self.s.session.ghost.schedule_llm(Instant::now());
         }
 
         fn poke_poll_due(&mut self) {
-            self.s.watch.expire_poll_at(Instant::now());
+            self.s.session.reload.expire_poll_at(Instant::now());
         }
 
         fn poke_hold_due(&mut self) {
-            self.s.echo.expire_hold_at(Instant::now());
+            self.s.session.expire_hold_at(Instant::now());
         }
 
         fn poke_spinner_due(&mut self) {
-            self.s.spinner_at = Some(Instant::now());
+            self.s.session.spinner_at = Some(Instant::now());
         }
 
         fn poke_probe_window(&mut self) {
-            self.s.probe_until = Some(Instant::now() + LATE_PROBE);
+            self.s.session.expect_late_probe_reply(Instant::now());
         }
 
         fn step_pty(&mut self, bytes: &[u8]) -> bool {
@@ -2051,11 +1946,11 @@ mod tests {
         }
 
         fn is_passthrough(&self) -> bool {
-            self.s.passthrough
+            self.s.session.is_passthrough()
         }
 
         fn exit_code(&self) -> Option<i32> {
-            self.s.exit.code()
+            self.s.session.reported_exit_code()
         }
 
         fn has_deadline(&self) -> bool {
@@ -2434,8 +2329,8 @@ mod tests {
         fn exit_state(&self) -> ExitState {
             ExitState {
                 code: self.rig.exit_code(),
-                output_ended: self.rig.s.exit.has_seen_eof(),
-                grace_armed: self.rig.s.exit.deadline().is_some(),
+                output_ended: self.rig.s.session.exit.has_seen_eof(),
+                grace_armed: self.rig.s.session.exit.deadline().is_some(),
             }
         }
 
@@ -2443,6 +2338,7 @@ mod tests {
         fn exit_deadline_is_set_after(&self, delay: Duration) -> bool {
             self.rig
                 .s
+                .session
                 .exit
                 .deadline()
                 .is_some_and(|at| at >= self.stepped_before + delay && at <= self.stepped_after + delay)
