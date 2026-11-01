@@ -8,5 +8,6 @@ pub(crate) mod pwsh_prediction_color;
 pub(crate) mod screen_command;
 pub(crate) mod session_id;
 pub(crate) mod shell_event;
+pub(crate) mod shell_marker;
 pub(crate) mod shell_suggestion_color;
 pub(crate) mod text_emphasis;
