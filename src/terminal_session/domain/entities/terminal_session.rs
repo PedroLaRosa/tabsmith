@@ -26,6 +26,7 @@ use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
+use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
 /// After a startup probe timeout, a late reply arriving within this window is dropped instead of typed into the shell.
@@ -164,9 +165,32 @@ impl TerminalSession {
         self.passthrough
     }
 
+    /// The directory the shell reported (`Dir=`), once it did.
+    pub(crate) fn tracked_cwd(&self) -> Option<&Path> {
+        self.tracker.cwd()
+    }
+
     /// The shell the tracker saw, else the one the wrapper spawned.
     pub(crate) fn shell(&self) -> Shell {
         self.tracker.shell().unwrap_or(self.launched_shell)
+    }
+
+    /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
+    /// their echo (what accepting it must add), else after the buffer on screen (what is drawn).
+    pub(crate) fn ghost_text(&self, typed: bool, screen: &ScreenState) -> Option<String> {
+        if !self.settings.bool(INLINE_ENABLED) || self.tracker.preexec() || screen.alt_screen() {
+            return None;
+        }
+        let e = self.edit_buffer.as_ref()?;
+        if e.buffer().is_empty() || e.cursor() != e.buffer().len() || e.shell_ghost() {
+            return None;
+        }
+        let buffer = if typed {
+            self.basis()?
+        } else {
+            e.buffer().to_string()
+        };
+        self.ghost.rest_after(&buffer)
     }
 
     /// The wrapper itself keeps the overlay away (SPEC §7.5.1): off the command line, a resize or a prompt redraw in

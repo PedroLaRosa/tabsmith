@@ -301,3 +301,76 @@ fn should_drop_a_reply_for_an_older_request() {
 
     assert_eq!((older, latest), (false, true));
 }
+
+#[test]
+fn should_be_drawable_on_a_plain_command_line_and_not_when_a_guard_holds() {
+    let mut session = session_at_prompt("{}");
+    session.refresh(&screen(), line("git ch"), Instant::now());
+    let narrow = ScreenState::plain(9, 24);
+    let in_string = ScreenState::new(ScreenStateParts {
+        columns: 80,
+        lines: 24,
+        in_string: true,
+        ..ScreenStateParts::default()
+    });
+
+    assert_eq!(
+        (
+            session.drawable(&screen()),
+            session.drawable(&narrow),
+            session.drawable(&in_string),
+            session.suppressed(&narrow)
+        ),
+        (true, false, false, false)
+    );
+}
+
+#[test]
+fn should_hold_the_overlay_back_over_a_pwsh_list_view_only_for_a_non_empty_line() {
+    let mut session = session_at_prompt("{}");
+    session.tracker_mut().set_pwsh_list_view(true);
+    session.refresh(&screen(), line("git ch"), Instant::now());
+    let with_text = session.drawable(&screen());
+    session.refresh(&screen(), line(""), Instant::now());
+    let empty = session.drawable(&screen());
+
+    assert_eq!((with_text, empty), (false, true));
+}
+
+// should_show_the_llm_ghost_text_of_the_current_request_behind_the_local_one, at the aggregate.
+#[test]
+fn should_draw_the_llm_ghost_text_of_the_current_request_behind_the_local_one() {
+    let start = Instant::now();
+    let mut session = session_at_prompt("{}");
+    session.refresh(&screen(), line("git sta"), start);
+    session.expect_llm_reply(session.request_id());
+    let request = session.request_id();
+
+    session.accept_llm_reply(request, Some("tus".into()));
+    let from_the_current_request = session.ghost_text(false, &screen());
+    session.accept_llm_reply(request + 1, Some("x".into()));
+    let after_another_request = session.ghost_text(false, &screen());
+    session.accept_llm_reply(request, None);
+    let after_an_empty_reply = session.ghost_text(false, &screen());
+    session.accept_llm_reply(request, Some("tus".into()));
+    session.apply_completion(
+        comp("git sta", 1, vec![]).with_request_id(request).with_ghost(Some("sh".into())),
+        start,
+    );
+    let with_a_local_ghost_text = session.ghost_text(false, &screen());
+
+    assert_eq!(
+        (
+            from_the_current_request,
+            after_another_request,
+            after_an_empty_reply,
+            with_a_local_ghost_text
+        ),
+        (
+            Some("tus".to_string()),
+            Some("tus".to_string()),
+            None,
+            Some("sh".to_string())
+        )
+    );
+}

@@ -23,7 +23,7 @@ use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
 use crate::settings::domain::services::settings_catalog::{
-    AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_ENABLED,
+    AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB,
 };
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
 use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
@@ -465,8 +465,8 @@ impl Session {
     }
 
     fn cwd(&self) -> PathBuf {
-        self.session.tracker
-            .cwd()
+        self.session
+            .tracked_cwd()
             .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default()
@@ -541,24 +541,12 @@ impl Session {
         self.release_held();
     }
 
-    /// Ghost text (SPEC §8.1): survives typing that matches its start. `typed` = after the keys typed ahead of
-    /// their echo (what accepting it must add), else after the buffer on screen (what is drawn).
+    /// Ghost text (SPEC §8.1): `typed` = after the keys typed ahead of their echo, else after the buffer on screen.
     fn ghost_text(&self, typed: bool) -> Option<String> {
-        if !self.session.settings.bool(INLINE_ENABLED) || self.session.tracker.preexec() || self.alt() {
-            return None;
-        }
-        let e = self.session.edit_buffer.as_ref()?;
-        if e.buffer().is_empty() || e.cursor() != e.buffer().len() || e.shell_ghost() {
-            return None;
-        }
-        let buffer = if typed {
-            self.basis()?
-        } else {
-            e.buffer().to_string()
-        };
-        self.session.ghost.rest_after(&buffer)
+        self.session.ghost_text(typed, &self.screen.state())
     }
 
+    /// The buffer once the shell echoed everything already sent (SPEC §7.3 reconciliation).
     fn basis(&self) -> Option<String> {
         self.session.basis()
     }
