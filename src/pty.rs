@@ -15,6 +15,9 @@ use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeRepository;
 use crate::terminal_session::application::frame_input::FrameInput;
+use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
+use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
+use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
 use crate::settings::domain::services::settings_catalog::{
     AUTOCOMPLETE_DISABLE, AUTOCOMPLETE_ONLY_SHOW_ON_TAB, INLINE_DEBOUNCE_MS, INLINE_ENABLED,
@@ -38,13 +41,7 @@ use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
-use crate::types::{
-    Model, Msg,
-};
-use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use crate::types::Msg;
 use anyhow::{anyhow, bail, Context, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use std::io::{IsTerminal, Read, Write};
@@ -342,10 +339,10 @@ struct Session {
     /// Dropped after the child exits on Windows to unblock the ConPTY reader.
     master: Option<Box<dyn MasterPty + Send>>,
     modes: sys::Modes,
-    term: Model,
     tracker: Tracker,
+    /// The model, the filter and the renderer of the session, behind the screen port.
+    screen: Rc<dyn TerminalScreen>,
     menu: Menu,
-    renderer: OverlayRenderer,
     /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
     themes: Rc<dyn ThemeRepository>,
     keymap: Keymap,
@@ -415,22 +412,12 @@ impl Session {
         *modes = Some(m);
         let (cols, rows) = crossterm::terminal::size().context("terminal size")?;
         let (cols, rows) = (cols.max(1), rows.max(1));
-        let mut term = Term::new(
-            Config {
-                scrolling_history: 2000,
-                ..Config::default()
-            },
-            &TermSize::new(cols as usize, rows as usize),
-            VoidListener,
-        );
         let sid = session_id();
         let shell = Shell::from_name(program).unwrap_or(if cfg!(windows) {
             Shell::Pwsh
         } else {
             Shell::Bash
         });
-        let mut tracker = Tracker::new(sid.clone(), Shell::from_name(program), rows as usize);
-        tracker.filter.lf_to_ind = lf_to_ind;
 
         // Sync the model with the real cursor; always ask for the background, the theme may become `system` later.
         write_stdout(PROBE);
@@ -446,9 +433,8 @@ impl Session {
         };
         // ponytail: a reply cut by the timeout is forwarded as typeahead; only a whole late reply is dropped.
         let probe_until = cpr.is_none().then(|| Instant::now() + LATE_PROBE);
-        match cpr {
-            Some((r, c)) => tracker.advance(&mut term, format!("\x1b[{r};{c}H").as_bytes()),
-            None => write_stdout(b"\x1b[H\x1b[2J"),
+        if cpr.is_none() {
+            write_stdout(b"\x1b[H\x1b[2J");
         }
 
         // Everything that can fail goes before the child exists, so the fallback never orphans a shell.
@@ -460,6 +446,13 @@ impl Session {
             Rc::new(FileThemeRepository::new(data_directory_from_env()));
         let renderer = OverlayRenderer::new(resolve_theme(&settings, terminal_bg, &*themes), truecolor)
             .with_images(kitty_graphics::detect());
+        let tracker = Tracker::new(sid.clone(), Shell::from_name(program));
+        let screen = AlacrittyTerminalScreen::new(cols as usize, rows as usize, renderer, lf_to_ind);
+        // Sync the model with the real cursor, through the same parser as the shell's output.
+        if let Some((r, c)) = cpr {
+            screen.advance_model(format!("\x1b[{r};{c}H").as_bytes());
+        }
+        let screen: Rc<dyn TerminalScreen> = Rc::new(screen);
         let (menu, keymap) = (Menu::new(), Keymap::from_settings(&settings));
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;
@@ -535,10 +528,9 @@ impl Session {
             credits,
             master: Some(pair.master),
             modes: m,
-            term,
             tracker,
+            screen,
             menu,
-            renderer,
             themes,
             keymap,
             decoder: StdinKeyDecoder::default(),
@@ -708,7 +700,7 @@ impl Session {
         }
         logger::error("pty: internal error; passing the session through until the shell exits");
         self.passthrough = true;
-        let clear = self.renderer.take_clear();
+        let clear = self.screen.take_clear();
         self.emit(&clear);
         false
     }
@@ -742,7 +734,7 @@ impl Session {
     }
 
     fn alt(&self) -> bool {
-        self.term.mode().contains(TermMode::ALT_SCREEN)
+        self.screen.state().alt_screen()
     }
 
     fn cwd(&self) -> PathBuf {
@@ -765,7 +757,7 @@ impl Session {
         }
         let was_alt = self.alt();
         let mut body = Vec::new();
-        self.tracker.feed(&mut self.term, batch, &mut body);
+        self.tracker.feed(&*self.screen, batch, &mut body);
         for ev in std::mem::take(&mut self.tracker.events) {
             self.on_event(ev);
         }
@@ -774,7 +766,7 @@ impl Session {
         }
         self.refresh();
         // Taken late: a panic above leaves the clear cached for `guard`.
-        let mut out = self.renderer.take_clear();
+        let mut out = self.screen.take_clear();
         out.extend(body);
         out.extend(self.take_repaint());
         out.extend(self.frame());
@@ -818,7 +810,7 @@ impl Session {
         let new = if self.alt() {
             None
         } else {
-            self.tracker.extract(&self.term).filter(|e| e.at_prompt())
+            self.tracker.extract(&*self.screen).filter(|e| e.at_prompt())
         };
         if !self.unechoed.is_empty() {
             let base = self
@@ -976,13 +968,17 @@ impl Session {
     }
 
     fn suppressed(&self) -> bool {
+        self.suppressed_in(&self.screen.state())
+    }
+
+    fn suppressed_in(&self, screen: &ScreenState) -> bool {
         !self.tracker.marker.at_prompt()
             // The cursor is off the command line (an inline TUI's rows: fzf, fish's pager): a menu for the line
             // stays hidden and keeps its hands off the keys.
             || self.cur.is_none()
             || self.resize_at.is_some()
             || self.repaint
-            || self.tracker.filter.in_string()
+            || screen.in_string()
             || self.redraw_until.is_some()
             // PSReadLine's ListView predictions own the rows below a non-empty line.
             || (self.tracker.marker.pwsh_list_view() && self.cur.as_ref().is_some_and(|e| !e.buffer().is_empty()))
@@ -991,29 +987,27 @@ impl Session {
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
     /// ponytail: mirrors overlay_renderer.rs `compose`'s guards; its no-room-for-the-menu case (3-row terminal) is not covered.
     fn drawable(&self) -> bool {
-        let g = self.term.grid();
-        !self.suppressed()
-            && !self.tracker.filter.scroll_region()
-            && !self
-                .term
-                .mode()
-                .intersects(TermMode::ALT_SCREEN | TermMode::ORIGIN | TermMode::INSERT)
-            && !g.cursor.input_needs_wrap
-            && g.columns() >= 10
-            && g.screen_lines() >= 3
+        let screen = self.screen.state();
+        !self.suppressed_in(&screen)
+            && !screen.scroll_region()
+            && !(screen.alt_screen() || screen.origin_mode() || screen.insert_mode())
+            && !screen.pending_wrap()
+            && screen.columns() >= 10
+            && screen.lines() >= 3
     }
 
     fn frame(&mut self) -> Vec<u8> {
         let ghost = self.ghost_text(false);
+        let screen = self.screen.state();
         let input = FrameInput {
             settings: &self.settings,
             ghost: ghost.as_deref(),
             spinner: self.spinner,
-            suppress: self.suppressed(),
-            scroll_region: self.tracker.filter.scroll_region(),
+            suppress: self.suppressed_in(&screen),
+            scroll_region: screen.scroll_region(),
             now: Instant::now(),
         };
-        self.renderer.frame(&self.term, &self.menu, &input)
+        self.screen.draw_overlay(&self.menu, &input)
     }
 
     /// State-only change: the renderer clears a changed frame in the same write and skips an identical one
@@ -1032,7 +1026,7 @@ impl Session {
                 let (cpr, bg, rest) = parse_probe(chunk);
                 if bg.is_some() {
                     self.terminal_bg = bg;
-                    self.renderer
+                    self.screen
                         .set_theme(resolve_theme(&self.settings, bg, &*self.themes));
                 }
                 if cpr.is_some() {
@@ -1198,7 +1192,7 @@ impl Session {
     fn on_resize(&mut self, cols: u16, rows: u16) {
         if cols == 0
             || rows == 0
-            || (cols as usize, rows as usize) == (self.term.columns(), self.term.screen_lines())
+            || (cols as usize, rows as usize) == self.screen.state().size()
         {
             return;
         }
@@ -1210,10 +1204,7 @@ impl Session {
                 pixel_height: 0,
             });
         }
-        self.term
-            .resize(TermSize::new(cols as usize, rows as usize));
-        self.tracker.filter.resize(rows as usize);
-        self.renderer.drop_clear(); // the terminal reflowed the old frame unpredictably
+        self.screen.resize(cols as usize, rows as usize);
         self.resize_at = Some(Instant::now() + RESIZE_DEBOUNCE);
     }
 
@@ -1223,7 +1214,7 @@ impl Session {
             return Vec::new();
         }
         self.repaint = false;
-        self.renderer.full_repaint(&self.term)
+        self.screen.full_repaint()
     }
 
     fn on_timers(&mut self) {
@@ -1297,7 +1288,7 @@ impl Session {
         self.settings_mtime = m;
         self.settings = load_or_defaults(&*self.settings_repository);
         self.keymap = Keymap::from_settings(&self.settings);
-        self.renderer
+        self.screen
             .set_theme(resolve_theme(
                 &self.settings,
                 self.terminal_bg,
@@ -1309,7 +1300,7 @@ impl Session {
 
     /// SPEC §4.4 step 10.
     fn cleanup(&mut self) {
-        let mut out = self.renderer.take_clear();
+        let mut out = self.screen.take_clear();
         out.extend_from_slice(b"\x1b[0m\x1b[?25h");
         self.emit(&out);
         self.engine.shut_down();
@@ -1772,14 +1763,12 @@ mod tests {
 
     use crate::completion::domain::test_fixtures::{comp, item, settings};
     use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
-    use crate::dropdown::domain::value_objects::theme::Theme;
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
     use crate::shared::domain::value_objects::data_directory::DataDirectory;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
     use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
     use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
-    use alacritty_terminal::event::VoidListener;
 
     const SID: &str = "0123456789abcdef0123456789abcdef";
 
@@ -1795,7 +1784,7 @@ mod tests {
     fn session(json: &str) -> (Session, Receiver<Vec<u8>>) {
         let settings = settings(json);
         let (writer, wrx) = mpsc::channel();
-        let tracker = Tracker::with_defer(SID.into(), Some(Shell::Bash), 24, false);
+        let tracker = Tracker::with_defer(SID.into(), Some(Shell::Bash), false);
         let s = Session {
             rx: mpsc::channel().1,
             engine: Rc::new(RecordingCompletionEngine::new(mpsc::channel().0)),
@@ -1803,10 +1792,9 @@ mod tests {
             credits: mpsc::sync_channel(PTY_CREDITS).0,
             master: None,
             modes: sys::Modes::default(),
-            term: Term::new(Config::default(), &TermSize::new(80, 24), VoidListener),
             tracker,
+            screen: Rc::new(AlacrittyTerminalScreen::for_tests(80, 24)),
             menu: Menu::new(),
-            renderer: OverlayRenderer::new(Theme::dark(), false),
             themes: Rc::new(InMemoryThemeRepository::default()),
             keymap: Keymap::from_settings(&settings),
             decoder: StdinKeyDecoder::default(),
@@ -3221,7 +3209,7 @@ mod tests {
         }
 
         fn model_size(&self) -> (usize, usize) {
-            (self.rig.s.term.columns(), self.rig.s.term.screen_lines())
+            self.rig.s.screen.state().size()
         }
 
         /// A request is waiting for the debounce, which is due.

@@ -2,6 +2,7 @@
 //! extraction from the model (SPEC §5.1, §5.6), and the filter for bytes sent to the real terminal (SPEC §7.5.4).
 //! OWNER: wrapper agent.
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
@@ -11,97 +12,73 @@ use crate::terminal_session::domain::value_objects::output_piece::OutputPiece;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::terminal_session::domain::value_objects::shell_marker::ShellMarker;
-use crate::terminal_session::infrastructure::adapters::cell_tagger;
-use crate::terminal_session::infrastructure::adapters::edit_buffer_extractor;
-use crate::terminal_session::infrastructure::adapters::output_filter::OutputFilter;
-use crate::types::{now_secs, Model};
-use alacritty_terminal::vte::ansi::Processor;
+use crate::types::now_secs;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Tracker (SPEC §5.1, §5.1.2, §5.1.4)
 
-/// Column the model's cursor is on (raw: a pending wrap counts as the last column).
-fn cursor_column(model: &Model) -> usize {
-    model.grid().cursor.point.column.0
-}
-
-/// Shell-integration state of one wrapper session; owns the PTY output path (splitter → model → filter). The marker
-/// state lives in the domain's `MarkerTracker`; this composite applies its effects to the model (interim, until the
-/// screen port replaces it).
+/// Shell-integration state of one wrapper session; drives the PTY output path (splitter → screen). The marker
+/// state lives in the domain's `MarkerTracker`; this composite applies its effects to the screen (interim, until
+/// the feeder replaces it).
 pub struct Tracker {
     pub marker: MarkerTracker,
     /// Drained by the wrapper after every batch.
     pub events: Vec<ShellEvent>,
-    pub filter: OutputFilter,
     splitter: MarkerSplitter,
-    proc: Processor,
 }
 
 impl Tracker {
     /// `cfg!(windows)` decides the ConPTY deferral of EndPrompt/NewCmd (SPEC §5.1.4).
-    pub fn new(sid: String, shell: Option<Shell>, rows: usize) -> Tracker {
-        Tracker::with_defer(sid, shell, rows, cfg!(windows))
+    pub fn new(sid: String, shell: Option<Shell>) -> Tracker {
+        Tracker::with_defer(sid, shell, cfg!(windows))
     }
 
-    pub fn with_defer(sid: String, shell: Option<Shell>, rows: usize, defer: bool) -> Tracker {
+    pub fn with_defer(sid: String, shell: Option<Shell>, defer: bool) -> Tracker {
         let session_id = SessionId::new(sid).expect("generated ids are valid");
         Tracker {
             marker: MarkerTracker::new(session_id, shell, defer),
             events: Vec::new(),
-            filter: OutputFilter::new(rows),
             splitter: MarkerSplitter::default(),
-            proc: Processor::new(),
         }
     }
 
     /// One PTY batch (SPEC §4.5): markers handled at their byte offset, window names appended (filtered) to `out`
-    /// only, everything else fed to the model and appended (filtered) to `out` for the real terminal.
-    pub fn feed(&mut self, model: &mut Model, batch: &[u8], out: &mut Vec<u8>) {
+    /// only, everything else fed to the screen's model and appended (filtered) to `out` for the real terminal.
+    pub fn feed(&mut self, screen: &dyn TerminalScreen, batch: &[u8], out: &mut Vec<u8>) {
         for piece in self.splitter.feed(batch) {
             match piece {
-                OutputPiece::Bytes(b) => {
-                    self.advance(model, &b);
-                    self.filter.feed(&b, out);
-                }
-                OutputPiece::WindowName(b) => self.filter.feed(&b, out),
-                OutputPiece::Marker(p) => self.handle_marker(&p, model),
+                OutputPiece::Bytes(b) => screen.pass_through(&b, out),
+                OutputPiece::WindowName(b) => screen.pass_window_name_through(&b, out),
+                OutputPiece::Marker(p) => self.handle_marker(&p, screen),
             }
         }
         // Windows: apply deferred markers once a batch brings no new ones (FIFO).
-        let effects = self.marker.end_batch(cursor_column(model), now_secs());
-        self.apply(model, effects);
+        let effects = self.marker.end_batch(screen.cursor_column(), now_secs());
+        self.apply(screen, effects);
     }
 
-    fn handle_marker(&mut self, payload: &str, model: &mut Model) {
+    fn handle_marker(&mut self, payload: &str, screen: &dyn TerminalScreen) {
         let marker = ShellMarker::parse(payload);
         match self
             .marker
-            .on_marker(marker, cursor_column(model), now_secs())
+            .on_marker(marker, screen.cursor_column(), now_secs())
         {
-            MarkerReaction::Handled(effects) => self.apply(model, effects),
+            MarkerReaction::Handled(effects) => self.apply(screen, effects),
             MarkerReaction::EditBufferNeeded(effects) => {
-                self.apply(model, effects);
-                let scraped = self.extract(model);
+                self.apply(screen, effects);
+                let scraped = self.extract(screen);
                 let effects = self.marker.complete_pre_exec(scraped.as_ref(), now_secs());
-                self.apply(model, effects);
+                self.apply(screen, effects);
             }
         }
     }
 
     /// The screen commands reach the model right away and in order; the events wait for the wrapper.
-    fn apply(&mut self, model: &mut Model, effects: MarkerEffects) {
+    fn apply(&mut self, screen: &dyn TerminalScreen, effects: MarkerEffects) {
         for &command in effects.screen_commands() {
-            cell_tagger::apply(model, command);
+            screen.apply(command);
         }
         self.events.extend(effects.into_events());
-    }
-
-    /// Feed bytes to the model only. Synchronized updates are applied at once: the model mirrors terminal state.
-    pub fn advance(&mut self, model: &mut Model, bytes: &[u8]) {
-        self.proc.advance(model, bytes);
-        if self.proc.sync_timeout().sync_timeout().is_some() {
-            self.proc.stop_sync(model);
-        }
     }
 
     /// At a prompt with a known command cycle (an edit buffer exists).
@@ -110,10 +87,10 @@ impl Tracker {
     }
 
     /// Edit buffer + cursor from the tagged cells around the cursor (SPEC §5.6). None while no cycle is open.
-    pub fn extract(&self, model: &Model) -> Option<EditBuffer> {
+    pub fn extract(&self, screen: &dyn TerminalScreen) -> Option<EditBuffer> {
         self.marker
             .edit_buffer_context()
-            .and_then(|context| edit_buffer_extractor::extract(model, &context))
+            .and_then(|context| screen.edit_buffer(&context))
     }
 }
 
@@ -122,11 +99,11 @@ mod tests {
     use super::*;
     use crate::terminal_session::domain::value_objects::deferred_marker::DeferredMarker;
     use std::path::Path;
-    use alacritty_terminal::event::VoidListener;
-    use alacritty_terminal::grid::Dimensions;
-    use alacritty_terminal::term::test::TermSize;
-    use alacritty_terminal::term::{Config, Term};
+    use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
     use crate::shared::infrastructure::testing::fixture_log::assert_matches_fixture;
+
+    /// The screen the rig drives, named after the model it wraps so the scenarios keep their shape.
+    type Model = AlacrittyTerminalScreen;
 
     const SID: &str = "0123456789abcdef0123456789abcdef";
     const SP: &str = "\x1b]697;StartPrompt\x07";
@@ -142,8 +119,8 @@ mod tests {
 
     fn setup(cols: usize, rows: usize, shell: Shell) -> (Tracker, Model) {
         (
-            Tracker::with_defer(SID.into(), Some(shell), rows, false),
-            Term::new(Config::default(), &TermSize::new(cols, rows), VoidListener),
+            Tracker::with_defer(SID.into(), Some(shell), false),
+            Model::for_tests(cols, rows),
         )
     }
 
@@ -191,7 +168,7 @@ mod tests {
         let out = feed(&mut t, &mut m, shell_output);
 
         assert_eq!(out, shell_output.as_bytes());
-        assert_eq!(m.grid().cursor.point.column.0, 4);
+        assert_eq!(m.cursor_column(), 4);
     }
 
     #[test]
@@ -348,7 +325,7 @@ mod tests {
         // Reflow on resize keeps the buffer.
         let (mut t, mut m) = setup(20, 5, Shell::Bash);
         feed(&mut t, &mut m, &format!("{}{cmd}", prompt("$ ")));
-        m.resize(TermSize::new(15, 5));
+        m.resize(15, 5);
         assert_eq!(buf(&t, &m), (cmd.into(), cmd.len()));
     }
 
@@ -941,7 +918,7 @@ mod tests {
         let cmd = "echo hello world again";
         feed(&mut t, &mut m, &format!("{}{cmd}", prompt("$ ")));
         // The prompt row has scrolled into history; tags moved with it.
-        assert!(m.grid().history_size() > 0);
+        assert!(m.history_size() > 0);
         assert_eq!(buf(&t, &m), (cmd.into(), cmd.len()));
         // Command output below a finished command does not leak into the next buffer.
         feed(
@@ -954,8 +931,8 @@ mod tests {
 
     #[test]
     fn windows_deferral_fifo() {
-        let mut t = Tracker::with_defer(SID.into(), Some(Shell::Pwsh), 5, true);
-        let mut m = Term::new(Config::default(), &TermSize::new(40, 5), VoidListener);
+        let mut t = Tracker::with_defer(SID.into(), Some(Shell::Pwsh), true);
+        let mut m = Model::for_tests(40, 5);
         feed(&mut t, &mut m, &format!("{SP}PS> {EP}{}", nc()));
         assert_eq!(t.marker.cycle(), None);
         assert_eq!(
@@ -985,15 +962,16 @@ mod tests {
     }
 
     fn tracker_rig(cols: usize, rows: usize, shell: Shell, defer: bool) -> TrackerRig {
-        let t = Tracker::with_defer(SID.into(), Some(shell), rows, defer);
-        let m = Term::new(Config::default(), &TermSize::new(cols, rows), VoidListener);
+        let t = Tracker::with_defer(SID.into(), Some(shell), defer);
+        let m = Model::for_tests(cols, rows);
         TrackerRig { t, m }
     }
 
     /// The hyperlink runs of the model, as ` row<r>:<from>..<to>=<uri>`.
-    fn tags(m: &Model) -> String {
+    fn tags(screen: &Model) -> String {
         use alacritty_terminal::grid::Dimensions;
         use alacritty_terminal::index::{Column, Line};
+        let m = screen.model();
         let mut out = String::new();
         for r in 0..m.screen_lines() {
             let mut run: Option<(usize, usize, String)> = None;
