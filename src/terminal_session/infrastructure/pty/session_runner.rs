@@ -4,8 +4,6 @@ use crate::shared::infrastructure::logger;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
-use crate::terminal_session::application::launch_environment::LaunchEnvironment;
-use crate::terminal_session::application::launch_request::LaunchRequest;
 use crate::terminal_session::application::ports::terminal_modes::TerminalModes;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::ports::terminal_writer::TerminalWriter;
@@ -27,11 +25,10 @@ use crate::terminal_session::domain::value_objects::terminal_background::Termina
 use crate::terminal_session::infrastructure::adapters::kitty_graphics;
 use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
 use crate::terminal_session::infrastructure::terminal_session_module::TerminalSessionModule;
-use crate::terminal_session::infrastructure::pty::fallback_shell::run_fallback_shell;
 use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
 use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, probe_terminal, PROBE_TIMEOUT};
 use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use portable_pty::{CommandBuilder, PtySize};
 use std::io::{IsTerminal, Write};
 use std::panic::AssertUnwindSafe;
@@ -44,39 +41,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::terminal_session::infrastructure::pty::platform_unix as sys;
 #[cfg(windows)]
 use crate::terminal_session::infrastructure::pty::platform_windows as sys;
-
-/// Run the wrapper; returns the exit code to exit with. Never leaves the user without a shell (fallback, SPEC §4.4).
-pub(crate) fn run(shell: Option<String>, cmd: Vec<String>, module: &TerminalSessionModule) -> i32 {
-    // Panics are logged, never printed over the user's screen; the session then falls back to a plain shell.
-    std::panic::set_hook(Box::new(|info| logger::error(&format!("panic: {info}"))));
-    // The environment facts are read before the session starts: the argv also feeds the fallback.
-    let command = module.prepare_session_launch.execute(LaunchRequest {
-        shell,
-        command: cmd,
-        environment: LaunchEnvironment {
-            tabsmith_shell: env_nonempty("TABSMITH_SHELL"),
-            system_shell: env_nonempty("SHELL"),
-            login_shell: std::env::var("TABSMITH_IS_LOGIN_SHELL").as_deref() == Ok("1"),
-        },
-    });
-    let mut modes = None;
-    let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        SessionRunner::start(&command, &mut modes, module).map(SessionRunner::run)
-    }));
-    let err = match res {
-        Ok(Ok(code)) => return code,
-        Ok(Err(e)) => e,
-        Err(_) => anyhow!("internal error (see pty.log)"),
-    };
-    if let Some(m) = modes {
-        m.restore();
-    }
-    run_fallback_shell(&err, command.argv(), &*module.generator_processes())
-}
-
-fn env_nonempty(k: &str) -> Option<String> {
-    std::env::var(k).ok().filter(|v| !v.is_empty())
-}
 
 fn session_id() -> String {
     let nanos = SystemTime::now()
@@ -144,7 +108,7 @@ impl SessionRunner {
     }
 
     /// SPEC §4.4 steps 1–9. `modes` receives the saved terminal modes as soon as they change.
-    fn start(command: &WrappedShellCommand, modes: &mut Option<Rc<dyn TerminalModes>>, module: &TerminalSessionModule) -> Result<SessionRunner> {
+    pub(crate) fn start(command: &WrappedShellCommand, modes: &mut Option<Rc<dyn TerminalModes>>, module: &TerminalSessionModule) -> Result<SessionRunner> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             bail!("stdin/stdout is not a terminal");
         }
@@ -298,7 +262,7 @@ impl SessionRunner {
     }
 
     /// Main loop (SPEC §4.3); returns the child's exit code.
-    fn run(mut self) -> i32 {
+    pub(crate) fn run(mut self) -> i32 {
         let mut stash = None;
         loop {
             let msg = match stash.take() {
