@@ -1,0 +1,16 @@
+prompt
+  stdout=$ echo hi
+  pty=
+  engine=["Complete(id=1 buffer=\"echo hi\" cursor=7 shell=Bash history_mode=false)"]
+Enter
+  stdout=
+  pty=\r
+  engine=[]
+PreExec and output
+  stdout=\r\nhi\r\n
+  pty=
+  engine=[]
+next prompt
+  stdout=$ 
+  pty=
+  engine=["CommandFinished(command=\"echo hi\" exit_code=Some(0) pid=None)"]
