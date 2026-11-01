@@ -3,6 +3,7 @@ use crate::terminal_session::application::apply_llm_ghost_text_use_case::ApplyLl
 use crate::terminal_session::application::completion_requester::CompletionRequester;
 use crate::terminal_session::application::handle_keystrokes_use_case::HandleKeystrokesUseCase;
 use crate::terminal_session::application::handle_shell_exit_use_case::HandleShellExitUseCase;
+use crate::terminal_session::application::handle_timer_tick_use_case::HandleTimerTickUseCase;
 use crate::terminal_session::application::keystroke_handler::KeystrokeHandler;
 use crate::terminal_session::application::overlay_painter::OverlayPainter;
 use crate::terminal_session::application::process_shell_output_use_case::{
@@ -27,6 +28,7 @@ pub(crate) struct SessionUseCases {
     pub(crate) apply_llm_ghost_text: ApplyLlmGhostTextUseCase,
     pub(crate) resize_terminal: ResizeTerminalUseCase,
     pub(crate) handle_shell_exit: HandleShellExitUseCase,
+    pub(crate) handle_timer_tick: HandleTimerTickUseCase,
 }
 
 impl SessionUseCases {
@@ -60,6 +62,15 @@ impl SessionUseCases {
         let apply_llm_ghost_text = ApplyLlmGhostTextUseCase::new(painter.clone());
         let resize_terminal = ResizeTerminalUseCase::new(ports.screen.clone(), ports.shell, ports.clock.clone());
         let handle_shell_exit = HandleShellExitUseCase::new(ports.clock.clone());
+        let handle_timer_tick = HandleTimerTickUseCase::new(
+            ports.engine.clone(),
+            ports.writer.clone(),
+            ports.clock.clone(),
+            requester.clone(),
+            painter.clone(),
+            poller.clone(),
+            keystroke_handler.clone(),
+        );
         let process_shell_output = ProcessShellOutputUseCase::new(ProcessShellOutputParts {
             engine: ports.engine,
             feeder: ShellOutputFeeder::new(ports.screen.clone(), ports.clock.clone()),
@@ -82,25 +93,30 @@ impl SessionUseCases {
             apply_llm_ghost_text,
             resize_terminal,
             handle_shell_exit,
+            handle_timer_tick,
         }
     }
 
-    // interim: dies with 9.5g (the legacy `Session::frame`, `redraw` and `take_repaint` still draw through it)
+    // interim: dies with 9.6d (the tests of the services and the Rig reach the service through it)
+    #[cfg(test)]
     pub(crate) fn painter(&self) -> &OverlayPainter {
         &self.painter
     }
 
-    // interim: dies with 9.5g (the legacy `Session::refresh` and `cwd` still ask through it)
+    // interim: dies with 9.6d (the tests of the services reach the service through it)
+    #[cfg(test)]
     pub(crate) fn requester(&self) -> &CompletionRequester {
         &self.requester
     }
 
-    // interim: dies with 9.5g (the legacy `Session::poll_files` still polls through it)
+    // interim: dies with 9.6d (the tests of the services reach the service through it)
+    #[cfg(test)]
     pub(crate) fn poller(&self) -> &SessionFilePoller {
         &self.poller
     }
 
-    // interim: dies with 9.5g (the legacy `Session::insert` and `release_held` still reach the handler through it)
+    // interim: dies with 9.6d (the tests of the services reach the service through it)
+    #[cfg(test)]
     pub(crate) fn keystroke_handler(&self) -> &KeystrokeHandler {
         &self.keystroke_handler
     }

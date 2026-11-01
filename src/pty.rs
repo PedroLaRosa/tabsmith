@@ -40,7 +40,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use portable_pty::{CommandBuilder, PtySize};
 use std::io::{IsTerminal, Write};
 use std::panic::AssertUnwindSafe;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
@@ -416,47 +415,19 @@ impl Session {
         self.session.next_deadline()
     }
 
-    fn cwd(&self) -> PathBuf {
-        self.use_cases.requester().working_directory_of(&self.session)
-    }
-
-    fn shell(&self) -> Shell {
-        self.session.shell()
-    }
-
     /// PTY batch (SPEC §4.5): clear, bytes (markers stripped), frame — one stdout write.
     fn on_output(&mut self, batch: &[u8]) {
         self.use_cases.process_shell_output.execute(&mut self.session, batch);
-    }
-
-    /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
-    fn refresh(&mut self) {
-        self.use_cases.requester().refresh(&mut self.session);
     }
 
     fn on_completion(&mut self, c: CompletionResult) {
         self.use_cases.apply_completion_result.execute(&mut self.session, c);
     }
 
-    /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
-    fn release_held(&mut self) {
-        self.use_cases.keystroke_handler().release_held(&mut self.session);
-    }
-
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
     #[cfg(test)]
     fn drawable(&self) -> bool {
         self.session.drawable(&self.screen.state())
-    }
-
-    fn frame(&mut self) -> Vec<u8> {
-        self.use_cases.painter().frame(&self.session)
-    }
-
-    /// State-only change: the renderer clears a changed frame in the same write and skips an identical one
-    /// (SPEC §7.5.3).
-    fn redraw(&mut self) {
-        self.use_cases.painter().redraw(&self.session);
     }
 
     /// Stdin chunk (SPEC §7.2.4): intercept bound keys while the menu is shown, accept ghost text, else forward.
@@ -490,44 +461,8 @@ impl Session {
         self.use_cases.resize_terminal.execute(&mut self.session, cols, rows);
     }
 
-    /// Full repaint once the resize settled (postponed while on the alternate screen).
-    fn take_repaint(&mut self) -> Vec<u8> {
-        self.use_cases.painter().take_repaint(&mut self.session)
-    }
-
     fn on_timers(&mut self) {
-        let now = Instant::now();
-        let mut redraw = false;
-        self.session.settle_resize_if_due(now);
-        if self.session.take_due_redraw_grace(now) {
-            self.refresh(); // the line really is empty
-            redraw = true;
-        }
-        self.release_held();
-        if self.session.insertion_lock_due(now) {
-            self.refresh(); // releases the lock and catches up with the buffer
-            redraw = true;
-        }
-        if let Some((request, buffer)) = self.session.take_due_llm_request(now) {
-            self.engine.request_llm_ghost_text(request, buffer, self.cwd(), self.shell());
-        }
-        redraw |= self.session.tick_spinner(now, Instant::now());
-        if self.session.poll_due(now) {
-            redraw |= self.poll_files();
-        }
-        let repaint = self.take_repaint();
-        if !repaint.is_empty() {
-            let mut out = repaint;
-            out.extend(self.frame());
-            self.emit(&out);
-        } else if redraw {
-            self.redraw();
-        }
-    }
-
-    /// Settings (live reload) and the session env file from `_ pre-cmd` (D17). True when settings changed.
-    fn poll_files(&mut self) -> bool {
-        self.use_cases.poller().poll(&mut self.session)
+        self.use_cases.handle_timer_tick.execute(&mut self.session);
     }
 
     /// SPEC §4.4 step 10.
@@ -1004,7 +939,7 @@ mod tests {
         }
 
         fn redraw(&mut self) {
-            self.s.redraw();
+            self.s.use_cases.painter().redraw(&self.s.session);
         }
 
         fn resize(&mut self, columns: u16, rows: u16) {
