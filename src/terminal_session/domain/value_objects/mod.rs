@@ -3,6 +3,7 @@ pub(crate) mod deferred_marker;
 pub(crate) mod edit_buffer;
 pub(crate) mod edit_buffer_context;
 pub(crate) mod key_event;
+pub(crate) mod lock_settlement;
 pub(crate) mod marker_effects;
 pub(crate) mod marker_reaction;
 pub(crate) mod output_piece;

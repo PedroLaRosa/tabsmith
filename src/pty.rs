@@ -18,6 +18,7 @@ use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeR
 use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
+use crate::terminal_session::domain::entities::insertion_lock::{InsertionLock, INSERT_LOCK};
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::services::insertion_reconciler::{expected_buffer, insertion_bytes, unechoed_after};
@@ -26,6 +27,7 @@ use crate::terminal_session::domain::services::render_guard::allows_drawing;
 use crate::terminal_session::domain::services::session_deadlines::{
     next_deadline, EXIT_GRACE, FILE_POLL, REDRAW_GRACE, RESIZE_DEBOUNCE, SPINNER_TICK,
 };
+use crate::terminal_session::domain::value_objects::lock_settlement::LockSettlement;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
@@ -71,9 +73,6 @@ use crate::terminal_session::infrastructure::pty::platform_unix as sys;
 #[cfg(windows)]
 use crate::terminal_session::infrastructure::pty::platform_windows as sys;
 
-const INSERT_LOCK: Duration = Duration::from_millis(100);
-/// A shell that has echoed nothing of an insertion keeps it in the basis this long at most.
-const LOCK_CAP: Duration = Duration::from_secs(1);
 /// After a probe timeout, a late reply arriving within this window is dropped instead of typed into the shell.
 const LATE_PROBE: Duration = Duration::from_secs(3);
 
@@ -197,9 +196,8 @@ struct Session {
     changed_at: Instant,
     /// Edit buffer at the last batch.
     cur: Option<EditBuffer>,
-    /// Insertion lock (SPEC §7.3): (deadline, cap, expected buffer, buffer before it). Re-armed up to the cap while
-    /// the shell has echoed nothing of the insertion (a slow shell).
-    lock: Option<(Instant, Instant, String, String)>,
+    /// Insertion lock (SPEC §7.3), re-armed up to its cap while the shell has echoed nothing of the insertion.
+    lock: Option<InsertionLock>,
     /// Printable keys forwarded but not yet echoed (reconciliation basis, SPEC §7.3).
     unechoed: String,
     /// `req` when a key the echo prediction cannot model was forwarded; cleared by a reply for a later request.
@@ -552,7 +550,7 @@ impl Session {
     }
 
     fn next_deadline(&self) -> Option<Instant> {
-        let lock = self.lock.as_ref().map(|l| l.0);
+        let lock = self.lock.as_ref().map(|l| l.deadline());
         next_deadline(
             self.passthrough,
             self.exit_at,
@@ -655,25 +653,18 @@ impl Session {
             let base = self
                 .lock
                 .as_ref()
-                .map(|l| l.2.as_str())
+                .map(|l| l.expected())
                 .or(self.cur.as_ref().map(|e| e.buffer()));
             let n = new.as_ref().map(|e| e.buffer());
             self.unechoed = unechoed_after(&self.unechoed, base, n, self.lock.is_some());
         }
         self.cur = new;
-        if let Some((until, cap, expected, before)) = &mut self.lock {
-            let now = Instant::now();
-            let buf = self.cur.as_ref().map(|e| e.buffer());
-            let applied = buf == Some(expected.as_str());
-            if !applied && now < *until {
-                return;
+        if let Some(lock) = &mut self.lock {
+            let shown = self.cur.as_ref().map(|e| e.buffer());
+            match lock.settle(shown, Instant::now()) {
+                LockSettlement::StillHeld => return,
+                LockSettlement::Released => self.lock = None,
             }
-            // Nothing of it echoed yet (a slow shell): it stays in the basis, or it would be written twice.
-            if !applied && now < *cap && buf == Some(before.as_str()) {
-                *until = now + INSERT_LOCK;
-                return;
-            }
-            self.lock = None;
         }
         let Some(e) = &self.cur else { return };
         match self.redraw_until {
@@ -771,7 +762,7 @@ impl Session {
         let b = self
             .lock
             .as_ref()
-            .map(|l| l.2.as_str())
+            .map(|l| l.expected())
             .or(self.cur.as_ref().map(|e| e.buffer()))?;
         Some(format!("{b}{}", self.unechoed))
     }
@@ -1012,7 +1003,7 @@ impl Session {
             .as_ref()
             .map_or_else(|| ib.clone(), |e| e.buffer().to_string());
         let now = Instant::now();
-        self.lock = Some((now + INSERT_LOCK, now + LOCK_CAP, expected, before));
+        self.lock = Some(InsertionLock::new(now, expected, before));
         if let Some((cmd, name)) = record {
             self.engine.record_insertion(cmd, name);
         }
@@ -1061,7 +1052,7 @@ impl Session {
             redraw = true;
         }
         self.release_held();
-        if self.lock.as_ref().is_some_and(|l| l.0 <= now) {
+        if self.lock.as_ref().is_some_and(|l| l.is_due(now)) {
             self.refresh(); // releases the lock and catches up with the buffer
             redraw = true;
         }
@@ -1611,7 +1602,7 @@ mod tests {
             .collect();
         reply(&mut s, items, Some("kout feature-login"));
         s.on_input(b"\t");
-        s.lock.as_mut().unwrap().0 = Instant::now();
+        s.lock.as_mut().unwrap().expire_deadline_at(Instant::now());
         s.on_timers();
         assert!(s.lock.is_some(), "re-armed: nothing echoed");
         s.on_input(b"\x1b[C");
@@ -1621,7 +1612,7 @@ mod tests {
         );
         // Never past the cap.
         let l = s.lock.as_mut().unwrap();
-        (l.0, l.1) = (Instant::now(), Instant::now());
+        l.expire_at(Instant::now(), Instant::now());
         s.on_timers();
         assert!(s.lock.is_none());
     }
@@ -2061,7 +2052,7 @@ mod tests {
         }
 
         fn poke_lock_due(&mut self) {
-            self.s.lock.as_mut().unwrap().0 = Instant::now();
+            self.s.lock.as_mut().unwrap().expire_deadline_at(Instant::now());
         }
 
         fn poke_resize_due(&mut self) {
