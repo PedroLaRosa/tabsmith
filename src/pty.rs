@@ -19,6 +19,7 @@ use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
 use crate::terminal_session::domain::entities::echo_hold::EchoHold;
+use crate::terminal_session::domain::entities::ghost_candidates::GhostCandidates;
 use crate::terminal_session::domain::entities::insertion_lock::InsertionLock;
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
@@ -203,11 +204,8 @@ struct Session {
     echo: EchoHold,
     /// A prompt redraw is in progress (see `REDRAW_GRACE`).
     redraw_until: Option<Instant>,
-    /// Ghost candidates (`GhostText`: the buffer each was computed for and its text): local (engine) and LLM.
-    ghost: Option<GhostText>,
-    llm: Option<GhostText>,
-    llm_req: u64,
-    llm_at: Option<Instant>,
+    /// Ghost candidates (SPEC §8): local (engine) and LLM, with the LLM request id and its debounce deadline.
+    ghost: GhostCandidates,
     /// The startup probe timed out: drop its late reply from stdin until then.
     probe_until: Option<Instant>,
     resize_at: Option<Instant>,
@@ -381,10 +379,7 @@ impl Session {
             lock: None,
             echo: EchoHold::default(),
             redraw_until: None,
-            ghost: None,
-            llm: None,
-            llm_req: 0,
-            llm_at: None,
+            ghost: GhostCandidates::default(),
             probe_until,
             resize_at: None,
             repaint: false,
@@ -508,10 +503,8 @@ impl Session {
             }
             SessionMessage::Ghost { req, text } => {
                 self.guard(|s| {
-                    if req == s.req && req == s.llm_req {
-                        s.llm = text
-                            .zip(s.sent.as_ref().map(|x| x.0.clone()))
-                            .map(|(t, b)| GhostText::new(b, t));
+                    let sent_buffer = s.sent.as_ref().map(|x| x.0.as_str());
+                    if s.ghost.accept_llm_reply(req, s.req, text, sent_buffer) {
                         s.redraw();
                     }
                 });
@@ -550,7 +543,7 @@ impl Session {
             [
                 self.resize_at,
                 lock,
-                self.llm_at,
+                self.ghost.llm_due_at(),
                 self.spinner_at,
                 Some(self.poll_at),
                 self.redraw_until,
@@ -623,9 +616,7 @@ impl Session {
             ShellEvent::PreExec => self.menu.error_reset(),
         }
         self.echo.reset();
-        self.ghost = None;
-        self.llm = None;
-        self.llm_at = None;
+        self.ghost.reset();
         self.lock = None;
     }
 
@@ -672,7 +663,7 @@ impl Session {
         self.req += 1;
         self.sent = Some((buffer.clone(), cursor));
         self.changed_at = Instant::now();
-        self.llm_at = None;
+        self.ghost.cancel_llm_schedule();
         if buffer.trim().is_empty() {
             self.menu.error_reset(); // empty buffer (SPEC §7.1); nothing to ask
             self.echo.forget_pending(); // nothing stale left for held keys to act on
@@ -695,7 +686,8 @@ impl Session {
         }
         self.echo.answered_by(c.request_id());
         if c.phase() == CompletionPhase::Parse || c.ghost().is_some() {
-            self.ghost = c.ghost().map(String::from).map(|g| GhostText::new(c.buffer().to_string(), g));
+            self.ghost
+                .replace_local(c.ghost().map(String::from).map(|g| GhostText::new(c.buffer().to_string(), g)));
         }
         // LLM ghost: only when the local reply has no history match (SPEC §8.4). Error replies (no spec for the
         // command) too: the inline source depends on the buffer only. A mid-word cursor fails the length check.
@@ -705,7 +697,7 @@ impl Session {
             && self.llm_enabled()
         {
             let debounce = self.settings.i64(INLINE_DEBOUNCE_MS).max(0) as u64;
-            self.llm_at = Some(self.changed_at + Duration::from_millis(debounce));
+            self.ghost.schedule_llm(self.changed_at + Duration::from_millis(debounce));
         }
         if c.is_loading() && self.spinner_at.is_none() {
             self.spinner_at = Some(Instant::now() + SPINNER_TICK);
@@ -738,10 +730,7 @@ impl Session {
         } else {
             e.buffer().to_string()
         };
-        [&self.ghost, &self.llm]
-            .into_iter()
-            .flatten()
-            .find_map(|g| g.rest_after(&buffer))
+        self.ghost.rest_after(&buffer)
     }
 
     /// The buffer once the shell echoed everything already sent: the pending insertion's result (else the extracted
@@ -899,8 +888,7 @@ impl Session {
                             let g = if full { g.as_str() } else { GhostText::next_word(&g) };
                             fwd.extend_from_slice(g.as_bytes());
                             self.echo.accepted_ghost(g);
-                            self.ghost = None;
-                            self.llm = None;
+                            self.ghost.accepted();
                             redraw = true;
                         }
                         None => {
@@ -1036,10 +1024,9 @@ impl Session {
             self.refresh(); // releases the lock and catches up with the buffer
             redraw = true;
         }
-        if due(self.llm_at) {
-            self.llm_at = None;
+        if self.ghost.take_due_llm(now) {
             if let Some((buffer, _)) = self.sent.clone() {
-                self.llm_req = self.req;
+                self.ghost.expect_llm_reply(self.req);
                 self.engine.request_llm_ghost_text(self.req, buffer, self.cwd(), self.shell());
             }
         }
@@ -1179,10 +1166,7 @@ mod tests {
             lock: None,
             echo: EchoHold::default(),
             redraw_until: None,
-            ghost: None,
-            llm: None,
-            llm_req: 0,
-            llm_at: None,
+            ghost: GhostCandidates::default(),
             probe_until: None,
             resize_at: None,
             repaint: false,
@@ -1332,18 +1316,18 @@ mod tests {
         );
         prompt(&mut s, "zzzcmd foo");
         s.on_completion(CompletionResult::error(s.req, "zzzcmd foo".into(), 10));
-        assert!(s.llm_at.is_some());
+        assert!(s.ghost.llm_due_at().is_some());
         // Mid-word cursor: still none.
-        s.llm_at = None;
+        s.ghost.cancel_llm_schedule();
         s.on_completion(CompletionResult::error(s.req, "zzzcmd foo".into(), 3));
-        assert!(s.llm_at.is_none());
+        assert!(s.ghost.llm_due_at().is_none());
     }
 
     #[test]
     fn should_show_the_llm_ghost_text_of_the_current_request_behind_the_local_one() {
         let (mut s, _) = session("{}");
         prompt(&mut s, "git sta");
-        s.llm_req = s.req;
+        s.ghost.expect_llm_reply(s.req);
         let llm_reply = |req, text: Option<&str>| SessionMessage::Ghost { req, text: text.map(String::from) };
 
         s.step(llm_reply(s.req, Some("tus")), &mut None);
@@ -2037,7 +2021,7 @@ mod tests {
         }
 
         fn poke_llm_due(&mut self) {
-            self.s.llm_at = Some(Instant::now());
+            self.s.ghost.schedule_llm(Instant::now());
         }
 
         fn poke_poll_due(&mut self) {
