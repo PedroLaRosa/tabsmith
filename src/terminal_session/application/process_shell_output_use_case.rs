@@ -77,11 +77,11 @@ mod tests {
     use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::shared::application::ports::clock::{Clock, FixedClock};
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
-    use crate::terminal_session::application::ports::completion_engine::CompletionEngineCall;
+    use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, PanickingCompletionEngine};
     use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
     use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
     use crate::terminal_session::application::test_fixtures::{
-        subs, Io, PanickingCompletionEngine, TerminalSessionHarness, SID,
+        subs, Io, TerminalSessionHarness, SID,
     };
     use crate::terminal_session::domain::entities::session_context::SessionContext;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;

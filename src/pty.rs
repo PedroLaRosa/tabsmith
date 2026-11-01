@@ -485,10 +485,12 @@ mod tests {
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
     use crate::settings::domain::value_objects::settings::Settings;
-    use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
+    use crate::terminal_session::application::ports::completion_engine::{
+        CompletionEngineCall, PanickingCompletionEngine, RecordingCompletionEngine,
+    };
     use crate::terminal_session::application::ports::generator_process_reaper::RecordingGeneratorProcessReaper;
     use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
-    use crate::terminal_session::application::test_fixtures::{set_panic_in_key_handling, PanickingCompletionEngine};
+    use crate::terminal_session::application::test_fixtures::set_panic_in_key_handling;
     use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::RecordingMasterPty;
     use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
     use crate::completion::domain::value_objects::suggestion::Suggestion;

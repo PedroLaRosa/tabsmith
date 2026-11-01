@@ -20,9 +20,13 @@ use std::rc::Rc;
 /// Everything a session does, wired once over the ports it runs on. Production and the test harness build it the same
 /// way, so a wiring mistake shows in a use-case test.
 pub(crate) struct SessionUseCases {
+    #[cfg(test)]
     painter: Rc<OverlayPainter>,
+    #[cfg(test)]
     requester: Rc<CompletionRequester>,
+    #[cfg(test)]
     poller: Rc<SessionFilePoller>,
+    #[cfg(test)]
     keystroke_handler: Rc<KeystrokeHandler>,
     pub(crate) handle_keystrokes: HandleKeystrokesUseCase,
     pub(crate) process_shell_output: ProcessShellOutputUseCase,
@@ -96,9 +100,13 @@ impl SessionUseCases {
             handler: keystroke_handler.clone(),
         });
         SessionUseCases {
+            #[cfg(test)]
             painter,
+            #[cfg(test)]
             requester,
+            #[cfg(test)]
             poller,
+            #[cfg(test)]
             keystroke_handler,
             handle_keystrokes,
             process_shell_output,
@@ -144,7 +152,7 @@ mod tests {
     /// The painter holds no frame of its own: the screen remembers what was drawn, so a frame drawn for one use case
     /// is skipped as identical by the redraw of another only while both draw over the same screen and writer.
     #[test]
-    fn should_share_one_painter_between_the_use_cases() {
+    fn should_skip_an_identical_frame_across_the_completion_and_llm_use_cases() {
         let mut harness = TerminalSessionHarness::new("{}");
         harness.prompt("git ch");
         harness.reply(subs("ch"), None);

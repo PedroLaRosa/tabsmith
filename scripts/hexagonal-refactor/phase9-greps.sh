@@ -100,8 +100,14 @@ expect_empty "F3 write_stdout only in stdout_terminal_writer.rs; std::io::stdout
   "$(grep -rn 'write_stdout' src | grep -v 'stdout_terminal_writer\.rs:'; grep -rn 'std::io::stdout(' $TS | grep -vE '/(stdout_terminal_writer|key_tester_command|debug_shell_command|session_launcher)\.rs:')"
 expect_empty "F4 SessionUseCases::new only in session_launcher.rs and test_fixtures.rs" \
   "$(grep -rn 'SessionUseCases::new' src | grep -vE '/(session_launcher|test_fixtures)\.rs:')"
+# a catch_unwind inside an inline `#[cfg(test)] mod tests` (after its attribute line) is test code, so it does not count
+f5_production_hits() {
+  for file in $(grep -rl catch_unwind $TS | grep -vE '/tests\.rs$|/(session_runner|pty_session)\.rs$'); do
+    awk '/^#\[cfg\(test\)\]$/ { cfg = 1; next } cfg && /^mod tests/ { exit } { cfg = 0 } /catch_unwind/ { print FILENAME ":" FNR ": " $0 }' "$file"
+  done
+}
 expect_empty "F5 catch_unwind in terminal_session production only in session_runner.rs and pty_session.rs" \
-  "$(grep -rn catch_unwind $TS | grep -v '/tests\.rs' | grep -vE '/(session_runner|pty_session)\.rs:')"
+  "$(f5_production_hits)"
 echo "== Z. the module's file list"
 review "Z git ls-files src/terminal_session | sort equals the file list of the design's Module map (read by eye at 9.7)" \
   "$(git ls-files -co --exclude-standard $TS | wc -l | tr -d ' ') files"

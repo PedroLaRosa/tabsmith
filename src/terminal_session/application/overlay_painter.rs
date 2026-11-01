@@ -65,14 +65,13 @@ mod tests {
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
     use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
     use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
-    use crate::terminal_session::application::test_fixtures::{subs, TerminalSessionHarness};
+    use crate::terminal_session::application::test_fixtures::{subs, TerminalSessionHarness, SID};
     use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
     use crate::terminal_session::domain::entities::terminal_session::TerminalSessionParts;
     use crate::terminal_session::domain::value_objects::session_id::SessionId;
     use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
     use std::time::Duration;
 
-    const SID: &str = "0123456789abcdef0123456789abcdef";
     const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
     const SPINNER_FIRST_FRAME: &str = "⠋";
 

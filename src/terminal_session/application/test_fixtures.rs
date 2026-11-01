@@ -1,6 +1,4 @@
 #[cfg(test)]
-use crate::completion::application::completion_request::CompletionRequest;
-#[cfg(test)]
 use crate::completion::domain::test_fixtures::{comp, item, settings};
 #[cfg(test)]
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
@@ -8,10 +6,6 @@ use crate::completion::domain::value_objects::completion_result::CompletionResul
 use crate::completion::domain::value_objects::suggestion::Suggestion;
 #[cfg(test)]
 use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
-#[cfg(test)]
-use crate::history::domain::entities::history_entry::HistoryEntry;
-#[cfg(test)]
-use crate::settings::domain::value_objects::settings::Settings;
 #[cfg(test)]
 use crate::shared::application::ports::clock::Clock;
 #[cfg(test)]
@@ -59,10 +53,6 @@ use crate::terminal_session::domain::value_objects::terminal_background::Termina
 #[cfg(test)]
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use std::cell::{Cell, RefCell};
-#[cfg(test)]
-use std::collections::HashMap;
-#[cfg(test)]
-use std::path::PathBuf;
 #[cfg(test)]
 use std::rc::Rc;
 #[cfg(test)]
@@ -317,23 +307,4 @@ impl TerminalSessionHarness {
     pub(crate) fn clear_written(&self) {
         self.writer.clear();
     }
-}
-
-/// Test double: panics when it is asked for completions and ignores everything else.
-#[cfg(test)]
-pub(crate) struct PanickingCompletionEngine;
-
-#[cfg(test)]
-impl CompletionEngine for PanickingCompletionEngine {
-    fn complete(&self, _request: CompletionRequest) {
-        panic!("the engine was asked");
-    }
-    fn command_finished(&self, _entry: HistoryEntry) {}
-    fn command_ended(&self) {}
-    fn record_insertion(&self, _command: String, _name: String) {}
-    fn request_llm_ghost_text(&self, _request: u64, _buffer: String, _cwd: PathBuf, _shell: Shell) {}
-    fn apply_settings(&self, _settings: Settings) {}
-    fn apply_session_context(&self, _env: HashMap<String, String>, _alias: Option<String>) {}
-    fn toggle_fuzzy_search(&self) {}
-    fn shut_down(&self) {}
 }
