@@ -7,3 +7,5 @@ pub(crate) mod icon_assets;
 pub(crate) mod kitty_graphics;
 pub(crate) mod output_filter;
 pub(crate) mod overlay_renderer;
+pub(crate) mod pty_wrapped_shell;
+pub(crate) mod stdout_terminal_writer;
