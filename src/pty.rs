@@ -44,6 +44,7 @@ use crate::terminal_session::domain::repositories::session_context_repository::S
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
 use crate::terminal_session::infrastructure::adapters::kitty_graphics;
+use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
 use crate::terminal_session::infrastructure::adapters::stdin_key_decoder::StdinKeyDecoder;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
 use crate::completion::application::completion_request::CompletionRequest;
@@ -90,10 +91,10 @@ pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStart
             }
         });
     let login = std::env::var("TABSMITH_IS_LOGIN_SHELL").as_deref() == Ok("1");
-    let argv = argv(shell.as_deref(), &cmd, login);
+    let command = WrappedShellCommand::new(shell.as_deref(), &cmd, login);
     let mut modes = None;
     let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        Session::start(&argv, &mut modes, start).map(Session::run)
+        Session::start(command.argv(), &mut modes, start).map(Session::run)
     }));
     let err = match res {
         Ok(Ok(code)) => return code,
@@ -103,33 +104,11 @@ pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStart
     if let Some(m) = modes {
         m.restore();
     }
-    fallback(&err, &argv)
+    fallback(&err, command.argv())
 }
 
 fn env_nonempty(k: &str) -> Option<String> {
     std::env::var(k).ok().filter(|v| !v.is_empty())
-}
-
-/// Child argv (SPEC §4.4 step 7). After `--`: a command (replaces the shell), or extra shell arguments when they
-/// start with `-` (`debug shell`: `--shell bash -- --noprofile --rcfile …`).
-fn argv(shell: Option<&str>, extra: &[String], login: bool) -> Vec<String> {
-    if extra.first().is_some_and(|a| !a.starts_with('-')) {
-        return extra.to_vec();
-    }
-    let Some(shell) = shell else {
-        return Vec::new();
-    };
-    let mut v = vec![shell.to_string()];
-    if login
-        && matches!(
-            Shell::from_name(shell),
-            Some(Shell::Bash | Shell::Zsh | Shell::Fish)
-        )
-    {
-        v.push("--login".into());
-    }
-    v.extend(extra.iter().cloned());
-    v
 }
 
 /// Run the plain shell with `TABSMITH_TERM_DISABLED=1` so its pre block does not loop (SPEC §4.4 fallback).
@@ -1164,25 +1143,6 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn child_argv() {
-        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            argv(Some("/bin/zsh"), &[], true),
-            s(&["/bin/zsh", "--login"])
-        );
-        assert_eq!(argv(Some("pwsh"), &[], true), s(&["pwsh"]));
-        assert_eq!(
-            argv(Some("bash"), &s(&["--noprofile", "--rcfile", "x"]), false),
-            s(&["bash", "--noprofile", "--rcfile", "x"])
-        );
-        assert_eq!(
-            argv(Some("bash"), &s(&["vim", "-u"]), true),
-            s(&["vim", "-u"])
-        );
-        assert!(argv(None, &[], false).is_empty());
-    }
 
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
 
