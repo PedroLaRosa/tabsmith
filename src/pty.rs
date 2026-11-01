@@ -44,7 +44,7 @@ use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
-use crate::types::Msg;
+use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use anyhow::{anyhow, bail, Context, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use std::io::{IsTerminal, Read, Write};
@@ -75,7 +75,7 @@ const PTY_CREDITS: usize = 4;
 const EXIT_GRACE: Duration = Duration::from_millis(200);
 
 /// Starts the completion engine, its replies going to the session's inbox; called once, inside `Session::start`.
-pub(crate) type CompletionEngineStarter = fn(Sender<Msg>, Settings) -> Rc<dyn CompletionEngine>;
+pub(crate) type CompletionEngineStarter = fn(Sender<SessionMessage>, Settings) -> Rc<dyn CompletionEngine>;
 
 /// Run the wrapper; returns the exit code to exit with. Never leaves the user without a shell (fallback, SPEC §4.4).
 pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStarter) -> i32 {
@@ -232,7 +232,7 @@ fn unechoed_after(
 
 /// PTY reader (SPEC §4.3). Every read takes a credit, returned once the main loop handled the chunk, so at most
 /// `PTY_CREDITS` chunks are queued: a flooding child feels backpressure and Ctrl-C is never stuck behind its output.
-fn pump(mut reader: impl Read, credits: Receiver<()>, tx: Sender<Msg>) {
+fn pump(mut reader: impl Read, credits: Receiver<()>, tx: Sender<SessionMessage>) {
     let mut buf = vec![0u8; 16 * 1024];
     while credits.recv().is_ok() {
         let n = loop {
@@ -241,11 +241,11 @@ fn pump(mut reader: impl Read, credits: Receiver<()>, tx: Sender<Msg>) {
                 r => break r.unwrap_or(0), // Linux: EIO once the slave side is gone
             }
         };
-        if n == 0 || tx.send(Msg::Pty(buf[..n].to_vec())).is_err() {
+        if n == 0 || tx.send(SessionMessage::Pty(buf[..n].to_vec())).is_err() {
             break;
         }
     }
-    let _ = tx.send(Msg::PtyEof);
+    let _ = tx.send(SessionMessage::PtyEof);
 }
 
 fn is_ctrl(k: &Key, c: char) -> bool {
@@ -335,7 +335,7 @@ fn write_stdout(b: &[u8]) {
 }
 
 struct Session {
-    rx: Receiver<Msg>,
+    rx: Receiver<SessionMessage>,
     engine: Rc<dyn CompletionEngine>,
     writer: Sender<Vec<u8>>,
     /// Returns PTY read credits to the reader thread (see `pump`).
@@ -526,7 +526,7 @@ impl Session {
         });
         let t = tx.clone();
         thread::spawn(move || {
-            let _ = t.send(Msg::ChildExit(sys::wait(&mut *child)));
+            let _ = t.send(SessionMessage::ChildExit(sys::wait(&mut *child)));
         });
         sys::spawn_input(tx);
         if !typeahead.is_empty() {
@@ -619,12 +619,12 @@ impl Session {
     }
 
     /// One main-loop message; false = leave the loop.
-    fn step(&mut self, msg: Msg, stash: &mut Option<Msg>) -> bool {
+    fn step(&mut self, msg: SessionMessage, stash: &mut Option<SessionMessage>) -> bool {
         match msg {
-            Msg::Stdin(b) if self.passthrough => {
+            SessionMessage::Stdin(b) if self.passthrough => {
                 let _ = self.writer.send(b);
             }
-            Msg::Stdin(b) => {
+            SessionMessage::Stdin(b) => {
                 // on_input writes nothing before its last step: after a panic, keys the menu would not have taken go
                 // out raw (an Enter meant for an item is dropped rather than running the line).
                 let raw = !self.menu.intercepting(&self.settings);
@@ -632,12 +632,12 @@ impl Session {
                     let _ = self.writer.send(b);
                 }
             }
-            Msg::Pty(mut b) => {
+            SessionMessage::Pty(mut b) => {
                 // One batch = everything already queued (one model pass, one stdout write).
                 let mut chunks = 1;
                 loop {
                     match self.rx.try_recv() {
-                        Ok(Msg::Pty(more)) => {
+                        Ok(SessionMessage::Pty(more)) => {
                             b.extend(more);
                             chunks += 1;
                         }
@@ -656,11 +656,11 @@ impl Session {
                     let _ = self.credits.try_send(());
                 }
             }
-            Msg::PtyEof => {
+            SessionMessage::PtyEof => {
                 self.eof = true;
                 return self.exit_code.is_none();
             }
-            Msg::Resize(cols, rows) if self.passthrough => {
+            SessionMessage::Resize(cols, rows) if self.passthrough => {
                 if let Some(m) = &self.master {
                     let _ = m.resize(PtySize {
                         rows,
@@ -670,10 +670,10 @@ impl Session {
                     });
                 }
             }
-            Msg::Resize(c, r) => {
+            SessionMessage::Resize(c, r) => {
                 self.guard(|s| s.on_resize(c, r));
             }
-            Msg::ChildExit(c) => {
+            SessionMessage::ChildExit(c) => {
                 self.exit_code = Some(c);
                 // ConPTY does not EOF on child exit. Its close may wait until the final frame fits in the pipe, which
                 // the reader drains only with credits from this loop: close it on a helper thread.
@@ -685,15 +685,15 @@ impl Session {
                 }
                 self.exit_at = Some(Instant::now() + EXIT_GRACE);
             }
-            Msg::Term => {
+            SessionMessage::Term => {
                 self.exit_code = Some(129);
                 return false;
             }
-            Msg::Completion(_) | Msg::Ghost { .. } if self.passthrough => {}
-            Msg::Completion(c) => {
+            SessionMessage::Completion(_) | SessionMessage::Ghost { .. } if self.passthrough => {}
+            SessionMessage::Completion(c) => {
                 self.guard(|s| s.on_completion(*c));
             }
-            Msg::Ghost { req, text } => {
+            SessionMessage::Ghost { req, text } => {
                 self.guard(|s| {
                     if req == s.req && req == s.llm_req {
                         s.llm = text
@@ -1330,7 +1330,7 @@ impl Session {
 
 #[cfg(unix)]
 mod sys {
-    use crate::types::Msg;
+    use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
     use anyhow::Result;
     use std::io::Read;
     use std::sync::mpsc::Sender;
@@ -1383,7 +1383,7 @@ mod sys {
         }
     }
 
-    pub fn spawn_input(tx: Sender<Msg>) {
+    pub fn spawn_input(tx: Sender<SessionMessage>) {
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let mut stdin = std::io::stdin();
@@ -1391,7 +1391,7 @@ mod sys {
                 match stdin.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if tx.send(Msg::Stdin(buf[..n].to_vec())).is_err() {
+                        if tx.send(SessionMessage::Stdin(buf[..n].to_vec())).is_err() {
                             break;
                         }
                     }
@@ -1426,17 +1426,17 @@ mod sys {
     }
 
     /// SIGWINCH → Resize, SIGTERM/SIGHUP → Term.
-    pub fn spawn_resize(tx: Sender<Msg>) -> Result<()> {
+    pub fn spawn_resize(tx: Sender<SessionMessage>) -> Result<()> {
         use signal_hook::consts::signal::{SIGHUP, SIGTERM, SIGWINCH};
         let mut signals = signal_hook::iterator::Signals::new([SIGWINCH, SIGTERM, SIGHUP])?;
         std::thread::spawn(move || {
             for sig in signals.forever() {
                 let msg = match sig {
                     SIGWINCH => match crossterm::terminal::size() {
-                        Ok((c, r)) => Msg::Resize(c, r),
+                        Ok((c, r)) => SessionMessage::Resize(c, r),
                         Err(_) => continue,
                     },
-                    _ => Msg::Term,
+                    _ => SessionMessage::Term,
                 };
                 if tx.send(msg).is_err() {
                     break;
@@ -1449,7 +1449,7 @@ mod sys {
 
 #[cfg(windows)]
 mod sys {
-    use crate::types::Msg;
+    use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
     use anyhow::{bail, Result};
     use std::sync::mpsc::Sender;
     use std::time::Duration;
@@ -1573,17 +1573,17 @@ mod sys {
             .unwrap_or_default()
     }
 
-    pub fn spawn_input(tx: Sender<Msg>) {
+    pub fn spawn_input(tx: Sender<SessionMessage>) {
         std::thread::spawn(move || {
             let (i, _) = handles();
             let mut high = None;
             while let Some((bytes, resized)) = read_console(i, &mut high) {
-                if !bytes.is_empty() && tx.send(Msg::Stdin(bytes)).is_err() {
+                if !bytes.is_empty() && tx.send(SessionMessage::Stdin(bytes)).is_err() {
                     break;
                 }
                 if resized {
                     if let Ok((c, r)) = crossterm::terminal::size() {
-                        let _ = tx.send(Msg::Resize(c, r));
+                        let _ = tx.send(SessionMessage::Resize(c, r));
                     }
                 }
             }
@@ -1595,7 +1595,7 @@ mod sys {
     }
 
     /// No SIGWINCH on Windows: also poll the size every 250 ms (legacy conhost may not send the event).
-    pub fn spawn_resize(tx: Sender<Msg>) -> Result<()> {
+    pub fn spawn_resize(tx: Sender<SessionMessage>) -> Result<()> {
         std::thread::spawn(move || {
             let mut last = crossterm::terminal::size().ok();
             loop {
@@ -1604,7 +1604,7 @@ mod sys {
                 if now != last {
                     last = now;
                     if let Some((c, r)) = now {
-                        if tx.send(Msg::Resize(c, r)).is_err() {
+                        if tx.send(SessionMessage::Resize(c, r)).is_err() {
                             break;
                         }
                     }
@@ -1745,7 +1745,7 @@ mod tests {
         credits.send(()).unwrap();
         std::thread::spawn(move || pump(std::io::repeat(b'y'), credit_rx, tx));
         let pty =
-            |r: Result<Msg, RecvTimeoutError>| matches!(r, Ok(Msg::Pty(b)) if b.len() == 16 * 1024);
+            |r: Result<SessionMessage, RecvTimeoutError>| matches!(r, Ok(SessionMessage::Pty(b)) if b.len() == 16 * 1024);
         assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
         assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
         assert!(
@@ -1757,7 +1757,7 @@ mod tests {
         drop(credits);
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(5)),
-            Ok(Msg::PtyEof)
+            Ok(SessionMessage::PtyEof)
         ));
     }
 
@@ -2004,7 +2004,7 @@ mod tests {
         let (mut s, _) = session("{}");
         prompt(&mut s, "git sta");
         s.llm_req = s.req;
-        let llm_reply = |req, text: Option<&str>| Msg::Ghost { req, text: text.map(String::from) };
+        let llm_reply = |req, text: Option<&str>| SessionMessage::Ghost { req, text: text.map(String::from) };
 
         s.step(llm_reply(s.req, Some("tus")), &mut None);
         let from_the_current_request = s.ghost_text(false);
@@ -2095,12 +2095,12 @@ mod tests {
         );
         s.sink.clear();
         let mut stash = None;
-        assert!(s.step(Msg::Pty(b"out\x1b]697;NewCmd\x07".to_vec()), &mut stash));
+        assert!(s.step(SessionMessage::Pty(b"out\x1b]697;NewCmd\x07".to_vec()), &mut stash));
         assert_eq!(s.sink, b"out\x1b]697;NewCmd\x07");
-        assert!(s.step(Msg::Stdin(b"\r".to_vec()), &mut stash));
+        assert!(s.step(SessionMessage::Stdin(b"\r".to_vec()), &mut stash));
         assert_eq!(sent(&pty), b"\r", "keys reach the shell unintercepted");
-        assert!(s.step(Msg::ChildExit(3), &mut stash));
-        assert!(!s.step(Msg::PtyEof, &mut stash));
+        assert!(s.step(SessionMessage::ChildExit(3), &mut stash));
+        assert!(!s.step(SessionMessage::PtyEof, &mut stash));
         assert_eq!((s.exit_code, s.next_deadline().is_some()), (Some(3), true));
     }
 
@@ -2109,7 +2109,7 @@ mod tests {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "ls");
         PANIC_IN_INPUT.with(|p| p.set(true));
-        assert!(s.step(Msg::Stdin(b"BOOM\r".to_vec()), &mut None));
+        assert!(s.step(SessionMessage::Stdin(b"BOOM\r".to_vec()), &mut None));
         PANIC_IN_INPUT.with(|p| p.set(false));
         assert!(s.passthrough);
         assert_eq!(sent(&pty), b"BOOM\r", "the read is not lost");
@@ -2118,7 +2118,7 @@ mod tests {
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         PANIC_IN_INPUT.with(|p| p.set(true));
-        s.step(Msg::Stdin(b"\r".to_vec()), &mut None);
+        s.step(SessionMessage::Stdin(b"\r".to_vec()), &mut None);
         PANIC_IN_INPUT.with(|p| p.set(false));
         assert!(s.passthrough && sent(&pty).is_empty());
     }
@@ -2545,7 +2545,7 @@ mod tests {
         let (mut s, _) = session("{}");
         let (tx, rx) = mpsc::channel();
         s.master = Some(Box::new(Master(tx)));
-        assert!(s.step(Msg::ChildExit(0), &mut None));
+        assert!(s.step(SessionMessage::ChildExit(0), &mut None));
         let on = rx.recv_timeout(Duration::from_secs(5)).expect("closed");
         assert_ne!(on, thread::current().id());
     }
@@ -2593,9 +2593,9 @@ mod tests {
         engine: Receiver<CompletionEngineCall>,
         log: String,
         mark: usize,
-        inbox: Sender<Msg>,
+        inbox: Sender<SessionMessage>,
         credit_returns: Receiver<()>,
-        stash: Option<Msg>,
+        stash: Option<SessionMessage>,
     }
 
     impl Rig {
@@ -2717,31 +2717,31 @@ mod tests {
         }
 
         fn step_pty(&mut self, bytes: &[u8]) -> bool {
-            self.s.step(Msg::Pty(bytes.to_vec()), &mut self.stash)
+            self.s.step(SessionMessage::Pty(bytes.to_vec()), &mut self.stash)
         }
 
         fn step_stdin(&mut self, bytes: &[u8]) -> bool {
-            self.s.step(Msg::Stdin(bytes.to_vec()), &mut self.stash)
+            self.s.step(SessionMessage::Stdin(bytes.to_vec()), &mut self.stash)
         }
 
         fn step_resize(&mut self, columns: u16, rows: u16) -> bool {
-            self.s.step(Msg::Resize(columns, rows), &mut self.stash)
+            self.s.step(SessionMessage::Resize(columns, rows), &mut self.stash)
         }
 
         fn step_completion(&mut self, result: CompletionResult) -> bool {
-            self.s.step(Msg::Completion(Box::new(result)), &mut self.stash)
+            self.s.step(SessionMessage::Completion(Box::new(result)), &mut self.stash)
         }
 
         fn step_ghost(&mut self, request: u64, text: Option<String>) -> bool {
-            self.s.step(Msg::Ghost { req: request, text }, &mut self.stash)
+            self.s.step(SessionMessage::Ghost { req: request, text }, &mut self.stash)
         }
 
         fn step_child_exit(&mut self, code: i32) -> bool {
-            self.s.step(Msg::ChildExit(code), &mut self.stash)
+            self.s.step(SessionMessage::ChildExit(code), &mut self.stash)
         }
 
         fn step_pty_eof(&mut self) -> bool {
-            self.s.step(Msg::PtyEof, &mut self.stash)
+            self.s.step(SessionMessage::PtyEof, &mut self.stash)
         }
 
         fn step_stashed(&mut self) -> bool {
@@ -2755,11 +2755,11 @@ mod tests {
         }
 
         fn queue_pty(&mut self, bytes: &[u8]) {
-            self.inbox.send(Msg::Pty(bytes.to_vec())).unwrap();
+            self.inbox.send(SessionMessage::Pty(bytes.to_vec())).unwrap();
         }
 
         fn queue_stdin(&mut self, bytes: &[u8]) {
-            self.inbox.send(Msg::Stdin(bytes.to_vec())).unwrap();
+            self.inbox.send(SessionMessage::Stdin(bytes.to_vec())).unwrap();
         }
 
         fn credits_returned(&self) -> usize {
@@ -2767,7 +2767,7 @@ mod tests {
         }
 
         fn stash_is_stdin(&self) -> bool {
-            matches!(self.stash, Some(Msg::Stdin(_)))
+            matches!(self.stash, Some(SessionMessage::Stdin(_)))
         }
 
         fn panic_in_the_guard(&mut self) {
@@ -3108,27 +3108,27 @@ mod tests {
         }
 
         fn queue_resize(&mut self, columns: u16, rows: u16) {
-            self.rig.inbox.send(Msg::Resize(columns, rows)).unwrap();
+            self.rig.inbox.send(SessionMessage::Resize(columns, rows)).unwrap();
         }
 
         fn queue_completion(&mut self, result: CompletionResult) {
-            self.rig.inbox.send(Msg::Completion(Box::new(result))).unwrap();
+            self.rig.inbox.send(SessionMessage::Completion(Box::new(result))).unwrap();
         }
 
         fn queue_ghost(&mut self, request: u64, text: Option<String>) {
-            self.rig.inbox.send(Msg::Ghost { req: request, text }).unwrap();
+            self.rig.inbox.send(SessionMessage::Ghost { req: request, text }).unwrap();
         }
 
         fn queue_child_exit(&mut self, code: i32) {
-            self.rig.inbox.send(Msg::ChildExit(code)).unwrap();
+            self.rig.inbox.send(SessionMessage::ChildExit(code)).unwrap();
         }
 
         fn queue_pty_eof(&mut self) {
-            self.rig.inbox.send(Msg::PtyEof).unwrap();
+            self.rig.inbox.send(SessionMessage::PtyEof).unwrap();
         }
 
         fn queue_term(&mut self) {
-            self.rig.inbox.send(Msg::Term).unwrap();
+            self.rig.inbox.send(SessionMessage::Term).unwrap();
         }
 
         fn disconnect(&mut self) {
