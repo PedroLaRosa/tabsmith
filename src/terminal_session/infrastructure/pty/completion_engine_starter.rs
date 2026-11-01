@@ -4,5 +4,5 @@ use crate::terminal_session::infrastructure::pty::session_message::SessionMessag
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
-/// Starts the completion engine, its replies going to the session's inbox; called once, inside `Session::start`.
+/// Starts the completion engine, its replies going to the session's inbox; called once, inside `launch_session`.
 pub(crate) type CompletionEngineStarter = fn(Sender<SessionMessage>, Settings) -> Rc<dyn CompletionEngine>;

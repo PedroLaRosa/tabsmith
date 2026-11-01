@@ -1,5 +1,4 @@
-//! `tabsmith _ pty`: the PTY wrapper session (SPEC §4.3–4.5, §7.2.4, §7.3, §7.6, §8).
-//! OWNER: wrapper agent.
+//! The driver of one session: its inbox, the panic guard and the dispatch to the use cases (SPEC §4.3, §7.2.4, §7.3, §8).
 use crate::shared::infrastructure::logger;
 use crate::shared::application::ports::clock::Clock;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
@@ -38,21 +37,15 @@ pub(crate) struct SessionRunnerParts {
 }
 
 /// The driver of one session: it reads its inbox, hands each message to the use case that handles it and leaves when the
-/// shell is gone. The fields keep the drop order of the legacy struct (the inbox, the credits, the shell, then the rest).
+/// shell is gone. The fields are declared in drop order (the inbox, the credits, the shell, then the rest): the credits
+/// must drop before the shell, or a ConPTY close waits for a reader that waits for a credit.
 pub(crate) struct SessionRunner {
     inbox: Receiver<SessionMessage>,
-    /// Returns PTY read credits to the reader thread (see `pump`). Declared before `pty`: it is dropped first, so a
-    /// ConPTY close never waits for a reader that waits for a credit.
     credits: SyncSender<()>,
-    /// The shell the session wraps: its input and its size.
     pty: Rc<PtyWrappedShell>,
-    /// What the wrapper knows of the shell it runs; the ports and plumbing around it stay here.
     session: TerminalSession,
-    /// The model, the filter and the renderer of the session, behind the screen port.
     screen: Rc<dyn TerminalScreen>,
-    /// The user's terminal.
     output: Rc<dyn TerminalWriter>,
-    /// What the wrapper does with the ports above.
     use_cases: SessionUseCases,
     clock: Arc<dyn Clock + Send + Sync>,
 }

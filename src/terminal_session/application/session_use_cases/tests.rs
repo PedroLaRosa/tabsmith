@@ -102,7 +102,7 @@ impl Rig {
         self.h.session.set_spinner_at(Some(Instant::now()));
     }
 
-    fn step_ghost(&mut self, request: u64, text: Option<String>) {
+    fn llm_reply(&mut self, request: u64, text: Option<String>) {
         self.h.llm_reply(request, text.as_deref());
     }
 }
@@ -263,9 +263,9 @@ fn should_debounce_and_show_the_llm_ghost_text_exactly_as_at_the_phase_9_start()
     rig.poke_llm_due();
     rig.tick();
     rig.note("debounce due: LLM request");
-    rig.step_ghost(request, Some(" bar".into()));
+    rig.llm_reply(request, Some(" bar".into()));
     rig.note("llm reply: ghost drawn");
-    rig.step_ghost(request + 5, Some("stale".into()));
+    rig.llm_reply(request + 5, Some("stale".into()));
     rig.note("stale reply ignored");
     rig.finish("llm");
 }

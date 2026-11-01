@@ -581,6 +581,13 @@ impl LoopRig {
         self.rig.poke_llm_due();
     }
 
+    /// A prompt is typed and its LLM request went out, so only the reply to the current request is taken.
+    fn await_the_llm_reply_to_the_prompt(&mut self) {
+        self.rig.prompt("git sta");
+        self.rig.s.session.expect_llm_reply(self.rig.request_id());
+        self.stdout();
+    }
+
     /// Runs the loop to its end; returns the exit code and the engine calls it made.
     fn run(self) -> (i32, Vec<String>) {
         let rig = self.rig;
@@ -711,6 +718,28 @@ fn should_ignore_engine_replies_while_passing_through() {
     rig.step_next();
 
     assert_eq!((rig.stdout(), rig.pty_writes()), (vec![], vec![]));
+}
+
+#[test]
+fn should_draw_the_llm_ghost_text_of_the_current_request_through_the_guard() {
+    let mut rig = loop_session();
+    rig.await_the_llm_reply_to_the_prompt();
+    rig.queue_ghost(rig.request_id(), Some("tus".into()));
+
+    rig.step_next();
+
+    assert!(String::from_utf8(rig.stdout()).unwrap().contains("tus"));
+}
+
+#[test]
+fn should_draw_nothing_for_an_llm_reply_to_another_request_through_the_guard() {
+    let mut rig = loop_session();
+    rig.await_the_llm_reply_to_the_prompt();
+    rig.queue_ghost(rig.request_id() + 1, Some("tus".into()));
+
+    rig.step_next();
+
+    assert_eq!(rig.stdout(), Vec::<u8>::new());
 }
 
 #[test]

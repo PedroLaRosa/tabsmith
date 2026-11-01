@@ -12,9 +12,9 @@ use crate::terminal_session::domain::repositories::session_context_repository::S
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// The runtime ports one session runs on, handed to the constructor of `SessionUseCases`: the driver fills them from the module and
-/// the per-session adapters, the test harness from its doubles.
-#[derive(Clone)]
+/// The runtime ports one session runs on, handed to the constructor of `SessionUseCases`: the driver fills them
+/// from the module and the per-session adapters, the test harness from its doubles.
+#[cfg_attr(test, derive(Clone))]
 pub(crate) struct SessionPortsParts {
     pub(crate) engine: Rc<dyn CompletionEngine>,
     pub(crate) screen: Rc<dyn TerminalScreen>,

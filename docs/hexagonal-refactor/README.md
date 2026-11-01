@@ -21,13 +21,13 @@ implementation session needs that the plan does not.
 | 10-11 | not started | |
 
 At `b898db1` (the last code commit of Phase 9; the docs commits that follow change no code), `scripts/hexagonal-refactor/gate.sh`
-passes (on Linux as `BASELINE_CLIPPY=4 scripts/hexagonal-refactor/gate.sh`). `cargo test` has 1411 passed, 0 failed, 1 ignored (the
+passes (on Linux as `BASELINE_CLIPPY=4 scripts/hexagonal-refactor/gate.sh`). `cargo test` has 1413 passed, 0 failed, 1 ignored (the
 baseline was 283; 1091 at the end of Phase 8). clippy shows 3 warnings (the Linux container's clippy 1.97 counts one more
 lint than macOS, so the Linux budget is 4). The 131-command golden CLI capture is byte-identical to the baseline and
 `cargo check --all-targets --target x86_64-pc-windows-gnu` prints `windows: ok`. The test lock against `ef807c1` has 0 baseline
-tests missing, 0 DUPLICATE, 210 CHANGED (each one a reviewed restructuring; 168 at the start of Phase 9) and 1130 NEW
-names. Against `phase9-start`: 0 missing, 0 DUPLICATE, 59 CHANGED (all in Phase 9's allowed list), 321 NEW names and 12
-PATH-ONLY; against `phase9-guards`: 0 missing, 0 DUPLICATE, 60 CHANGED (the 59 plus one guard test), 287 NEW. The 17
+tests missing, 0 DUPLICATE, 210 CHANGED (each one a reviewed restructuring; 168 at the start of Phase 9) and 1132 NEW
+names. Against `phase9-start`: 0 missing, 0 DUPLICATE, 59 CHANGED (all in Phase 9's allowed list), 323 NEW names and 12
+PATH-ONLY; against `phase9-guards`: 0 missing, 0 DUPLICATE, 60 CHANGED (the 59 plus one guard test), 289 NEW. The 17
 characterisation fixtures are byte-identical to `phase9-guards`. `theme-diff.sh`, `inline-diff.sh`,
 `integrations-diff.sh`, `precmd-diff.sh`, `pty-diff.py` and `session-diff.py` are empty against the baseline binary.
 `REGISTERED_MODULES` = `completion`, `dropdown`, `ghost_text`, `history`, `settings`, `shared`, `shell_integration`,
@@ -161,7 +161,7 @@ Run everything from the repo root. Output goes to `target/hexagonal-refactor/` (
 - Registering the module in the architecture test at the first step, not the last, made every later move rule-checked. Rule
   scanners read string and char literals as code (a `b"\x1b["` literal shifts the scan): write `\x5b`.
 - Test support belongs in one harness. The 14 session scenarios ran against a hand-rolled rig until 9.6f rebuilt them over
-  `TerminalSessionHarness`; the swap forced `SessionPortsParts: Clone` into production code, a cost to price in first.
+  `TerminalSessionHarness`; the swap needed `SessionPortsParts: Clone` (kept under `#[cfg(test)]`), a cost to price in first.
 - A test module over about 500 lines is sliced into `<file>/tests.rs`; two modules both named `tests` cannot share one
   file, which reordered two commits of 9.6f.
 - The agent that drives the commits should write messages with `git commit -F <file>`, not `-m`: the RTK command hook

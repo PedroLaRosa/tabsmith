@@ -398,7 +398,7 @@ infrastructure/adapters/{fs_directory_lister ← list_dir, path_executable_catal
 ### ghost_text
 ```
 domain/entities/ghost_text_cache.rs       ← GhostCache
-domain/value_objects/{ghost_text ← pty next_word/ghost_rest (ghost_key stays in pty.rs until Phase 9),
+domain/value_objects/{ghost_text ← pty next_word/ghost_rest (ghost_key moved to terminal_session/domain/services/key_router.rs in Phase 9),
                       ghost_text_source ← Source + BUILTIN_SOURCES,
                       llm_profile ← Profile + parse_profile (from SettingValue), llm_provider ← Provider,
                       llm_prompt (carries SYSTEM)}.rs
@@ -806,7 +806,7 @@ the Phase 8 notes in section 9.
 
 Done at `b898db1`: `terminal_session` registered in the architecture test (at 9.0a, the first step), `pty.rs` and
 `tracker.rs` gone, `types.rs` down to `now_ms` and `now_secs`, the aggregate, the entities, seven new ports, five services, ten
-use cases and the runner in place, gate green (1411 passed). The phase ran in 42 steps (`9.0a` … `9.7`) in six runs. See
+use cases and the runner in place, gate green (1413 passed). The phase ran in 42 steps (`9.0a` … `9.7`) in six runs. See
 the Phase 9 notes in section 9.
 
 ### Phase 10: diagnostics
@@ -1872,15 +1872,15 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
   (inside the gate) compiles every `cfg(windows)` item and prints `windows: ok`. The hand greps
   `completion::application::(command_line_parser|generator_runner|test_fixtures)` outside `completion` and a `pub use` /
   `pub(crate) use` outside `architecture_tests.rs` print nothing. The dead-code scan (the `#![allow(dead_code)]` line
-  deleted in a copy, `cargo check --locked --bin tabsmith`) reports 9 warnings: the 7 that were there at the start (two in `logger.rs`, one each in
-  `completion_result.rs`, `parsed_command_line.rs`, `suggestion.rs`, `data_directory.rs`, and `types.rs`' `now_ms`) and 2 under
-  `terminal_session`, the `clock` field and the `clock()` getter of `TerminalSessionModule`, which nothing has read since run 4
-  (the research expected 0 here; this close changes no code, so Phase 11 either reads them or deletes them).
-- **Checks**: totals at the end of the phase (`b898db1`; the closing commits change docs only): 1411 passed, 0 failed, 1 ignored (`all_bundle_modules`, whose release run prints `1 passed`;
+  deleted in a copy, `cargo check --locked --bin tabsmith`) reports 7 warnings, the 7 that were there at the start (two in `logger.rs`, one each in
+  `completion_result.rs`, `parsed_command_line.rs`, `suggestion.rs`, `data_directory.rs`, and `types.rs`' `now_ms`), and 0 under
+  `terminal_session`: `launch_session` takes the clock from `module.clock()`, so the module's `clock` field and getter are read
+  (the review of run 6 found the launcher building its own `SystemClock`; the same clock in production, one line).
+- **Checks**: totals at the end of the phase (`b898db1` plus the review-fix commit, which adds two runner tests; the other closing commits change docs only): 1413 passed, 0 failed, 1 ignored (`all_bundle_modules`, whose release run prints `1 passed`;
   1091 at `phase9-start`), clippy 3 warnings on this Linux container (clippy 1.97 reports one lint more than macOS, so the
   gate runs with `BASELINE_CLIPPY=4`; the lint on the pty's `Modes::default()` went at 9.4c), build warnings 0, golden
   identical (131 commands), `windows: ok`. Test lock against `ef807c1`: MISSING 0, DUPLICATE 0, CHANGED 210 (the 168 at
-  the start of Phase 9 plus 42), NEW 1130, PATH-ONLY 31. Against `phase9-start`: MISSING 0, DUPLICATE 0, NEW 321, CHANGED
+  the start of Phase 9 plus 42), NEW 1132, PATH-ONLY 31. Against `phase9-start`: MISSING 0, DUPLICATE 0, NEW 323, CHANGED
   59, PATH-ONLY 12; all 59 are in the research's allowed list of 83 names and each is a restructuring in its "Test moves"
   tables: the tracker pipeline tests (field reads to accessors, the `(Tracker, Model)` pair to one rig over
   `AlacrittyTerminalScreen`, `Event` to `ShellEvent`: `extract_*`, `pwsh_*`, `prompt_*`, `at_prompt_only_on_the_command_line`,
@@ -1905,7 +1905,7 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
   `panic_while_handling_keys_still_forwards_them`, `conpty_is_closed_off_the_main_loop`),
   `debug_shell_survives_closed_terminal` (the D9 string; the child branch builds the module) and the module test
   `should_report_the_context_into_the_run_files_of_the_data_directory_it_was_built_with`; no assertion changed. Against
-  `phase9-guards`: MISSING 0, DUPLICATE 0, NEW 287, CHANGED 60: the same 59 plus the guard test
+  `phase9-guards`: MISSING 0, DUPLICATE 0, NEW 289, CHANGED 60: the same 59 plus the guard test
   `should_generate_a_session_id_of_32_lowercase_hex_digits`, which calls `generate_session_id()` after the move (same three
   assertions). The fixtures are untouched. `theme-diff.sh`, `inline-diff.sh`, `integrations-diff.sh`, `precmd-diff.sh`,
   `pty-diff.py` and `session-diff.py` print nothing against the baseline binary; `debug_shell_survives_closed_terminal`
@@ -1959,11 +1959,11 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
     `architecture_tests.rs`) and `now_secs` (one caller, `doctor.rs`), so Phase 10 may move the doctor caller to the
     `Clock` port and Phase 11 deletes the file. `LEGACY_MODULES` keeps every dead name (`pty` and `tracker` join
     `cli doctor engine icons inline integrations js keys menu parser render shell_parser spec suggest types`). Watch list (D7):
-    the four `#[cfg(test)]` accessors and `Rc` fields of `SessionUseCases`, `SessionPortsParts: Clone` (added for the
+    the four `#[cfg(test)]` accessors and `Rc` fields of `SessionUseCases`, `SessionPortsParts: Clone` (`#[cfg(test)]`, for the
     harness), `SessionPortsParts` and `SessionRunner` fields that the use cases also hold, `EditBuffer: Default`,
     `MenuEffect::Insert.full` and `Menu::vis()` (Phase 8), `MarkerTracker`'s `#[cfg(test)]` accessors,
     `TerminalSession::tracker_mut` (`#[cfg(test)]`, read by two tests), `TerminalBackground::rgb`, `LockSettlement`,
-    the module's `clock()` getter (no caller yet), `TerminalSession`
+    `TerminalSession`
     itself (728 lines: `route_key`, `insert` and `forward_key` could become a keystroke-specific domain object), the
     query-looking methods that mutate (`ReloadWatch::poll_due`, `context_changed`, `settings_changed`,
     `ShellExit::output_ended` and the aggregate's forwarders: `take_due_poll`, `note_context_time`, `note_settings_time`,

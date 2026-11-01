@@ -1,6 +1,4 @@
 use crate::shared::infrastructure::logger;
-use crate::shared::application::ports::clock::Clock;
-use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::terminal_session::application::ports::terminal_modes::TerminalModes;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
@@ -31,7 +29,6 @@ use portable_pty::{CommandBuilder, PtySize};
 use std::io::{IsTerminal, Write};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
@@ -89,7 +86,7 @@ pub(crate) fn launch_session(command: &WrappedShellCommand, modes: &mut Option<R
         screen.advance_model(format!("\x1b[{r};{c}H").as_bytes());
     }
     let screen: Rc<dyn TerminalScreen> = Rc::new(screen);
-    let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
+    let clock = module.clock();
     let (tx, rx) = mpsc::channel();
     sys::spawn_resize(tx.clone())?;
     let engine = module.start_completion_engine()(tx.clone(), settings.clone());

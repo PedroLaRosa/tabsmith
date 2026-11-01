@@ -96,16 +96,16 @@ researchers' raw notes `recon-*.md` with their compiled prototypes, the step gat
 | 9, services and use cases (run 5: 9.5a-9.5h) | up to `b7338e1` | five services, ten use cases, `SessionUseCases`, the harness |
 | 9, runner and close (run 6: 9.6d-9.6f, 9.7) | `f5921cb..b898db1`, then the docs | `pty.rs` became `session_runner.rs`; `probe_terminal`, `run_pty_session`, `launch_session`; tests moved; docs written from the as-built tree |
 
-State at `b898db1` (the docs commits after it change no code; numbers measured in 9.7): full gate `GATE PASS`, 1411 passed,
+State at `b898db1` (the docs commits after it change no code; numbers measured in 9.7): full gate `GATE PASS`, 1413 passed,
 0 failed, 1 ignored (`all_bundle_modules`, release run `1 passed`), clippy 3 warnings (Linux budget 4), build warnings 0, golden
-identical, `windows: ok`; testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 210, NEW 1130, PATH-ONLY 31; against
-`phase9-start` MISSING 0, DUPLICATE 0, CHANGED 59, NEW 321, PATH-ONLY 12; against `phase9-guards` MISSING 0, DUPLICATE 0, CHANGED
-60 (the 59 plus `should_generate_a_session_id_of_32_lowercase_hex_digits`), NEW 287; the 17 fixtures identical to `phase9-guards`;
+identical, `windows: ok`; testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 210, NEW 1132, PATH-ONLY 31; against
+`phase9-start` MISSING 0, DUPLICATE 0, CHANGED 59, NEW 323, PATH-ONLY 12; against `phase9-guards` MISSING 0, DUPLICATE 0, CHANGED
+60 (the 59 plus `should_generate_a_session_id_of_32_lowercase_hex_digits`), NEW 289; the 17 fixtures identical to `phase9-guards`;
 the six diff scripts empty; `debug_shell_survives_closed_terminal` x3 green; 20 serial runs of `pty::` and
 `exactly_as_at_the_phase_9_start` (44 tests) 0 failures; `cargo check --locked --no-default-features --all-targets` passes;
 `phase9-greps.sh`: every A, B1-B3, B5-B7, B9-B13, E1 and F label OK, Z lists 118 files (the design's 116 plus two sliced test
-modules). The dead-code scan (the `#![allow(dead_code)]` line deleted in a copy) reports 9 warnings: 7 as before and 2 under
-`terminal_session` (`TerminalSessionModule`'s `clock` field and `clock()` getter).
+modules). The dead-code scan (the `#![allow(dead_code)]` line deleted in a copy) reports 7 warnings (the 7 of the start) and 0 under
+`terminal_session`.
 
 ## Next: Phase 10 (diagnostics), only if the user asks
 
@@ -167,7 +167,7 @@ plan's section 9 "Phase 9 notes". Phase 8's O1-O8 are in the Phase 8 notes.
 - The hash tests bake FNV values generated on macOS aarch64; they read no clock, env, file or platform code, so ubuntu and
   windows should agree, but that is reasoned, not run, until CI runs.
 - Phase 11 dead-code watch list (D7): the plan's section 9 "Phase 9 notes", hand-off "Phase 11": the four `#[cfg(test)]`
-  accessors and `Rc` fields of `SessionUseCases`, `SessionPortsParts: Clone`, the module's unread `clock`, `TerminalSession`
+  accessors and `Rc` fields of `SessionUseCases`, `SessionPortsParts: Clone` (`#[cfg(test)]`), `TerminalSession`
   (728 lines), the query-named methods that mutate, plus Phase 8's list. `#![allow(dead_code)]` stays in `main.rs` until
   Phase 11, and `LEGACY_MODULES` keeps every dead name.
 - Commit `7a81d7f` (8.5a) alone has 4 clippy warnings; `5783c4b` fixes it, so a bisect landing on `7a81d7f` sees a red gate.
