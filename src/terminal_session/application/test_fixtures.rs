@@ -125,6 +125,75 @@ impl IoJournal {
     }
 }
 
+/// One line per call to the engine, for the logs of the characterisation scenarios.
+pub(crate) fn describe_engine_call(call: &CompletionEngineCall) -> String {
+    match call {
+        CompletionEngineCall::Complete(r) => format!(
+            "Complete(id={} buffer={:?} cursor={} shell={:?} history_mode={})",
+            r.id, r.buffer, r.cursor, r.shell, r.history_mode
+        ),
+        CompletionEngineCall::CommandFinished(h) => format!(
+            "CommandFinished(command={:?} exit_code={:?} pid={:?})",
+            h.command(),
+            h.exit_code(),
+            h.pid()
+        ),
+        CompletionEngineCall::CommandEnded => "CommandEnded".into(),
+        CompletionEngineCall::RecordInsertion { command, name } => format!("RecordInsertion({command:?}, {name:?})"),
+        CompletionEngineCall::RequestLlmGhostText { request, buffer, shell, .. } => {
+            format!("RequestLlmGhostText(request={request} buffer={buffer:?} shell={shell:?})")
+        }
+        CompletionEngineCall::ApplySettings(s) => format!("ApplySettings({} entries)", s.entries().count()),
+        CompletionEngineCall::ApplySessionContext { env, alias } => {
+            let mut env: Vec<_> = env.iter().collect();
+            env.sort();
+            format!("ApplySessionContext({env:?}, {alias:?})")
+        }
+        CompletionEngineCall::ToggleFuzzySearch => "ToggleFuzzySearch".into(),
+        CompletionEngineCall::ShutDown => "ShutDown".into(),
+    }
+}
+
+/// What a characterisation scenario writes step by step: each step lists what reached the user's terminal, the shell
+/// and the engine since the step before, and the text is compared with the frozen fixture of the scenario.
+pub(crate) struct ScenarioLog {
+    text: String,
+    stdout_mark: usize,
+}
+
+impl ScenarioLog {
+    pub(crate) fn new() -> Self {
+        ScenarioLog { text: String::new(), stdout_mark: 0 }
+    }
+
+    /// `stdout_so_far` is everything the user's terminal got since the session began.
+    pub(crate) fn note(
+        &mut self,
+        step: &str,
+        stdout_so_far: &[u8],
+        shell_input: &[u8],
+        engine_calls: &[CompletionEngineCall],
+    ) {
+        let out = stdout_so_far[self.stdout_mark..].to_vec();
+        self.stdout_mark = stdout_so_far.len();
+        let engine: Vec<String> = engine_calls.iter().map(describe_engine_call).collect();
+        self.text += &format!(
+            "{step}\n  stdout={}\n  pty={}\n  engine={engine:?}\n",
+            out.escape_ascii(),
+            shell_input.escape_ascii()
+        );
+    }
+
+    pub(crate) fn record(&mut self, line: &str) {
+        self.text += &format!("  {line}\n");
+    }
+
+    /// The whole log, to compare with the frozen fixture of the scenario.
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+}
+
 /// A session over the real screen and in-memory doubles, wired through `SessionUseCases::new` exactly as production
 /// wires it. The writer and the shell share one journal, so a test sees the order of what went out.
 pub(crate) struct TerminalSessionHarness {
@@ -138,7 +207,14 @@ pub(crate) struct TerminalSessionHarness {
     pub(crate) live_settings: Rc<InMemoryLiveSettings>,
     pub(crate) reaper: Rc<RecordingGeneratorProcessReaper>,
     pub(crate) clock: Arc<dyn Clock + Send + Sync>,
+    /// The ports `use_cases` is wired over: a test that swaps one wires the use cases again with `use_cases_over`.
+    pub(crate) ports: SessionPortsParts,
     pub(crate) use_cases: SessionUseCases,
+}
+
+/// The use cases over `ports`, wired as production wires them. The one place a test builds them.
+pub(crate) fn use_cases_over(ports: SessionPortsParts) -> SessionUseCases {
+    SessionUseCases::new(ports)
 }
 
 impl TerminalSessionHarness {
@@ -182,7 +258,7 @@ impl TerminalSessionHarness {
         let engine = engine.unwrap_or_else(|| Rc::new(RecordingCompletionEngine::new(calls)));
         let live_settings = Rc::new(InMemoryLiveSettings::new(settings.clone()));
         let reaper = Rc::new(RecordingGeneratorProcessReaper::new());
-        let use_cases = SessionUseCases::new(SessionPortsParts {
+        let ports = SessionPortsParts {
             engine,
             screen: screen.clone(),
             writer: writer.clone(),
@@ -194,7 +270,8 @@ impl TerminalSessionHarness {
             themes: Rc::new(InMemoryThemeRepository::default()),
             working_directory: Rc::new(FixedWorkingDirectory::new(std::env::current_dir().ok())),
             clock: clock.clone(),
-        });
+        };
+        let use_cases = use_cases_over(ports.clone());
         let session = TerminalSession::new(TerminalSessionParts {
             id,
             launched_shell: Shell::Bash,
@@ -204,7 +281,13 @@ impl TerminalSessionHarness {
             settings_modified: None,
             now: clock.now_instant(),
         });
-        TerminalSessionHarness { session, screen, writer, shell, journal, engine_calls, live_settings, reaper, clock, use_cases }
+        TerminalSessionHarness { session, screen, writer, shell, journal, engine_calls, live_settings, reaper, clock, ports, use_cases }
+    }
+
+    /// Swaps a port and wires the use cases over the new set again; the session keeps its state.
+    pub(crate) fn rewire(&mut self, swap: impl FnOnce(&mut SessionPortsParts)) {
+        swap(&mut self.ports);
+        self.use_cases = use_cases_over(self.ports.clone());
     }
 
     /// A stdin read arrives.

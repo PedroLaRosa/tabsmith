@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 /// The runtime ports one session runs on, handed to `SessionUseCases::new`: the driver fills them from the module and
 /// the per-session adapters, the test harness from its doubles.
+#[derive(Clone)]
 pub(crate) struct SessionPortsParts {
     pub(crate) engine: Rc<dyn CompletionEngine>,
     pub(crate) screen: Rc<dyn TerminalScreen>,

@@ -258,7 +258,7 @@ mod tests {
     };
     use crate::terminal_session::application::ports::generator_process_reaper::RecordingGeneratorProcessReaper;
     use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
-    use crate::terminal_session::application::test_fixtures::set_panic_in_key_handling;
+    use crate::terminal_session::application::test_fixtures::{describe_engine_call, set_panic_in_key_handling};
     use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::RecordingMasterPty;
     use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
     use crate::completion::domain::value_objects::suggestion::Suggestion;
@@ -487,34 +487,6 @@ mod tests {
 
     use crate::shared::infrastructure::testing::fixture_log::assert_matches_fixture;
 
-    fn describe(call: &CompletionEngineCall) -> String {
-        match call {
-            CompletionEngineCall::Complete(r) => format!(
-                "Complete(id={} buffer={:?} cursor={} shell={:?} history_mode={})",
-                r.id, r.buffer, r.cursor, r.shell, r.history_mode
-            ),
-            CompletionEngineCall::CommandFinished(h) => format!(
-                "CommandFinished(command={:?} exit_code={:?} pid={:?})",
-                h.command(),
-                h.exit_code(),
-                h.pid()
-            ),
-            CompletionEngineCall::CommandEnded => "CommandEnded".into(),
-            CompletionEngineCall::RecordInsertion { command, name } => format!("RecordInsertion({command:?}, {name:?})"),
-            CompletionEngineCall::RequestLlmGhostText { request, buffer, shell, .. } => {
-                format!("RequestLlmGhostText(request={request} buffer={buffer:?} shell={shell:?})")
-            }
-            CompletionEngineCall::ApplySettings(s) => format!("ApplySettings({} entries)", s.entries().count()),
-            CompletionEngineCall::ApplySessionContext { env, alias } => {
-                let mut env: Vec<_> = env.iter().collect();
-                env.sort();
-                format!("ApplySessionContext({env:?}, {alias:?})")
-            }
-            CompletionEngineCall::ToggleFuzzySearch => "ToggleFuzzySearch".into(),
-            CompletionEngineCall::ShutDown => "ShutDown".into(),
-        }
-    }
-
     /// A session plus a log of what each step wrote to stdout, to the PTY and to the engine.
     /// `inbox`, `credit_returns` and `stash` are the live ends of the session's message channel, for the scenarios
     /// that drive `SessionRunner::step`.
@@ -562,7 +534,7 @@ mod tests {
             let written = self.pty.stdout.written();
             let out = written[self.mark..].to_vec();
             self.mark = written.len();
-            let engine: Vec<String> = self.engine.try_iter().map(|c| describe(&c)).collect();
+            let engine: Vec<String> = self.engine.try_iter().map(|c| describe_engine_call(&c)).collect();
             self.log += &format!(
                 "{step}\n  stdout={}\n  pty={}\n  engine={engine:?}\n",
                 out.escape_ascii(),
@@ -728,172 +700,6 @@ mod tests {
     }
 
     #[test]
-    fn should_draw_and_insert_when_typing_with_a_menu_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new("{}");
-        rig.prompt("git ch");
-        rig.note("prompt: git ch");
-        rig.reply(subs("ch"), None);
-        rig.note("two replies");
-        rig.input(b"\x1b[B");
-        rig.note("Down");
-        rig.input(b"\t");
-        rig.note("Tab");
-        rig.output(b"erry-pick");
-        rig.note("the echo");
-        rig.input(b"\x1b");
-        rig.note("Esc");
-        rig.finish("typing");
-    }
-
-    #[test]
-    fn should_ring_the_bell_before_the_frame_and_write_the_line_last_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new(r#"{"autocomplete.keybindings.tab": "insertCommonPrefix"}"#);
-        rig.prompt("git ");
-        let items = ["add", "branch"].iter().map(|n| item(n, SuggestionKind::Subcommand, "")).collect();
-        rig.reply(items, None);
-        rig.note("menu for 'git '");
-        rig.input(b"\tx");
-        rig.note("Tab (Bell) and a typed x in one read");
-        rig.finish("bell");
-    }
-
-    #[test]
-    fn should_release_held_keys_after_the_frame_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new("{}");
-        rig.prompt("git che");
-        rig.reply(subs("che"), None);
-        rig.note("menu");
-        rig.input(b"\x7f");
-        rig.input(b"\r");
-        rig.note("Backspace, Enter (held)");
-        rig.output(b"\x08\x1b[K");
-        rig.note("echo of the Backspace");
-        rig.reply(subs("ch"), None);
-        rig.note("reply for 'git ch': release_held after the frame");
-        rig.finish("held");
-    }
-
-    #[test]
-    fn should_report_a_command_cycle_to_the_engine_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new("{}");
-        rig.prompt("echo hi");
-        rig.note("prompt");
-        rig.input(b"\r");
-        rig.note("Enter");
-        rig.output(b"\r\n\x1b]697;PreExec\x07hi\r\n");
-        rig.note("PreExec and output");
-        rig.output(
-            format!("\x1b]697;ExitCode=0\x07\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07")
-                .as_bytes(),
-        );
-        rig.note("next prompt");
-        rig.finish("lifecycle");
-    }
-
-    #[test]
-    fn should_clear_the_overlay_and_shut_down_the_engine_at_the_end_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new("{}");
-        rig.prompt("git ch");
-        rig.reply(subs("ch"), None);
-        rig.note("menu");
-        rig.end();
-        rig.note("cleanup");
-        rig.finish("cleanup");
-    }
-
-    #[test]
-    fn should_accept_the_ghost_whole_and_by_word_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new("{}");
-        rig.prompt("echo hel");
-        rig.reply(vec![], Some("lo wor ld"));
-        rig.note("ghost lo wor ld");
-        rig.input(b"\x1bf");
-        rig.note("Alt-f: next word");
-        rig.output(b"lo");
-        rig.note("echo of the word");
-        rig.input(b"\x1b[C");
-        rig.note("Right: the rest");
-        rig.finish("ghost");
-    }
-
-    #[test]
-    fn should_keep_an_insertion_in_the_basis_until_it_is_echoed_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new("{}");
-        rig.prompt("git chec");
-        let items = ["checkout", "checkout-index"].iter().map(|n| item(n, SuggestionKind::Subcommand, "chec")).collect();
-        rig.reply(items, Some("kout feature-login"));
-        rig.note("menu and ghost");
-        rig.input(b"\t");
-        rig.note("Tab inserts, lock armed");
-        rig.poke_lock_due();
-        rig.tick();
-        rig.note("lock deadline: re-armed, nothing echoed");
-        rig.input(b"\x1b[C");
-        rig.note("Right: ghost on top of the insertion");
-        rig.output(b"kout feature-login");
-        rig.note("everything echoed");
-        rig.input(b"e");
-        rig.input(b"\r");
-        rig.note("typed-ahead e, then Enter");
-        rig.finish("lock");
-    }
-
-    #[test]
-    fn should_repaint_once_the_resize_settled_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new("{}");
-        rig.prompt("git ch");
-        rig.reply(subs("ch"), None);
-        rig.note("menu");
-        rig.resize(60, 18);
-        rig.note("resize 60x18");
-        rig.output(b"x");
-        rig.note("output while resizing re-arms the quiet time");
-        rig.poke_resize_due();
-        rig.tick();
-        rig.note("resize settled: repaint and frame");
-        rig.finish("resize");
-    }
-
-    #[test]
-    fn should_debounce_and_show_the_llm_ghost_text_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new(
-            r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
-        );
-        rig.prompt("zzzcmd foo");
-        rig.note("prompt");
-        let request = rig.request_id();
-        rig.reply_error("zzzcmd foo", 10);
-        rig.note("error reply arms the debounce");
-        rig.poke_llm_due();
-        rig.tick();
-        rig.note("debounce due: LLM request");
-        rig.step_ghost(request, Some(" bar".into()));
-        rig.note("llm reply: ghost drawn");
-        rig.step_ghost(request + 5, Some("stale".into()));
-        rig.note("stale reply ignored");
-        rig.finish("llm");
-    }
-
-    #[test]
-    fn should_reload_the_settings_and_the_theme_from_the_file_exactly_as_at_the_phase_9_start() {
-        let temp_dir = TempDir::new("reload-the-settings");
-        let mut rig = Rig::new("{}");
-        rig.read_settings_from(&temp_dir);
-        rig.prompt("git ch");
-        rig.reply(subs("ch"), None);
-        rig.note("menu");
-        std::fs::write(temp_dir.path().join("settings.json"), r#"{"autocomplete.theme":"light","autocomplete.height":2}"#).unwrap();
-        rig.poke_poll_due();
-        rig.tick();
-        rig.note("settings file appeared: reload, theme, redraw");
-        std::fs::remove_file(temp_dir.path().join("settings.json")).unwrap();
-        rig.poke_poll_due();
-        rig.tick();
-        rig.note("settings file deleted: reload to the defaults (the time went Some -> None), redraw in the dark theme");
-        rig.finish("reload");
-    }
-
-    #[test]
     fn should_theme_the_late_probe_reply_and_not_type_it_exactly_as_at_the_phase_9_start() {
         let mut rig = Rig::new(r#"{"autocomplete.theme": "system"}"#);
         rig.poke_probe_window();
@@ -930,23 +736,6 @@ mod tests {
         assert!(rig.is_passthrough());
         rig.record(&format!("exit_code={:?} deadline_set={}", rig.exit_code(), rig.has_deadline()));
         rig.finish("passthrough");
-    }
-
-    #[test]
-    fn should_serve_the_spinner_after_two_hundred_milliseconds_exactly_as_at_the_phase_9_start() {
-        let mut rig = Rig::new("{}");
-        rig.prompt("git ch");
-        rig.reply_loading("git ch", subs("ch"));
-        rig.note("first loading reply arms the spinner timer");
-        rig.reply_loading("git ch", subs("ch"));
-        std::thread::sleep(Duration::from_millis(250));
-        rig.poke_spinner_due();
-        rig.tick();
-        rig.note("after 250 ms: spinner tick and redraw");
-        rig.poke_spinner_due();
-        rig.tick();
-        rig.note("next tick");
-        rig.finish("spinner");
     }
 
     #[test]
@@ -1176,7 +965,7 @@ mod tests {
         fn run(self) -> (i32, Vec<String>) {
             let rig = self.rig;
             let code = rig.s.run();
-            let calls = rig.engine.try_iter().map(|c| describe(&c)).collect();
+            let calls = rig.engine.try_iter().map(|c| describe_engine_call(&c)).collect();
             (code, calls)
         }
     }

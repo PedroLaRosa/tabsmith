@@ -146,22 +146,4 @@ impl SessionUseCases {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::terminal_session::application::test_fixtures::{subs, TerminalSessionHarness};
-
-    /// The painter holds no frame of its own: the screen remembers what was drawn, so a frame drawn for one use case
-    /// is skipped as identical by the redraw of another only while both draw over the same screen and writer.
-    #[test]
-    fn should_skip_an_identical_frame_across_the_completion_and_llm_use_cases() {
-        let mut harness = TerminalSessionHarness::new("{}");
-        harness.prompt("git ch");
-        harness.reply(subs("ch"), None);
-        harness.session.expect_llm_reply(harness.session.request_id());
-        let frame_drawn_for_the_reply = !harness.written().is_empty();
-        harness.clear_written();
-
-        harness.llm_reply(harness.session.request_id(), None);
-
-        assert_eq!((frame_drawn_for_the_reply, harness.written().is_empty()), (true, true));
-    }
-}
+mod tests;
