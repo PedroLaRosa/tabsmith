@@ -1,6 +1,6 @@
 //! Small user-facing commands: diagnostic, debug (SPEC §2.10).
 //! OWNER: cli agent.
-use crate::pty::CompletionEngineStarter;
+use crate::terminal_session::infrastructure::pty::completion_engine_starter::CompletionEngineStarter;
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;

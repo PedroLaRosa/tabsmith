@@ -44,6 +44,7 @@ use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
+use crate::terminal_session::infrastructure::pty::completion_engine_starter::CompletionEngineStarter;
 use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
 use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, PROBE, PROBE_TIMEOUT};
 use crate::dropdown::domain::value_objects::rgb::Rgb;
@@ -75,9 +76,6 @@ const FILE_POLL: Duration = Duration::from_secs(2);
 const LATE_PROBE: Duration = Duration::from_secs(3);
 /// After the child exits, wait this long for the rest of its output (PTY EOF) before leaving.
 const EXIT_GRACE: Duration = Duration::from_millis(200);
-
-/// Starts the completion engine, its replies going to the session's inbox; called once, inside `Session::start`.
-pub(crate) type CompletionEngineStarter = fn(Sender<SessionMessage>, Settings) -> Rc<dyn CompletionEngine>;
 
 /// Run the wrapper; returns the exit code to exit with. Never leaves the user without a shell (fallback, SPEC §4.4).
 pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStarter) -> i32 {

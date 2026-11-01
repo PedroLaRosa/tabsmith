@@ -1,3 +1,4 @@
+pub(crate) mod completion_engine_starter;
 #[cfg(unix)]
 pub(crate) mod platform_unix;
 #[cfg(windows)]
