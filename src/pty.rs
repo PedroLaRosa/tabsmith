@@ -44,10 +44,11 @@ use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_phase::CompletionPhase;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
+use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
 use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use anyhow::{anyhow, bail, Context, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Write};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -69,8 +70,6 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 const PROBE: &[u8] = b"\x1b]11;?\x1b\\\x1b[6n";
 /// After a probe timeout, a late reply arriving within this window is dropped instead of typed into the shell.
 const LATE_PROBE: Duration = Duration::from_secs(3);
-/// PTY chunks in flight between the reader thread and the main loop (backpressure for a flooding child).
-const PTY_CREDITS: usize = 4;
 /// After the child exits, wait this long for the rest of its output (PTY EOF) before leaving.
 const EXIT_GRACE: Duration = Duration::from_millis(200);
 
@@ -228,24 +227,6 @@ fn unechoed_after(
         },
         _ => String::new(),
     }
-}
-
-/// PTY reader (SPEC §4.3). Every read takes a credit, returned once the main loop handled the chunk, so at most
-/// `PTY_CREDITS` chunks are queued: a flooding child feels backpressure and Ctrl-C is never stuck behind its output.
-fn pump(mut reader: impl Read, credits: Receiver<()>, tx: Sender<SessionMessage>) {
-    let mut buf = vec![0u8; 16 * 1024];
-    while credits.recv().is_ok() {
-        let n = loop {
-            match reader.read(&mut buf) {
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                r => break r.unwrap_or(0), // Linux: EIO once the slave side is gone
-            }
-        };
-        if n == 0 || tx.send(SessionMessage::Pty(buf[..n].to_vec())).is_err() {
-            break;
-        }
-    }
-    let _ = tx.send(SessionMessage::PtyEof);
 }
 
 fn is_ctrl(k: &Key, c: char) -> bool {
@@ -506,12 +487,7 @@ impl Session {
         write_stdout(format!("\x1b]0;{base}\x07").as_bytes());
 
         // Threads (SPEC §4.3).
-        let t = tx.clone();
-        let (credits, credit_rx) = mpsc::sync_channel(PTY_CREDITS);
-        for _ in 0..PTY_CREDITS {
-            let _ = credits.send(());
-        }
-        thread::spawn(move || pump(reader, credit_rx, t));
+        let credits = spawn_pty_reader(reader, tx.clone());
         let (writer, wrx) = mpsc::channel::<Vec<u8>>();
         thread::spawn(move || {
             for b in wrx {
@@ -1737,30 +1713,6 @@ mod tests {
         assert_eq!(unechoed_after("y", None, Some("x"), false), "");
     }
 
-    #[test]
-    fn pty_reader_waits_for_credits() {
-        let (credits, credit_rx) = mpsc::sync_channel(PTY_CREDITS);
-        let (tx, rx) = mpsc::channel();
-        credits.send(()).unwrap();
-        credits.send(()).unwrap();
-        std::thread::spawn(move || pump(std::io::repeat(b'y'), credit_rx, tx));
-        let pty =
-            |r: Result<SessionMessage, RecvTimeoutError>| matches!(r, Ok(SessionMessage::Pty(b)) if b.len() == 16 * 1024);
-        assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
-        assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
-        assert!(
-            rx.recv_timeout(Duration::from_millis(100)).is_err(),
-            "an endless child is not read ahead"
-        );
-        credits.send(()).unwrap();
-        assert!(pty(rx.recv_timeout(Duration::from_secs(5))));
-        drop(credits);
-        assert!(matches!(
-            rx.recv_timeout(Duration::from_secs(5)),
-            Ok(SessionMessage::PtyEof)
-        ));
-    }
-
     #[cfg(unix)]
     #[test]
     fn signal_death_exit_code() {
@@ -1777,6 +1729,7 @@ mod tests {
 
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
 
+    use crate::terminal_session::infrastructure::pty::pty_reader::PTY_CREDITS;
     use crate::completion::domain::test_fixtures::{comp, item, settings};
     use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
     use crate::settings::domain::repositories::settings_repository::InMemorySettingsRepository;
@@ -2529,7 +2482,7 @@ mod tests {
             fn get_size(&self) -> anyhow::Result<PtySize> {
                 Ok(PtySize::default())
             }
-            fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
+            fn try_clone_reader(&self) -> anyhow::Result<Box<dyn std::io::Read + Send>> {
                 bail!("unused")
             }
             fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
