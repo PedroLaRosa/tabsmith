@@ -13,7 +13,7 @@ use crate::terminal_session::domain::services::session_deadlines::REDRAW_GRACE;
 use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::terminal_session::domain::value_objects::shell_marker::ShellMarker;
 use crate::terminal_session::domain::services::session_deadlines::{
-    EXIT_GRACE, FILE_POLL, RESIZE_DEBOUNCE,
+    EXIT_GRACE, FILE_POLL, RESIZE_DEBOUNCE, SPINNER_TICK,
 };
 
 const SID: &str = "0123456789abcdef0123456789abcdef";
@@ -407,4 +407,60 @@ fn should_hold_enter_behind_an_unmodelled_backspace_until_its_reply_came() {
     let after_the_reply = session.release_held_keys(start);
 
     assert_eq!((route, before_the_reply, after_the_reply), (KeyRoute::Hold, None, Some(b"\r".to_vec())));
+}
+
+#[test]
+fn should_tick_the_spinner_only_while_a_reply_is_loading() {
+    let start = Instant::now();
+    let judged_at = start + Duration::from_secs(1);
+    let mut session = session_at_prompt("{}");
+    session.refresh(&screen(), line("git ch"), start);
+    session.apply_completion(comp("git ch", 1, vec![]).with_request_id(1).with_loading(true), start);
+
+    let before_the_tick = session.tick_spinner(start, judged_at);
+    let while_loading = session.tick_spinner(start + SPINNER_TICK, judged_at);
+    let frame_while_loading = session.spinner_frame();
+    session.apply_completion(comp("git ch", 1, vec![]).with_request_id(1), start + SPINNER_TICK);
+    let once_loaded = session.tick_spinner(start + SPINNER_TICK * 2, judged_at);
+
+    assert_eq!(
+        (before_the_tick, while_loading, frame_while_loading, once_loaded, session.spinner_frame()),
+        (false, true, 1, false, 1)
+    );
+}
+
+#[test]
+fn should_take_the_llm_request_once_its_debounce_ran_out() {
+    let start = Instant::now();
+    let mut session = session_at_prompt(
+        r#"{"inline.source": "mock", "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#,
+    );
+    session.refresh(&screen(), line("zzzcmd foo"), start);
+    session.apply_completion(CompletionResult::error(session.request_id(), "zzzcmd foo".into(), 10), start);
+    let due = session.llm_due_at().expect("the debounce was armed");
+
+    let too_early = session.take_due_llm_request(due - Duration::from_millis(1));
+    let taken = session.take_due_llm_request(due);
+    let again = session.take_due_llm_request(due);
+    let reply_is_awaited = session.accept_llm_reply(1, Some("bar".into()));
+
+    assert_eq!(
+        (too_early, taken, again, reply_is_awaited),
+        (None, Some((1, "zzzcmd foo".to_string())), None, true)
+    );
+}
+
+#[test]
+fn should_poll_the_files_once_the_interval_passed_and_arm_the_next_poll() {
+    let start = Instant::now();
+    let mut session = session_at(start);
+
+    let too_early = session.poll_due(start + FILE_POLL - Duration::from_millis(1));
+    let due = session.poll_due(start + FILE_POLL);
+    let at_once_again = session.poll_due(start + FILE_POLL);
+
+    assert_eq!(
+        (too_early, due, at_once_again, session.next_deadline()),
+        (false, true, false, Some(start + FILE_POLL * 2))
+    );
 }

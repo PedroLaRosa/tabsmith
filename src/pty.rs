@@ -1,6 +1,5 @@
 //! `tabsmith _ pty`: the PTY wrapper session (SPEC §4.3–4.5, §7.2.4, §7.3, §7.6, §8).
 //! OWNER: wrapper agent.
-use crate::dropdown::domain::value_objects::keymap::Keymap;
 use crate::shared::infrastructure::logger;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
@@ -13,7 +12,6 @@ use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
 use crate::terminal_session::domain::services::key_router::plain_char;
-use crate::terminal_session::domain::services::session_deadlines::SPINNER_TICK;
 use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
@@ -708,7 +706,6 @@ impl Session {
 
     fn on_timers(&mut self) {
         let now = Instant::now();
-        let due = |d: Option<Instant>| d.is_some_and(|d| d <= now);
         let mut redraw = false;
         self.session.settle_resize_if_due(now);
         if self.session.take_due_redraw_grace(now) {
@@ -716,25 +713,15 @@ impl Session {
             redraw = true;
         }
         self.release_held();
-        if self.session.lock.as_ref().is_some_and(|l| l.is_due(now)) {
+        if self.session.insertion_lock_due(now) {
             self.refresh(); // releases the lock and catches up with the buffer
             redraw = true;
         }
-        if self.session.ghost.take_due_llm(now) {
-            if let Some((buffer, _)) = self.session.sent.clone() {
-                self.session.ghost.expect_llm_reply(self.session.request);
-                self.engine.request_llm_ghost_text(self.session.request, buffer, self.cwd(), self.shell());
-            }
+        if let Some((request, buffer)) = self.session.take_due_llm_request(now) {
+            self.engine.request_llm_ghost_text(request, buffer, self.cwd(), self.shell());
         }
-        if due(self.session.spinner_at) {
-            self.session.spinner_at = None;
-            if self.session.menu.last().is_some_and(|c| c.is_loading()) {
-                self.session.spinner += 1;
-                self.session.spinner_at = Some(now + SPINNER_TICK);
-                redraw |= self.session.menu.loading(Instant::now());
-            }
-        }
-        if self.session.reload.poll_due(now) {
+        redraw |= self.session.tick_spinner(now, Instant::now());
+        if self.session.poll_due(now) {
             redraw |= self.poll_files();
         }
         let repaint = self.take_repaint();
@@ -750,25 +737,24 @@ impl Session {
     /// Settings (live reload) and the session env file from `_ pre-cmd` (D17). True when settings changed.
     fn poll_files(&mut self) -> bool {
         let m = self.session_contexts.last_modified(self.session.id());
-        if self.session.reload.context_changed(m) {
+        if self.session.context_changed(m) {
             if let Some(ctx) = self.session_contexts.find(self.session.id()) {
                 self.engine
                     .apply_session_context(ctx.env().clone(), ctx.alias().map(str::to_owned));
             }
         }
         let m = self.settings_repository.last_modified();
-        if !self.session.reload.settings_changed(m) {
+        if !self.session.settings_changed(m) {
             return false;
         }
-        self.session.settings = load_or_defaults(&*self.settings_repository);
-        self.session.keymap = Keymap::from_settings(&self.session.settings);
+        self.session.apply_settings(load_or_defaults(&*self.settings_repository));
         self.screen
             .set_theme(resolve_theme(
-                &self.session.settings,
-                self.session.terminal_background.map(TerminalBackground::rgb),
+                self.session.settings(),
+                self.session.terminal_background().map(TerminalBackground::rgb),
                 &*self.themes,
             ));
-        self.engine.apply_settings(self.session.settings.clone());
+        self.engine.apply_settings(self.session.settings().clone());
         true
     }
 

@@ -569,6 +569,60 @@ impl TerminalSession {
         self.exit.child_exited(code, now)
     }
 
+    pub(crate) fn insertion_lock_due(&self, now: Instant) -> bool {
+        self.lock.as_ref().is_some_and(|l| l.is_due(now))
+    }
+
+    /// The LLM debounce ran out: the request id and the buffer to ask the LLM for.
+    pub(crate) fn take_due_llm_request(&mut self, now: Instant) -> Option<(u64, String)> {
+        if !self.ghost.take_due_llm(now) {
+            return None;
+        }
+        let (buffer, _) = self.sent.clone()?;
+        self.ghost.expect_llm_reply(self.request);
+        Some((self.request, buffer))
+    }
+
+    /// The spinner tick: true when the frame is to be drawn again. `now` = the tick's instant (the next tick is
+    /// scheduled from it), `judged_at` = a fresh read, the instant the menu judges "loading for > 200 ms" at.
+    pub(crate) fn tick_spinner(&mut self, now: Instant, judged_at: Instant) -> bool {
+        if !self.spinner_at.is_some_and(|d| d <= now) {
+            return false;
+        }
+        self.spinner_at = None;
+        if self.menu.last().is_some_and(|c| c.is_loading()) {
+            self.spinner += 1;
+            self.spinner_at = Some(now + SPINNER_TICK);
+            return self.menu.loading(judged_at);
+        }
+        false
+    }
+
+    pub(crate) fn spinner_frame(&self) -> usize {
+        self.spinner
+    }
+
+    /// The files are looked at again: the next look is one interval away.
+    pub(crate) fn poll_due(&mut self, now: Instant) -> bool {
+        self.reload.poll_due(now)
+    }
+
+    /// The context file's time, as the repository reports it. True when the context is to be read again.
+    pub(crate) fn context_changed(&mut self, modified: Option<SystemTime>) -> bool {
+        self.reload.context_changed(modified)
+    }
+
+    /// The settings file's time. True when the settings are to be reloaded.
+    pub(crate) fn settings_changed(&mut self, modified: Option<SystemTime>) -> bool {
+        self.reload.settings_changed(modified)
+    }
+
+    /// The reloaded settings replace the old ones, and the keymap follows them.
+    pub(crate) fn apply_settings(&mut self, settings: Settings) {
+        self.keymap = Keymap::from_settings(&settings);
+        self.settings = settings;
+    }
+
     pub(crate) fn enter_passthrough(&mut self) {
         self.passthrough = true;
     }
