@@ -1,7 +1,7 @@
 //! Composition root for the command line: the clap root, the dispatch to each command handler, and the
 //! commands that only need the root (`version`, `completion`) plus the error printer.
 
-use crate::bootstrap::bridges::SpecBundleBridge;
+use crate::bootstrap::bridges::{GeneratorProcessBridge, SpecBundleBridge};
 use crate::bootstrap::channel_completion_engine::start_completion_engine;
 use crate::dropdown::infrastructure::cli::theme_command::{run_theme_command, ThemeArgs};
 use crate::dropdown::infrastructure::dropdown_module::{build_dropdown_module, DropdownModule};
@@ -26,7 +26,9 @@ use crate::shell_integration::infrastructure::shell_integration_module::{
 };
 use crate::specs::infrastructure::specs_module::build_specs_module;
 use crate::terminal_session::infrastructure::cli::pre_cmd_command::run_pre_cmd_command;
-use crate::terminal_session::infrastructure::terminal_session_module::build_terminal_session_module;
+use crate::terminal_session::infrastructure::terminal_session_module::{
+    build_terminal_session_module, TerminalSessionModule,
+};
 use crate::{cli, doctor, pty};
 use anyhow::Result;
 use clap::{ArgAction, Args, Parser, Subcommand};
@@ -145,16 +147,29 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         }
         Some(Command::Diagnostic(a)) => cli::diagnostic(a),
         Some(Command::Completion(a)) => completion(a),
-        Some(Command::Debug(c)) => cli::debug(c, start_completion_engine),
+        Some(Command::Debug(c)) => cli::debug(c, &terminal_session_module()),
         Some(Command::Internal(c)) => match c {
-            InternalCmd::Pty { shell, cmd } => Ok(pty::run(shell, cmd, start_completion_engine)),
+            InternalCmd::Pty { shell, cmd } => Ok(pty::run(shell, cmd, &terminal_session_module())),
             InternalCmd::ShouldLaunch => run_should_launch_command(&shell_integration_module()),
             InternalCmd::GetShell => run_get_shell_command(),
-            InternalCmd::PreCmd { alias } => {
-                run_pre_cmd_command(alias, &build_terminal_session_module(&SharedDependencies::from_env()))
-            }
+            InternalCmd::PreCmd { alias } => run_pre_cmd_command(alias, &terminal_session_module()),
         },
     }
+}
+
+/// The module of the terminal session (the PTY wrapper, the debug shell and `_ pre-cmd`), over the settings file and
+/// the themes folder the environment names (resolved when a session needs them; building reads no file).
+pub(crate) fn terminal_session_module() -> TerminalSessionModule {
+    let dependencies = SharedDependencies::from_env();
+    let settings = Rc::new(JsonFileSettingsRepository::new(dependencies.data_directory.clone()));
+    let themes = build_dropdown_module(&dependencies, settings.clone()).themes;
+    build_terminal_session_module(
+        &dependencies,
+        settings,
+        themes,
+        Rc::new(GeneratorProcessBridge),
+        start_completion_engine,
+    )
 }
 
 /// The inline command's module over the settings file the environment names (resolved when a command needs it).

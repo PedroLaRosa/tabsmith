@@ -5,7 +5,6 @@ use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
-use crate::dropdown::infrastructure::adapters::file_theme_repository::FileThemeRepository;
 use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
@@ -17,24 +16,22 @@ use crate::terminal_session::domain::value_objects::screen_state::ScreenState;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
 use crate::settings::domain::repositories::settings_repository::SettingsRepository;
-use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::settings::infrastructure::load_or_defaults::load_or_defaults;
-use crate::shared::infrastructure::data_directory_from_env::{data_directory_from_env, user_home_from_env};
+use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
-use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
 use crate::terminal_session::infrastructure::adapters::kitty_graphics;
 use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
 use crate::completion::application::completion_request::CompletionRequest;
 use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
-use crate::terminal_session::infrastructure::pty::completion_engine_starter::CompletionEngineStarter;
+use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
+use crate::terminal_session::infrastructure::terminal_session_module::TerminalSessionModule;
 use crate::terminal_session::infrastructure::pty::fallback_shell::run_fallback_shell;
-use crate::bootstrap::bridges::GeneratorProcessBridge;
 use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
 use crate::terminal_session::infrastructure::pty::terminal_probe::{parse_probe, PROBE, PROBE_TIMEOUT};
 use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
@@ -54,7 +51,7 @@ use crate::terminal_session::infrastructure::pty::platform_unix as sys;
 use crate::terminal_session::infrastructure::pty::platform_windows as sys;
 
 /// Run the wrapper; returns the exit code to exit with. Never leaves the user without a shell (fallback, SPEC §4.4).
-pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStarter) -> i32 {
+pub(crate) fn run(shell: Option<String>, cmd: Vec<String>, module: &TerminalSessionModule) -> i32 {
     // Panics are logged, never printed over the user's screen; the session then falls back to a plain shell.
     std::panic::set_hook(Box::new(|info| logger::error(&format!("panic: {info}"))));
     let shell = shell
@@ -70,7 +67,7 @@ pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStart
     let command = WrappedShellCommand::new(shell.as_deref(), &cmd, login);
     let mut modes = None;
     let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        Session::start(&command, &mut modes, start).map(Session::run)
+        Session::start(&command, &mut modes, module).map(Session::run)
     }));
     let err = match res {
         Ok(Ok(code)) => return code,
@@ -80,7 +77,7 @@ pub fn run(shell: Option<String>, cmd: Vec<String>, start: CompletionEngineStart
     if let Some(m) = modes {
         m.restore();
     }
-    run_fallback_shell(&err, command.argv(), &GeneratorProcessBridge)
+    run_fallback_shell(&err, command.argv(), &*module.generator_processes())
 }
 
 fn env_nonempty(k: &str) -> Option<String> {
@@ -123,8 +120,10 @@ struct Session {
     feeder: ShellOutputFeeder,
     /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
     themes: Rc<dyn ThemeRepository>,
-    settings_repository: Box<dyn SettingsRepository>,
-    session_contexts: Box<dyn SessionContextRepository>,
+    settings_repository: Rc<dyn SettingsRepository>,
+    session_contexts: Rc<dyn SessionContextRepository>,
+    /// Kills the generators still running when the session ends.
+    generator_processes: Rc<dyn GeneratorProcessReaper>,
     /// What the wrapper knows of the shell it runs; the ports and plumbing around it stay here.
     session: TerminalSession,
     /// Test builds: stdout bytes are captured here instead of written.
@@ -133,15 +132,14 @@ struct Session {
 
 impl Session {
     /// SPEC §4.4 steps 1–9. `modes` receives the saved terminal modes as soon as they change.
-    fn start(command: &WrappedShellCommand, modes: &mut Option<sys::Modes>, start: CompletionEngineStarter) -> Result<Session> {
+    fn start(command: &WrappedShellCommand, modes: &mut Option<sys::Modes>, module: &TerminalSessionModule) -> Result<Session> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             bail!("stdin/stdout is not a terminal");
         }
         let program = command
             .program()
             .context("no shell to run (set SHELL or pass --shell)")?;
-        let settings_repository: Box<dyn SettingsRepository> =
-            Box::new(JsonFileSettingsRepository::new(data_directory_from_env()));
+        let settings_repository = module.settings_repository();
         let settings = load_or_defaults(&*settings_repository);
         let (m, lf_to_ind) = sys::enter()?;
         *modes = Some(m);
@@ -178,8 +176,7 @@ impl Session {
             std::env::var("COLORTERM").as_deref(),
             Ok("truecolor" | "24bit")
         ) || std::env::var_os("WT_SESSION").is_some();
-        let themes: Rc<dyn ThemeRepository> =
-            Rc::new(FileThemeRepository::new(data_directory_from_env()));
+        let themes = module.themes();
         let renderer = OverlayRenderer::new(resolve_theme(&settings, terminal_bg, &*themes), truecolor)
             .with_images(kitty_graphics::detect());
         let marker = MarkerTracker::new(
@@ -196,7 +193,7 @@ impl Session {
         let feeder = ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock));
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;
-        let engine = start(tx.clone(), settings.clone());
+        let engine = module.start_completion_engine()(tx.clone(), settings.clone());
 
         let pair = portable_pty::native_pty_system().openpty(PtySize {
             rows,
@@ -255,7 +252,7 @@ impl Session {
             let _ = writer.send(typeahead);
         }
 
-        let session_contexts = Box::new(FileSessionContextRepository::new(data_directory_from_env()));
+        let session_contexts = module.session_contexts();
         let mut session = TerminalSession::new(TerminalSessionParts {
             id,
             launched_shell: shell,
@@ -280,6 +277,7 @@ impl Session {
             themes,
             settings_repository,
             session_contexts,
+            generator_processes: module.generator_processes(),
             session,
             sink: Vec::new(),
         })
@@ -731,7 +729,7 @@ impl Session {
         out.extend_from_slice(b"\x1b[0m\x1b[?25h");
         self.emit(&out);
         self.engine.shut_down();
-        crate::specs::infrastructure::adapters::process_executor::kill_live_children(); // Windows has no atexit hook for running generators
+        self.generator_processes.kill_live_children(); // Windows has no atexit hook for running generators
         self.modes.restore();
         self.session_contexts.remove(self.session.id());
     }
@@ -753,6 +751,9 @@ mod tests {
     use crate::terminal_session::domain::repositories::session_context_repository::InMemorySessionContextRepository;
     use crate::settings::domain::value_objects::settings::Settings;
     use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
+    use crate::terminal_session::application::ports::generator_process_reaper::RecordingGeneratorProcessReaper;
+    use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
+    use crate::terminal_session::infrastructure::adapters::file_session_context_repository::FileSessionContextRepository;
     use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
@@ -791,8 +792,9 @@ mod tests {
             feeder: ShellOutputFeeder::new(screen.clone(), Arc::new(SystemClock)),
             screen,
             themes: Rc::new(InMemoryThemeRepository::default()),
-            settings_repository: Box::new(InMemorySettingsRepository::default()),
-            session_contexts: Box::new(InMemorySessionContextRepository::default()),
+            settings_repository: Rc::new(InMemorySettingsRepository::default()),
+            session_contexts: Rc::new(InMemorySessionContextRepository::default()),
+            generator_processes: Rc::new(RecordingGeneratorProcessReaper::new()),
             session: TerminalSession::new(TerminalSessionParts {
                 id: SessionId::new(id.to_string()).unwrap(),
                 launched_shell: Shell::Bash,
@@ -1346,7 +1348,7 @@ mod tests {
         let (mut s, _) = session_named("{}", "abc");
         let (engine, sent_to_engine) = mpsc::channel();
         s.engine = Rc::new(RecordingCompletionEngine::new(engine));
-        s.session_contexts = Box::new(FileSessionContextRepository::new(DataDirectory::new(
+        s.session_contexts = Rc::new(FileSessionContextRepository::new(DataDirectory::new(
             Some(temp_dir.path().to_path_buf()),
             None,
         )));
@@ -1559,7 +1561,7 @@ mod tests {
 
         fn read_settings_from(&mut self, temp_dir: &TempDir) {
             self.s.settings_repository =
-                Box::new(JsonFileSettingsRepository::new(DataDirectory::new(Some(temp_dir.path().to_path_buf()), None)));
+                Rc::new(JsonFileSettingsRepository::new(DataDirectory::new(Some(temp_dir.path().to_path_buf()), None)));
         }
 
         fn sent(&self) -> Vec<u8> {
