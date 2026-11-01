@@ -10,6 +10,10 @@ impl TextEmphasis {
         TextEmphasis { dim, italic }
     }
 
+    pub(crate) fn is_empty(self) -> bool {
+        !self.dim && !self.italic
+    }
+
     /// Every attribute of `self` is also set in `other`; the empty emphasis is within any.
     pub(crate) fn is_within(self, other: TextEmphasis) -> bool {
         (!self.dim || other.dim) && (!self.italic || other.italic)

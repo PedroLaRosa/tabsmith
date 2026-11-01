@@ -5,9 +5,11 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntryPrimitives};
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::value_objects::output_piece::OutputPiece;
+use crate::terminal_session::domain::value_objects::pwsh_prediction_color::PwshPredictionColor;
 use crate::terminal_session::domain::value_objects::shell_suggestion_color::{
     rgb_to_256, ShellSuggestionColor,
 };
+use crate::terminal_session::domain::value_objects::text_emphasis::TextEmphasis;
 use crate::types::{now_secs, Model};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
@@ -33,6 +35,10 @@ fn cell_col(c: Color) -> Option<u8> {
 
 fn matches_cell(z: &ShellSuggestionColor, cell: &Cell) -> bool {
     z.matches(cell_col(cell.fg), cell_col(cell.bg))
+}
+
+fn cell_emphasis(flags: Flags) -> TextEmphasis {
+    TextEmphasis::new(flags.contains(Flags::DIM), flags.contains(Flags::ITALIC))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -296,7 +302,7 @@ pub struct Tracker {
     /// Cleared when a command starts, not on NewCmd: the marker may precede NewCmd in the same prompt.
     pub pwsh_list_view: bool,
     /// PSReadLine `InlinePredictionColor` (colour + required DIM/ITALIC); None = PSReadLine's default dim/italic test.
-    pwsh_color: Option<(ShellSuggestionColor, Flags)>,
+    pwsh_color: Option<PwshPredictionColor>,
     /// PSReadLine ContinuationPrompt and PromptText(s): drawn after EndPrompt, so stripped from the buffer.
     pwsh_cont: String,
     pwsh_prompt_text: Vec<String>,
@@ -426,7 +432,7 @@ impl Tracker {
             "User" => self.user = Some(v.to_string()),
             "ZshAutosuggestionColor" => self.zsh_color = ShellSuggestionColor::parse_zsh(v),
             "FishSuggestionColor" => self.fish_color = ShellSuggestionColor::parse_fish(v),
-            "PwshPredictionColor" => self.pwsh_color = parse_sgr(v),
+            "PwshPredictionColor" => self.pwsh_color = PwshPredictionColor::parse(v),
             "PwshListView" => self.pwsh_list_view = v == "1",
             "PwshPrompts" => {
                 // `<ContinuationPrompt>\x1f<PromptText>…` (untrimmed: the prompts end in spaces).
@@ -526,8 +532,8 @@ impl Tracker {
             Some(Shell::Zsh) => self.zsh_color.as_ref().is_some_and(|c| matches_cell(c, cell)),
             Some(Shell::Fish) => self.fish_color.as_ref().is_some_and(|c| matches_cell(c, cell)),
             Some(Shell::Pwsh) => match &self.pwsh_color {
-                Some((c, f)) => matches_cell(c, cell) && cell.flags.contains(*f),
-                None => cell.flags.intersects(Flags::DIM | Flags::ITALIC),
+                Some(c) => c.matches(cell_col(cell.fg), cell_col(cell.bg), cell_emphasis(cell.flags)),
+                None => cell_emphasis(cell.flags).is_dim_or_italic(),
             },
             _ => false,
         }
@@ -704,50 +710,6 @@ impl Tracker {
         e.buffer = out;
         e.cursor -= shift;
     }
-}
-
-/// SGR parameters of a pwsh `InlinePredictionColor` (ESC stripped: `[97;2;3m`, `38;5;8`, `[38;2;r;g;bm[3m`): its
-/// colours plus the DIM/ITALIC a prediction cell must carry. None when it sets neither.
-fn parse_sgr(spec: &str) -> Option<(ShellSuggestionColor, Flags)> {
-    let p: Vec<u16> = spec
-        .split([';', ':', '[', 'm'])
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
-    let byte = |k: usize| p.get(k).and_then(|&n| u8::try_from(n).ok());
-    let (mut fg, mut bg, mut flags, mut i) = (vec![], vec![], Flags::empty(), 0);
-    while i < p.len() {
-        // 38/48;5;n and 38/48;2;r;g;b: (colour, parameters used).
-        let ext = match p.get(i + 1) {
-            Some(5) => (byte(i + 2), 3),
-            Some(2) => (
-                (|| Some(rgb_to_256(byte(i + 2)?, byte(i + 3)?, byte(i + 4)?)))(),
-                5,
-            ),
-            _ => (None, 1),
-        };
-        let mut step = 1;
-        match p[i] {
-            0 => (fg, bg, flags) = (vec![], vec![], Flags::empty()),
-            2 => flags |= Flags::DIM,
-            3 => flags |= Flags::ITALIC,
-            n @ 30..=37 => fg = vec![Some(n as u8 - 30)],
-            n @ 90..=97 => fg = vec![Some(n as u8 - 90 + 8)],
-            39 => fg = vec![None],
-            n @ 40..=47 => bg = vec![Some(n as u8 - 40)],
-            n @ 100..=107 => bg = vec![Some(n as u8 - 100 + 8)],
-            49 => bg = vec![None],
-            n @ (38 | 48) => {
-                step = ext.1;
-                if let Some(col) = ext.0 {
-                    *(if n == 38 { &mut fg } else { &mut bg }) = vec![Some(col)];
-                }
-            }
-            _ => {}
-        }
-        i += step;
-    }
-    (!fg.is_empty() || !bg.is_empty() || !flags.is_empty())
-        .then(|| (ShellSuggestionColor::new(fg, bg), flags))
 }
 
 /// Inject a cell tag into the model only (OSC 8 hyperlink on the cursor template; SPEC D3).
@@ -1137,21 +1099,6 @@ mod tests {
         );
         let e = t.extract(&m).unwrap();
         assert_eq!((e.buffer.as_str(), e.cursor), ("ls        x", 2));
-        let p = |s: &str| parse_sgr(s).map(|(c, f)| (c.fg().to_vec(), c.bg().to_vec(), f));
-        assert_eq!(
-            p("[97;2;3m"),
-            Some((vec![Some(15)], vec![], Flags::DIM | Flags::ITALIC))
-        );
-        assert_eq!(
-            p("38;5;238;48;2;0;0;0"),
-            Some((vec![Some(238)], vec![Some(16)], Flags::empty()))
-        );
-        assert_eq!(
-            p("[38;2;170;170;170m[3m"),
-            Some((vec![Some(rgb_to_256(170, 170, 170))], vec![], Flags::ITALIC))
-        );
-        assert_eq!(p("[39;49m"), Some((vec![None], vec![None], Flags::empty())));
-        assert_eq!((p("[0m"), p("[1;4m"), p("x")), (None, None, None));
     }
 
     #[test]
