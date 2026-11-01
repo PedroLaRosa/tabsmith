@@ -4,6 +4,7 @@ pub(crate) mod handle_keystrokes_use_case;
 pub(crate) mod keystroke_handler;
 pub(crate) mod overlay_painter;
 pub(crate) mod ports;
+pub(crate) mod process_shell_output_use_case;
 pub(crate) mod report_session_context_use_case;
 pub(crate) mod session_file_poller;
 pub(crate) mod session_ports_parts;

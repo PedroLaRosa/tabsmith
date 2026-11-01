@@ -2,8 +2,12 @@ use crate::terminal_session::application::completion_requester::CompletionReques
 use crate::terminal_session::application::handle_keystrokes_use_case::HandleKeystrokesUseCase;
 use crate::terminal_session::application::keystroke_handler::KeystrokeHandler;
 use crate::terminal_session::application::overlay_painter::OverlayPainter;
+use crate::terminal_session::application::process_shell_output_use_case::{
+    ProcessShellOutputParts, ProcessShellOutputUseCase,
+};
 use crate::terminal_session::application::session_file_poller::SessionFilePoller;
 use crate::terminal_session::application::session_ports_parts::SessionPortsParts;
+use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
 use std::rc::Rc;
 
 /// Everything a session does, wired once over the ports it runs on. Production and the test harness build it the same
@@ -14,6 +18,7 @@ pub(crate) struct SessionUseCases {
     poller: Rc<SessionFilePoller>,
     keystroke_handler: Rc<KeystrokeHandler>,
     pub(crate) handle_keystrokes: HandleKeystrokesUseCase,
+    pub(crate) process_shell_output: ProcessShellOutputUseCase,
 }
 
 impl SessionUseCases {
@@ -33,16 +38,27 @@ impl SessionUseCases {
             ports.themes,
         ));
         let keystroke_handler = Rc::new(KeystrokeHandler::new(
-            ports.engine,
-            ports.screen,
+            ports.engine.clone(),
+            ports.screen.clone(),
             ports.shell,
-            ports.writer,
-            ports.clock,
+            ports.writer.clone(),
+            ports.clock.clone(),
             requester.clone(),
             painter.clone(),
         ));
         let handle_keystrokes = HandleKeystrokesUseCase::new(keystroke_handler.clone());
-        SessionUseCases { painter, requester, poller, keystroke_handler, handle_keystrokes }
+        let process_shell_output = ProcessShellOutputUseCase::new(ProcessShellOutputParts {
+            engine: ports.engine,
+            feeder: ShellOutputFeeder::new(ports.screen.clone(), ports.clock.clone()),
+            screen: ports.screen,
+            writer: ports.writer,
+            clock: ports.clock,
+            requester: requester.clone(),
+            painter: painter.clone(),
+            poller: poller.clone(),
+            handler: keystroke_handler.clone(),
+        });
+        SessionUseCases { painter, requester, poller, keystroke_handler, handle_keystrokes, process_shell_output }
     }
 
     // interim: dies with 9.5g (the legacy `Session::frame`, `redraw` and `take_repaint` still draw through it)

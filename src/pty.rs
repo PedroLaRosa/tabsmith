@@ -13,7 +13,6 @@ use crate::terminal_session::application::ports::working_directory::WorkingDirec
 use crate::terminal_session::application::ports::wrapped_shell::WrappedShell;
 use crate::terminal_session::application::session_ports_parts::SessionPortsParts;
 use crate::terminal_session::application::session_use_cases::SessionUseCases;
-use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
@@ -22,7 +21,6 @@ use crate::terminal_session::infrastructure::adapters::overlay_renderer::Overlay
 use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::PtyWrappedShell;
 use crate::terminal_session::infrastructure::adapters::stdout_terminal_writer::StdoutTerminalWriter;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
-use crate::terminal_session::domain::value_objects::shell_event::ShellEvent;
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
@@ -111,8 +109,6 @@ struct Session {
     modes: Rc<dyn TerminalModes>,
     /// The model, the filter and the renderer of the session, behind the screen port.
     screen: Rc<dyn TerminalScreen>,
-    /// Drives the splitter, the marker tracker and the screen over one PTY batch.
-    feeder: ShellOutputFeeder,
     /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
     themes: Rc<dyn ThemeRepository>,
     live_settings: Rc<dyn LiveSettings>,
@@ -190,7 +186,6 @@ impl Session {
         }
         let screen: Rc<dyn TerminalScreen> = Rc::new(screen);
         let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock);
-        let feeder = ShellOutputFeeder::new(screen.clone(), clock.clone());
         let (tx, rx) = mpsc::channel();
         sys::spawn_resize(tx.clone())?;
         let engine = module.start_completion_engine()(tx.clone(), settings.clone());
@@ -289,7 +284,6 @@ impl Session {
             output,
             modes: terminal_modes,
             screen,
-            feeder,
             themes,
             live_settings,
             working_directory,
@@ -436,34 +430,7 @@ impl Session {
 
     /// PTY batch (SPEC §4.5): clear, bytes (markers stripped), frame — one stdout write.
     fn on_output(&mut self, batch: &[u8]) {
-        self.session.output_arrived(Instant::now());
-        let before = self.screen.state();
-        let mut body = Vec::new();
-        let (splitter, tracker) = self.session.output_parts();
-        let events = self.feeder.feed(splitter, tracker, batch, &mut body);
-        for ev in events {
-            self.on_event(ev);
-        }
-        self.session.screen_changed(&before, &self.screen.state());
-        self.refresh();
-        // Taken late: a panic above leaves the clear cached for `guard`.
-        let mut out = self.screen.take_clear();
-        out.extend(body);
-        out.extend(self.take_repaint());
-        out.extend(self.frame());
-        self.emit(&out);
-        self.release_held();
-    }
-
-    fn on_event(&mut self, ev: ShellEvent) {
-        match &ev {
-            ShellEvent::NewCommand(Some(h)) => self.engine.command_finished(h.clone()),
-            ShellEvent::CommandEnded => self.engine.command_ended(), // NoHistory: the end-of-command reset, nothing recorded
-            ShellEvent::NewCommand(None) | ShellEvent::PreExec => {}
-        }
-        if self.session.on_shell_event(&ev, Instant::now()) {
-            self.poll_files();
-        }
+        self.use_cases.process_shell_output.execute(&mut self.session, batch);
     }
 
     /// Re-read the edit buffer; request completions when it changed (SPEC §4.5; held while insertion-locked).
@@ -608,7 +575,6 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::application::completion_request::CompletionRequest;
     use std::sync::mpsc::Sender;
     use std::time::Duration;
 
@@ -630,7 +596,7 @@ mod tests {
     use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
     use crate::terminal_session::application::ports::generator_process_reaper::RecordingGeneratorProcessReaper;
     use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
-    use crate::terminal_session::application::test_fixtures::set_panic_in_key_handling;
+    use crate::terminal_session::application::test_fixtures::{set_panic_in_key_handling, PanickingCompletionEngine};
     use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::RecordingMasterPty;
     use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
     use crate::completion::domain::value_objects::suggestion::Suggestion;
@@ -691,7 +657,6 @@ mod tests {
             pty,
             output: stdout.clone(),
             modes,
-            feeder: ShellOutputFeeder::new(screen.clone(), clock),
             screen,
             themes,
             live_settings,
@@ -1135,6 +1100,7 @@ mod tests {
         let (mut s, _) = session("{}");
         let (tx, rx) = mpsc::channel();
         s.engine = Rc::new(RecordingCompletionEngine::new(tx));
+        rewire_use_cases(&mut s);
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
         s.session.tracker_mut().set_submitted(Some("stale".into()));
@@ -1188,6 +1154,7 @@ mod tests {
         let (mut s, _) = session("{}");
         let (tx, rx) = mpsc::channel();
         s.engine = Rc::new(RecordingCompletionEngine::new(tx));
+        rewire_use_cases(&mut s);
         prompt(&mut s, " git branch -D fe");
         s.on_output(b"\r\n\x1b]697;NoHistory\x07\x1b]697;PreExec\x07Deleted branch\r\n");
         prompt(&mut s, "");
@@ -1793,23 +1760,6 @@ mod tests {
         fn drop(&mut self) {
             set_panic_in_key_handling(false);
         }
-    }
-
-    /// An engine that panics when it is asked for completions and ignores everything else.
-    struct PanickingCompletionEngine;
-
-    impl CompletionEngine for PanickingCompletionEngine {
-        fn complete(&self, _request: CompletionRequest) {
-            panic!("the engine was asked");
-        }
-        fn command_finished(&self, _entry: crate::history::domain::entities::history_entry::HistoryEntry) {}
-        fn command_ended(&self) {}
-        fn record_insertion(&self, _command: String, _name: String) {}
-        fn request_llm_ghost_text(&self, _request: u64, _buffer: String, _cwd: PathBuf, _shell: Shell) {}
-        fn apply_settings(&self, _settings: Settings) {}
-        fn apply_session_context(&self, _env: std::collections::HashMap<String, String>, _alias: Option<String>) {}
-        fn toggle_fuzzy_search(&self) {}
-        fn shut_down(&self) {}
     }
 
     /// The session of a loop test with a live inbox, plus what the loop did to the outside world.
