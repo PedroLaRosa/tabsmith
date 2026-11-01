@@ -127,11 +127,16 @@ fn should_defer_end_prompt_and_new_cmd_and_apply_them_in_order_when_a_batch_has_
     let still_marked = t.end_batch(4, NOW);
     let unmarked = t.end_batch(4, NOW);
 
-    assert_eq!(queued, [DeferredMarker::EndPrompt, DeferredMarker::NewCmd]);
-    assert_eq!(still_marked, MarkerEffects::default());
     assert_eq!(
-        (unmarked.screen_commands(), unmarked.events()),
         (
+            queued,
+            still_marked,
+            unmarked.screen_commands(),
+            unmarked.events()
+        ),
+        (
+            vec![DeferredMarker::EndPrompt, DeferredMarker::NewCmd],
+            MarkerEffects::default(),
             &[
                 ScreenCommand::ClearTag,
                 ScreenCommand::Tag(CellTag::Cycle(1)),
@@ -174,8 +179,13 @@ fn should_flush_the_deferred_markers_before_asking_for_the_edit_buffer_on_pre_ex
     let MarkerReaction::EditBufferNeeded(effects) = reaction else {
         panic!("{reaction:?}")
     };
+    let context_is_of_cycle_1 = t.edit_buffer_context().is_some_and(|c| c.cycle() == 1);
     assert_eq!(
-        (effects.screen_commands(), effects.events()),
+        (
+            effects.screen_commands(),
+            effects.events(),
+            context_is_of_cycle_1
+        ),
         (
             &[
                 ScreenCommand::Tag(CellTag::Cycle(1)),
@@ -183,10 +193,10 @@ fn should_flush_the_deferred_markers_before_asking_for_the_edit_buffer_on_pre_ex
                     redrawn_cycle: None
                 }
             ][..],
-            &[ShellEvent::NewCommand(None)][..]
+            &[ShellEvent::NewCommand(None)][..],
+            true
         )
     );
-    assert!(t.edit_buffer_context().is_some_and(|c| c.cycle() == 1));
 }
 
 #[test]
@@ -221,21 +231,21 @@ fn should_let_only_the_lock_exempt_markers_through_while_locked() {
     ];
     let new_cmd_effects = new_cmd(&mut t, 0);
     send(&mut t, "NoHistory");
-
-    assert_eq!(
-        (
-            dropped
-                .iter()
-                .all(|effects| *effects == MarkerEffects::default()),
-            t.cwd().is_none(),
-            new_cmd_effects.events().len(),
-            t.no_history(),
-            t.osc_lock()
-        ),
-        (true, true, 1, true, true)
+    let while_locked = (
+        dropped
+            .iter()
+            .all(|effects| *effects == MarkerEffects::default()),
+        t.cwd().is_none(),
+        new_cmd_effects.events().len(),
+        t.no_history(),
+        t.osc_lock(),
     );
     send(&mut t, &format!("OSCUnlock={SID}"));
-    assert!(!t.osc_lock());
+
+    assert_eq!(
+        (while_locked, t.osc_lock()),
+        ((true, true, 1, true, true), false)
+    );
 }
 
 #[test]
@@ -294,8 +304,10 @@ fn should_finish_the_innermost_command_first_with_the_exit_code_of_the_outer_pro
         .iter()
         .map(|entry| (entry.command(), entry.exit_code()))
         .collect();
-    assert_eq!(finished, [("exit 5", Some(5)), ("bash", Some(5))]);
-    assert!(t.pending_is_empty());
+    assert_eq!(
+        (finished, t.pending_is_empty()),
+        (vec![("exit 5", Some(5)), ("bash", Some(5))], true)
+    );
 }
 
 #[test]

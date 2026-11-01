@@ -987,10 +987,6 @@ impl Session {
         self.on_keys(&held);
     }
 
-    fn suppressed(&self) -> bool {
-        self.suppressed_in(&self.screen.state())
-    }
-
     fn suppressed_in(&self, screen: &ScreenState) -> bool {
         !self.marker.at_prompt()
             // The cursor is off the command line (an inline TUI's rows: fzf, fish's pager): a menu for the line
