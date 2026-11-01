@@ -424,12 +424,6 @@ impl Session {
         self.use_cases.apply_completion_result.execute(&mut self.session, c);
     }
 
-    /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
-    #[cfg(test)]
-    fn drawable(&self) -> bool {
-        self.session.drawable(&self.screen.state())
-    }
-
     /// Stdin chunk (SPEC §7.2.4): intercept bound keys while the menu is shown, accept ghost text, else forward.
     fn on_input(&mut self, chunk: &[u8]) {
         // A probe reply arriving after the startup timeout is dropped, not typed into the shell.
@@ -625,19 +619,6 @@ mod tests {
         pty.shell_input.try_iter().flatten().collect()
     }
 
-    /// The shell line after `line` receives what pty wrote (DEL erases, printable bytes append).
-    fn shell_line(line: &str, bytes: &[u8]) -> String {
-        let mut l = line.to_string();
-        for &b in bytes {
-            match b {
-                0x7f => drop(l.pop()),
-                0x20..=0x7e => l.push(b as char),
-                _ => {}
-            }
-        }
-        l
-    }
-
     #[test]
     fn late_probe_reply_is_not_typed() {
         let (mut s, pty) = session("{}");
@@ -690,89 +671,6 @@ mod tests {
         s.step(SessionMessage::Stdin(b"\r".to_vec()), &mut None);
         set_panic_in_key_handling(false);
         assert!(s.session.is_passthrough() && sent(&pty).is_empty());
-    }
-
-    /// The shell redraws its prompt (SIGWINCH, `zle reset-prompt`): PS1 with NewCmd=<sid>, then `text`.
-    fn redraw(s: &mut Session, text: &str) {
-        let r = format!("\r\x1b[K\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}");
-        s.on_output(r.as_bytes());
-    }
-
-    #[test]
-    fn split_prompt_redraw_keeps_the_menu() {
-        let (mut s, _) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        // The redraw's line arrives in a second read: the empty line in between does not reset the menu.
-        redraw(&mut s, "");
-        s.on_output(b"git ch");
-        assert!(s.session.menu().intercepting(s.session.settings()) && s.drawable());
-        // A line that really is empty resets once the grace passed.
-        redraw(&mut s, "");
-        assert!(
-            s.session.menu().has_items() && !s.drawable(),
-            "held, not drawn, during the grace"
-        );
-        s.session.set_redraw_until(Some(Instant::now()));
-        s.on_timers();
-        assert!(!s.session.menu().has_items());
-    }
-
-    #[test]
-    fn keys_after_an_unmodelled_key_wait_for_its_echo() {
-        // Backspace then Enter before the echo: Enter acts on the menu for the line the shell then has.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git che");
-        reply(&mut s, subs("che"), None);
-        s.on_input(b"\x7f");
-        s.on_input(b"\r");
-        assert_eq!(sent(&pty), b"\x7f", "Enter is held");
-        s.on_output(b"\x08\x1b[K");
-        reply(&mut s, subs("ch"), None);
-        assert_eq!(shell_line("git ch", &sent(&pty)), "git cherry-pick");
-        // Ghost: Backspace, `e`, Right in one read gives `git ce`, not the ghost computed for `git ch`.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, vec![], Some("eckout feature-login"));
-        s.on_input(b"\x7fe\x1b[C");
-        assert_eq!(sent(&pty), b"\x7fe");
-        s.on_output(b"\x08\x1b[Ke");
-        reply(&mut s, vec![], None);
-        assert_eq!(sent(&pty), b"\x1b[C");
-        // No echo at all (nothing changed): the held key goes out after the hold.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git ch");
-        reply(&mut s, subs("ch"), None);
-        s.on_input(b"\x1bOC\t");
-        assert_eq!(sent(&pty), b"\x1bOC");
-        s.session.expire_hold_at(Instant::now());
-        s.on_timers();
-        assert_eq!(sent(&pty), b"e", "Tab inserted the common prefix");
-    }
-
-    #[test]
-    fn slow_echo_keeps_the_insertion_in_the_basis() {
-        // Tab inserts `kout`; the shell has echoed nothing when the 100 ms lock runs out, then Right accepts the ghost.
-        let (mut s, pty) = session("{}");
-        prompt(&mut s, "git chec");
-        let items = ["checkout", "checkout-index"]
-            .iter()
-            .map(|n| item(n, SuggestionKind::Subcommand, "chec"))
-            .collect();
-        reply(&mut s, items, Some("kout feature-login"));
-        s.on_input(b"\t");
-        s.session.expire_insertion_deadline(Instant::now());
-        s.on_timers();
-        assert!(s.session.has_insertion_lock(), "re-armed: nothing echoed");
-        s.on_input(b"\x1b[C");
-        assert_eq!(
-            shell_line("git chec", &sent(&pty)),
-            "git checkout feature-login"
-        );
-        // Never past the cap.
-        s.session.expire_insertion_lock(Instant::now(), Instant::now());
-        s.on_timers();
-        assert!(!s.session.has_insertion_lock());
     }
 
     #[cfg(windows)]

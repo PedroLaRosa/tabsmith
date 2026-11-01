@@ -86,7 +86,7 @@ mod tests {
     use crate::terminal_session::application::test_fixtures::{shell_line, subs, Io, TerminalSessionHarness};
     use crate::terminal_session::domain::services::session_deadlines::{FILE_POLL, REDRAW_GRACE, RESIZE_DEBOUNCE};
     use std::sync::Arc;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const LLM_SETTINGS: &str = r#"{"inline.source": "mock", "inline.debounceMs": 300, "inline.profiles.mock": {"provider": "openai", "model": "m", "base_url": "http://127.0.0.1:9/v1"}}"#;
     const LIGHT_THEME: &str = r#"{"autocomplete.theme": "light"}"#;
@@ -249,5 +249,30 @@ mod tests {
         same_tick.tick();
 
         assert_eq!((same_tick.written().is_empty(), same_tick.written() == polled_earlier.written()), (false, true));
+    }
+
+    #[test]
+    fn slow_echo_keeps_the_insertion_in_the_basis() {
+        // Tab inserts `kout`; the shell has echoed nothing when the 100 ms lock runs out, then Right accepts the ghost.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git chec");
+        let items = ["checkout", "checkout-index"]
+            .iter()
+            .map(|n| item(n, SuggestionKind::Subcommand, "chec"))
+            .collect();
+        h.reply(items, Some("kout feature-login"));
+        h.input(b"\t");
+        h.session.expire_insertion_deadline(Instant::now());
+        h.tick();
+        assert!(h.session.has_insertion_lock(), "re-armed: nothing echoed");
+        h.input(b"\x1b[C");
+        assert_eq!(
+            shell_line("git chec", &h.sent()),
+            "git checkout feature-login"
+        );
+        // Never past the cap.
+        h.session.expire_insertion_lock(Instant::now(), Instant::now());
+        h.tick();
+        assert!(!h.session.has_insertion_lock());
     }
 }

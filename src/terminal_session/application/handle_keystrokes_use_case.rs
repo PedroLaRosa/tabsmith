@@ -542,4 +542,36 @@ mod tests {
         h.session.tracker_mut().set_pwsh_list_view(true);
         assert!(h.drawable(), "an empty line has no list");
     }
+
+    #[test]
+    fn keys_after_an_unmodelled_key_wait_for_its_echo() {
+        // Backspace then Enter before the echo: Enter acts on the menu for the line the shell then has.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git che");
+        h.reply(subs("che"), None);
+        h.input(b"\x7f");
+        h.input(b"\r");
+        assert_eq!(h.sent(), b"\x7f", "Enter is held");
+        h.output(b"\x08\x1b[K");
+        h.reply(subs("ch"), None);
+        assert_eq!(shell_line("git ch", &h.sent()), "git cherry-pick");
+        // Ghost: Backspace, `e`, Right in one read gives `git ce`, not the ghost computed for `git ch`.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(vec![], Some("eckout feature-login"));
+        h.input(b"\x7fe\x1b[C");
+        assert_eq!(h.sent(), b"\x7fe");
+        h.output(b"\x08\x1b[Ke");
+        h.reply(vec![], None);
+        assert_eq!(h.sent(), b"\x1b[C");
+        // No echo at all (nothing changed): the held key goes out after the hold.
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        h.input(b"\x1bOC\t");
+        assert_eq!(h.sent(), b"\x1bOC");
+        h.session.expire_hold_at(Instant::now());
+        h.tick();
+        assert_eq!(h.sent(), b"e", "Tab inserted the common prefix");
+    }
 }

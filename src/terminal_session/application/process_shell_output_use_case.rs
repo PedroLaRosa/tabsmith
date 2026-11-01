@@ -414,4 +414,24 @@ mod tests {
         h.input(b"\t");
         assert_eq!(h.sent(), b"\t");
     }
+
+    #[test]
+    fn split_prompt_redraw_keeps_the_menu() {
+        let mut h = TerminalSessionHarness::new("{}");
+        h.prompt("git ch");
+        h.reply(subs("ch"), None);
+        // The redraw's line arrives in a second read: the empty line in between does not reset the menu.
+        h.redraw_prompt("");
+        h.output(b"git ch");
+        assert!(h.session.menu().intercepting(h.session.settings()) && h.drawable());
+        // A line that really is empty resets once the grace passed.
+        h.redraw_prompt("");
+        assert!(
+            h.session.menu().has_items() && !h.drawable(),
+            "held, not drawn, during the grace"
+        );
+        h.session.set_redraw_until(Some(Instant::now()));
+        h.tick();
+        assert!(!h.session.menu().has_items());
+    }
 }
