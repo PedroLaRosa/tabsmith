@@ -3,15 +3,12 @@
 use crate::shared::infrastructure::logger;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::infrastructure::system_clock::SystemClock;
-use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::terminal_session::application::launch_environment::LaunchEnvironment;
 use crate::terminal_session::application::launch_request::LaunchRequest;
-use crate::terminal_session::application::ports::live_settings::LiveSettings;
 use crate::terminal_session::application::ports::terminal_modes::TerminalModes;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::application::ports::terminal_writer::TerminalWriter;
-use crate::terminal_session::application::ports::working_directory::WorkingDirectory;
 use crate::terminal_session::application::ports::wrapped_shell::WrappedShell;
 use crate::terminal_session::application::session_ports_parts::SessionPortsParts;
 use crate::terminal_session::application::session_use_cases::SessionUseCases;
@@ -25,14 +22,10 @@ use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::PtyWra
 use crate::terminal_session::infrastructure::adapters::stdout_terminal_writer::StdoutTerminalWriter;
 use crate::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::shared::domain::value_objects::shell::Shell;
-use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
 use crate::terminal_session::domain::value_objects::session_id::SessionId;
 use crate::terminal_session::domain::value_objects::terminal_background::TerminalBackground;
 use crate::terminal_session::infrastructure::adapters::kitty_graphics;
 use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
-use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
-use crate::completion::domain::value_objects::completion_result::CompletionResult;
-use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
 use crate::terminal_session::infrastructure::terminal_session_module::TerminalSessionModule;
 use crate::terminal_session::infrastructure::pty::fallback_shell::run_fallback_shell;
 use crate::terminal_session::infrastructure::pty::pty_reader::spawn_pty_reader;
@@ -68,7 +61,7 @@ pub(crate) fn run(shell: Option<String>, cmd: Vec<String>, module: &TerminalSess
     });
     let mut modes = None;
     let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        Session::start(&command, &mut modes, module).map(Session::run)
+        SessionRunner::start(&command, &mut modes, module).map(SessionRunner::run)
     }));
     let err = match res {
         Ok(Ok(code)) => return code,
@@ -97,36 +90,61 @@ fn session_id() -> String {
     )
 }
 
-struct Session {
-    rx: Receiver<SessionMessage>,
-    engine: Rc<dyn CompletionEngine>,
+/// What `SessionRunner::new` takes: the fields of the runner, declared in the order the runner drops them.
+pub(crate) struct SessionRunnerParts {
+    pub(crate) inbox: Receiver<SessionMessage>,
+    /// Returns PTY read credits to the reader thread (see `pump`). Declared before `pty`: it is dropped first, so a
+    /// ConPTY close never waits for a reader that waits for a credit.
+    pub(crate) credits: SyncSender<()>,
+    /// The shell the session wraps: its input and its size.
+    pub(crate) pty: Rc<PtyWrappedShell>,
+    /// What the wrapper knows of the shell it runs; the ports and plumbing around it stay here.
+    pub(crate) session: TerminalSession,
+    /// The model, the filter and the renderer of the session, behind the screen port.
+    pub(crate) screen: Rc<dyn TerminalScreen>,
+    /// The user's terminal.
+    pub(crate) output: Rc<dyn TerminalWriter>,
+    /// What the wrapper does with the ports it was built over.
+    pub(crate) use_cases: SessionUseCases,
+    pub(crate) clock: Arc<dyn Clock + Send + Sync>,
+}
+
+/// The driver of one session: it reads its inbox, hands each message to the use case that handles it and leaves when the
+/// shell is gone. The fields keep the drop order of the legacy struct (the inbox, the credits, the shell, then the rest).
+pub(crate) struct SessionRunner {
+    inbox: Receiver<SessionMessage>,
     /// Returns PTY read credits to the reader thread (see `pump`). Declared before `pty`: it is dropped first, so a
     /// ConPTY close never waits for a reader that waits for a credit.
     credits: SyncSender<()>,
     /// The shell the session wraps: its input and its size.
     pty: Rc<PtyWrappedShell>,
-    /// The user's terminal.
-    output: Rc<dyn TerminalWriter>,
-    modes: Rc<dyn TerminalModes>,
-    /// The model, the filter and the renderer of the session, behind the screen port.
-    screen: Rc<dyn TerminalScreen>,
-    /// Where `autocomplete.theme` finds a custom theme file; read again at every theme resolution, never cached (P8-T25).
-    themes: Rc<dyn ThemeRepository>,
-    live_settings: Rc<dyn LiveSettings>,
-    /// The directory the wrapper runs in, for a request the shell has not reported a directory for.
-    working_directory: Rc<dyn WorkingDirectory>,
-    session_contexts: Rc<dyn SessionContextRepository>,
-    /// Kills the generators still running when the session ends.
-    generator_processes: Rc<dyn GeneratorProcessReaper>,
-    /// What the wrapper does with the ports above; the legacy methods delegate to it one by one.
-    use_cases: SessionUseCases,
     /// What the wrapper knows of the shell it runs; the ports and plumbing around it stay here.
     session: TerminalSession,
+    /// The model, the filter and the renderer of the session, behind the screen port.
+    screen: Rc<dyn TerminalScreen>,
+    /// The user's terminal.
+    output: Rc<dyn TerminalWriter>,
+    /// What the wrapper does with the ports above.
+    use_cases: SessionUseCases,
+    clock: Arc<dyn Clock + Send + Sync>,
 }
 
-impl Session {
+impl SessionRunner {
+    fn new(parts: SessionRunnerParts) -> Self {
+        SessionRunner {
+            inbox: parts.inbox,
+            credits: parts.credits,
+            pty: parts.pty,
+            session: parts.session,
+            screen: parts.screen,
+            output: parts.output,
+            use_cases: parts.use_cases,
+            clock: parts.clock,
+        }
+    }
+
     /// SPEC §4.4 steps 1–9. `modes` receives the saved terminal modes as soon as they change.
-    fn start(command: &WrappedShellCommand, modes: &mut Option<Rc<dyn TerminalModes>>, module: &TerminalSessionModule) -> Result<Session> {
+    fn start(command: &WrappedShellCommand, modes: &mut Option<Rc<dyn TerminalModes>>, module: &TerminalSessionModule) -> Result<SessionRunner> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             bail!("stdin/stdout is not a terminal");
         }
@@ -275,24 +293,18 @@ impl Session {
             session_contexts: session_contexts.clone(),
             themes: themes.clone(),
             working_directory: working_directory.clone(),
-            clock,
+            clock: clock.clone(),
         });
-        Ok(Session {
-            rx,
-            engine,
+        Ok(SessionRunner::new(SessionRunnerParts {
+            inbox: rx,
             credits,
             pty,
-            output,
-            modes: terminal_modes,
-            screen,
-            themes,
-            live_settings,
-            working_directory,
-            session_contexts,
-            generator_processes,
-            use_cases,
             session,
-        })
+            screen,
+            output,
+            use_cases,
+            clock,
+        }))
     }
 
     /// Main loop (SPEC §4.3); returns the child's exit code.
@@ -303,9 +315,9 @@ impl Session {
                 Some(m) => Ok(m),
                 None => match self.next_deadline() {
                     Some(d) => self
-                        .rx
-                        .recv_timeout(d.saturating_duration_since(Instant::now())),
-                    None => self.rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                        .inbox
+                        .recv_timeout(d.saturating_duration_since(self.clock.now_instant())),
+                    None => self.inbox.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 },
             };
             let go = match msg {
@@ -316,14 +328,14 @@ impl Session {
             if !go {
                 break;
             }
-            if self.session.exit_grace_over(Instant::now()) {
+            if self.session.exit_grace_over(self.clock.now_instant()) {
                 break;
             }
             if !self.session.is_passthrough() {
-                self.guard(Session::on_timers);
+                self.guard(|s| s.use_cases.handle_timer_tick.execute(&mut s.session));
             }
         }
-        self.cleanup();
+        self.use_cases.end_session.execute(&self.session);
         self.session.exit_code()
     }
 
@@ -345,7 +357,7 @@ impl Session {
                 // One batch = everything already queued (one model pass, one stdout write).
                 let mut chunks = 1;
                 loop {
-                    match self.rx.try_recv() {
+                    match self.inbox.try_recv() {
                         Ok(SessionMessage::Pty(more)) => {
                             b.extend(more);
                             chunks += 1;
@@ -357,8 +369,10 @@ impl Session {
                         Err(_) => break,
                     }
                 }
-                // on_output writes nothing before its last step: after a panic the batch goes out raw.
-                if self.session.is_passthrough() || !self.guard(|s| s.on_output(&b)) {
+                // Processing the output writes nothing before its last step: after a panic the batch goes out raw.
+                if self.session.is_passthrough()
+                    || !self.guard(|s| s.use_cases.process_shell_output.execute(&mut s.session, &b))
+                {
                     self.emit(&b);
                 }
                 for _ in 0..chunks {
@@ -372,7 +386,7 @@ impl Session {
                 self.pty.resize(cols, rows);
             }
             SessionMessage::Resize(c, r) => {
-                self.guard(|s| s.on_resize(c, r));
+                self.guard(|s| s.use_cases.resize_terminal.execute(&mut s.session, c, r));
             }
             SessionMessage::ChildExit(c) => {
                 self.pty.release_pseudo_console();
@@ -385,7 +399,7 @@ impl Session {
             }
             SessionMessage::Completion(_) | SessionMessage::Ghost { .. } if self.session.is_passthrough() => {}
             SessionMessage::Completion(c) => {
-                self.guard(|s| s.on_completion(*c));
+                self.guard(|s| s.use_cases.apply_completion_result.execute(&mut s.session, *c));
             }
             SessionMessage::Ghost { req, text } => {
                 self.guard(|s| s.use_cases.apply_llm_ghost_text.execute(&mut s.session, req, text));
@@ -396,8 +410,8 @@ impl Session {
 
     /// Run one handler. A panic (logged by the hook) clears the overlay and turns the session into a plain
     /// pass-through until the child exits: the running shell and its jobs are never killed for it.
-    /// ponytail: a panic in `on_output`'s final frame loses the clear it already took (overlay left until redrawn).
-    fn guard(&mut self, f: impl FnOnce(&mut Session)) -> bool {
+    /// ponytail: a panic in the output processing's final frame loses the clear it already took (overlay left until redrawn).
+    fn guard(&mut self, f: impl FnOnce(&mut SessionRunner)) -> bool {
         if std::panic::catch_unwind(AssertUnwindSafe(|| f(self))).is_ok() {
             return true;
         }
@@ -416,20 +430,11 @@ impl Session {
         self.session.next_deadline()
     }
 
-    /// PTY batch (SPEC §4.5): clear, bytes (markers stripped), frame — one stdout write.
-    fn on_output(&mut self, batch: &[u8]) {
-        self.use_cases.process_shell_output.execute(&mut self.session, batch);
-    }
-
-    fn on_completion(&mut self, c: CompletionResult) {
-        self.use_cases.apply_completion_result.execute(&mut self.session, c);
-    }
-
     /// Stdin chunk (SPEC §7.2.4): intercept bound keys while the menu is shown, accept ghost text, else forward.
     fn on_input(&mut self, chunk: &[u8]) {
         // A probe reply arriving after the startup timeout is dropped, not typed into the shell.
         let late;
-        let chunk = if self.session.late_probe_open(Instant::now()) {
+        let chunk = if self.session.late_probe_open(self.clock.now_instant()) {
             let (cpr, bg, rest) = parse_probe(chunk);
             if let Some(bg) = bg {
                 self.use_cases
@@ -444,25 +449,7 @@ impl Session {
         } else {
             chunk
         };
-        self.on_keys(chunk);
-    }
-
-    fn on_keys(&mut self, chunk: &[u8]) {
         self.use_cases.handle_keystrokes.execute(&mut self.session, chunk);
-    }
-
-    /// SPEC §7.6: resize PTY + model now, repaint after 150 ms of quiet.
-    fn on_resize(&mut self, cols: u16, rows: u16) {
-        self.use_cases.resize_terminal.execute(&mut self.session, cols, rows);
-    }
-
-    fn on_timers(&mut self) {
-        self.use_cases.handle_timer_tick.execute(&mut self.session);
-    }
-
-    /// SPEC §4.4 step 10.
-    fn cleanup(&mut self) {
-        self.use_cases.end_session.execute(&self.session);
     }
 }
 
@@ -471,6 +458,13 @@ mod tests {
     use super::*;
     use std::sync::mpsc::Sender;
     use std::time::Duration;
+    use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
+    use crate::terminal_session::application::ports::working_directory::WorkingDirectory;
+    use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
+    use crate::completion::domain::value_objects::completion_result::CompletionResult;
+    use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
+    use crate::terminal_session::domain::repositories::session_context_repository::SessionContextRepository;
+    use crate::terminal_session::application::ports::live_settings::LiveSettings;
 
     // --- Session driven without a terminal: PTY output via `on_output`, keys via `on_input`. -------------------
 
@@ -505,12 +499,24 @@ mod tests {
         stdout: Rc<CapturingTerminalWriter>,
     }
 
-    fn session(json: &str) -> (Session, Taps) {
-        session_named(json, SID)
+    /// The ports a test swaps after the session is built; `rewire_use_cases` builds the use cases over them again.
+    struct Ports {
+        engine: Rc<dyn CompletionEngine>,
+        modes: Rc<dyn TerminalModes>,
+        themes: Rc<dyn ThemeRepository>,
+        live_settings: Rc<dyn LiveSettings>,
+        working_directory: Rc<dyn WorkingDirectory>,
+        session_contexts: Rc<dyn SessionContextRepository>,
+        generator_processes: Rc<dyn GeneratorProcessReaper>,
+    }
+
+    fn session(json: &str) -> (SessionRunner, Taps) {
+        let (s, taps, _) = session_named(json, SID);
+        (s, taps)
     }
 
     /// A session whose id is `id` (the shell integration markers keep the id `SID`).
-    fn session_named(json: &str, id: &str) -> (Session, Taps) {
+    fn session_named(json: &str, id: &str) -> (SessionRunner, Taps, Ports) {
         let settings = settings(json);
         let (input, shell_input) = mpsc::channel();
         let stdout = Rc::new(CapturingTerminalWriter::new());
@@ -544,20 +550,10 @@ mod tests {
             working_directory: working_directory.clone(),
             clock: clock.clone(),
         });
-        let s = Session {
-            rx: mpsc::channel().1,
-            engine,
+        let s = SessionRunner::new(SessionRunnerParts {
+            inbox: mpsc::channel().1,
             credits: mpsc::sync_channel(PTY_CREDITS).0,
             pty,
-            output: stdout.clone(),
-            modes,
-            screen,
-            themes,
-            live_settings,
-            working_directory,
-            session_contexts,
-            generator_processes,
-            use_cases,
             session: TerminalSession::new(TerminalSessionParts {
                 id: SessionId::new(id.to_string()).unwrap(),
                 launched_shell: Shell::Bash,
@@ -567,42 +563,47 @@ mod tests {
                 settings_modified: None,
                 now: Instant::now(),
             }),
-        };
-        (s, Taps { shell_input, stdout })
+            screen,
+            output: stdout.clone(),
+            use_cases,
+            clock,
+        });
+        let ports = Ports { engine, modes, themes, live_settings, working_directory, session_contexts, generator_processes };
+        (s, Taps { shell_input, stdout }, ports)
     }
 
     /// The use cases hold the ports they were built over: a test that swaps a port of the session builds them again.
-    fn rewire_use_cases(s: &mut Session) {
+    fn rewire_use_cases(s: &mut SessionRunner, ports: &Ports) {
         s.use_cases = SessionUseCases::new(SessionPortsParts {
-            engine: s.engine.clone(),
+            engine: ports.engine.clone(),
             screen: s.screen.clone(),
             writer: s.output.clone(),
             shell: s.pty.clone(),
-            reaper: s.generator_processes.clone(),
-            modes: s.modes.clone(),
-            live_settings: s.live_settings.clone(),
-            session_contexts: s.session_contexts.clone(),
-            themes: s.themes.clone(),
-            working_directory: s.working_directory.clone(),
+            reaper: ports.generator_processes.clone(),
+            modes: ports.modes.clone(),
+            live_settings: ports.live_settings.clone(),
+            session_contexts: ports.session_contexts.clone(),
+            themes: ports.themes.clone(),
+            working_directory: ports.working_directory.clone(),
             clock: Arc::new(SystemClock),
         });
     }
 
     /// A bash prompt `$ ` with the integration markers, then `text` echoed.
-    fn prompt(s: &mut Session, text: &str) {
+    fn prompt(s: &mut SessionRunner, text: &str) {
         let p = format!(
             "\x1b]697;StartPrompt\x07$ \x1b]697;EndPrompt\x07\x1b]697;NewCmd={SID}\x07{text}"
         );
-        s.on_output(p.as_bytes());
+        s.use_cases.process_shell_output.execute(&mut s.session, p.as_bytes());
     }
 
     /// Engine reply for the latest request (twice: the first one after a reset only arms the menu).
-    fn reply(s: &mut Session, items: Vec<Suggestion>, ghost: Option<&str>) {
+    fn reply(s: &mut SessionRunner, items: Vec<Suggestion>, ghost: Option<&str>) {
         let (buffer, _) = s.session.sent().expect("a request was sent");
         let mut c = comp(buffer, 1, items);
         c = c.with_request_id(s.session.request_id()).with_ghost(ghost.map(String::from));
-        s.on_completion(c.clone());
-        s.on_completion(c);
+        s.use_cases.apply_completion_result.execute(&mut s.session, c.clone());
+        s.use_cases.apply_completion_result.execute(&mut s.session, c);
     }
 
     fn subs(q: &str) -> Vec<Suggestion> {
@@ -739,9 +740,10 @@ mod tests {
 
     /// A session plus a log of what each step wrote to stdout, to the PTY and to the engine.
     /// `inbox`, `credit_returns` and `stash` are the live ends of the session's message channel, for the scenarios
-    /// that drive `Session::step`.
+    /// that drive `SessionRunner::step`.
     struct Rig {
-        s: Session,
+        s: SessionRunner,
+        ports: Ports,
         pty: Taps,
         engine: Receiver<CompletionEngineCall>,
         log: String,
@@ -753,22 +755,26 @@ mod tests {
 
     impl Rig {
         fn new(settings_json: &str) -> Rig {
-            let (mut s, pty) = session(settings_json);
+            let (mut s, pty, mut ports) = session_named(settings_json, SID);
             let (calls, engine) = mpsc::channel();
-            s.engine = Rc::new(RecordingCompletionEngine::new(calls));
-            rewire_use_cases(&mut s);
+            ports.engine = Rc::new(RecordingCompletionEngine::new(calls));
+            rewire_use_cases(&mut s, &ports);
             let (inbox, rx) = mpsc::channel();
             let (credits, credit_returns) = mpsc::sync_channel(PTY_CREDITS);
-            s.rx = rx;
+            s.inbox = rx;
             s.credits = credits;
-            Rig { s, pty, engine, log: String::new(), mark: 0, inbox, credit_returns, stash: None }
+            Rig { s, ports, pty, engine, log: String::new(), mark: 0, inbox, credit_returns, stash: None }
         }
 
         fn read_settings_from(&mut self, temp_dir: &TempDir) {
-            self.s.live_settings = Rc::new(LenientLiveSettings::new(Rc::new(JsonFileSettingsRepository::new(
+            self.ports.live_settings = Rc::new(LenientLiveSettings::new(Rc::new(JsonFileSettingsRepository::new(
                 DataDirectory::new(Some(temp_dir.path().to_path_buf()), None),
             ))));
-            rewire_use_cases(&mut self.s);
+            self.rewire_use_cases();
+        }
+
+        fn rewire_use_cases(&mut self) {
+            rewire_use_cases(&mut self.s, &self.ports);
         }
 
         fn sent(&self) -> Vec<u8> {
@@ -805,12 +811,12 @@ mod tests {
 
         fn reply_error(&mut self, buffer: &str, cursor: usize) {
             let request = self.s.session.request_id();
-            self.s.on_completion(CompletionResult::error(request, buffer.into(), cursor));
+            self.complete(CompletionResult::error(request, buffer.into(), cursor));
         }
 
         fn reply_loading(&mut self, buffer: &str, items: Vec<Suggestion>) {
             let loading = comp(buffer, 1, items).with_request_id(self.s.session.request_id()).with_loading(true);
-            self.s.on_completion(loading);
+            self.complete(loading);
         }
 
         fn request_id(&self) -> u64 {
@@ -822,15 +828,15 @@ mod tests {
         }
 
         fn output(&mut self, bytes: &[u8]) {
-            self.s.on_output(bytes);
+            self.s.use_cases.process_shell_output.execute(&mut self.s.session, bytes);
         }
 
         fn complete(&mut self, result: CompletionResult) {
-            self.s.on_completion(result);
+            self.s.use_cases.apply_completion_result.execute(&mut self.s.session, result);
         }
 
         fn tick(&mut self) {
-            self.s.on_timers();
+            self.s.use_cases.handle_timer_tick.execute(&mut self.s.session);
         }
 
         fn redraw(&mut self) {
@@ -838,11 +844,11 @@ mod tests {
         }
 
         fn resize(&mut self, columns: u16, rows: u16) {
-            self.s.on_resize(columns, rows);
+            self.s.use_cases.resize_terminal.execute(&mut self.s.session, columns, rows);
         }
 
         fn end(&mut self) {
-            self.s.cleanup();
+            self.s.use_cases.end_session.execute(&self.s.session);
         }
 
         fn poke_lock_due(&mut self) {
@@ -907,7 +913,7 @@ mod tests {
         }
 
         fn step_queued(&mut self) -> bool {
-            let message = self.s.rx.try_recv().expect("a queued message");
+            let message = self.s.inbox.try_recv().expect("a queued message");
             self.s.step(message, &mut self.stash)
         }
 
@@ -1187,7 +1193,7 @@ mod tests {
         rig.finish("batching");
     }
 
-    // --- Phase 9 loop guards: how `Session::step` and `run` batch, hand back credits and decide to leave. ---------
+    // --- Phase 9 loop guards: how `SessionRunner::step` and `run` batch, hand back credits and decide to leave. ---------
     // The tests drive the loop only through `LoopRig`, which builds the driver messages itself, so the move of the
     // driver rewrites the rig and leaves the test bodies alone.
 
@@ -1352,8 +1358,8 @@ mod tests {
         }
 
         fn panic_when_the_engine_is_asked(&mut self) {
-            self.rig.s.engine = Rc::new(PanickingCompletionEngine);
-            rewire_use_cases(&mut self.rig.s);
+            self.rig.ports.engine = Rc::new(PanickingCompletionEngine);
+            self.rig.rewire_use_cases();
         }
 
         fn panic_in_key_handling(&mut self) {
@@ -1368,7 +1374,7 @@ mod tests {
                 .unwrap();
             let (input, shell_input) = mpsc::channel();
             self.rig.s.pty = Rc::new(PtyWrappedShell::new(input, pair.master));
-            rewire_use_cases(&mut self.rig.s);
+            self.rig.rewire_use_cases();
             self.rig.pty.shell_input = shell_input;
             self.pty_slave = Some(pair.slave);
         }

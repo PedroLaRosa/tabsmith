@@ -1,5 +1,6 @@
 use crate::shared::domain::services::shell_quoting;
 use crate::shared::domain::value_objects::shell::Shell;
+use crate::terminal_session::infrastructure::pty::session_runner;
 use crate::terminal_session::infrastructure::terminal_session_module::TerminalSessionModule;
 use anyhow::{Context, Result};
 use std::io::Write;
@@ -32,7 +33,7 @@ pub(crate) fn run_debug_shell_command(
     // The wrapper passes the current env to the child.
     std::env::set_var("TABSMITH_DEBUG_SHELL", "1");
     let _ = writeln!(std::io::stdout(), "Starting tabsmith debug shell\n");
-    let code = crate::pty::run(Some(exe), cmd, module);
+    let code = session_runner::run(Some(exe), cmd, module);
     let _ = std::fs::remove_dir_all(&dir);
     // The terminal may be gone (window closed): no panic, the shell's code still counts.
     let _ = writeln!(std::io::stdout(), "\nEnding tabsmith debug shell\n");

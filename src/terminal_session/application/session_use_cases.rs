@@ -120,25 +120,25 @@ impl SessionUseCases {
         }
     }
 
-    // interim: dies with 9.6d (the tests of the services and the Rig reach the service through it)
+    // The tests of the services, the harness and the runner tests reach the service through it.
     #[cfg(test)]
     pub(crate) fn painter(&self) -> &OverlayPainter {
         &self.painter
     }
 
-    // interim: dies with 9.6d (the tests of the services reach the service through it)
+    // The tests of the services and the harness reach the service through it.
     #[cfg(test)]
     pub(crate) fn requester(&self) -> &CompletionRequester {
         &self.requester
     }
 
-    // interim: dies with 9.6d (the tests of the services reach the service through it)
+    // The tests of the services and the harness reach the service through it.
     #[cfg(test)]
     pub(crate) fn poller(&self) -> &SessionFilePoller {
         &self.poller
     }
 
-    // interim: dies with 9.6d (the tests of the services reach the service through it)
+    // The tests of the services and the harness reach the service through it.
     #[cfg(test)]
     pub(crate) fn keystroke_handler(&self) -> &KeystrokeHandler {
         &self.keystroke_handler

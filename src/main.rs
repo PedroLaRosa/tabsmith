@@ -11,7 +11,6 @@ mod doctor;
 mod dropdown;
 mod ghost_text;
 mod history;
-mod pty;
 mod settings;
 mod shared;
 mod shell_integration;
