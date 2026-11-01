@@ -4,6 +4,7 @@
 use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntryPrimitives};
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
+use crate::terminal_session::domain::value_objects::cell_tag::CellTag;
 use crate::terminal_session::domain::value_objects::edit_buffer::EditBuffer;
 use crate::terminal_session::domain::value_objects::output_piece::OutputPiece;
 use crate::terminal_session::domain::value_objects::pwsh_prediction_color::PwshPredictionColor;
@@ -21,7 +22,6 @@ use std::path::PathBuf;
 
 /// An unfinished CSI/ESC sequence longer than this passes through instead of being carried (no quadratic rescans).
 const SEQ_MAX: usize = 4096;
-const TAG_PROMPT: &str = "tabsmith:p";
 
 // ---------------------------------------------------------------------------------------------------------------
 // Suggestion colours (SPEC §5.1.3)
@@ -406,7 +406,7 @@ impl Tracker {
         match key {
             "StartPrompt" => {
                 self.has_seen_prompt = true;
-                tag(model, Some(TAG_PROMPT.to_string()));
+                tag(model, Some(CellTag::PROMPT_URI.to_string()));
             }
             "EndPrompt" if self.defer => self.deferred.push_back(Deferred::EndPrompt),
             "EndPrompt" => self.end_prompt(model),
@@ -447,7 +447,7 @@ impl Tracker {
 
     fn end_prompt(&mut self, model: &mut Model) {
         let open = self.cycle.filter(|_| !self.preexec);
-        tag(model, open.map(|n| format!("tabsmith:c{n}")));
+        tag(model, open.map(|n| CellTag::Cycle(n).uri()));
     }
 
     fn new_cmd(&mut self, model: &mut Model) {
@@ -456,8 +456,8 @@ impl Tracker {
         self.cycle = Some(n);
         self.preexec = false;
         self.no_history = false;
-        tag(model, Some(format!("tabsmith:c{n}")));
-        mark_line_start(model, redraw.map(|o| format!("tabsmith:c{o}")).as_deref());
+        tag(model, Some(CellTag::Cycle(n).uri()));
+        mark_line_start(model, redraw.map(|o| CellTag::Cycle(o).uri()).as_deref());
         self.line_col0 = model.grid().cursor.point.column.0 == 0;
         // The prompt finishes this shell's command (and those of nested shells that exited under it); a nested
         // shell's first prompt leaves the outer command running.
@@ -543,7 +543,7 @@ impl Tracker {
     /// Edit buffer + cursor from the tagged cells around the cursor (SPEC §5.6). None while no cycle is open.
     pub fn extract(&self, model: &Model) -> Option<EditBuffer> {
         let n = self.cycle.filter(|_| !self.preexec)?;
-        let tag = format!("tabsmith:c{n}");
+        let tag = CellTag::Cycle(n).uri();
         let grid = model.grid();
         let cols = grid.columns();
         let cur = &grid.cursor;
@@ -584,7 +584,7 @@ impl Tracker {
         let mut end = cl;
         while !(pwsh && self.pwsh_list_view)
             && end < grid.bottommost_line().0
-            && (wraps(end) || (has(&row(end + 1)[0], TAG_PROMPT) && tagged(end + 1)))
+            && (wraps(end) || (has(&row(end + 1)[0], CellTag::PROMPT_URI) && tagged(end + 1)))
         {
             end += 1;
         }
@@ -603,10 +603,10 @@ impl Tracker {
         while top > grid.topmost_line().0 && cl - top < 100 && wraps(top - 1) {
             top -= 1;
         }
-        let prompt_row = |r: i32| row(r).iter().any(|c| has(c, TAG_PROMPT));
+        let prompt_row = |r: i32| row(r).iter().any(|c| has(c, CellTag::PROMPT_URI));
         // A prompt filling its row to the margin (zsh then moves on with its own CRLF): like a PS1 ending in a newline.
         let full_prompt =
-            |r: i32| r >= grid.topmost_line().0 && row(r).iter().all(|c| has(c, TAG_PROMPT));
+            |r: i32| r >= grid.topmost_line().0 && row(r).iter().all(|c| has(c, CellTag::PROMPT_URI));
         let cont = self.pwsh_cont.chars().count();
         let below = end < grid.bottommost_line().0 && tagged(end + 1);
         let at_prompt = (top..=cl).any(prompt_row)
@@ -726,7 +726,7 @@ fn tag(model: &mut Model, uri: Option<String>) {
 fn mark_line_start(model: &mut Model, from: Option<&str>) {
     let prompt = Some(alacritty_terminal::term::cell::Hyperlink::new(
         None::<String>,
-        TAG_PROMPT.into(),
+        CellTag::PROMPT_URI.into(),
     ));
     let link = model.grid().cursor.template.hyperlink();
     let (cols, bottom) = (model.grid().columns(), model.grid().bottommost_line());

@@ -1,3 +1,4 @@
+pub(crate) mod cell_tag;
 pub(crate) mod edit_buffer;
 pub(crate) mod key_event;
 pub(crate) mod output_piece;
