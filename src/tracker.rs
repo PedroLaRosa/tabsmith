@@ -5,6 +5,9 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::history::domain::entities::history_entry::{HistoryEntry, HistoryEntryPrimitives};
 use crate::terminal_session::domain::entities::marker_splitter::MarkerSplitter;
 use crate::terminal_session::domain::value_objects::output_piece::OutputPiece;
+use crate::terminal_session::domain::value_objects::shell_suggestion_color::{
+    rgb_to_256, ShellSuggestionColor,
+};
 use crate::types::{now_secs, Model};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
@@ -20,89 +23,7 @@ const TAG_PROMPT: &str = "tabsmith:p";
 // ---------------------------------------------------------------------------------------------------------------
 // Suggestion colours (SPEC §5.1.3)
 
-/// A colour as an xterm-256 index; `None` = the terminal's default colour.
-type Col = Option<u8>;
-
-/// Colour the shell draws its own suggestions in. Any listed colour matches; an empty list matches every colour.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SuggestionColor {
-    pub fg: Vec<Col>,
-    pub bg: Vec<Col>,
-}
-
-impl SuggestionColor {
-    /// zsh highlight style: `fg=8`, `fg=#aaaaaa,bg=…`, `fg=245,bold`, `fg=yellow`.
-    pub fn parse_zsh(spec: &str) -> Option<SuggestionColor> {
-        let mut c = SuggestionColor::default();
-        for part in spec.split(',').map(str::trim) {
-            if let Some(v) = part.strip_prefix("fg=") {
-                c.fg.extend(parse_color(v, false));
-            } else if let Some(v) = part.strip_prefix("bg=") {
-                c.bg.extend(parse_color(v, false));
-            }
-        }
-        (!c.fg.is_empty() || !c.bg.is_empty()).then_some(c)
-    }
-
-    /// fish `set_color` arguments: every non-option token is a colour (`555 brblack`, `--bold 666`).
-    pub fn parse_fish(spec: &str) -> Option<SuggestionColor> {
-        let mut c = SuggestionColor::default();
-        let mut tokens = spec.split_whitespace();
-        while let Some(t) = tokens.next() {
-            if t == "-b" || t == "--background" {
-                tokens.next(); // ponytail: background colours ignored (fish autosuggestions never set one)
-            } else if !t.starts_with('-') {
-                c.fg.extend(parse_color(t, true));
-            }
-        }
-        (!c.fg.is_empty()).then_some(c)
-    }
-
-    pub fn matches(&self, cell: &Cell) -> bool {
-        (self.fg.is_empty() || self.fg.contains(&cell_col(cell.fg)))
-            && (self.bg.is_empty() || self.bg.contains(&cell_col(cell.bg)))
-    }
-}
-
-/// One colour token: names (+ fish `br*` variants), zsh `0..255`, hex `#rgb`/`#rrggbb` (fish: `#` optional).
-fn parse_color(v: &str, fish: bool) -> Option<Col> {
-    const NAMES: [&str; 8] = [
-        "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-    ];
-    let v = v.trim().to_ascii_lowercase();
-    if v == "default" || v == "normal" {
-        return Some(None);
-    }
-    if let Some(i) = NAMES.iter().position(|n| *n == v) {
-        return Some(Some(i as u8));
-    }
-    if let Some(i) = v
-        .strip_prefix("br")
-        .and_then(|n| NAMES.iter().position(|x| *x == n))
-    {
-        return Some(Some(i as u8 + 8));
-    }
-    if !fish {
-        if let Ok(i) = v.parse::<u8>() {
-            return Some(Some(i));
-        }
-    }
-    let hex = match v.strip_prefix('#') {
-        Some(h) => h,
-        None if fish => v.as_str(),
-        None => return None,
-    };
-    let digit =
-        |i: usize, len: usize| u8::from_str_radix(hex.get(i * len..(i + 1) * len)?, 16).ok();
-    let (r, g, b) = match hex.len() {
-        3 => (digit(0, 1)? * 17, digit(1, 1)? * 17, digit(2, 1)? * 17),
-        6 => (digit(0, 2)?, digit(1, 2)?, digit(2, 2)?),
-        _ => return None,
-    };
-    Some(Some(rgb_to_256(r, g, b)))
-}
-
-fn cell_col(c: Color) -> Col {
+fn cell_col(c: Color) -> Option<u8> {
     match c {
         Color::Indexed(i) => Some(i),
         Color::Spec(rgb) => Some(rgb_to_256(rgb.r, rgb.g, rgb.b)),
@@ -110,25 +31,8 @@ fn cell_col(c: Color) -> Col {
     }
 }
 
-/// Nearest xterm-256 index (6×6×6 cube or 24 greys).
-fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
-    const LEVELS: [i32; 6] = [0, 95, 135, 175, 215, 255];
-    let near = |v: u8| {
-        (0..6)
-            .min_by_key(|&i| (LEVELS[i] - v as i32).abs())
-            .unwrap_or(0)
-    };
-    let (ri, gi, bi) = (near(r), near(g), near(b));
-    let dist = |x: i32, y: i32, z: i32| {
-        (x - r as i32).pow(2) + (y - g as i32).pow(2) + (z - b as i32).pow(2)
-    };
-    let grey = ((r as i32 + g as i32 + b as i32) / 3 - 3).clamp(0, 230) / 10; // levels 8, 18, …, 238
-    let gv = 8 + 10 * grey;
-    if dist(gv, gv, gv) < dist(LEVELS[ri], LEVELS[gi], LEVELS[bi]) {
-        232 + grey as u8
-    } else {
-        (16 + 36 * ri + 6 * gi + bi) as u8
-    }
+fn matches_cell(z: &ShellSuggestionColor, cell: &Cell) -> bool {
+    z.matches(cell_col(cell.fg), cell_col(cell.bg))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -378,8 +282,8 @@ pub struct Tracker {
     pub pid: Option<i32>,
     pub tty: Option<String>,
     pub user: Option<String>,
-    pub zsh_color: Option<SuggestionColor>,
-    pub fish_color: Option<SuggestionColor>,
+    pub zsh_color: Option<ShellSuggestionColor>,
+    pub fish_color: Option<ShellSuggestionColor>,
     /// Drained by the wrapper after every batch.
     pub events: Vec<Event>,
     pub filter: OutFilter,
@@ -392,7 +296,7 @@ pub struct Tracker {
     /// Cleared when a command starts, not on NewCmd: the marker may precede NewCmd in the same prompt.
     pub pwsh_list_view: bool,
     /// PSReadLine `InlinePredictionColor` (colour + required DIM/ITALIC); None = PSReadLine's default dim/italic test.
-    pwsh_color: Option<(SuggestionColor, Flags)>,
+    pwsh_color: Option<(ShellSuggestionColor, Flags)>,
     /// PSReadLine ContinuationPrompt and PromptText(s): drawn after EndPrompt, so stripped from the buffer.
     pwsh_cont: String,
     pwsh_prompt_text: Vec<String>,
@@ -520,8 +424,8 @@ impl Tracker {
             "PID" => self.pid = v.parse().ok(),
             "TTY" => self.tty = Some(v.to_string()),
             "User" => self.user = Some(v.to_string()),
-            "ZshAutosuggestionColor" => self.zsh_color = SuggestionColor::parse_zsh(v),
-            "FishSuggestionColor" => self.fish_color = SuggestionColor::parse_fish(v),
+            "ZshAutosuggestionColor" => self.zsh_color = ShellSuggestionColor::parse_zsh(v),
+            "FishSuggestionColor" => self.fish_color = ShellSuggestionColor::parse_fish(v),
             "PwshPredictionColor" => self.pwsh_color = parse_sgr(v),
             "PwshListView" => self.pwsh_list_view = v == "1",
             "PwshPrompts" => {
@@ -619,10 +523,10 @@ impl Tracker {
     /// Suggestion-coloured cell (SPEC §5.1.3; pwsh: the reported prediction colour, else dim or italic).
     fn suggestion(&self, cell: &Cell) -> bool {
         match self.shell {
-            Some(Shell::Zsh) => self.zsh_color.as_ref().is_some_and(|c| c.matches(cell)),
-            Some(Shell::Fish) => self.fish_color.as_ref().is_some_and(|c| c.matches(cell)),
+            Some(Shell::Zsh) => self.zsh_color.as_ref().is_some_and(|c| matches_cell(c, cell)),
+            Some(Shell::Fish) => self.fish_color.as_ref().is_some_and(|c| matches_cell(c, cell)),
             Some(Shell::Pwsh) => match &self.pwsh_color {
-                Some((c, f)) => c.matches(cell) && cell.flags.contains(*f),
+                Some((c, f)) => matches_cell(c, cell) && cell.flags.contains(*f),
                 None => cell.flags.intersects(Flags::DIM | Flags::ITALIC),
             },
             _ => false,
@@ -804,13 +708,13 @@ impl Tracker {
 
 /// SGR parameters of a pwsh `InlinePredictionColor` (ESC stripped: `[97;2;3m`, `38;5;8`, `[38;2;r;g;bm[3m`): its
 /// colours plus the DIM/ITALIC a prediction cell must carry. None when it sets neither.
-fn parse_sgr(spec: &str) -> Option<(SuggestionColor, Flags)> {
+fn parse_sgr(spec: &str) -> Option<(ShellSuggestionColor, Flags)> {
     let p: Vec<u16> = spec
         .split([';', ':', '[', 'm'])
         .filter_map(|s| s.trim().parse().ok())
         .collect();
     let byte = |k: usize| p.get(k).and_then(|&n| u8::try_from(n).ok());
-    let (mut c, mut flags, mut i) = (SuggestionColor::default(), Flags::empty(), 0);
+    let (mut fg, mut bg, mut flags, mut i) = (vec![], vec![], Flags::empty(), 0);
     while i < p.len() {
         // 38/48;5;n and 38/48;2;r;g;b: (colour, parameters used).
         let ext = match p.get(i + 1) {
@@ -823,26 +727,27 @@ fn parse_sgr(spec: &str) -> Option<(SuggestionColor, Flags)> {
         };
         let mut step = 1;
         match p[i] {
-            0 => (c, flags) = (SuggestionColor::default(), Flags::empty()),
+            0 => (fg, bg, flags) = (vec![], vec![], Flags::empty()),
             2 => flags |= Flags::DIM,
             3 => flags |= Flags::ITALIC,
-            n @ 30..=37 => c.fg = vec![Some(n as u8 - 30)],
-            n @ 90..=97 => c.fg = vec![Some(n as u8 - 90 + 8)],
-            39 => c.fg = vec![None],
-            n @ 40..=47 => c.bg = vec![Some(n as u8 - 40)],
-            n @ 100..=107 => c.bg = vec![Some(n as u8 - 100 + 8)],
-            49 => c.bg = vec![None],
+            n @ 30..=37 => fg = vec![Some(n as u8 - 30)],
+            n @ 90..=97 => fg = vec![Some(n as u8 - 90 + 8)],
+            39 => fg = vec![None],
+            n @ 40..=47 => bg = vec![Some(n as u8 - 40)],
+            n @ 100..=107 => bg = vec![Some(n as u8 - 100 + 8)],
+            49 => bg = vec![None],
             n @ (38 | 48) => {
                 step = ext.1;
                 if let Some(col) = ext.0 {
-                    *(if n == 38 { &mut c.fg } else { &mut c.bg }) = vec![Some(col)];
+                    *(if n == 38 { &mut fg } else { &mut bg }) = vec![Some(col)];
                 }
             }
             _ => {}
         }
         i += step;
     }
-    (!c.fg.is_empty() || !c.bg.is_empty() || !flags.is_empty()).then_some((c, flags))
+    (!fg.is_empty() || !bg.is_empty() || !flags.is_empty())
+        .then(|| (ShellSuggestionColor::new(fg, bg), flags))
 }
 
 /// Inject a cell tag into the model only (OSC 8 hyperlink on the cursor template; SPEC D3).
@@ -1232,7 +1137,7 @@ mod tests {
         );
         let e = t.extract(&m).unwrap();
         assert_eq!((e.buffer.as_str(), e.cursor), ("ls        x", 2));
-        let p = |s: &str| parse_sgr(s).map(|(c, f)| (c.fg, c.bg, f));
+        let p = |s: &str| parse_sgr(s).map(|(c, f)| (c.fg().to_vec(), c.bg().to_vec(), f));
         assert_eq!(
             p("[97;2;3m"),
             Some((vec![Some(15)], vec![], Flags::DIM | Flags::ITALIC))
@@ -1759,59 +1664,24 @@ mod tests {
     }
 
     #[test]
-    fn suggestion_colors() {
-        let z = SuggestionColor::parse_zsh("fg=8,bold").unwrap();
-        assert_eq!(
-            z,
-            SuggestionColor {
-                fg: vec![Some(8)],
-                bg: vec![]
-            }
-        );
-        assert_eq!(
-            SuggestionColor::parse_zsh("fg=yellow").unwrap().fg,
-            [Some(3)]
-        );
-        assert_eq!(
-            SuggestionColor::parse_zsh("fg=245").unwrap().fg,
-            [Some(245)]
-        );
-        assert_eq!(
-            SuggestionColor::parse_zsh("fg=#aaaaaa,bg=default")
-                .unwrap()
-                .bg,
-            [None]
-        );
-        assert_eq!(SuggestionColor::parse_zsh("bold"), None);
-        let f = SuggestionColor::parse_fish("555 brblack --bold").unwrap();
-        assert_eq!(f.fg, [Some(rgb_to_256(0x55, 0x55, 0x55)), Some(8)]);
-        assert_eq!(
-            SuggestionColor::parse_fish("-b red 666").unwrap().fg,
-            [Some(rgb_to_256(0x66, 0x66, 0x66))]
-        );
+    fn suggestion_colors_cell_matching() {
+        let z = ShellSuggestionColor::parse_zsh("fg=8,bold").unwrap();
         // Cell colours: named, indexed and truecolor all map to xterm-256.
         let mut cell = Cell {
             fg: Color::Named(alacritty_terminal::vte::ansi::NamedColor::BrightBlack),
             ..Cell::default()
         };
-        assert!(z.matches(&cell));
+        assert!(matches_cell(&z, &cell));
         cell.fg = Color::Spec(alacritty_terminal::vte::ansi::Rgb {
             r: 0xaa,
             g: 0xaa,
             b: 0xaa,
         });
-        assert!(SuggestionColor::parse_zsh("fg=#aaaaaa")
-            .unwrap()
-            .matches(&cell));
-        assert!(!z.matches(&cell));
-        assert_eq!(
-            (
-                rgb_to_256(0, 0, 0),
-                rgb_to_256(255, 0, 0),
-                rgb_to_256(128, 128, 128)
-            ),
-            (16, 196, 244)
-        );
+        assert!(matches_cell(
+            &ShellSuggestionColor::parse_zsh("fg=#aaaaaa").unwrap(),
+            &cell
+        ));
+        assert!(!matches_cell(&z, &cell));
     }
 
     fn filter(f: &mut OutFilter, s: &[u8]) -> Vec<u8> {
