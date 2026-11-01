@@ -3,7 +3,6 @@
 use crate::shared::infrastructure::logger;
 use crate::shared::application::ports::clock::Clock;
 use crate::shared::infrastructure::system_clock::SystemClock;
-use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
 use crate::dropdown::domain::repositories::theme_repository::ThemeRepository;
 use crate::dropdown::domain::services::theme_resolver::resolve_theme;
 use crate::terminal_session::application::ports::live_settings::LiveSettings;
@@ -17,8 +16,6 @@ use crate::terminal_session::application::session_use_cases::SessionUseCases;
 use crate::terminal_session::application::shell_output_feeder::ShellOutputFeeder;
 use crate::terminal_session::domain::entities::marker_tracker::MarkerTracker;
 use crate::terminal_session::domain::entities::terminal_session::{TerminalSession, TerminalSessionParts};
-use crate::terminal_session::domain::services::key_router::plain_char;
-use crate::terminal_session::domain::value_objects::key_route::KeyRoute;
 use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen::AlacrittyTerminalScreen;
 use crate::terminal_session::infrastructure::adapters::console_terminal_modes::ConsoleTerminalModes;
 use crate::terminal_session::infrastructure::adapters::overlay_renderer::OverlayRenderer;
@@ -33,7 +30,6 @@ use crate::terminal_session::domain::value_objects::terminal_background::Termina
 use crate::terminal_session::infrastructure::adapters::kitty_graphics;
 use crate::terminal_session::domain::value_objects::wrapped_shell_command::WrappedShellCommand;
 use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
-use crate::completion::domain::value_objects::insertion::Insertion;
 use crate::completion::domain::value_objects::completion_result::CompletionResult;
 use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
 use crate::terminal_session::infrastructure::terminal_session_module::TerminalSessionModule;
@@ -491,10 +487,7 @@ impl Session {
 
     /// Replay held keys once the reply for the buffer after the unmodelled key came (or the hold timed out).
     fn release_held(&mut self) {
-        let Some(held) = self.session.release_held_keys(Instant::now()) else {
-            return;
-        };
-        self.on_keys(&held);
+        self.use_cases.keystroke_handler().release_held(&mut self.session);
     }
 
     /// No render guard (SPEC §7.5.1) holds, so a menu or ghost can be on screen and keys may act on it.
@@ -536,80 +529,18 @@ impl Session {
     }
 
     fn on_keys(&mut self, chunk: &[u8]) {
-        if self.session.is_holding_keys() {
-            self.session.hold_behind(chunk); // keys keep their order behind held ones
-            return;
-        }
-        let mut fwd = Vec::new();
-        let (mut redraw, mut rerequest) = (false, false);
-        let mut typed = 0usize;
-        for ev in self.session.decode_keys(chunk) {
-            #[cfg(test)]
-            tests::maybe_panic();
-            let key = ev.key();
-            let effects = match self.session.route_key(&key, typed, &self.screen.state()) {
-                KeyRoute::Hold => {
-                    // The menu / ghost is for a buffer the shell may no longer have: wait for the echo and its reply.
-                    // ponytail: one hold buffer; separate reads replayed together count as one for the paste rule.
-                    self.session.hold_keys(&chunk[ev.bytes().start..], Instant::now());
-                    break;
-                }
-                KeyRoute::MenuAction(a) => self.session.run_menu_action(a),
-                KeyRoute::Swallow => Vec::new(),
-                KeyRoute::ShowOnTab => self.session.show_menu_on_tab(),
-                KeyRoute::AcceptGhost(g) => {
-                    fwd.extend_from_slice(g.as_bytes());
-                    self.session.accept_ghost(&g);
-                    redraw = true;
-                    continue;
-                }
-                KeyRoute::Forward => {
-                    fwd.extend_from_slice(&chunk[ev.bytes()]);
-                    typed += usize::from(plain_char(&key).is_some());
-                    if self.session.forward_key(&key) {
-                        redraw = true;
-                    }
-                    continue;
-                }
-            };
-            redraw = true;
-            for e in effects {
-                match e {
-                    MenuEffect::Insert { ins, record, .. } => self.insert(&ins, record, &mut fwd),
-                    MenuEffect::Write(b) => {
-                        fwd.extend_from_slice(&b);
-                        self.session.wrote_to_shell(&b);
-                    }
-                    MenuEffect::Bell => self.emit(b"\x07"),
-                    MenuEffect::Rerequest => rerequest = true,
-                    MenuEffect::ToggleFuzzy => {
-                        self.engine.toggle_fuzzy_search();
-                        rerequest = true;
-                    }
-                }
-            }
-        }
-        if rerequest {
-            self.session.forget_sent();
-            self.refresh();
-        }
-        if redraw {
-            self.redraw();
-        }
-        if !fwd.is_empty() {
-            self.pty.write_input(fwd); // last: after a panic above, `step` forwards the read raw
-        }
+        self.use_cases.handle_keystrokes.execute(&mut self.session, chunk);
     }
 
     /// Insertion with reconciliation + lock (SPEC §7.3). Dropped while a command runs.
-    fn insert(&mut self, ins: &Insertion, record: Option<(String, String)>, fwd: &mut Vec<u8>) {
-        let Some(bytes) = self.session.insert(ins, Instant::now()) else {
-            return;
-        };
-        fwd.extend(bytes);
-        if let Some((cmd, name)) = record {
-            self.engine.record_insertion(cmd, name);
-        }
+    #[cfg(test)]
+    fn insert(
+        &mut self,
+        ins: &crate::completion::domain::value_objects::insertion::Insertion,
+        record: Option<(String, String)>,
+        fwd: &mut Vec<u8>,
+    ) {
+        self.use_cases.keystroke_handler().insert(&mut self.session, ins, record, fwd);
     }
 
     /// SPEC §7.6: resize PTY + model now, repaint after 150 ms of quiet.
@@ -686,6 +617,7 @@ mod tests {
     use crate::terminal_session::infrastructure::pty::pty_reader::PTY_CREDITS;
     use crate::completion::domain::test_fixtures::{comp, item, settings};
     use crate::dropdown::domain::value_objects::key_action::KeyAction;
+    use crate::dropdown::domain::value_objects::menu_effect::MenuEffect;
     use crate::dropdown::domain::repositories::theme_repository::InMemoryThemeRepository;
     use crate::terminal_session::application::ports::live_settings::InMemoryLiveSettings;
     use crate::terminal_session::application::ports::terminal_modes::RecordingTerminalModes;
@@ -698,21 +630,13 @@ mod tests {
     use crate::terminal_session::application::ports::completion_engine::{CompletionEngineCall, RecordingCompletionEngine};
     use crate::terminal_session::application::ports::generator_process_reaper::RecordingGeneratorProcessReaper;
     use crate::terminal_session::application::ports::terminal_writer::CapturingTerminalWriter;
+    use crate::terminal_session::application::test_fixtures::set_panic_in_key_handling;
     use crate::terminal_session::infrastructure::adapters::pty_wrapped_shell::RecordingMasterPty;
     use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
     use crate::completion::domain::value_objects::suggestion::Suggestion;
     use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
     const SID: &str = "0123456789abcdef0123456789abcdef";
-
-    thread_local!(static PANIC_IN_INPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
-
-    /// Fault injection: a panic while keys are handled (decoder, menu, insertion).
-    pub(super) fn maybe_panic() {
-        if PANIC_IN_INPUT.with(|p| p.get()) {
-            panic!("injected");
-        }
-    }
 
     /// What a session sent out: the bytes it wrote to the shell (read from the writer thread's channel) and to the
     /// user's terminal.
@@ -1055,18 +979,18 @@ mod tests {
     fn panic_while_handling_keys_still_forwards_them() {
         let (mut s, pty) = session("{}");
         prompt(&mut s, "ls");
-        PANIC_IN_INPUT.with(|p| p.set(true));
+        set_panic_in_key_handling(true);
         assert!(s.step(SessionMessage::Stdin(b"BOOM\r".to_vec()), &mut None));
-        PANIC_IN_INPUT.with(|p| p.set(false));
+        set_panic_in_key_handling(false);
         assert!(s.session.is_passthrough());
         assert_eq!(sent(&pty), b"BOOM\r", "the read is not lost");
         // With the menu intercepting it is dropped: an Enter meant for an item never runs the line.
         let (mut s, pty) = session("{}");
         prompt(&mut s, "git ch");
         reply(&mut s, subs("ch"), None);
-        PANIC_IN_INPUT.with(|p| p.set(true));
+        set_panic_in_key_handling(true);
         s.step(SessionMessage::Stdin(b"\r".to_vec()), &mut None);
-        PANIC_IN_INPUT.with(|p| p.set(false));
+        set_panic_in_key_handling(false);
         assert!(s.session.is_passthrough() && sent(&pty).is_empty());
     }
 
@@ -1867,7 +1791,7 @@ mod tests {
 
     impl Drop for KeyHandlingPanic {
         fn drop(&mut self) {
-            PANIC_IN_INPUT.with(|p| p.set(false));
+            set_panic_in_key_handling(false);
         }
     }
 
@@ -2038,7 +1962,7 @@ mod tests {
         }
 
         fn panic_in_key_handling(&mut self) {
-            PANIC_IN_INPUT.with(|p| p.set(true));
+            set_panic_in_key_handling(true);
             self.key_handling_panic = Some(KeyHandlingPanic);
         }
 
@@ -2049,6 +1973,7 @@ mod tests {
                 .unwrap();
             let (input, shell_input) = mpsc::channel();
             self.rig.s.pty = Rc::new(PtyWrappedShell::new(input, pair.master));
+            rewire_use_cases(&mut self.rig.s);
             self.rig.pty.shell_input = shell_input;
             self.pty_slave = Some(pair.slave);
         }
