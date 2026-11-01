@@ -1,5 +1,7 @@
 pub(crate) mod cell_tag;
+pub(crate) mod deferred_marker;
 pub(crate) mod edit_buffer;
+pub(crate) mod edit_buffer_context;
 pub(crate) mod key_event;
 pub(crate) mod marker_effects;
 pub(crate) mod marker_reaction;
