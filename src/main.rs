@@ -7,6 +7,7 @@ mod architecture_tests;
 mod bootstrap;
 mod cli;
 mod completion;
+mod diagnostics;
 mod doctor;
 mod dropdown;
 mod ghost_text;
