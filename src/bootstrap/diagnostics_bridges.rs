@@ -176,8 +176,8 @@ impl CheckFixer for CheckFixerBridge {
 
 /// The error with its whole chain, as anyhow's `{:#}` prints it: an io error as its bare Display, a
 /// `ShellIntegrationError` without its source.
-fn rendered(error: impl Into<anyhow::Error>) -> String {
-    format!("{:#}", error.into())
+fn rendered(error: anyhow::Error) -> String {
+    format!("{error:#}")
 }
 
 #[cfg(test)]

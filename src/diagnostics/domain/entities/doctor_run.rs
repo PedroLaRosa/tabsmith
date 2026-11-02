@@ -24,14 +24,17 @@ impl DoctorRun {
         self.all
     }
 
+    #[cfg(test)]
     pub(crate) fn strict(&self) -> bool {
         self.strict
     }
 
+    #[cfg(test)]
     pub(crate) fn errors(&self) -> usize {
         self.errors
     }
 
+    #[cfg(test)]
     pub(crate) fn warnings(&self) -> usize {
         self.warnings
     }

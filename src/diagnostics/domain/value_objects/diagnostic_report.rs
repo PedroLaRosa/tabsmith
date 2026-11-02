@@ -1,6 +1,6 @@
 use crate::diagnostics::domain::value_objects::diagnostic_section::DiagnosticSection;
 
-/// The facts about the installation that `debug diagnostic` prints, section by section.
+/// The facts about the installation that `diagnostic` prints, section by section.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DiagnosticReport {
     sections: Vec<DiagnosticSection>,

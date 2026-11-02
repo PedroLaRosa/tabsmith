@@ -2115,7 +2115,9 @@ its errata and the run notes in [`phase-10-run-notes/`](hexagonal-refactor/phase
 - **History**: 34 commits from `phase10-start` (`b0fe04d`) to `3273a89` (the guards, the design, the domain, the application,
   the adapters, the bridges, the rewire, the two deletions) plus the docs commit of this close; five subjects are over 72
   characters (`7ef9712` 73, `8675f09` 75, `bebc322` 80, `7d7674a` 77 and `1b2a152` 73), every commit has the Sonnet 5.5 trailer
-  and the session trailer, every message went through `git commit -F`, none was rewritten.
+  and the session trailer, every message went through `git commit -F`, none was rewritten. Known process deviation: the bridges and their 23 tests went in as the
+  single commit `e3e20a0` (production code first, the RED rebuilt afterwards), and the pwsh-no-second-spawn and `locate_paths`
+  delegation tests were dropped because both need a fake pwsh or the real HOME.
 - **Manual smoke pending** (the user's; section 8): P10-S1 (the spinner and Ctrl-C in a real terminal), P10-S2 (`doctor --all`
   colours) and, CI only, P10-S3 (Windows console, Windows version and the Ctrl-C handler), plus Phase 8's P8-S1 and P8-S2 and
   Phase 9's P9-S1..S5, none of which has been run. Nothing was pushed by the phase.

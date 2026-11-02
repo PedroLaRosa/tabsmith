@@ -11,7 +11,7 @@ pub(crate) struct DiagnosticArgs {
     pub(crate) format: OutputFormat,
 }
 
-/// `debug diagnostic`: everything is gathered before the single print.
+/// `diagnostic`: everything is gathered before the single print.
 pub(crate) fn run_diagnostic_command(args: DiagnosticArgs, module: &DiagnosticsModule) -> anyhow::Result<i32> {
     let report = module.collect_diagnostic_report.execute();
     println!("{}", args.format.render(|| to_toml(&report), || json(&report)));
