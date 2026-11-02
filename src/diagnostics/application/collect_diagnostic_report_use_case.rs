@@ -38,7 +38,7 @@ impl CollectDiagnosticReportUseCase {
     }
 
     fn environment_section(&self, scrubber: &UsernameScrubber) -> DiagnosticSection {
-        let shell = self.host.env_text("SHELL");
+        let shell = self.host.non_empty_env("SHELL");
         let shell_version = shell.as_deref().and_then(|shell| self.host.shell_version(shell));
         let rows = vec![
             row("cwd", scrubbed_text(scrubber, self.host.current_dir())),
@@ -47,7 +47,7 @@ impl CollectDiagnosticReportUseCase {
             row("shell-version", scrubbed_text(scrubber, shell_version)),
             row("terminal", scrubbed_text(scrubber, self.terminal())),
             row("in-ssh", DiagnosticValue::Flag(self.is_in_ssh())),
-            row("in-ci", DiagnosticValue::Flag(self.host.env_text("CI").is_some())),
+            row("in-ci", DiagnosticValue::Flag(self.host.non_empty_env("CI").is_some())),
             row("in-wsl", DiagnosticValue::Flag(self.host.in_wsl())),
         ];
         DiagnosticSection::new("environment".to_string(), rows)
@@ -55,13 +55,13 @@ impl CollectDiagnosticReportUseCase {
 
     fn terminal(&self) -> Option<String> {
         self.host
-            .env_text("TERM_PROGRAM")
-            .or_else(|| self.host.env_text("WT_SESSION").map(|_| "Windows Terminal".to_string()))
-            .or_else(|| self.host.env_text("TERM"))
+            .non_empty_env("TERM_PROGRAM")
+            .or_else(|| self.host.non_empty_env("WT_SESSION").map(|_| "Windows Terminal".to_string()))
+            .or_else(|| self.host.non_empty_env("TERM"))
     }
 
     fn is_in_ssh(&self) -> bool {
-        SSH_VARIABLES.iter().any(|name| self.host.env_text(name).is_some())
+        SSH_VARIABLES.iter().any(|name| self.host.non_empty_env(name).is_some())
     }
 
     fn environment_variables_section(&self, scrubber: &UsernameScrubber) -> DiagnosticSection {

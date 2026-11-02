@@ -8,7 +8,7 @@ pub(crate) trait DiagnosticHost {
 
     /// The value of an environment variable; unset, empty and not valid UTF-8 are all `None`. This is not the
     /// presence rule doctor applies to the environment: the report treats an empty value as missing.
-    fn env_text(&self, name: &str) -> Option<String>;
+    fn non_empty_env(&self, name: &str) -> Option<String>;
 
     /// Every environment variable, as the process sees them: not filtered, not sorted, names that are not valid
     /// UTF-8 already dropped and values converted lossily.
@@ -115,7 +115,7 @@ impl DiagnosticHost for InMemoryDiagnosticHost {
         self.user.clone()
     }
 
-    fn env_text(&self, name: &str) -> Option<String> {
+    fn non_empty_env(&self, name: &str) -> Option<String> {
         self.environment
             .iter()
             .find(|(key, _)| key == name)
@@ -162,7 +162,7 @@ mod tests {
 
         let described = (
             host.user(),
-            host.env_text("SHELL"),
+            host.non_empty_env("SHELL"),
             host.environment_variables(),
             host.shell_version("/bin/zsh"),
             host.current_dir(),
@@ -206,19 +206,19 @@ mod tests {
     }
 
     #[test]
-    fn should_answer_env_text_for_a_non_empty_variable() {
+    fn should_answer_a_non_empty_variable() {
         let host = InMemoryDiagnosticHost::default().with_env("SHELL", "/bin/zsh");
 
-        let shell = host.env_text("SHELL");
+        let shell = host.non_empty_env("SHELL");
 
         assert_eq!(shell, Some("/bin/zsh".to_string()));
     }
 
     #[test]
-    fn should_treat_an_empty_variable_as_missing_for_env_text() {
+    fn should_treat_an_empty_variable_as_missing() {
         let host = InMemoryDiagnosticHost::default().with_env("CI", "");
 
-        let ci = host.env_text("CI");
+        let ci = host.non_empty_env("CI");
 
         assert_eq!(ci, None);
     }
@@ -255,7 +255,7 @@ mod tests {
             .with_env("TERM", "screen");
 
         assert_eq!(
-            (host.environment_variables(), host.env_text("TERM")),
+            (host.environment_variables(), host.non_empty_env("TERM")),
             (
                 vec![("TERM".to_string(), "screen".to_string())],
                 Some("screen".to_string())

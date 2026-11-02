@@ -50,6 +50,12 @@ impl EventLog {
     }
 }
 
+/// A path as the doubles write it into the log: with `/` on every platform, so a test states one expected string.
+#[cfg(test)]
+pub(crate) fn logged_path(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 /// The paths of a user `u` whose pwsh `$PROFILE` is not known yet.
 #[cfg(test)]
 pub(crate) fn sample_paths() -> IntegrationPaths {

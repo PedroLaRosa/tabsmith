@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::diagnostics::application::test_fixtures::EventLog;
+use crate::diagnostics::application::test_fixtures::{logged_path, EventLog};
 #[cfg(test)]
 use std::cell::Cell;
 use std::path::Path;
@@ -41,7 +41,7 @@ impl BundledSpecsProbe for InMemoryBundledSpecsProbe {
     fn is_extracted(&self, data_root: &Path) -> bool {
         self.log.push(format!(
             "bundled_specs.is_extracted({})",
-            data_root.display()
+            logged_path(data_root)
         ));
         self.extracted.get()
     }

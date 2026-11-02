@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::diagnostics::application::test_fixtures::EventLog;
+use crate::diagnostics::application::test_fixtures::{logged_path, EventLog};
 use crate::diagnostics::domain::value_objects::operating_system::OperatingSystem;
 use crate::diagnostics::domain::value_objects::tool_version::ToolVersion;
 #[cfg(test)]
@@ -167,10 +167,10 @@ impl InMemorySystemFactsProbe {
         path: &Path,
     ) -> bool {
         self.log
-            .push(format!("system.{question}({})", path.display()));
+            .push(format!("system.{question}({})", logged_path(path)));
         match facts.borrow().get(path) {
             Some(answer) => *answer,
-            None => panic!("unscripted system.{question}({})", path.display()),
+            None => panic!("unscripted system.{question}({})", logged_path(path)),
         }
     }
 }
@@ -232,7 +232,7 @@ impl SystemFactsProbe for InMemorySystemFactsProbe {
 
     fn settings_file(&self, data_root: &Path) -> PathBuf {
         self.log
-            .push(format!("system.settings_file({})", data_root.display()));
+            .push(format!("system.settings_file({})", logged_path(data_root)));
         self.settings_file
             .clone()
             .unwrap_or_else(|| data_root.join("settings.json"))

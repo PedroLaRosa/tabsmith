@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::diagnostics::application::test_fixtures::EventLog;
+use crate::diagnostics::application::test_fixtures::{logged_path, EventLog};
 #[cfg(test)]
 use std::collections::HashMap;
 use std::path::Path;
@@ -38,7 +38,7 @@ impl InMemoryLogReader {
 impl LogReader for InMemoryLogReader {
     fn read(&self, path: &Path) -> Option<Vec<u8>> {
         if let Some(log) = &self.log {
-            log.push(format!("log_reader.read({})", path.display()));
+            log.push(format!("log_reader.read({})", logged_path(path)));
         }
         self.files.get(path).cloned()
     }
