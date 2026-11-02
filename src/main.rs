@@ -15,7 +15,6 @@ mod shared;
 mod shell_integration;
 mod specs;
 mod terminal_session;
-mod types;
 
 fn main() {
     let cli: bootstrap::cli::Cli = clap::Parser::parse();
