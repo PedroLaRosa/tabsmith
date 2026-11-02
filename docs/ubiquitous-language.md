@@ -8,7 +8,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
 | `Shell` | VO | A supported shell: Bash, Zsh, Fish, Pwsh. Built from a path or name. | `types::Shell` |
-| `DataDirectory` | VO | tabsmith's home (`~/.tabsmith` or `TABSMITH_HOME`) and every path under it: settings, state, history, run, logs, themes, shell, backups, specs. | `settings::{home, settings_path, state_path}` + ad-hoc joins |
+| `DataDirectory` | VO | tabsmith's home (`~/.tabsmith` or `TABSMITH_HOME`) and every path under it: settings, state, history, run, logs, themes, shell, backups, specs (`shell_dir` and `backups_dir` are `#[cfg(test)]`: only their tests call them). | `settings::{home, settings_path, state_path}` + ad-hoc joins |
 | `ShellQuoting` | Domain service | Quote a string for a shell (POSIX single quotes, pwsh smart quotes). | `integrations::{quote, pwsh_sq}` |
 | `Clock` | Port | Wall-clock ms/secs and monotonic `Instant`. | `types::{now_ms, now_secs}`, `Instant::now()` |
 

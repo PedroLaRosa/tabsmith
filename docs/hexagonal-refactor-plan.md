@@ -1,11 +1,10 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 and 10 are done (gate green at `3273a89`, the last code commit of Phase 10).
-Phases 0-7 ran on branch `refactor/hexagonal-architecture`, Phases 8 and 9 on `refactor/hexagonal-dropdown-terminal-session`,
-Phase 10 on `refactor/hexagonal-diagnostics`. Phase 11 (cleanup and `docs/SPEC.md`) is next. The Phase 10 request authorised
-one new PR for `refactor/hexagonal-diagnostics`, off PR #1's branch; no step pushed, and pushing and opening the PR are the
-orchestrator's (the Phase 9 branch's local remote-tracking ref is still at `d1fdd67`). The manual smoke of section 8 is the
-user's and still pending. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6, 7, 8, 9 and 10 research are in
+Status: Phases 0 to 11 are done (gate green at `5694ed1`, the last code commit of Phase 11). Phases 0-7 ran on branch
+`refactor/hexagonal-architecture`, Phases 8 and 9 on `refactor/hexagonal-dropdown-terminal-session` and Phase 10 on
+`refactor/hexagonal-diagnostics` (the last two merged into `refactor/hexagonal-architecture`, PR #1's branch, at `a2cd91c`).
+Phase 11 (cleanup and `docs/SPEC.md`) ran on `refactor/hexagonal-cleanup`, cut from that merge (tag `phase11-start`); its request
+authorised one new PR for that branch, off PR #1's branch. The manual smoke of section 8 is the user's and still pending. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6, 7, 8, 9 and 10 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -866,7 +865,7 @@ deletion (10.18a); `integrations-diff.sh` and `inline-diff.sh` empty at 10.17; t
 CHANGED 213, NEW 1714; against `phase10-start` MISSING 0, DUPLICATE 0, CHANGED 6 (the four locked tests that moved plus two
 re-homed `load_or_defaults` tests, all in the allowed list), NEW 581, PATH-ONLY 1. See the Phase 10 notes in section 9.
 
-### Phase 11: cleanup and documentation
+### Phase 11: cleanup and documentation (done)
 1. Delete `types.rs`. Remove `#![allow(dead_code)]` and delete whatever the compiler then
    flags, including:
    - `logger::trace`;
@@ -874,6 +873,13 @@ re-homed `load_or_defaults` tests, all in the allowed list), NEW 581, PATH-ONLY 
 2. Register all 10 modules in the architecture test, with no exceptions left.
 3. Update `docs/SPEC.md`: §4.1 (module table → the new tree), §4.3 (message and type names) and §10 (test locations).
    The README needs no change.
+
+Done at `5694ed1`: `types.rs` deleted, the crate-wide `#![allow(dead_code)]` removed after 21 findings were resolved on six build
+configurations (7 deleted, 2 test-only, 12 alive on another platform or feature: 11 gated, 1 made live everywhere), SPEC sections 4.1, 4.3, 5.1 and 10
+rewritten (`c0fdccb`). `LEGACY_MODULES` was NOT emptied (deviation 1 of the Phase 11 notes). Result: 1995 passed, 0 failed,
+1 ignored, clippy 3 on a baseline of 3, build warnings 0, golden identical, `windows: ok`; testlock against `phase11-start`:
+2001 tests before and after, nothing missing, new, changed or duplicate; seven behaviour-diff transcripts byte-identical to the
+pre-refactor binary. See the Phase 11 notes in section 9.
 
 ---
 
@@ -893,7 +899,7 @@ re-homed `load_or_defaults` tests, all in the allowed list), NEW 581, PATH-ONLY 
 | `icons.rs` | dropdown (icon slot/resolver), terminal_session (`kitty_graphics`, `icon_assets`) |
 | `pty.rs` | terminal_session/* (done in Phase 9) |
 | `tracker.rs` | terminal_session/* (done in Phase 9) |
-| `types.rs` | split across shared, specs, completion, history, terminal_session, bootstrap; deleted (Phase 9 moved `Msg` and `Model`; `now_ms` and `now_secs` stay until Phase 11) |
+| `types.rs` | split across shared, specs, completion, history, terminal_session, bootstrap; deleted in Phase 11 (Phase 9 moved `Msg` and `Model`; `now_ms` and `now_secs` had no caller left) |
 | `shell_parser.rs` | completion tokenizer + Token / CommandLine / AliasTable |
 | `spec.rs` | specs domain model + `fig_spec_mapper` |
 | `specs.rs` | specs domain (index, locator, retention), `embedded_spec_bundle`, shared temp_dir |
@@ -2137,3 +2143,71 @@ its errata and the run notes in [`phase-10-run-notes/`](hexagonal-refactor/phase
     machine without `bash` on PATH; Windows and macOS paths of doctor (`sw_vers`, `Windows version`, the console check) are
     covered by the compile check and by CI only; the `OsSystemFactsProbe` and `cursor_restorer` `cfg(windows)` bodies (10.12a, 10.13a) were moved verbatim and
     checked by hand (`phase10-greps.sh` C1 to C3).
+
+Phase 11 notes (the cleanup; branch `refactor/hexagonal-cleanup`, tag `phase11-start` = `a2cd91c`, code ends at `5694ed1`):
+- **Commits** (9): `5eb4305` delete `types.rs`; `27614a2` delete `logger::enabled` and `trace`; `5292092` delete the value object fields
+  nothing reads; `01698bb` gate the items that only tests, Windows or a feature use; `77d2dc8` tidy the test support; `30693e7` drop
+  the crate-wide allow; `555acf3` read `ToolVersion` through `components` (the B15 fix, below); `5694ed1` act on the review nits;
+  `c0fdccb` the SPEC sections. `src/` changed by +27 and -74 lines in 23 files; no `Cargo.toml` change.
+- **Verification at `5694ed1`.** Full gate: build warnings 0, 1995 passed, 0 failed, 1 ignored, clippy 3 on 3, `windows: ok`, golden
+  identical. Testlock against `ef807c1`: MISSING 0, DUPLICATE 0, CHANGED 213 (unchanged since Phase 10). Against `phase11-start`:
+  2001 tests before and after, MISSING, NEW, CHANGED, PATH-ONLY and DUPLICATE all 0. `cargo test --locked --release -- --ignored
+  all_bundle_modules` passes. The seven behaviour-diff scripts (`integrations`, `inline`, `theme`, `precmd`, `pty`, `session`,
+  `doctor`) give transcripts byte-identical to the pre-refactor binary (`af1b304`); `doctor` (11010 lines) was re-run on the final
+  binary. `phase10-greps.sh` has no FAIL. An independent panel review (`panel-review`, `mode:agent`, four personas and two context
+  agents) found no defect above P3 after its confidence gate.
+- **The dead-code pass.** Lifting the allow showed 7 findings on the default build, 21 over six configurations (Linux and
+  `x86_64-pc-windows-gnu`, normal and test builds, `embed-specs` on and off). Fixes: 7 deleted because nothing reads them in any
+  build (`logger::enabled`, `logger::trace`, `CompletionResult.fuzzy`, `Suggestion.{priority, is_dangerous, template_type}`, the test
+  const `S`, the doctor test fn `healthy_with_bash_running`, the harness field `reaper`); 2 test-only (D7): `DataDirectory::shell_dir`
+  and `backups_dir` are `#[cfg(test)]`, and `ParsedCommandLine.spec_name` has an item-level `cfg_attr(not(test), allow(dead_code,
+  reason = ..))` because a `cfg(test)` field would run through `ArgvState` and the signature of `ArgvState::initial`; 12 alive on
+  another platform or feature, kept: `ToolVersion::components` (read by the Windows build probe; first gated, then made live on every
+  platform by deviation 2, so it carries no cfg), `SessionMessage::Term` (only the unix signal thread sends it; the allow is Windows-only), `embedded_spec_bundle::{extract_to,
+  unpack}` (`embed-specs`) and eight test helpers, consts and imports used only by `cfg(unix)` tests. The plan's `pub` items used
+  only locally: there are none (the only bare `pub` in `src/` is a string fixture in `architecture_tests.rs`). Two bare
+  `#[allow(dead_code)]` stay in `theme_json_mapper.rs` (serde-only fields, load-bearing per the Phase 8 notes). Lesson: after the
+  blanket allow, the lint depends on the platform and the features. A Linux-only pass would have deleted `ToolVersion::components`
+  and broken the Windows build; `gate.sh` prints `windows: ok` for any exit 0 and does not count warnings, so the six-configuration
+  check (`cargo check` with and without `--tests`, `--target x86_64-pc-windows-gnu`, `--no-default-features`) is the real test.
+- **Deviation 1: `LEGACY_MODULES` is not emptied** (step 2; E3 of `phase10-greps.sh`). Two locked tests need it:
+  `should_flag_a_domain_or_application_file_that_uses_a_legacy_module` names `crate::types` and `crate::engine`, and
+  `should_match_whole_path_segments_only` asserts that `crate::bootstrapping` is not flagged. Any "the root must be a registered
+  module" rule flags `bootstrapping`, so the list cannot become an allow-list without editing that fixture line, which the lock
+  forbids. An attempt was made and reverted. All ten modules were registered since Phase 10 and the architecture test has no other
+  exception. Follow-up for the user: if editing that one fixture line is acceptable, the allow-list rule is stricter (it would also
+  catch `crate::update` or any other crate-root item) and a RED test for it was written during the attempt.
+- **Deviation 2: B15 was broken, then fixed forward.** `01698bb` first put `#[cfg(any(windows, test))]` on `ToolVersion::components`
+  (domain), which fails B15 of `phase10-greps.sh` ("no cfg in domain/application"; Phase 10 deviation 8). The gate does not run
+  that script; the panel's prior-art agent pointed at it and the script confirmed. `555acf3` makes `major`, `minor_or_zero`,
+  `is_below` and `Display` read through `components`, so it is live everywhere and the cfg is gone.
+- **Deviation 3: two commit messages are inexact; history was not rewritten.** `5292092` says the reads of the deleted `Suggestion`
+  fields served "menu highlighting and auto-execute" on `SuggestionCandidate` and `FilterOptions`; the reads are `priority` in
+  `suggestion_ranker.rs`, `is_dangerous` in `suggestion_filter.rs:87` and `template_type` in `suggestion_filter.rs:131`, all on
+  `SuggestionCandidate`. `30693e7` says "two item-level allows stay"; that counts the ones this phase added, the two in
+  `theme_json_mapper.rs` pre-date it. Three subjects (`01698bb`, `77d2dc8`, `30693e7`) have no module scope because they span
+  modules.
+- **SPEC.** Sections 4.1, 4.3, 5.1 and 10 were rewritten from the code, each checked by two independent reviewers, and every path and
+  identifier was resolved against the tree by a script. In 5.1, `has_seen_prompt`, `ShellPath`, `TTY` and `User` are gone: at
+  `ef807c1` they were only written, never read, so no behaviour changed; 5.1.2 lost "and `User`" for the same reason. Old
+  behaviour sentences that were already inexact at both commits were kept, not rewritten: "all 727 root specs normalise" (no test
+  asserts 727), the cache test vector (`lookup` returns the rest of the entry), "each handler runs inside `guard`" (not `ChildExit`,
+  `PtyEof`, `Term`), "a batch merges every queued `Pty`" (only the consecutive head), the Windows 250 ms size poll (its own thread,
+  not the stdin thread), the `llm` worker (only for a deferred answer), and "values other than `Dir` and `PwshPrompts` are trimmed"
+  (`NewCmd` is compared untrimmed). 17 lines in sections 3, 4.4, 4.5, 5.1.1 and 7 to 9 still say `Msg::`, `EngineMsg`, `on_event` or
+  `ExecDone`: a rename sweep, not done.
+- **Noticed and not done** (outside the three steps, or a design call): `rgb_to_256` is still duplicated with `dropdown`'s `xterm256`
+  (O4; equal on all 2^24 inputs); `CompletionSession` regrouping and the 728-line `TerminalSession`; `debug_shell_post_script` is a
+  third wiring place of `RenderInitScriptUseCase`; `DataDirectory::shell_dir` and `backups_dir` are test-only and duplicate the
+  installer's own `data_root().join("backups")` (`integration_installer.rs:141`): delete them with their tests, or use them (a call for
+  the user, since the lock keeps the tests); `docs/native-install-auto-update-plan.md` line 66 still proposes a flat `src/update.rs`
+  "like `doctor.rs`", which no longer exists and contradicts the vertical-slice layout; `phase9-greps.sh` A6 and `phase10-greps.sh`
+  A7 name the deleted `types.rs` and pass vacuously; CI (`.github/workflows/ci.yml`) runs only build and test on three OSes (no clippy,
+  no `-D warnings`, no `--no-default-features`), so a dead-code warning missed on one platform would not fail it.
+- **Environment.** The sandbox clone was shallow (`git fetch --unshallow` restored `ef807c1`); the session installed the
+  `x86_64-pc-windows-gnu` target and `gcc-mingw-w64-x86-64` (after `apt-get update`), so `windows: ok` was a real compile of the
+  `cfg(windows)` code, run on every commit. `pty-diff.py` needs an absolute binary path (`os.execve` after a `chdir`): with a relative
+  one it crashes identically on both binaries and a `cmp` of the two crash logs says "different".
+- **Not verified by anyone:** macOS (no toolchain; every gate in the diff is `unix`, `windows`, `test` or the feature, never
+  `target_os`, so the item set equals Linux's) and any run on Windows beyond the compile check. The manual smoke of section 8
+  (P8-S1, P8-S2, P9-S1..S5, P10-S1..S3) has never been run.
