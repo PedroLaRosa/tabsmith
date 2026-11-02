@@ -22,19 +22,23 @@ pub(crate) trait SystemFactsProbe {
     /// The variable exists, even with an empty value.
     fn env_is_set(&self, name: &str) -> bool;
 
+    /// The variable is set to a value that is not empty (`var_os(name)` is `Some` and not empty).
     fn env_is_non_empty(&self, name: &str) -> bool;
 
     fn tabsmith_version(&self) -> String;
 
     fn operating_system(&self) -> OperatingSystem;
 
+    /// The path is a directory, following symbolic links (`Path::is_dir`); a file of that name is not one.
     fn directory_exists(&self, path: &Path) -> bool;
 
+    /// The path is a regular file, following symbolic links (`Path::is_file`); a directory of that name is not one.
     fn file_exists(&self, path: &Path) -> bool;
 
     /// The settings file of the user; `data_root/settings.json` when the data directory cannot say.
     fn settings_file(&self, data_root: &Path) -> PathBuf;
 
+    /// The settings document store loads the file without an error.
     fn settings_file_loads(&self, path: &Path) -> bool;
 
     /// The version a program prints; `None` when it fails, takes too long or prints no version.

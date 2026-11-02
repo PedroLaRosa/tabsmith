@@ -153,9 +153,9 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let mut components = path.split('/');
     let module = components.next().unwrap_or_default();
     let layer = components.next();
-    // ponytail: a `tests.rs` file is taken to be the body of a `#[cfg(test)] mod tests;` (the plan's sibling test
-    // file); read the parent's declaration if a production file is ever named `tests.rs`.
-    let test_file = path.ends_with("/tests.rs");
+    // ponytail: a `tests.rs` or `<what>_tests.rs` file below a module is taken to be the body of a `#[cfg(test)]
+    // mod ...;` (the plan's sibling test file); read the parent's declaration if a production file is ever named so.
+    let test_file = path.ends_with("/tests.rs") || (path.contains('/') && path.ends_with("_tests.rs"));
     let mut open_braces = Vec::new();
     let mut test_only_item = TestOnlyItem::default();
     let imported_names = ImportedNames::in_source(source);
@@ -1024,6 +1024,17 @@ mod tests {
                       use crate::settings::infrastructure::json_file_settings_repository::JsonFileSettingsRepository;\n";
 
         let found = violations_in("settings/domain/settings/tests.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_not_apply_the_layer_rules_to_a_second_sibling_tests_file_named_after_what_it_tests() {
+        let source = "use super::*;\n\
+                      use serde_json::json;\n\
+                      use crate::settings::infrastructure::json_file_settings_repository::JsonFileSettingsRepository;\n";
+
+        let found = violations_in("settings/domain/settings/execute_tests.rs", source);
 
         assert_eq!(found, vec![]);
     }
