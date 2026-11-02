@@ -1,10 +1,11 @@
 # tabsmith → DDD + hexagonal architecture: refactor plan
 
-Status: Phases 0, 1, 2, 3, 4, 5, 6, 7, 8 and 9 are done (gate green at `b898db1`, the last code commit of Phase 9).
-Phases 0-7 ran on branch `refactor/hexagonal-architecture`, Phases 8 and 9 on `refactor/hexagonal-dropdown-terminal-session`.
-Phase 10 is next. The Phase 9 request authorises no push and no PR (the local remote-tracking ref of the branch is at
-`d1fdd67`, the end of run 5; run 6 and the closing docs are not pushed); the manual smoke of section 8 is the user's and still
-pending. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6, 7, 8 and 9 research are in
+Status: Phases 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 and 10 are done (gate green at `3273a89`, the last code commit of Phase 10).
+Phases 0-7 ran on branch `refactor/hexagonal-architecture`, Phases 8 and 9 on `refactor/hexagonal-dropdown-terminal-session`,
+Phase 10 on `refactor/hexagonal-diagnostics`. Phase 11 (cleanup and `docs/SPEC.md`) is next. The Phase 10 request authorised
+one new PR for `refactor/hexagonal-diagnostics`, off PR #1's branch; no step pushed, and pushing and opening the PR are the
+orchestrator's (the Phase 9 branch's local remote-tracking ref is still at `d1fdd67`). The manual smoke of section 8 is the
+user's and still pending. Working notes, tools, the per-file source map and the Phase 3, 4, 5, 6, 7, 8, 9 and 10 research are in
 [`hexagonal-refactor/`](hexagonal-refactor/README.md). Source inventory taken on 2026-10-24 from `main` @ `4f26859`.
 
 ## Context
@@ -180,7 +181,7 @@ completion                         → shared, settings, specs, history
 ghost_text                         → shared, settings, history, specs, completion
 dropdown                           → shared, settings, specs, completion
 terminal_session                   → shared, settings, history, completion, ghost_text, dropdown
-diagnostics                        → shared, settings, shell_integration, specs, ghost_text, terminal_session
+diagnostics                        → shared, settings, shell_integration, ghost_text (as built; the bridges make specs and terminal_session unnecessary)
 bootstrap                          → everything (composition root only)
 ```
 
@@ -190,7 +191,9 @@ calling the other module's use case or adapter.
 | Port (declared in) | Implemented in bootstrap by |
 |---|---|
 | `shell_integration::SpecBundleInstaller` | `specs::InstallSpecBundleUseCase` |
-| `diagnostics::CheckFixer` | shell_integration install/reinstall use cases, settings repository reset, `specs::InstallSpecBundleUseCase`, data-dir creation |
+| `diagnostics::CheckFixer` | `bootstrap::CheckFixerBridge` (`diagnostics_bridges.rs`, built in Phase 10): `IntegrationInstaller::{install, install_missing}`, `specs::InstallSpecBundleUseCase`, diagnostics' own `FileRepairs` (data-dir creation and settings reset), and the restart reminder after an `Ok` iff `CheckFix::marks_restart_reminder()` |
+| `diagnostics::IntegrationProbe` | `bootstrap::IntegrationProbeBridge` (`diagnostics_bridges.rs`): `integration_paths_from`, `IntegrationInstaller::{integrations, check}` and the verbatim `script_bins` body (built in Phase 10) |
+| `diagnostics::BundledSpecsProbe` | `bootstrap::BundledSpecsBridge` (`diagnostics_bridges.rs`): `<data root>/specs/<bundle version>/index.json` is a file (built in Phase 10) |
 | `terminal_session::CompletionEngine` | `bootstrap::ChannelCompletionEngine` (sends `EngineMessage` to the engine server thread) |
 | `terminal_session::GeneratorProcessReaper` | `bootstrap::GeneratorProcessBridge` (`bridges.rs`), which calls `specs`' `kill_live_children` (built in Phase 9) |
 | `specs::RuntimeEventSource` | `bootstrap::EngineInbox` (`engine_inbox.rs`, the engine server's single channel; keeps today's abort-on-newer-request semantics) |
@@ -244,9 +247,9 @@ application/{get_setting, set_setting, delete_settings, list_settings, list_sett
              open_settings_file}_use_case.rs
 application/ports/settings_editor.rs
 infrastructure/settings_module.rs
-infrastructure/load_or_defaults.rs        the legacy doctor.rs lenient load: defaults + the old warning
-                                          (doctor.rs only until Phase 10; the pty caller went in Phase 9, where
-                                          terminal_session's LenientLiveSettings does the same load)
+infrastructure/load_or_defaults.rs        (deleted in Phase 10: the pty caller went in Phase 9, where terminal_session's
+                                          LenientLiveSettings does the same load, and doctor's went in Phase 10 to
+                                          diagnostics' LenientSettings)
 infrastructure/adapters/{json_file_settings_repository.rs, setting_value_json.rs (SettingValue ↔ serde_json,
                          "JSON else string" parsing), system_settings_editor.rs ← cli::open_settings}
 infrastructure/cli/settings_command.rs    ← cli::{SettingsArgs, SettingsCmd, settings, render_get, render_list,
@@ -507,21 +510,46 @@ sliced test modules `handle_keystrokes_use_case/tests.rs`, `marker_tracker/tests
 `PanickingCompletionEngine`, and the types listed in the glossary. The domain uses no external crate (`std`
 only).
 
-### diagnostics
+### diagnostics (built in Phase 10: 64 files, as built)
+A `Check` is data (name, severity, subject); every rule is a pure function of facts; the facts come through ports, one check at
+a time, so doctor keeps its laziness (a group is built only after the previous one passed, a fix is followed by a fresh
+evaluation of that one check).
 ```
-domain/entities/doctor_run.rs             ← doctor::Run policy (soft→warn unless strict, abort on unfixed, --all)
-domain/value_objects/{check, check_group, check_severity, check_outcome, check_fix, system_facts, tool_version,
-                      diagnostic_report}.rs
-domain/services/{doctor_check_catalog ← dotfile/setup/env/system checks evaluated over SystemFacts
-                 (session_kind, inline_outcome, is_local, short_path; launch rules reuse
-                 shell_integration::LaunchPolicy instead of duplicating them), username_scrubber}.rs
-application/{run_doctor, collect_diagnostic_report, show_recent_logs}_use_case.rs
-application/ports/{system_facts_probe, doctor_reporter, check_fixer, log_reader}.rs
-infrastructure/diagnostics_module.rs
-infrastructure/adapters/{os_system_facts_probe, terminal_doctor_reporter ← print_outcome/Spinner/SIGINT cursor
-                         restore, file_log_reader}.rs
-infrastructure/cli/{doctor_command, diagnostic_command ← diagnostic/diagnostics/to_toml, debug_logs_command}.rs
+mod.rs
+domain/diagnostics_error.rs                       DiagnosticsError {IntegrationPaths, DataDirectory}
+domain/entities/doctor_run.rs                     ← doctor::Run (strict/all policy, counts, abort) + doctor_group_soft_fix_abort
+domain/value_objects/{check, check_group, check_subject, environment_check, system_check, check_severity, check_outcome,
+                      check_fix (+ marks_restart_reminder), info_line, system_facts (the env group's snapshot),
+                      terminal_environment (+ TerminalEnvironmentParts), operating_system, tool_version
+                      (← version_of + doctor_version_parsing),
+                      diagnostic_report, diagnostic_section, diagnostic_value}.rs
+domain/services/{doctor_check_catalog (free functions: every check of the four groups, their severities and one pure
+                 outcome function per check; session_kind, inline_outcome, short_path, ...) + doctor_check_catalog/tests.rs,
+                 username_scrubber}.rs
+application/{check_group_builder (+ /tests.rs) ← the construction-time I/O of one group,
+             check_evaluator (+ /tests.rs) ← the facts of one check, asked when it is evaluated,
+             run_doctor_use_case (+ /tests.rs, /execute_tests.rs) ← doctor::run + Run::group,
+             collect_diagnostic_report_use_case ← cli::diagnostics, show_recent_logs_use_case ← cli::debug_logs,
+             doctor_request, doctor_verdict, log_paths (DTOs),
+             test_fixtures (#[cfg(test)]: EventLog, logged_path, sample_paths, LoggingRestartReminder, DoctorHarness)}.rs
+application/ports/{system_facts_probe, integration_probe, bundled_specs_probe, settings_snapshot, check_fixer,
+                   doctor_reporter, log_reader, diagnostic_host}.rs      each trait with its #[cfg(test)] double
+infrastructure/diagnostics_module.rs              DiagnosticsModule {run_doctor, collect_diagnostic_report, show_recent_logs}
+                                                  + build_diagnostics_module (only builds)
+infrastructure/adapters/{os_system_facts_probe (the cfg(windows) bodies moved verbatim), lenient_settings
+                         ← settings::load_or_defaults, file_repairs ← the two Fix closure bodies,
+                         terminal_doctor_reporter ← print_outcome and the prints, spinner, cursor_restorer
+                         ← restore_cursor_on_ctrl_c (SIGINT watcher / SetConsoleCtrlHandler),
+                         file_log_reader, os_diagnostic_host}.rs
+infrastructure/cli/{doctor_command (DoctorArgs, run_doctor_command(args, build_module)),
+                    diagnostic_command ← diagnostic/diagnostics/to_toml + diagnostic_toml,
+                    debug_logs_command ← debug_logs}.rs
 ```
+Beyond the first draft of this section: the lazy design needs `CheckGroupBuilder` and `CheckEvaluator` (application services, not
+use cases), the seven VOs `InfoLine`, `DiagnosticValue`, `CheckSubject`, `EnvironmentCheck`, `SystemCheck`,
+`TerminalEnvironment` and `OperatingSystem`, `DiagnosticsError`, `LogPaths` and four more ports than the plan's four
+(`IntegrationProbe`, `BundledSpecsProbe`, `SettingsSnapshot`, `DiagnosticHost`). The domain uses `std` and the other modules'
+domain only (`shared`, `settings`, `shell_integration`, `ghost_text`); the three bridges are in `bootstrap/diagnostics_bridges.rs`.
 
 ### bootstrap (composition root)
 ```
@@ -538,6 +566,9 @@ bootstrap/engine_inbox.rs  EngineInbox, the engine thread's one channel; impleme
 bootstrap/channel_completion_engine.rs  implements terminal_session::CompletionEngine over Sender<EngineMessage>
                              + start_completion_engine, the starter the pty receives
 bootstrap/bridges.rs       cross-module port implementations (section 2): SpecBundleBridge, GeneratorProcessBridge
+bootstrap/diagnostics_bridges.rs  IntegrationProbeBridge, BundledSpecsBridge, CheckFixerBridge (Phase 10; a sibling of
+                             bridges.rs because the code and its 23 tests are about 650 lines); bootstrap/cli.rs builds
+                             diagnostics_module() for doctor, diagnostic and debug logs
 ```
 
 ### Event → use case tables
@@ -809,7 +840,7 @@ Done at `b898db1`: `terminal_session` registered in the architecture test (at 9.
 use cases and the runner in place, gate green (1414 passed). The phase ran in 42 steps (`9.0a` … `9.7`) in six runs. See
 the Phase 9 notes in section 9.
 
-### Phase 10: diagnostics
+### Phase 10: diagnostics (done: [design](hexagonal-refactor/phase-10-diagnostics.md))
 1. Domain:
    - `DoctorRun`, with `doctor_group_soft_fix_abort` split between `DoctorRun` and `RunDoctorUseCase`;
    - `CheckOutcome` and `CheckFix` (data, no closures);
@@ -820,6 +851,20 @@ the Phase 9 notes in section 9.
    infrastructure does the lenient load the way Phase 9 step 6 says; `settings::infrastructure::load_or_defaults`
    then has no caller and is deleted.
 3. Write the three use cases. Add the CLI handlers (with `diagnostic_toml`). Delete `doctor.rs` and `cli.rs`.
+
+Done at `3273a89`: `diagnostics` registered in the architecture test at 10.0 (the first step), `doctor.rs` and `cli.rs` deleted
+from `src/` (`main.rs` declares `mod diagnostics;` and neither), `settings::infrastructure::load_or_defaults` deleted after its
+last caller moved, `types.rs` down to `now_ms` and `now_secs`, both without a caller. The phase ran in 28 steps in four runs: run 1
+= `10.0` (guards: tag `phase10-start`, the Windows check, `phase10-greps.sh`, `doctor-diff.sh`, registration, the design) to `10.6`
+(the domain); run 2 = `10.7a` to `10.11` (ports, `CheckGroupBuilder`, `CheckEvaluator`, the three use cases); run 3 = `10.12a` to
+`10.15b` (the adapters, the reporter, `DiagnosticsModule`, the three commands); run 4 = `10.16` (bridges), `10.17` (rewire into
+`bootstrap/cli.rs`), `10.18a` (delete `doctor.rs` and `cli.rs`, create the locked tests at their homes), `10.18b` (delete
+`load_or_defaults`), `10.19` (these docs) and `10.20` (the close). Result at `3273a89`: 1995 tests passed, 0 failed, 1 ignored
+(1414 at the end of Phase 9), clippy 3 on a baseline of 3, build warnings 0, golden identical, `windows: ok`; `doctor-diff.sh`
+(470 commands in 61 scenarios, 11010 lines) byte-identical to the `af1b304` transcript after the rewire (10.17) and after the
+deletion (10.18a); `integrations-diff.sh` and `inline-diff.sh` empty at 10.17; testlock against `ef807c1` MISSING 0, DUPLICATE 0,
+CHANGED 213, NEW 1714; against `phase10-start` MISSING 0, DUPLICATE 0, CHANGED 6 (the four locked tests that moved plus two
+re-homed `load_or_defaults` tests, all in the allowed list), NEW 581, PATH-ONLY 1. See the Phase 10 notes in section 9.
 
 ### Phase 11: cleanup and documentation
 1. Delete `types.rs`. Remove `#![allow(dead_code)]` and delete whatever the compiler then
@@ -837,11 +882,11 @@ the Phase 9 notes in section 9.
 | Today | Goes to |
 |---|---|
 | `main.rs` | `main.rs` (thin), `bootstrap/cli.rs` |
-| `cli.rs` | settings, dropdown (theme), ghost_text (inline), diagnostics (diagnostic, debug logs), terminal_session (debug shell, key tester), bootstrap (completion, print_error), shared (OutputFormat, style) |
+| `cli.rs` | settings, dropdown (theme), ghost_text (inline), diagnostics (diagnostic, debug logs), terminal_session (debug shell, key tester), bootstrap (completion, print_error), shared (OutputFormat, style); fully moved and deleted in Phase 10 |
 | `settings.rs` | settings/*, shared (DataDirectory, JsonDocumentStore, AtomicFile) |
 | `logger.rs` | `shared/infrastructure/logger.rs` |
 | `integrations.rs` | shell_integration/*, shared (quoting, os helpers, style, AtomicFile), terminal_session (pre-cmd, run files) |
-| `doctor.rs` | diagnostics/* |
+| `doctor.rs` | diagnostics/* (done and deleted in Phase 10; `script_bins` went verbatim to `bootstrap/diagnostics_bridges.rs`) |
 | `keys.rs` | dropdown domain (keys, keymap, keystroke parser), terminal_session adapter (stdin decoder) |
 | `menu.rs` | dropdown `Menu` + `CommonPrefix`; fixtures → `completion/domain/test_fixtures.rs` |
 | `render.rs` | dropdown domain (theme, colour, layout, text fitting), dropdown theme mapper, terminal_session `overlay_renderer` |
@@ -912,6 +957,11 @@ the Phase 9 notes in section 9.
   bottom row and resize, `vim` and `exit 3`, settings reload, key tester, failures, files) and on a real pty
   (probe answered or not, typeahead, env and cwd, SIGTERM, no shell, corrupt settings); both are empty. They do not
   cover zsh, fish, pwsh, kitty/ghostty/tmux icons or Windows.
+- **Phase 10 smoke (the user's; agents cannot drive a terminal):** **P10-S1** `tabsmith doctor` in a real terminal shows the
+  `Running checks...` spinner on stderr and clears it, and Ctrl-C during it restores the cursor and exits 1; **P10-S2**
+  `tabsmith doctor --all` colours (bold headers, green and red marks) in a real terminal; **P10-S3** (CI only) on Windows the
+  `Windows Console Check` and `Windows version` lines and the Ctrl-C handler. `doctor-diff.sh` pins the spinner clear bytes and
+  Ctrl-C under a pty on Linux, not Windows and not macOS `sw_vers`.
 - **End:** push the branch and let the CI matrix (ubuntu, macos, windows) run. Ask the user before pushing.
 
 ---
@@ -1979,3 +2029,111 @@ deviations and watch lists are in [`phase-9-run-notes/`](hexagonal-refactor/phas
     context fields, lines 679 and 689) and §10 (test locations): Phase 11 rewrites them; Phase 9 did not touch the file.
     `rgb_to_256` equals `dropdown::color_parser::xterm256` for all 2^24 inputs; the dedupe edits two locked tests
     (`suggestion_colors`, `pwsh_reported_prediction_colour`).
+
+
+Phase 10 notes (decisions and deviations of [`phase-10-diagnostics.md`](hexagonal-refactor/phase-10-diagnostics.md) section 12,
+its errata and the run notes in [`phase-10-run-notes/`](hexagonal-refactor/phase-10-run-notes/); the phase ran as 28 steps,
+`10.0` ... `10.20`, in four runs; where the notes differ from the briefs, the notes win):
+
+- **Deviations from the plan's letter** (design section 12, as built):
+  1. `CheckFix::ReinstallIntegrations` is `InstallMissingIntegrations`: the fix is `install_missing` (install what is not
+     installed, with backups); the reinstall use case uninstalls first.
+  2. `SystemFacts` is the environment group's snapshot (terminal environment, session id, settings), not a monolith: every
+     other fact is gathered through a port by `CheckGroupBuilder` or `CheckEvaluator` when its check is built or evaluated.
+  3. `RestartReminderRepository` gains `is_pending` and `clear_pending` (the latter writes `false` and keeps the key) instead
+     of the plan's `find` and `delete`, which would change the bytes of `state.json`. The epilogue reads the file twice.
+  4. The settings reset and the data-directory creation are plain `std::fs` in `FileRepairs` (backup copy, non-atomic
+     write, mode), not the settings repository.
+  5. More ports than the plan's four (`IntegrationProbe`, `BundledSpecsProbe`, `SettingsSnapshot`, `DiagnosticHost`) and
+     three bridges, not one.
+  6. New VOs `InfoLine`, `DiagnosticValue`, `CheckSubject`, `EnvironmentCheck`, `SystemCheck`, `TerminalEnvironment`,
+     `OperatingSystem`; the error `DiagnosticsError`; the application services `CheckGroupBuilder` and `CheckEvaluator`.
+  7. `Integration` derives `PartialEq, Eq` (shell_integration, no behaviour).
+  8. No `cfg(windows)` in a port method, domain or application; the Windows rules read facts (`OperatingSystem::Windows`,
+     `Option` facts that are `None` elsewhere).
+  9. `doctor_script_bins_skip_orphans` lives with the bridge it tests (`bootstrap/diagnostics_bridges.rs`);
+     `doctor_group_soft_fix_abort` is split (D6): the policy half keeps the name in `doctor_run.rs`, the flow half is
+     `doctor_group_soft_fix_abort_flow` in `run_doctor_use_case/tests.rs`.
+  10. `LEGACY_MODULES` keeps `cli` and `doctor` (precedent `pty`, `tracker`).
+  11. The plan's "launch rules reuse `LaunchPolicy`" is not done: doctor's terminal rules differ in order and messages (D1).
+  12. `diagnostics` reaches `specs` and the installer only through the bridges, so the plan's edges to `specs` and
+      `terminal_session` are unused; the one extra edge is `ghost_text` (domain: `ghost_text_source_resolver` for the
+      inline check).
+  Added by the errata and the steps: (13) `ShowRecentLogsUseCase` has two methods and `LogPaths` replaces `RecentLogs`, so
+  `debug logs` prints the two path lines before it reads `pty.log`, so they show even when that file is a FIFO, a device or huge;
+  (14) `CheckFix::marks_restart_reminder()` is the domain home of the reminder policy (the two integration fixes mark it, even
+  when nothing was installed), and the bridge calls `save_pending()` iff it is true, after an `Ok`; (15)
+  `run_doctor_command(args, build_module)` takes a module builder so the root check precedes construction (`doctor` as root
+  without `--all` constructs nothing); (16) `OsDiagnosticHost` keeps the stdout handling of the shell version in the pure
+  helper `first_line_of`; (17) the tests of the lazy builder and evaluator, and the large use-case tests, are sibling
+  `tests.rs` files (the fitness test treats `<what>_tests.rs` like `tests.rs`).
+- **Decisions.** Lazy facts: `CheckGroupBuilder` does the construction I/O of one group (the `which` calls, the bash
+  login-file stats, the pwsh `$PROFILE` listing, the settings load with its warning, `which("fish")`) and
+  `CheckEvaluator` asks the ports for the facts of one check when that check is evaluated, so a group is built after the
+  previous one passed and before its header, the settings are loaded once, skipped and after-abort checks are never probed,
+  and `sw_vers`, `bash --version` and `fish --version` spawn only when their turn comes. The catalog decides what is asked
+  (a thunk where a fact is needed only sometimes). The restart reminder is read with `is_pending` and cleared with
+  `clear_pending`. `FileRepairs` takes the `Clock` for the backup name. The bridges: `IntegrationProbeBridge` (`script_binaries`
+  is the `script_bins` body moved verbatim: the pwsh profile is patched so pwsh is never spawned a second time, `Shell::ALL`
+  filtered by `which`, the text between the first two quotes), `BundledSpecsBridge` and `CheckFixerBridge` (five explicit
+  arms, D8; any `Err` is rendered with `{:#}`, the io fixes print the bare io text, `InstallMissingIntegrations` errors go
+  through `integration_failures_error`, bold iff stdout is a terminal at fix time; `install_missing` gets the original paths so
+  pwsh is spawned again exactly as before). `diagnostics_module()` in `bootstrap/cli.rs` only constructs (D3), and the module
+  is built only for the command that runs.
+- **Test moves.** The five locked tests and the flow half sit at their homes (`doctor_group_soft_fix_abort` in
+  `doctor_run.rs`, `doctor_group_soft_fix_abort_flow` in `run_doctor_use_case/tests.rs`, `doctor_script_bins_skip_orphans` in
+  the bridges, `doctor_session_check_skips_pwsh` in the catalog tests, `doctor_version_parsing` in `tool_version.rs`,
+  `diagnostic_toml` in `diagnostic_command.rs`), created in the commit that deleted `doctor.rs` and `cli.rs` (10.18a) so no
+  name existed twice. The three `load_or_defaults` tests were re-homed under their exact names in `lenient_settings.rs`
+  (10.18b) and the three interim tests of 10.12b were dropped as subsumed. The interim equivalent tests of 10.3 to 10.15
+  (`should_replay_*` in `doctor_run.rs`, ...) stay beside them. `doctor_script_bins_skip_orphans` and the `script_binaries` tests
+  assert only when `bash` is on PATH, as the legacy test did.
+- **Behaviour evidence.** The golden capture covers `doctor --all`, `diagnostic`, `debug logs` and the no-HOME lines only. The
+  non-`--all` flow, the fixes, the spinner bytes, strict mode, the restart epilogue and the diagnostic environment branches are
+  covered by the new `scripts/hexagonal-refactor/doctor-diff.sh` (committed in 10.0; 470 commands in 61 scenarios, about 3 minutes,
+  needs `cc` and `python3`): run on `target/debug/tabsmith` after `cargo build --locked` and `cmp` with the `af1b304` transcript.
+  It was identical after 10.17 and after 10.18a. The 10.17 smoke test under `env -i` (a scratch HOME and none) compared the
+  baseline binary and the new one on `doctor`, `doctor --all`, `--strict`, `--help`, `diagnostic`, `diagnostic --format json` and
+  `debug logs`: identical, except the `cli-path` line, which is the path of the binary being run.
+- **Fitness notes.** `diagnostics` is in `REGISTERED_MODULES` from 10.0, so all ten modules are registered. Rule 3 flags only
+  another module's use cases and `infrastructure` paths, so it cannot see the `IntegrationInstaller` application service, and
+  the rules do not check std I/O, env, clock, threads or `cfg` in domain and application: `phase10-greps.sh` checks those by
+  hand (B5 `IntegrationInstaller` only in bootstrap, B13 no I/O, env, process, clock or thread in domain or application,
+  B15 no `cfg` there), and all three are OK. The rules also do not check the `anyhow` rule (B9: `anyhow` and `clap` only in
+  `infrastructure/cli`). The reviewers of runs 1 to 3 found a `mod` line dropped for five steps, which the scanner could not see; E4
+  of `phase10-greps.sh` and the script change `7b81f61` guard against it. Test doubles carry `#[cfg(test)]` on each item and
+  on each `use` only they need, never `#![cfg(test)]` (the scanner does not understand it); doubles use Windows-safe paths
+  (`test_fixtures::logged_path`).
+- **Open questions and the defaults applied** (the user did not answer): `doctor-diff.sh` is not in `gate.sh` (it needs a built
+  binary, a C compiler and python3 and takes about 3 minutes; it is run at 10.17, 10.18a and 10.20); the Windows target is
+  installed on the Linux machine that ran the phase, so `windows: ok` is a real compile check of the `cfg(windows)` code, but nothing of it ran;
+  `cli` and `doctor` stay in `LEGACY_MODULES`; the PR is opened by the orchestrator after 10.20.
+- **Noticed and not fixed** (D1: behaviour today, kept): `debug logs` reads all of `pty.log` before keeping 50 lines (the
+  path lines print first, as today); the `script_binaries` parse takes the text between the first two single quotes, so a
+  script path with a quote misreads, as `script_bins` did; `install_missing` marks the restart reminder even when it
+  returned `Ok(false)` (nothing installed), as `doctor.rs` did.
+- **History**: 34 commits from `phase10-start` (`b0fe04d`) to `3273a89` (the guards, the design, the domain, the application,
+  the adapters, the bridges, the rewire, the two deletions) plus the docs commit of this close; five subjects are over 72
+  characters (`7ef9712` 73, `8675f09` 75, `bebc322` 80, `7d7674a` 77 and `1b2a152` 73), every commit has the Sonnet 5.5 trailer
+  and the session trailer, every message went through `git commit -F`, none was rewritten. Known process deviation: the bridges and their 23 tests went in as the
+  single commit `e3e20a0` (production code first, the RED rebuilt afterwards), and the pwsh-no-second-spawn and `locate_paths`
+  delegation tests were dropped because both need a fake pwsh or the real HOME.
+- **Manual smoke pending** (the user's; section 8): P10-S1 (the spinner and Ctrl-C in a real terminal), P10-S2 (`doctor --all`
+  colours) and, CI only, P10-S3 (Windows console, Windows version and the Ctrl-C handler), plus Phase 8's P8-S1 and P8-S2 and
+  Phase 9's P9-S1..S5, none of which has been run. Nothing was pushed by the phase.
+- **Hand-offs**:
+  - Phase 11: delete `src/types.rs` (it holds only `now_ms` and `now_secs`, both without a caller; the two mentions left are a
+    fixture string and a comment in `architecture_tests.rs`) and empty `LEGACY_MODULES` (`cli doctor engine icons inline
+    integrations js keys menu parser pty render shell_parser spec suggest tracker types` are all dead names now); step 2 of
+    Phase 11 ("register all 10 modules") is already done, so only the exceptions in the architecture test remain. Remove
+    `#![allow(dead_code)]` from `main.rs` and delete what the compiler flags. Dead-code watch list (D7) for diagnostics:
+    `CheckSeverity` accessors used only by tests, the `OperatingSystem::Other` payload, the `InMemory*` and `Recording*`
+    doubles, `DiagnosticsError::DataDirectory` and `ToolVersion::components` if only tests read it (the design's list).
+    `docs/SPEC.md` is stale in section 4.1 (the rows naming `doctor.rs` and `cli.rs`, around line 496), section 4.3 and
+    section 10; `docs/native-install-auto-update-plan.md` line 66 also names `doctor.rs`. Phase 10 touched neither file. `debug_shell_post_script` is still a third wiring place
+    of `RenderInitScriptUseCase`. The 645-line `bootstrap/diagnostics_bridges.rs` (about 400 lines of tests),
+    and `run_doctor_use_case/tests.rs` (about 600 lines) are candidates for a split at the next touch.
+  - Risks for Phase 11: the `script_binaries`, `doctor_script_bins_skip_orphans` and every `which`-based test pass vacuously on a
+    machine without `bash` on PATH; Windows and macOS paths of doctor (`sw_vers`, `Windows version`, the console check) are
+    covered by the compile check and by CI only; the `OsSystemFactsProbe` and `cursor_restorer` `cfg(windows)` bodies (10.12a, 10.13a) were moved verbatim and
+    checked by hand (`phase10-greps.sh` C1 to C3).

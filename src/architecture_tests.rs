@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 /// Modules that follow the hexagonal layout; each phase registers the module it finishes. `bootstrap` is the
 /// composition root and is never registered.
 const REGISTERED_MODULES: &[&str] = &[
-    "completion", "dropdown", "ghost_text", "history", "settings", "shared", "shell_integration", "specs",
+    "completion", "diagnostics", "dropdown", "ghost_text", "history", "settings", "shared", "shell_integration", "specs",
     "terminal_session",
 ];
 
@@ -153,9 +153,9 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let mut components = path.split('/');
     let module = components.next().unwrap_or_default();
     let layer = components.next();
-    // ponytail: a `tests.rs` file is taken to be the body of a `#[cfg(test)] mod tests;` (the plan's sibling test
-    // file); read the parent's declaration if a production file is ever named `tests.rs`.
-    let test_file = path.ends_with("/tests.rs");
+    // ponytail: a `tests.rs` or `<what>_tests.rs` file below a module is taken to be the body of a `#[cfg(test)]
+    // mod ...;` (the plan's sibling test file); read the parent's declaration if a production file is ever named so.
+    let test_file = path.ends_with("/tests.rs") || (path.contains('/') && path.ends_with("_tests.rs"));
     let mut open_braces = Vec::new();
     let mut test_only_item = TestOnlyItem::default();
     let imported_names = ImportedNames::in_source(source);
@@ -375,8 +375,8 @@ fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
 /// (`crate::types::InstallSpecBundleUseCase`) too. An adapter has no name suffix, so only its `infrastructure`
 /// segment gives it away.
 // ponytail: a use case re-exported under another name (`type Installer = ..UseCase;`, a wrapper fn), an `as` rename,
-// a `super::` path, and an adapter re-exported by a legacy file (`crate::cli::X` from a
-// `pub(crate) use crate::specs::infrastructure::..` in src/cli.rs) still pass; read every file of the module for
+// a `super::` path, and an adapter re-exported by a legacy file (`crate::types::X` from a
+// `pub(crate) use crate::specs::infrastructure::..` in src/types.rs) still pass; read every file of the module for
 // those, as rule 6 reads mod.rs, and the legacy files for `pub(crate) use crate::<module>::..`, if one shows up.
 fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| match path.as_slice() {
@@ -1024,6 +1024,17 @@ mod tests {
                       use crate::settings::infrastructure::json_file_settings_repository::JsonFileSettingsRepository;\n";
 
         let found = violations_in("settings/domain/settings/tests.rs", source);
+
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn should_not_apply_the_layer_rules_to_a_second_sibling_tests_file_named_after_what_it_tests() {
+        let source = "use super::*;\n\
+                      use serde_json::json;\n\
+                      use crate::settings::infrastructure::json_file_settings_repository::JsonFileSettingsRepository;\n";
+
+        let found = violations_in("settings/domain/settings/execute_tests.rs", source);
 
         assert_eq!(found, vec![]);
     }

@@ -74,7 +74,8 @@ mod tests {
         assert_eq!(loaded, Settings::default());
     }
 
-    /// The text `load_or_defaults` logs: `settings: {e:#}`, every cause after a colon.
+    /// The text the legacy `load_or_defaults` logged (now `LenientSettings` in diagnostics): `settings: {e:#}`,
+    /// every cause after a colon.
     #[test]
     fn should_word_the_session_settings_warning_like_the_load_or_defaults_one() {
         let temp_dir = TempDir::new("live-settings-warning");

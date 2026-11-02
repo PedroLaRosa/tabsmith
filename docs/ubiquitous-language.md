@@ -243,16 +243,54 @@ Not in the table: `icon_assets` (the embedded PNGs and the template RGBA; `tinte
 | `SessionRunner` / `SessionMessage` | Adapter (driver) | The event loop, the panic pass-through and the batching / the messages of its one inbox. | `pty::Session` (driver half) / `types::Msg` |
 
 ## diagnostics
+As built in Phase 10 (`src/diagnostics`, 64 files). A **check is data**: it carries a name, a severity and a subject, never a closure and never I/O. The rules live in the domain; the facts come through ports, one check at a time, so doctor stays lazy.
+
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
-| `DoctorRun` | Entity | One doctor run: strict/all policy, error and warning counts. | `doctor::Run` |
-| `Check` / `CheckGroup` | VO | A named check with a severity; a headed group. | `Check` (closure-based) |
-| `CheckSeverity` | VO | Normal, Soft, Skip. | `Kind` |
-| `CheckOutcome` | VO | Ok, Warn(reason), Err(reason, info, fix). | `Outcome` |
-| `CheckFix` | VO | CreateDataDirectory, InstallIntegration, ReinstallIntegrations, ResetSettings, InstallSpecBundle. | `Fix` closures |
-| `SystemFacts` | VO | Snapshot of env, OS, tool versions, file existence and each integration's check result (`Result<(), ShellIntegrationError>`) that checks evaluate. | direct I/O inside checks |
-| `ToolVersion` | VO | Parsed `bash`/`fish` version. | `version_of` |
-| `DiagnosticReport` / `DiagnosticSection` | VO | `tabsmith diagnostic` content. | `Section` |
+| `DoctorRun` | Entity | One doctor run: the `--all` and `--strict` policy and the error and warning counts. A Soft failure counts as a warning unless strict; the first unfixed failure aborts the run. | `doctor::Run` |
+| `Check` | VO | One line of a group: name, `CheckSeverity` (decided when the group is built) and `CheckSubject`. | `Check` (closure-based) |
+| `CheckGroup` | VO | A titled run of checks that doctor builds, prints and evaluates together (dotfiles, setup, environment, system). | `Run::group` arguments |
+| `CheckSeverity` | VO | `Normal`, `Soft` (an error becomes a warning unless `--strict`) or `Skip` (never evaluated). | `Kind` |
+| `CheckSubject` | VO | What a check evaluates: `Dotfile`, `ListingFailure`, `DataDirectory`, `ScriptsPointAtBinary`, `SettingsCorruption`, `SpecsExtracted`, `WindowsConsole`, `WindowsVersion`, `Environment(EnvironmentCheck, Rc<SystemFacts>)` or `System(SystemCheck)`. | the closure bodies |
+| `EnvironmentCheck` | VO | A check of the environment group: `TerminalIntegrations`, `Session`, `AutocompleteEnabled`, `DeveloperMode`, `Inline`. | closures |
+| `SystemCheck` | VO | A check of the system group: `Os`, `Bash { program }`, `Fish`. | closures |
+| `CheckOutcome` | VO | `Ok`, `Warn(reason)` or `Err { reason, info: Vec<InfoLine>, fix: Option<CheckFix> }`. | `Outcome` |
+| `InfoLine` | VO | One line of a failed check's details: plain text, or text around a command the reporter paints. | `info` strings |
+| `CheckFix` | VO | What doctor can do to repair a failed check: `CreateDataDirectory`, `InstallIntegration`, `InstallMissingIntegrations` (installs what is missing; it is not a reinstall), `ResetSettings`, `InstallSpecBundle`. `marks_restart_reminder()` is the domain rule for the terminal restart reminder (the two integration fixes mark it, even when they installed nothing). | `Fix` closures; `ReinstallIntegrations` of the plan |
+| `SystemFacts` | VO | The environment group's snapshot, read once when that group is built: the `TerminalEnvironment`, the session id and the `Settings`. Not a monolith: every other fact is asked through a port when its check is evaluated. | direct I/O inside checks |
+| `TerminalEnvironment` | VO | The environment facts the terminal rule reads (`TERM_PROGRAM`, bundle identifier, `TABSMITH_TERM`, presence of emacs, CI and tabsmith launch variables, whether the parent is cmd, the tabsmith version); built from `TerminalEnvironmentParts`. | env reads in the terminal check |
+| `OperatingSystem` | VO | `Linux`, `Macos`, `Windows` or `Other(name)`; the domain decides platform rules from it, never with `cfg`. | `consts::OS` |
+| `ToolVersion` | VO | The numbers of a tool's version (`GNU bash, version 5.2.37(1)` is 5.2.37); never empty; compared by components. | `version_of` |
+| `DiagnosticReport` | VO | The facts `tabsmith diagnostic` prints, section by section. | `Section` list |
+| `DiagnosticSection` | VO | A named group of report rows, in insertion order. | `Section` |
+| `DiagnosticValue` | VO | One value of a report row: `Text`, `Flag` or `Missing`. | `Section` rows |
+| `DiagnosticsError` | Error | Why a fact could not be found (`IntegrationPaths`, `DataDirectory`); its text is the wrapped error's, unchanged. | `anyhow` context |
+| `DoctorCheckCatalog` | Domain service | Free functions that hold every rule of doctor: which checks a group has, their names and headers, the severity rules and, per check, a pure function from facts to `CheckOutcome` (`dotfile_outcome`, `terminal_outcome`, `session_kind`, `inline_outcome`, `os_outcome`, `bash_outcome`, `fish_outcome`, `short_path`, ...). Where a fact is needed only sometimes the function takes a thunk. | the bodies of `doctor.rs` |
+| `UsernameScrubber` | Domain service | Hides the user name in report values that can carry a path (a raw substring after a slash or backslash, no segment boundary). | the replace calls in `cli::diagnostics` |
+| `CheckGroupBuilder` | Application service | Builds one group when asked and does that group's construction-time I/O through the ports (`which`, the bash login-file stats, the pwsh `$PROFILE` listing, the settings load and its warning). Not a use case. | the group arguments of `Run::group` |
+| `CheckEvaluator` | Application service | Asks the ports for the facts of one check at the moment that check is evaluated, then calls the catalog; evaluating again after a fix asks again. Not a use case. | the check closures |
+| `RunDoctorUseCase` | Use case | `execute(DoctorRequest) -> Result<DoctorVerdict, DiagnosticsError>`: builds a group only after the previous one passed, builds it before printing its header, evaluates check by check, repairs and re-evaluates, prints the summary and the restart epilogue. | `doctor::run` |
+| `CollectDiagnosticReportUseCase` | Use case | `execute() -> DiagnosticReport` over the `DiagnosticHost`. | `cli::diagnostics` |
+| `ShowRecentLogsUseCase` | Use case | Two methods so the command keeps its order: `paths() -> LogPaths` (no I/O besides the path), then `pty_tail(&LogPaths)` (the last 50 lines or `None`). | `cli::debug_logs` |
+| `DoctorRequest` | DTO | What the user asked of `tabsmith doctor`: `all` and `strict`. | `Args` fields |
+| `DoctorVerdict` | DTO | `Passed` or `Failed`; `Failed` makes the command exit 1. | the `bool` result |
+| `LogPaths` | DTO | The `cli.log` and `pty.log` paths. | `RecentLogs` of the first design |
+| `SystemFactsProbe` | Port | The machine as doctor asks it: parent executable, PATH lookup, environment, tabsmith version, operating system, file and directory existence, settings file and whether it loads, tool versions, console and Windows build. | direct calls in `doctor.rs` |
+| `IntegrationProbe` | Port | `locate_paths`, `list`, `check` and `script_binaries` over the shell integrations. | `IntegrationInstaller` calls |
+| `BundledSpecsProbe` | Port | Whether the bundle of this version is extracted below the data root. | `specs::version()` and a file check |
+| `SettingsSnapshot` | Port | `load() -> Settings`; the lenient load that never fails. | `load_or_defaults` |
+| `CheckFixer` | Port | `fix(&CheckFix, &IntegrationPaths) -> Result<(), String>`; the text is what follows `Failed to fix: `. | the `Fix` closures |
+| `DoctorReporter` | Port | Everything doctor prints and the progress indicator: group header, outcome, fixing, failed to fix, re-running, summary, hint, restart notice. | `println!` calls |
+| `LogReader` | Port | `read(path) -> Option<Vec<u8>>`. | `std::fs::read` |
+| `DiagnosticHost` | Port | The host as the diagnostic report sees it: user, environment, shell versions, working directory, executable, WSL, version, platform. | env and process calls in `cli.rs` |
+| `OsSystemFactsProbe` | Adapter | Implements `SystemFactsProbe` over the process table, environment, file system and child processes (the `cfg(windows)` bodies live here). | `doctor.rs` |
+| `LenientSettings` | Adapter | Implements `SettingsSnapshot` over the `SettingsRepository`: on an error it logs the `settings: <error>` warning with the old text and uses the defaults. | `settings::load_or_defaults` |
+| `FileRepairs` | Adapter | Creates the data directory and resets the settings file (backup copy, plain write, mode) with `std::fs`; takes a `Clock`. | the `Fix` closure bodies |
+| `TerminalDoctorReporter` | Adapter | Implements `DoctorReporter` on stdout (styled when it is a terminal) and owns the `Spinner` on stderr. | `print_outcome` and the prints |
+| `Spinner`, `restore_cursor_on_ctrl_c` | Adapters | `Running checks...` on stderr and the Ctrl-C handler that restores the cursor (SIGINT watcher on unix, `SetConsoleCtrlHandler` on Windows). | `doctor::Spinner` |
+| `FileLogReader`, `OsDiagnosticHost` | Adapters | Implement `LogReader` and `DiagnosticHost` (`first_line_of` is the pure helper of the shell version). | `cli.rs` |
+| `DiagnosticsModule`, `build_diagnostics_module` | Module | The three use cases over the adapters; building only constructs (no env read, no PATH lookup, no spawn, no file opened). | |
+| `IntegrationProbeBridge`, `BundledSpecsBridge`, `CheckFixerBridge` | Bridges (`bootstrap/diagnostics_bridges.rs`) | The only code that names `IntegrationInstaller`, `integration_failures_error`, `embedded_spec_bundle::version` and `InstallSpecBundleUseCase` on behalf of diagnostics. `CheckFixerBridge` applies a fix with five explicit arms, renders any failure with `{:#}` and marks the restart reminder after an `Ok` iff `CheckFix::marks_restart_reminder()`. | `IntegrationInstaller` wiring in `doctor.rs` |
 
 ## Words with more than one meaning: use the qualified name, never the bare word
 | Word | Name for each meaning |
@@ -261,7 +299,7 @@ Not in the table: `icon_assets` (the embedded PNGs and the template RGBA; `tinte
 | prompt | shell prompt · `LlmPrompt` · the `inline set-customization` chooser prompt (`Select a customization: `, written by `StdinSourceChooser`; no domain type) · the `[Y/n]` confirmation `setup`/`uninstall` ask (`confirm`/`answer` in shell_integration's `infrastructure/cli/user_confirmation.rs`; no port, not a domain type) |
 | ghost | `GhostText` (ours) · shell autosuggestion (zsh/fish/PSReadLine's own) |
 | history | `HistoryEntry` / `HistoryRepository` (store) · `SuggestionKind::History` (rows) · history mode (Ctrl-R in `Menu`) |
-| session | `TerminalSession` · `SessionContext` · `SessionId` · `CompletionSession` |
+| session | `TerminalSession` · `SessionContext` · `SessionId` · `CompletionSession` · the doctor `Session` check (`EnvironmentCheck::Session`: has the shell reported its environment, i.e. does the session's file under `run/` exist) |
 | at prompt | `MarkerTracker::at_prompt` (a command cycle is open and no command runs) · `EditBuffer::at_prompt` (the cursor is on the command line, not in an inline TUI's rows) |
 | shell | the launched shell (`launched_shell`: the program the wrapper spawns) · the tracker's `Shell` (what the prompt reported with `Shell=`; it wins once known and can be `None`) |
 | screen | the real terminal · the model (the headless alacritty `Term`) · `TerminalScreen` (the port over the model, the filter and the renderer) |
@@ -273,3 +311,9 @@ Not in the table: `icon_assets` (the embedded PNGs and the template RGBA; `tinte
 | script | `IntegrationScript` (files tabsmith writes) · `InitScript` / `InitScriptTemplates` (what `init` prints) · `GeneratorScript` (spec) |
 | version | the bundle version (`assets/SPECS_VERSION`, `specs/<version>`) · the CLI version (`SemanticVersion`) · the diff version (a key of a diff-versioned spec's `versions`) |
 | theme file | `ThemeDefinition` (the strict read: its author, for the `theme NAME` banner) · `ThemePalette` (the lenient read: its colour roles, for drawing) |
+| run | `DoctorRun` (one doctor run and its counts) · `RunDoctorUseCase` (the use case that drives it) · the `run/` directory of session files (`DataDirectory::run_dir`) |
+| check | `Check` (a doctor line, data) · `check` of the `IntegrationProbe` (does an integration's dotfile hold its block) · `CheckSubject` (what a check evaluates) |
+| probe | a diagnostics port that asks the machine (`SystemFactsProbe`, `IntegrationProbe`, `BundledSpecsProbe`) · the terminal probe of `terminal_session` (`probe_terminal`: cursor position and OSC 11 at start-up) |
+| report | `DiagnosticReport` (what `tabsmith diagnostic` prints) · `DoctorReporter` (the port that prints a doctor run) · `report_session_context` (`_ pre-cmd`) |
+| fix | `CheckFix` (data: what to do) · `CheckFixer::fix` (doing it) · `fixing` (the reporter line `Attempting to fix automatically...`) |
+| logs | the two log files `logs/cli.log` and `logs/pty.log` (`LogPaths`, `debug logs`) · `logger` (the `shared` writer) |

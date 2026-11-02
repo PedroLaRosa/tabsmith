@@ -5,9 +5,8 @@
 #[cfg(test)]
 mod architecture_tests;
 mod bootstrap;
-mod cli;
 mod completion;
-mod doctor;
+mod diagnostics;
 mod dropdown;
 mod ghost_text;
 mod history;

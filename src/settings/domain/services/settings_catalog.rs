@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(read, 300);
     }
 
-    /// get_inline_status_use_case.rs, doctor.rs, suggest_local_ghost_text_use_case.rs and terminal_session/domain/entities/terminal_session.rs: `bool("inline.enabled", true)`.
+    /// get_inline_status_use_case.rs, diagnostics/domain/services/doctor_check_catalog.rs, suggest_local_ghost_text_use_case.rs and terminal_session/domain/entities/terminal_session.rs: `bool("inline.enabled", true)`.
     #[test]
     fn should_default_ghost_text_to_enabled() {
         let settings = Settings::default();
@@ -372,7 +372,7 @@ mod tests {
         assert!(read);
     }
 
-    /// doctor.rs, dropdown/domain/entities/menu.rs and terminal_session/domain/entities/terminal_session.rs: `bool("autocomplete.disable", false)`.
+    /// diagnostics/domain/services/doctor_check_catalog.rs, dropdown/domain/entities/menu.rs and terminal_session/domain/entities/terminal_session.rs: `bool("autocomplete.disable", false)`.
     #[test]
     fn should_default_autocomplete_to_not_disabled() {
         let settings = Settings::default();
@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(read, (false, Some("false")));
     }
 
-    /// doctor.rs, command_line_parser.rs, embedded_spec_bundle.rs and quickjs_spec_repository.rs:
+    /// diagnostics/domain/services/doctor_check_catalog.rs, command_line_parser.rs, embedded_spec_bundle.rs and quickjs_spec_repository.rs:
     /// `bool("autocomplete.developerMode", false)`.
     #[test]
     fn should_default_developer_mode_to_off() {
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(read, Some("dark"));
     }
 
-    /// ghost_text_source_resolver.rs and doctor.rs: `string("inline.source").unwrap_or("history+specs")`.
+    /// ghost_text_source_resolver.rs and diagnostics/domain/services/doctor_check_catalog.rs: `string("inline.source").unwrap_or("history+specs")`.
     #[test]
     fn should_default_the_ghost_text_source_to_history_then_specs() {
         let settings = Settings::default();
