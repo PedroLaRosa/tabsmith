@@ -4,5 +4,6 @@ pub(crate) mod doctor_request;
 pub(crate) mod doctor_verdict;
 pub(crate) mod log_paths;
 pub(crate) mod ports;
+pub(crate) mod run_doctor_use_case;
 #[cfg(test)]
 pub(crate) mod test_fixtures;

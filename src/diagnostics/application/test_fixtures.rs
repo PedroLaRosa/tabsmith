@@ -1,4 +1,26 @@
 #[cfg(test)]
+use crate::diagnostics::application::check_evaluator::CheckEvaluator;
+#[cfg(test)]
+use crate::diagnostics::application::check_group_builder::CheckGroupBuilder;
+#[cfg(test)]
+use crate::diagnostics::application::ports::bundled_specs_probe::InMemoryBundledSpecsProbe;
+#[cfg(test)]
+use crate::diagnostics::application::ports::check_fixer::RecordingCheckFixer;
+#[cfg(test)]
+use crate::diagnostics::application::ports::doctor_reporter::RecordingDoctorReporter;
+#[cfg(test)]
+use crate::diagnostics::application::ports::integration_probe::InMemoryIntegrationProbe;
+#[cfg(test)]
+use crate::diagnostics::application::ports::settings_snapshot::InMemorySettingsSnapshot;
+#[cfg(test)]
+use crate::diagnostics::application::ports::system_facts_probe::InMemorySystemFactsProbe;
+#[cfg(test)]
+use crate::diagnostics::application::run_doctor_use_case::RunDoctorUseCase;
+#[cfg(test)]
+use crate::settings::domain::value_objects::settings::Settings;
+#[cfg(test)]
+use crate::shell_integration::domain::repositories::restart_reminder_repository::InMemoryRestartReminderRepository;
+#[cfg(test)]
 use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
 #[cfg(test)]
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
@@ -70,6 +92,95 @@ impl RestartReminderRepository for LoggingRestartReminder {
     fn clear_pending(&self) {
         self.log.push("reminder.clear_pending");
         self.inner.clear_pending();
+    }
+}
+
+/// Every double of a doctor run behind one shared event log, and the use case built over them. A test replaces the
+/// doubles it scripts and asks for the use case last.
+#[cfg(test)]
+pub(crate) struct DoctorHarness {
+    pub(crate) log: EventLog,
+    pub(crate) system: Rc<InMemorySystemFactsProbe>,
+    pub(crate) integrations: Rc<InMemoryIntegrationProbe>,
+    pub(crate) specs: Rc<InMemoryBundledSpecsProbe>,
+    pub(crate) settings: Rc<InMemorySettingsSnapshot>,
+    pub(crate) fixer: Rc<RecordingCheckFixer>,
+    pub(crate) reporter: Rc<RecordingDoctorReporter>,
+    pub(crate) reminder: Rc<InMemoryRestartReminderRepository>,
+}
+
+#[cfg(test)]
+impl DoctorHarness {
+    pub(crate) fn new() -> Self {
+        let log = EventLog::default();
+        DoctorHarness {
+            system: Rc::new(InMemorySystemFactsProbe::default().logging_to(log.clone())),
+            integrations: Rc::new(InMemoryIntegrationProbe::default().logging_to(log.clone())),
+            specs: Rc::new(InMemoryBundledSpecsProbe::extracted(true).logging_to(log.clone())),
+            settings: Rc::new(
+                InMemorySettingsSnapshot::returning(Settings::default()).logging_to(log.clone()),
+            ),
+            fixer: Rc::new(RecordingCheckFixer::succeeding().logging_to(log.clone())),
+            reporter: Rc::new(RecordingDoctorReporter::default().logging_to(log.clone())),
+            reminder: Rc::new(InMemoryRestartReminderRepository::default()),
+            log,
+        }
+    }
+
+    pub(crate) fn with_system(mut self, system: InMemorySystemFactsProbe) -> Self {
+        self.system = Rc::new(system.logging_to(self.log.clone()));
+        self
+    }
+
+    pub(crate) fn with_integrations(mut self, integrations: InMemoryIntegrationProbe) -> Self {
+        self.integrations = Rc::new(integrations.logging_to(self.log.clone()));
+        self
+    }
+
+    pub(crate) fn with_fixer(mut self, fixer: RecordingCheckFixer) -> Self {
+        self.fixer = Rc::new(fixer.logging_to(self.log.clone()));
+        self
+    }
+
+    pub(crate) fn use_case(&self) -> RunDoctorUseCase {
+        RunDoctorUseCase::new(
+            CheckGroupBuilder::new(
+                self.system.clone(),
+                self.integrations.clone(),
+                self.settings.clone(),
+            ),
+            CheckEvaluator::new(
+                self.system.clone(),
+                self.integrations.clone(),
+                self.specs.clone(),
+            ),
+            self.fixer.clone(),
+            self.reporter.clone(),
+            self.system.clone(),
+            self.integrations.clone(),
+            Rc::new(LoggingRestartReminder::new(
+                self.reminder.clone(),
+                self.log.clone(),
+            )),
+        )
+    }
+
+    /// What doctor told the user, in order.
+    pub(crate) fn reporter_events(&self) -> Vec<String> {
+        self.log
+            .entries()
+            .into_iter()
+            .filter(|entry| entry.starts_with("reporter."))
+            .collect()
+    }
+
+    /// What doctor asked the machine, in order.
+    pub(crate) fn probe_questions(&self) -> Vec<String> {
+        self.log
+            .entries()
+            .into_iter()
+            .filter(|entry| !["reporter.", "fixer.", "reminder."].iter().any(|own| entry.starts_with(own)))
+            .collect()
     }
 }
 
