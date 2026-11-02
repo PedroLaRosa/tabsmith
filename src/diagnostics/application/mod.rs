@@ -1,3 +1,4 @@
+pub(crate) mod check_evaluator;
 pub(crate) mod check_group_builder;
 pub(crate) mod doctor_request;
 pub(crate) mod doctor_verdict;
