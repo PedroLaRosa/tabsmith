@@ -129,6 +129,13 @@ review "D5 a diagnostics test that spawns a process, reads the real env or the r
 echo "== E. the fitness test"
 echo "          cargo test --locked architecture   (diagnostics is in REGISTERED_MODULES)"
 grep -q '"diagnostics"' src/architecture_tests.rs && echo "OK      E1 diagnostics registered" || { echo "FAIL    E1 diagnostics not registered"; fail=1; }
+expect_empty "E4 every .rs file under src/diagnostics is declared (mod NAME; in its sibling mod.rs, or in the file that owns its folder, as tests.rs): the fitness test and clippy do not see a file no mod declares" \
+  "$(git ls-files -co --exclude-standard $DG | grep '\.rs$' | grep -v '/mod\.rs$' | while read -r f; do
+       d=$(dirname "$f"); n=$(basename "$f" .rs)
+       grep -qE "^[[:space:]]*(#\[[^]]*\][[:space:]]*)*(pub\(crate\) )?mod $n\b" "$d/mod.rs" 2>/dev/null && continue
+       grep -qE "mod $n\b" "$d.rs" 2>/dev/null && continue
+       echo "$f"
+     done)"
 expect_empty "E2 no src/diagnostics.rs next to the module folder" "$(ls src/diagnostics.rs 2>/dev/null)"
 review "E3 LEGACY_MODULES still lists the dead names cli and doctor (precedent: pty and tracker stayed, O13; Phase 11 empties the list). A comment in architecture_tests.rs may no longer name src/cli.rs" \
   "$(sed -n '/^const LEGACY_MODULES/,/^];/p' src/architecture_tests.rs | tr -d ' \n' | cut -c1-200)"
