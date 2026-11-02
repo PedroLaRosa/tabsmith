@@ -1292,3 +1292,19 @@ fn should_evaluate_the_fish_check_by_its_subject() {
 
     assert_eq!(checks[2].subject(), &CheckSubject::System(SystemCheck::Fish));
 }
+
+#[test]
+fn doctor_session_check_skips_pwsh() {
+    let pwsh = Some(r"C:\Program Files\PowerShell\7\pwsh.exe");
+    assert_eq!(session_kind(Some("s1"), pwsh, None), CheckSeverity::Skip);
+    assert_eq!(session_kind(Some("s1"), None, pwsh), CheckSeverity::Skip); // parent unknown: TABSMITH_SHELL decides
+    assert_eq!(
+        session_kind(Some("s1"), Some("/bin/zsh"), pwsh),
+        CheckSeverity::Normal
+    ); // zsh nested in pwsh runs pre-cmd
+    assert_eq!(
+        session_kind(Some("s1"), Some("/bin/zsh"), None),
+        CheckSeverity::Normal
+    );
+    assert_eq!(session_kind(None, Some("/bin/zsh"), None), CheckSeverity::Skip);
+}

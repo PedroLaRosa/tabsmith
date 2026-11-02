@@ -148,6 +148,24 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_toml() {
+        let sections = vec![
+            section(
+                "tabsmith",
+                vec![("version", text("0.1.0")), ("missing", DiagnosticValue::Missing)],
+            ),
+            section(
+                "env-vars",
+                vec![("PATH", text("/a:\"b\"")), ("in-ci", DiagnosticValue::Flag(false))],
+            ),
+        ];
+        assert_eq!(
+            to_toml(&report_of(sections)),
+            "[tabsmith]\nversion = \"0.1.0\"\n\n[env-vars]\nPATH = \"/a:\\\"b\\\"\"\nin-ci = false"
+        );
+    }
+
+    #[test]
     fn should_quote_a_key_that_is_not_bare() {
         let rendered = toml_of_one_section(vec![("a b", text("x"))]);
 

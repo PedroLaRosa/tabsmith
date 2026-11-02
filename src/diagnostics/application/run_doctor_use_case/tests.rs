@@ -529,3 +529,74 @@ fn should_not_announce_a_fix_with_all() {
         ]
     );
 }
+
+fn soft_console() -> Check {
+    check("Console", CheckSeverity::Soft, CheckSubject::WindowsConsole)
+}
+
+fn skipped_check() -> Check {
+    let settings = CheckSubject::SettingsCorruption(PathBuf::from("/home/u/settings.json"));
+    check("Skipped", CheckSeverity::Skip, settings)
+}
+
+fn check_after_the_abort() -> Check {
+    check("After", CheckSeverity::Normal, CheckSubject::Dotfile(bashrc()))
+}
+
+fn fatal_check() -> Check {
+    listing_failure(CheckSeverity::Normal)
+}
+
+/// The data directory is missing until the fixer creates it, the console is not attached; the skipped and the
+/// after-abort subjects are unscripted, so their probe panics if it is ever asked.
+fn harness_of_the_legacy_group() -> DoctorHarness {
+    let harness = harness_that_can_create_the_data_directory();
+    harness.system.script_console_attached(false);
+    harness
+}
+
+#[test]
+fn doctor_group_soft_fix_abort_flow() {
+    // Soft error -> warning (not with --strict); fixed error -> continue; unfixed error -> abort.
+    let checks = || {
+        vec![
+            soft_console(),
+            skipped_check(),
+            data_directory(),
+            fatal_check(),
+            check_after_the_abort(),
+        ]
+    };
+    let harness = harness_of_the_legacy_group();
+    let mut run = DoctorRun::new(false, false);
+    assert!(!run_group(&harness, &mut run, &group(checks())));
+    assert_eq!(
+        harness.fixer.fixes(),
+        vec![CheckFix::CreateDataDirectory(PathBuf::from(DATA_ROOT))]
+    );
+    assert_eq!(run.counts(), (1, 1));
+    assert_eq!(
+        harness.probe_questions(),
+        ["system.console_attached", DIRECTORY_QUESTION, DIRECTORY_QUESTION]
+    );
+
+    // --strict: a Soft error stays an error.
+    let harness = harness_of_the_legacy_group();
+    let mut run = DoctorRun::new(false, true);
+    assert!(!run_group(&harness, &mut run, &group(vec![soft_console()])));
+    assert_eq!(run.counts(), (1, 0));
+    assert_eq!(harness.probe_questions(), ["system.console_attached"]);
+
+    // --all: never fixes, never aborts.
+    let harness = harness_of_the_legacy_group();
+    let mut run = DoctorRun::new(true, false);
+    let mut list = checks();
+    list.pop();
+    assert!(run_group(&harness, &mut run, &group(list)));
+    assert_eq!(harness.fixer.fixes(), Vec::new());
+    assert_eq!(run.counts(), (2, 1));
+    assert_eq!(
+        harness.probe_questions(),
+        ["system.console_attached", DIRECTORY_QUESTION]
+    );
+}

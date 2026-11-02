@@ -190,6 +190,7 @@ mod tests {
     use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
     use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
     use crate::specs::application::ports::spec_bundle::RecordingSpecBundle;
+    use crate::shell_integration::infrastructure::testing::integration_fixtures::install_dotfiles;
     use crate::specs::domain::spec_error::SpecError;
     use std::sync::Arc;
 
@@ -265,6 +266,38 @@ mod tests {
             .script(paths, phase)
             .path()
             .to_path_buf()
+    }
+
+    /// After the binary moved, the fix (reinstall) makes the check pass even when a dotfile was deleted since
+    /// setup: its orphaned script files are no longer checked.
+    #[test]
+    fn doctor_script_bins_skip_orphans() {
+        let temp_dir = TempDir::new("doctor-orphans");
+        let dir = temp_dir.path().to_path_buf();
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".bash_profile"), "").unwrap();
+        let c = IntegrationPaths::new(
+            home.clone(),
+            home.join(".tabsmith"),
+            "/old/tabsmith".into(),
+            None,
+            home.join(".config/fish"),
+            Some(home.join("profile.ps1")),
+        );
+        install_dotfiles(&c, &[Shell::Bash]).unwrap();
+        std::fs::remove_file(home.join(".bash_profile")).unwrap();
+        let moved = c.with_binary("/new/tabsmith".into());
+        install_dotfiles(&moved, &[Shell::Bash]).unwrap(); // the check's fix
+        assert!(moved.data_root().join("shell/bash_profile.pre.bash").exists());
+        if which("bash").is_some() {
+            let bins = probe().script_binaries(&moved);
+            assert!(
+                !bins.is_empty() && bins.iter().all(|(_, b)| b == "/new/tabsmith"),
+                "{bins:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

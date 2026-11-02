@@ -276,4 +276,39 @@ mod tests {
 
         assert_eq!(run.counts(), (2, 1));
     }
+
+    /// The pure-arithmetic half of the legacy `doctor_group_soft_fix_abort`; the group flow is replayed by
+    /// `doctor_group_soft_fix_abort_flow` in the `RunDoctorUseCase` tests.
+    #[test]
+    fn doctor_group_soft_fix_abort() {
+        // Soft error -> warning (not with --strict); fixed error -> continue; unfixed error -> abort.
+        let mut run = DoctorRun::new(false, false);
+        let soft = run.effective(CheckSeverity::Soft, CheckOutcome::err("meh"));
+        run.count(&soft);
+        let fixable = run.effective(CheckSeverity::Normal, error_with_info_and_fix("broken"));
+        let after_the_fix = run.effective(CheckSeverity::Normal, CheckOutcome::Ok);
+        run.count(&after_the_fix);
+        let fatal = run.effective(CheckSeverity::Normal, CheckOutcome::err("nope"));
+        run.abort();
+        assert!(fixable.is_err() && fatal.is_err());
+        assert_eq!(run.counts(), (1, 1));
+
+        let mut run = DoctorRun::new(false, true); // --strict: a Soft error stays an error
+        let soft = run.effective(CheckSeverity::Soft, CheckOutcome::err("meh"));
+        assert!(soft.is_err());
+        run.abort();
+        assert_eq!(run.counts(), (1, 0));
+
+        // --all: never fixes, never aborts; the last check is left out of the list.
+        let mut run = DoctorRun::new(true, false);
+        for (severity, outcome) in [
+            (CheckSeverity::Soft, CheckOutcome::err("meh")),
+            (CheckSeverity::Normal, error_with_info_and_fix("broken")),
+            (CheckSeverity::Normal, CheckOutcome::err("nope")),
+        ] {
+            let effective = run.effective(severity, outcome);
+            run.count(&effective);
+        }
+        assert_eq!(run.counts(), (2, 1));
+    }
 }

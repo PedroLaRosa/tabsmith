@@ -162,4 +162,22 @@ mod tests {
 
         assert_eq!((version.major(), version.minor_or_zero()), (5, 2));
     }
+
+    #[test]
+    fn doctor_version_parsing() {
+        let version_of = |text: &str| ToolVersion::parse(text).map(|v| v.components().to_vec());
+        assert_eq!(
+            version_of("GNU bash, version 3.2.57(1)-release (arm64-apple-darwin24)"),
+            Some(vec![3, 2, 57])
+        );
+        assert_eq!(version_of("fish, version 3.7.1"), Some(vec![3, 7, 1]));
+        assert_eq!(
+            version_of("Microsoft Windows [Version 10.0.19045.3803]"),
+            Some(vec![10, 0, 19045, 3803])
+        );
+        assert_eq!(version_of("14.5\n"), Some(vec![14, 5]));
+        assert!(
+            [3, 2, 57].as_slice() < [4, 4].as_slice() && [4, 4, 0].as_slice() >= [4, 4].as_slice()
+        );
+    }
 }
