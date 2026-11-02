@@ -18,21 +18,23 @@ implementation session needs that the plan does not.
 | 7 ghost_text | done, run in three chunks (7.0-7.4, 7.5-7.7, 7.8-7.10) | `c38dc4b..ab50884`, registration at `353faaa` (tag `phase7-start` at `eef4c88`, whose `src/` equals `7f48161`), see [`phase-7-ghost-text.md`](phase-7-ghost-text.md) |
 | 8 dropdown | done, run in three chunks (8.0a-8.2c and 8.4a; 8.4b; 8.3a-8.7) | `bb7c6b7..1bbe27b`, registration at `da2f950` (tag `phase8-start` at `7aafcef`), see [`phase-8-dropdown.md`](phase-8-dropdown.md) |
 | 9 terminal_session | done, run in six runs (9.0a-9.0d; 9.1a-9.2f; 9.6a-b and 9.3a-i; 9.4a-c and 9.6c; 9.5a-h; 9.6d-f and 9.7) | `858b7b5..b898db1`, registered first at 9.0a (tags `phase9-start` at `858b7b5` and `phase9-guards` at `3fdb6e5`), see [`phase-9-terminal-session.md`](phase-9-terminal-session.md) |
-| 10-11 | not started | |
+| 10 diagnostics | done, run in four runs (10.0-10.6; 10.7a-10.11; 10.12a-10.15b; 10.16-10.20) | `b0fe04d..3273a89` (tag `phase10-start` at `b0fe04d`), registered first at 10.0, see [`phase-10-diagnostics.md`](phase-10-diagnostics.md) |
+| 11 cleanup and `docs/SPEC.md` | not started | |
 
-At `b898db1` (the last code commit of Phase 9; the docs commits that follow change no code), `scripts/hexagonal-refactor/gate.sh`
-passes (on Linux as `BASELINE_CLIPPY=4 scripts/hexagonal-refactor/gate.sh`). `cargo test` has 1414 passed, 0 failed, 1 ignored (the
-baseline was 283; 1091 at the end of Phase 8). clippy shows 3 warnings (the Linux container's clippy 1.97 counts one more
-lint than macOS, so the Linux budget is 4). The 131-command golden CLI capture is byte-identical to the baseline and
-`cargo check --all-targets --target x86_64-pc-windows-gnu` prints `windows: ok`. The test lock against `ef807c1` has 0 baseline
-tests missing, 0 DUPLICATE, 210 CHANGED (each one a reviewed restructuring; 168 at the start of Phase 9) and 1133 NEW
-names. Against `phase9-start`: 0 missing, 0 DUPLICATE, 59 CHANGED (all in Phase 9's allowed list), 324 NEW names and 12
-PATH-ONLY; against `phase9-guards`: 0 missing, 0 DUPLICATE, 61 CHANGED (the 59 plus two guard tests: the session-id test and a Rig-helper rename), 290 NEW. The 17
-characterisation fixtures are byte-identical to `phase9-guards`. `theme-diff.sh`, `inline-diff.sh`,
-`integrations-diff.sh`, `precmd-diff.sh`, `pty-diff.py` and `session-diff.py` are empty against the baseline binary.
-`REGISTERED_MODULES` = `completion`, `dropdown`, `ghost_text`, `history`, `settings`, `shared`, `shell_integration`,
-`specs`, `terminal_session` (`diagnostics` waits for Phase 10). `src/pty.rs` and `src/tracker.rs` are gone and `src/types.rs`
-holds only `now_ms` and `now_secs`. The manual smoke (plan section 8) has never been run and is the user's.
+At `3273a89` (the last code commit of Phase 10; the docs commit that follows changes no code), `scripts/hexagonal-refactor/gate.sh`
+passes with its default budget (`BASELINE_CLIPPY=3`; the tree has 3 clippy warnings, so the default budget has no headroom; the Linux budget of 4 has one lint). `cargo test` has 1995 passed, 0 failed,
+1 ignored (1414 at the end of Phase 9, 283 at the baseline). The 131-command golden CLI capture is byte-identical to the
+baseline and `cargo check --all-targets --target x86_64-pc-windows-gnu` prints `windows: ok`. The test lock against `ef807c1`
+has 0 baseline tests missing, 0 DUPLICATE, 213 CHANGED (each one a reviewed restructuring; 210 at the end of Phase 9) and
+1714 NEW names. Against `phase10-start`: 0 missing, 0 DUPLICATE, 6 CHANGED (the four locked tests that moved with the deletion of
+`doctor.rs` and `cli.rs`, `diagnostic_toml`, `doctor_group_soft_fix_abort`, `doctor_script_bins_skip_orphans` and
+`doctor_version_parsing`, plus two re-homed `load_or_defaults` tests), 581 NEW names and 1 PATH-ONLY.
+`doctor-diff.sh` (470 commands, 11010 lines) is byte-identical to the `af1b304` transcript after the rewire and after the
+deletion; `integrations-diff.sh` and `inline-diff.sh` were empty at the rewire. `phase10-greps.sh` prints no FAIL (groups A, B1-B13,
+B15, D1-D2, E and F are OK; the rest is REVIEW noise listed in the design's section 15). `REGISTERED_MODULES` = all ten modules
+(`completion`, `diagnostics`, `dropdown`, `ghost_text`, `history`, `settings`, `shared`, `shell_integration`, `specs`,
+`terminal_session`). `src/doctor.rs`, `src/cli.rs` and `settings::infrastructure::load_or_defaults` are gone and `src/types.rs`
+holds only `now_ms` and `now_secs`, with no caller. The manual smoke (plan section 8) has never been run and is the user's.
 
 ## Files here
 
@@ -44,6 +46,12 @@ holds only `now_ms` and `now_secs`. The manual smoke (plan section 8) has never 
   - four reviewer lenses in parallel: behaviour, test lock, architecture, completeness;
   - one skeptic per finding, who tries to refute it;
   - a fixer, then another review round, up to 3 rounds.
+- [`phase-10-diagnostics.md`](phase-10-diagnostics.md) and
+  [`phase-10-diagnostics.args.json`](phase-10-diagnostics.args.json): Phase 10 design (the lazy-doctor problem, the file tree,
+  the check catalogue, trap-to-mechanism-to-test table, the 12 deviations, the test plan, the acceptance greps, the Phase 11
+  hand-offs, open questions), the 28 step briefs (`10.0` ... `10.20`, four runs) and, in
+  [`phase-10-run-notes/`](phase-10-run-notes/), the binding preambles of runs 2, 3 and 4 (`run<N>-since.md`), the review notes and
+  the design errata that amend the design (where a step brief and the design differ, the brief wins). Status line: done.
 - [`phase-9-terminal-session.md`](phase-9-terminal-session.md) and
   [`phase-9-terminal-session.args.json`](phase-9-terminal-session.args.json): Phase 9 research (traps P9-T1..T101, decisions
   R1-R46, 30 deviations, the module map, signatures, test moves, the guard design, open questions O1-O18), the 42 step
@@ -118,13 +126,24 @@ Run everything from the repo root. Output goes to `target/hexagonal-refactor/` (
   with scripted keystrokes and prints what a user would see after each step (startup, menu, ghost, bottom row and resize,
   `vim` and `exit 3`, settings reload, key tester, failures, files). Needs python3, tmux, bash, vim and git; about 85 s.
   Diff it the same way; empty. It does not cover zsh, fish, pwsh, kitty/ghostty/tmux icons or Windows (the smoke).
+- `doctor-diff.sh <binary>` (Phase 10): a scrubbed transcript of 470 doctor, diagnostic and debug-logs commands in 61 scenarios
+  (fix, re-run and abort, the spawn log, the restart reminder, strict, root, no HOME, pty colours, the spinner clear bytes,
+  Ctrl-C, the diagnostic environment branches, debug-logs tails). It needs a built binary (`cargo build --locked`), `cc` and
+  `python3`, takes about 3 minutes and is not in the gate. Run it on `target/debug/tabsmith` and `cmp` the output with the
+  transcript of the baseline binary; any difference is a bug in the new code, never re-baseline. Its output is sectioned
+  (`======== <scenario>`, `--- stderr`, `--- exit`, `--- spawns`, `## tree`): use `diff -u` to find the scenario. Run it at
+  every step that changes doctor's wiring.
+- `phase10-greps.sh [base-rev]` and `phase10-literals.py` (Phase 10): the acceptance greps A-G and Z of the design's section 15,
+  one OK / FAIL / REVIEW line each (the legacy files and names are gone, layers and dependencies of `diagnostics`, the cfg
+  multiset against `phase10-start`, the locked test names once each and the testlock lines, the registration and the
+  `mod` line of every file, names that live only inside the module, every user-visible string literal of the old files
+  still present, the file list). `phase10-literals.py` extracts the literals for group G. Read every FAIL and REVIEW line.
 - `phase9-greps.sh [base-rev]` (Phase 9): the acceptance greps A-F and Z of the Phase 9 research, one OK / FAIL / REVIEW
   line each (the legacy files and names are gone, layers and dependencies of `terminal_session`, the cfg multiset against
   `phase9-start`, the panic injection and the one `#[ignore]`, the registration, names that live only inside the module,
   the file list). Read every FAIL and REVIEW line.
 - `fitness-mod.sh [--worktree] [module ...]` (Phase 9): runs the architecture test on a copy of HEAD or of the working
-  tree with other modules registered or a candidate file dropped into a layer folder. After Phase 9 `diagnostics` is the
-  one module left to register (Phase 10 or 11).
+  tree with other modules registered or a candidate file dropped into a layer folder. All ten modules are registered since Phase 10.
 - The local tags `phase9-start` (`858b7b5`) and `phase9-guards` (`3fdb6e5`) are the second and third `testlock.py` baselines of
   Phase 9 (`testlock.py . phase9-start --diff`, `. phase9-guards --diff`); `git diff phase9-guards --
   tests/fixtures/terminal_session/characterisation` must print nothing. Both tags are local.
@@ -147,6 +166,26 @@ Run everything from the repo root. Output goes to `target/hexagonal-refactor/` (
   - Phase 10: doctor checks evaluated over facts with re-probing after fixes.
 
   Each gap is written up in the matching `source-map/*.md` under "Plan gaps".
+
+## Lessons from Phase 10
+
+- Pin the lazy behaviour of the old code before moving it. Doctor builds a group only after the previous one passed, re-probes
+  one check after a fix and spawns processes (`pwsh`, `sw_vers`, `bash --version`) only when their turn comes, so the plan's
+  literal "facts snapshot" would have added spawns and moved a warning log. Making a `Check` data and splitting the I/O into
+  `CheckGroupBuilder` (when a group is built) and `CheckEvaluator` (when a check runs) kept every event in its order. The
+  golden capture sees only `doctor --all`; the 470-command `doctor-diff.sh`, run after the rewire and after the deletion, is
+  what proved the rest (spawn logs, fixes, strict, spinner bytes, the restart reminder). Add such a script before the first move.
+- Put the policy in the domain and let the bridge delegate: `CheckFix::marks_restart_reminder()` has a pure test per variant,
+  and the bridge calls the reminder iff it is true and only after an `Ok`. The bridge holds no list of which fixes mark.
+- A module that wires specs and the installer through bridges needs only three edges (`shared`, `settings`, `shell_integration`,
+  plus `ghost_text`'s domain); rule 3 cannot see an application service such as `IntegrationInstaller`, so a grep (B5) holds it.
+- Delete a legacy file in the same commit that creates its locked tests at their new homes, so no test name exists twice at any
+  commit; earlier steps used other names for the interim equivalents.
+- A `mod` line forgotten for five steps hid a file from the compiler and the fitness test alike; E4 of `phase10-greps.sh`
+  (every `.rs` file under the module is declared) is cheap to keep in a module's greps.
+- A test that only asserts when `bash` is on PATH passes vacuously without it (`doctor_script_bins_skip_orphans`,
+  the `script_binaries` tests); say so in the notes.
+- Docs: `docs/git-convention.md`, named in `AGENTS.md`, does not exist; commits follow the Conventional Commits log style.
 
 ## Lessons from Phase 9
 

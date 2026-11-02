@@ -1,6 +1,17 @@
 # Phase 10 design: `diagnostics` (doctor, diagnostic report, debug logs)
 
-Status: DESIGN, not started (written at `b0fe04d`, the tip of PR #1 plus Phases 8-9; branch `refactor/hexagonal-diagnostics`).
+Status: **done at `3273a89`** (the last code commit of Phase 10: 1995 passed, 0 failed, 1 ignored; clippy 3 on a budget of 3; golden identical; `windows: ok`; testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 213, NEW 1714 and against `phase10-start` MISSING 0, DUPLICATE 0, CHANGED 6, NEW 581; `doctor-diff.sh` byte-identical to the baseline transcript after the rewire and after the deletion; the docs commit of step 10.19 follows it). This file is the design as written at `b0fe04d` (the tip of PR #1 plus Phases 8-9; branch `refactor/hexagonal-diagnostics`), kept unchanged below; where the tree differs, the as-built list here and the plan's section 9 "Phase 10 notes" win. The manual smoke (P10-S1..S3, section 16) is the user's and still pending.
+
+As built, the delta from the design below:
+* `CheckFix::marks_restart_reminder()`, `LogPaths` with the two-method `ShowRecentLogsUseCase` (`paths`, `pty_tail`) and `run_doctor_command(args, build_module)` follow the errata (`phase-10-run-notes/design-errata.md`); `OsDiagnosticHost` has the pure helper `first_line_of`.
+* The bridges are in `bootstrap/diagnostics_bridges.rs` (645 lines, 23 tests), a sibling of `bridges.rs` declared in `bootstrap/mod.rs`; `IntegrationProbeBridge::new(installer, data_directory)`, `BundledSpecsBridge` is a unit struct, `CheckFixerBridge::new(installer, restart_reminder, spec_bundle, repairs)`.
+* The module has 64 files (the design's about 62): the builder, evaluator and use-case tests are sibling files (`check_group_builder/tests.rs`, `check_evaluator/tests.rs`, `run_doctor_use_case/{tests,execute_tests}.rs`, `doctor_check_catalog/tests.rs`).
+* The locked tests landed as in section 13; `doctor_script_bins_skip_orphans` is in `bootstrap/diagnostics_bridges.rs` (the design said `bridges.rs`). The interim equivalent tests (for example the `should_replay_*` tests of `doctor_run.rs`) were kept beside the locked ones.
+* `diagnostics` imports only `shared`, `settings`, `shell_integration` and (domain only) `ghost_text`; `phase10-greps.sh` has no FAIL.
+* Steps 10.0 to 10.18b ran as designed in four runs; 10.19 wrote the docs and 10.20 closes. The gate ran with its default `BASELINE_CLIPPY=3`.
+* `cli` and `doctor` stay in `LEGACY_MODULES`; `types.rs` has no caller left. `docs/SPEC.md` is untouched (Phase 11).
+
+Original status: DESIGN, not started (written at `b0fe04d`, the tip of PR #1 plus Phases 8-9; branch `refactor/hexagonal-diagnostics`).
 Inputs: the plan (sections 1, 2, 4 `diagnostics`, 5 "Phase 10", 9 hand-offs), `agent-brief.md` (D1-D9, binding),
 `handoff.md`, the glossary (`diagnostics` section), `source-map/doctor.md` and `source-map/cli.md` (written at `af1b304`,
 re-verified against the CURRENT `src/doctor.rs` 927 lines and `src/cli.rs` 200 lines), and four recon notes
