@@ -52,32 +52,22 @@ mod tests {
     }
 
     #[test]
-    fn should_give_doctor_the_settings_the_repository_loads() {
+    fn should_give_the_settings_the_repository_loads() {
         let repository = Rc::new(InMemorySettingsRepository::default());
         let saved = Settings::default().with("inline.enabled", SettingValue::Bool(false));
         repository.save(&saved).unwrap();
-        let snapshot = LenientSettings::new(repository);
 
-        let loaded = snapshot.load();
+        let settings = LenientSettings::new(repository).load();
 
-        assert_eq!(loaded, saved);
+        assert_eq!(settings, saved);
     }
 
-    /// The warning itself goes to the process-wide log, which a test cannot read: the defaults are what shows.
+    /// The text `Settings::load` logged: `settings: {e:#}`, every cause after a colon.
     #[test]
-    fn should_fall_back_to_the_defaults_when_the_settings_cannot_be_loaded() {
-        let temp_dir = TempDir::new("doctor-lenient-settings");
-        let snapshot = LenientSettings::new(Rc::new(corrupted_settings_file(&temp_dir)));
-
-        let loaded = snapshot.load();
-
-        assert_eq!(loaded, Settings::default());
-    }
-
-    #[test]
-    fn should_warn_with_the_settings_prefix_and_each_cause_after_a_colon() {
-        let temp_dir = TempDir::new("doctor-lenient-warning");
-        let error = corrupted_settings_file(&temp_dir).load().unwrap_err();
+    fn should_word_the_warning_as_settings_then_the_error_and_each_cause() {
+        let temp_dir = TempDir::new("settings-warning");
+        let repository = corrupted_settings_file(&temp_dir);
+        let error = repository.load().unwrap_err();
 
         let text = warning(&error);
 
@@ -88,5 +78,16 @@ mod tests {
                 temp_dir.path().join("settings.json").display()
             )
         );
+    }
+
+    /// A settings.json saved mid-edit turns the live settings back to the defaults; it does not keep the old ones.
+    #[test]
+    fn should_fall_back_to_the_default_settings_when_they_cannot_be_loaded() {
+        let temp_dir = TempDir::new("settings-lenient");
+        let repository = corrupted_settings_file(&temp_dir);
+
+        let settings = LenientSettings::new(Rc::new(repository)).load();
+
+        assert_eq!(settings, Settings::default());
     }
 }
