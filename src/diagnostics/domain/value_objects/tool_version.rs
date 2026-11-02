@@ -18,6 +18,7 @@ impl ToolVersion {
             .map(ToolVersion)
     }
 
+    #[cfg(any(windows, test))]
     pub(crate) fn components(&self) -> &[u32] {
         &self.0
     }

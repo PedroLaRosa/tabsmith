@@ -7,6 +7,7 @@ pub(crate) enum SessionMessage {
     PtyEof,
     Resize(u16, u16),
     ChildExit(i32),
+    #[cfg_attr(windows, allow(dead_code, reason = "only the unix signal thread sends it"))]
     Term,
     Completion(Box<CompletionResult>),
     Ghost { req: u64, text: Option<String> },

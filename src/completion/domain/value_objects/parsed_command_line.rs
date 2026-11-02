@@ -35,6 +35,7 @@ pub(crate) struct ParsedCommandLine {
     /// Single-token command: suggest first tokens (SPEC §6.9) instead of spec items.
     first_token: bool,
     /// Name of the root spec (`git`), for recency keys and caches.
+    #[cfg_attr(not(test), allow(dead_code, reason = "the parser tests assert which spec a parse resolved to"))]
     spec_name: String,
 }
 
