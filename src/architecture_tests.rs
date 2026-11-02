@@ -376,7 +376,7 @@ fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
 /// segment gives it away.
 // ponytail: a use case re-exported under another name (`type Installer = ..UseCase;`, a wrapper fn), an `as` rename,
 // a `super::` path, and an adapter re-exported by a legacy file (`crate::types::X` from a
-// `pub(crate) use crate::specs::infrastructure::..` in src/types.rs) still pass; read every file of the module for
+// `pub(crate) use crate::specs::infrastructure::..` in a flat file such as the retired src/types.rs) still pass; read every file of the module for
 // those, as rule 6 reads mod.rs, and the legacy files for `pub(crate) use crate::<module>::..`, if one shows up.
 fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| match path.as_slice() {
