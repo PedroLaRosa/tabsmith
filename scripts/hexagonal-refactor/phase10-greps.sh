@@ -78,8 +78,8 @@ expect_empty "B10 libc, signal_hook, windows_sys, crossterm, std::os::windows, s
 expect_empty "B11 serde, serde_json, json! only in infrastructure" "$(prod '\b(serde|serde_json)\b|json!' $DG/domain $DG/application)"
 expect_empty "B12 print, println, eprint, eprintln, dbg, logger, paint/epaint/sgr (tty styling) only in infrastructure" \
   "$(prod '\b(e?print(ln)?|dbg)!|\blogger\b|\b(e?paint|sgr|bold|stdout_tty)\(' $DG/domain $DG/application)"
-expect_empty "B13 no I/O, env, process, clock, thread or channel in domain/application (std fs/env/process/thread/net/io, IsTerminal, Command, SystemTime, Instant::now, current_dir/current_exe, consts::OS/ARCH, mpsc)" \
-  "$(prod 'std::(fs|env|process|thread|net|io)\b|IsTerminal|\bCommand::new|SystemTime|UNIX_EPOCH|Instant::now|current_dir|current_exe|consts::(OS|ARCH)|mpsc|var_os|env::var' $DG/domain $DG/application)"
+expect_empty "B13 no I/O, env, process, clock, thread or channel in domain/application (std fs/env/process/thread/net/io, IsTerminal, Command, SystemTime, Instant::now, env::current_dir/current_exe (the DiagnosticHost port methods of the same name are allowed), consts::OS/ARCH, mpsc)" \
+  "$(prod 'std::(fs|env|process|thread|net|io)\b|IsTerminal|\bCommand::new|SystemTime|UNIX_EPOCH|Instant::now|env::current_(dir|exe)|consts::(OS|ARCH)|mpsc|var_os|env::var' $DG/domain $DG/application)"
 review "B14 compile-time env!() in domain/application (the TABSMITH_TERM == CARGO_PKG_VERSION rule): prefer the version as a fact so a test can fix it" \
   "$(prod '\benv!\(' $DG/domain $DG/application)"
 expect_empty "B15 no cfg in domain/application (the design keeps every platform branch in infrastructure/adapters; the Windows rules read facts, None off Windows). Relax with a reason if the planner gates a port method instead" \
