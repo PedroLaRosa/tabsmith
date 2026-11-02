@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compare_terminal_environments_by_every_fact() {
+    fn should_tell_terminal_environments_apart_by_in_ci() {
         let environment = TerminalEnvironment::new(every_fact_set());
         let other = TerminalEnvironment::new(TerminalEnvironmentParts { in_ci: false, ..every_fact_set() });
 

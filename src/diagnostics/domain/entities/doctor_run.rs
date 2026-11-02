@@ -243,14 +243,12 @@ mod tests {
         let soft = run.effective(CheckSeverity::Soft, CheckOutcome::err("meh"));
         run.count(&soft);
         let fixable = run.effective(CheckSeverity::Normal, error_with_info_and_fix("broken"));
-        assert!(fixable.is_err());
         let after_the_fix = run.effective(CheckSeverity::Normal, CheckOutcome::Ok);
         run.count(&after_the_fix);
         let fatal = run.effective(CheckSeverity::Normal, CheckOutcome::err("nope"));
-        assert!(fatal.is_err());
         run.abort();
 
-        assert_eq!(run.counts(), (1, 1));
+        assert_eq!((run.counts(), fixable.is_err(), fatal.is_err()), ((1, 1), true, true));
     }
 
     #[test]
@@ -258,10 +256,9 @@ mod tests {
         let mut run = DoctorRun::new(false, true);
 
         let soft = run.effective(CheckSeverity::Soft, CheckOutcome::err("meh"));
-        assert!(soft.is_err());
         run.abort();
 
-        assert_eq!(run.counts(), (1, 0));
+        assert_eq!((run.counts(), soft.is_err()), ((1, 0), true));
     }
 
     #[test]

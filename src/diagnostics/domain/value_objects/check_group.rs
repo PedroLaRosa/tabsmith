@@ -48,7 +48,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compare_groups_by_header_and_checks() {
+    fn should_compare_groups_by_header() {
         let checks = vec![check("Specs", CheckSubject::SpecsExtracted)];
         let group = CheckGroup::new("Setup".to_string(), checks.clone());
 

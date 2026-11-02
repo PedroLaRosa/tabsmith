@@ -34,7 +34,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compare_dotfile_subjects_by_integration() {
+    fn should_tell_dotfile_subjects_of_different_integrations_apart() {
         let bashrc = CheckSubject::Dotfile(Integration::dotfile(Shell::Bash, PathBuf::from("/home/u/.bashrc")));
         let zshrc = CheckSubject::Dotfile(Integration::dotfile(Shell::Zsh, PathBuf::from("/home/u/.zshrc")));
 
@@ -42,7 +42,7 @@ mod tests {
     }
 
     #[test]
-    fn should_compare_environment_subjects_by_check_and_facts() {
+    fn should_treat_environment_subjects_of_the_same_check_as_equal() {
         let subject = CheckSubject::Environment(EnvironmentCheck::Session, facts());
 
         assert_eq!(subject, CheckSubject::Environment(EnvironmentCheck::Session, facts()));
