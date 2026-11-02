@@ -1,6 +1,13 @@
+pub(crate) mod check;
 pub(crate) mod check_fix;
+pub(crate) mod check_group;
 pub(crate) mod check_outcome;
 pub(crate) mod check_severity;
+pub(crate) mod check_subject;
+pub(crate) mod environment_check;
 pub(crate) mod info_line;
 pub(crate) mod operating_system;
+pub(crate) mod system_check;
+pub(crate) mod system_facts;
+pub(crate) mod terminal_environment;
 pub(crate) mod tool_version;
