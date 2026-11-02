@@ -34,8 +34,6 @@ mod tests {
             description: None,
             kind,
             original_kind: None,
-            priority: 50.0,
-            is_dangerous: false,
             args_hint: String::new(),
             highlight: Vec::new(),
             query: String::new(),
@@ -47,7 +45,6 @@ mod tests {
             }),
             generator: None,
             prefix_match: prefix,
-            template_type: None,
             icon: None,
         })
     }

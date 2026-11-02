@@ -26,8 +26,6 @@ pub(crate) struct CompletionResult {
     loading: bool,
     /// Local inline ghost text for this buffer (SPEC §6.11).
     ghost: Option<String>,
-    /// Effective fuzzy mode for this reply.
-    fuzzy: bool,
 }
 
 /// What a `CompletionResult` is built from: named fields, so two counts or flags cannot be swapped.
@@ -47,7 +45,6 @@ pub(crate) struct CompletionResultParts {
     pub(crate) items: Vec<Suggestion>,
     pub(crate) loading: bool,
     pub(crate) ghost: Option<String>,
-    pub(crate) fuzzy: bool,
 }
 
 impl CompletionResult {
@@ -68,7 +65,6 @@ impl CompletionResult {
             items,
             loading,
             ghost,
-            fuzzy,
         } = parts;
         CompletionResult {
             req,
@@ -86,7 +82,6 @@ impl CompletionResult {
             items,
             loading,
             ghost,
-            fuzzy,
         }
     }
 
@@ -108,7 +103,6 @@ impl CompletionResult {
             items: Vec::new(),
             loading: false,
             ghost: None,
-            fuzzy: false,
         }
     }
 

@@ -105,8 +105,6 @@ pub(crate) fn item(name: &str, kind: SuggestionKind, query: &str) -> Suggestion 
         description: Some(format!("about {name}")),
         kind,
         original_kind: None,
-        priority: 50.0,
-        is_dangerous: false,
         args_hint: String::new(),
         highlight: (0..query.chars().count()).collect(),
         query: query.to_string(),
@@ -122,7 +120,6 @@ pub(crate) fn item(name: &str, kind: SuggestionKind, query: &str) -> Suggestion 
         }),
         generator: None,
         prefix_match: true,
-        template_type: None,
         icon: None,
     })
 }
@@ -146,7 +143,6 @@ pub(crate) fn comp(buffer: &str, arg_key: u64, items: Vec<Suggestion>) -> Comple
         items,
         loading: false,
         ghost: None,
-        fuzzy: false,
     })
 }
 
