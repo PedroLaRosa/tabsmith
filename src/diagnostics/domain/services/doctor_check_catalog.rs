@@ -76,17 +76,16 @@ pub(crate) fn dotfile_outcome(integration: &Integration, result: Result<(), Shel
         Ok(()) => return CheckOutcome::Ok,
         Err(error) => error,
     };
-    let reason = match &error {
-        ShellIntegrationError::NotInstalled(message) | ShellIntegrationError::Improper(message) => message.clone(),
-        ShellIntegrationError::FileDoesNotExist(_) => error.to_string(),
-        ShellIntegrationError::PermissionDenied(_) => error.to_string(),
-        ShellIntegrationError::Io(..) => error.to_string(),
-        ShellIntegrationError::Environment(_) => error.to_string(),
-        ShellIntegrationError::SpecBundle(_) => error.to_string(),
-    };
-    let fix = match &error {
-        ShellIntegrationError::PermissionDenied(_) => None,
-        _ => Some(CheckFix::InstallIntegration(integration.clone())),
+    let install = || Some(CheckFix::InstallIntegration(integration.clone()));
+    let (reason, fix) = match &error {
+        ShellIntegrationError::NotInstalled(message) | ShellIntegrationError::Improper(message) => {
+            (message.clone(), install())
+        }
+        ShellIntegrationError::PermissionDenied(_) => (error.to_string(), None),
+        ShellIntegrationError::FileDoesNotExist(_)
+        | ShellIntegrationError::Io(..)
+        | ShellIntegrationError::Environment(_)
+        | ShellIntegrationError::SpecBundle(_) => (error.to_string(), install()),
     };
     CheckOutcome::Err {
         reason,

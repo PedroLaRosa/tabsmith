@@ -7,9 +7,23 @@ pub(crate) struct StateRestartReminderRepository {
     data_directory: DataDirectory,
 }
 
+const PENDING_KEY: &str = "doctor.prompt-restart-terminal";
+
 impl StateRestartReminderRepository {
     pub(crate) fn new(data_directory: DataDirectory) -> Self {
         StateRestartReminderRepository { data_directory }
+    }
+
+    fn loaded_state(&self) -> Option<JsonDocumentStore> {
+        let state_file = self.data_directory.state_file();
+        state_file.ok().and_then(|path| JsonDocumentStore::load(&path).ok())
+    }
+
+    fn store_pending(&self, pending: bool) {
+        if let Some(mut state) = self.loaded_state() {
+            state.map.insert(PENDING_KEY.into(), pending.into());
+            let _ = state.save();
+        }
     }
 }
 
@@ -17,32 +31,19 @@ impl RestartReminderRepository for StateRestartReminderRepository {
     /// Nothing is written without a data directory or when `state.json` cannot be loaded (it is never clobbered); a
     /// failed save is ignored.
     fn save_pending(&self) {
-        let state_file = self.data_directory.state_file();
-        if let Some(mut s) = state_file.ok().and_then(|path| JsonDocumentStore::load(&path).ok()) {
-            s.map
-                .insert("doctor.prompt-restart-terminal".into(), true.into());
-            let _ = s.save();
-        }
+        self.store_pending(true);
     }
 
     /// Only a stored boolean `true` is pending; no data directory, no file or a corrupt file is not.
     fn is_pending(&self) -> bool {
-        let state_file = self.data_directory.state_file();
-        state_file
-            .ok()
-            .and_then(|path| JsonDocumentStore::load(&path).ok())
-            .is_some_and(|s| s.map.get("doctor.prompt-restart-terminal").and_then(|v| v.as_bool()) == Some(true))
+        self.loaded_state()
+            .is_some_and(|state| state.map.get(PENDING_KEY).and_then(|v| v.as_bool()) == Some(true))
     }
 
     /// The key stays, set to `false`. Nothing is written without a data directory or when `state.json` cannot be
     /// loaded; a failed save is ignored.
     fn clear_pending(&self) {
-        let state_file = self.data_directory.state_file();
-        if let Some(mut s) = state_file.ok().and_then(|path| JsonDocumentStore::load(&path).ok()) {
-            s.map
-                .insert("doctor.prompt-restart-terminal".into(), false.into());
-            let _ = s.save();
-        }
+        self.store_pending(false);
     }
 }
 
