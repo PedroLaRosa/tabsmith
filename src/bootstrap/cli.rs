@@ -3,6 +3,12 @@
 
 use crate::bootstrap::bridges::{GeneratorProcessBridge, SpecBundleBridge};
 use crate::bootstrap::channel_completion_engine::start_completion_engine;
+use crate::bootstrap::diagnostics_bridges::{BundledSpecsBridge, CheckFixerBridge, IntegrationProbeBridge};
+use crate::diagnostics::infrastructure::adapters::file_repairs::FileRepairs;
+use crate::diagnostics::infrastructure::cli::debug_logs_command::run_debug_logs_command;
+use crate::diagnostics::infrastructure::cli::diagnostic_command::{run_diagnostic_command, DiagnosticArgs};
+use crate::diagnostics::infrastructure::cli::doctor_command::{run_doctor_command, DoctorArgs};
+use crate::diagnostics::infrastructure::diagnostics_module::{build_diagnostics_module, DiagnosticsModule};
 use crate::dropdown::infrastructure::cli::theme_command::{run_theme_command, ThemeArgs};
 use crate::dropdown::infrastructure::dropdown_module::{build_dropdown_module, DropdownModule};
 use crate::ghost_text::infrastructure::cli::inline_command::{run_inline_command, InlineCmd};
@@ -16,10 +22,15 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
 use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
 use crate::shared::infrastructure::terminal_style::epaint;
+use crate::shell_integration::application::integration_installer::IntegrationInstaller;
 use crate::shell_integration::application::render_init_script_use_case::RenderInitScriptUseCase;
+use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
+use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
+use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
+use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
 use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
 use crate::shell_integration::infrastructure::cli::init_command::{init_script, run_init_command, InitArgs, ShellArg};
 use crate::shell_integration::infrastructure::cli::integrations_command::{run_integrations_command, IntegrationsCmd};
@@ -37,7 +48,6 @@ use crate::terminal_session::infrastructure::cli::pty_command::run_pty_command;
 use crate::terminal_session::infrastructure::terminal_session_module::{
     build_terminal_session_module, TerminalSessionModule,
 };
-use crate::{cli, doctor};
 use anyhow::Result;
 use clap::{ArgAction, Args, Parser, Subcommand};
 use std::io::Write;
@@ -72,7 +82,7 @@ enum Command {
     /// Generate the dotfiles for the given shell
     Init(InitArgs),
     /// Fix and diagnose common issues
-    Doctor(doctor::DoctorArgs),
+    Doctor(DoctorArgs),
     /// Setup cli components
     #[command(alias = "install")]
     Setup(SetupArgs),
@@ -83,7 +93,7 @@ enum Command {
     Version,
     /// Run diagnostic tests
     #[command(alias = "diagnostics")]
-    Diagnostic(cli::DiagnosticArgs),
+    Diagnostic(DiagnosticArgs),
     /// Generate shell completions for tabsmith itself
     #[command(hide = true)]
     Completion(CompletionArgs),
@@ -158,21 +168,21 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         Some(Command::Inline(c)) => run_inline_command(c, &inline_command_module()),
         Some(Command::Integrations(c)) => run_integrations_command(c, &shell_integration_module()),
         Some(Command::Init(a)) => run_init_command(a, &shell_integration_module()),
-        Some(Command::Doctor(a)) => doctor::run(a),
+        Some(Command::Doctor(a)) => run_doctor_command(a, diagnostics_module),
         Some(Command::Setup(a)) => run_setup_command(a, &shell_integration_module()),
         Some(Command::Uninstall(a)) => run_uninstall_command(a, &shell_integration_module()),
         Some(Command::Version) => {
             println!("tabsmith {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
         }
-        Some(Command::Diagnostic(a)) => cli::diagnostic(a),
+        Some(Command::Diagnostic(a)) => run_diagnostic_command(a, &diagnostics_module()),
         Some(Command::Completion(a)) => completion(a),
         Some(Command::Debug(c)) => match c {
             DebugCmd::KeyTester => run_key_tester_command(),
             DebugCmd::Shell { shell } => {
                 run_debug_shell_command(shell.map(Into::into), &terminal_session_module(), debug_shell_post_script)
             }
-            DebugCmd::Logs => cli::debug_logs(),
+            DebugCmd::Logs => run_debug_logs_command(&diagnostics_module()),
         },
         Some(Command::Internal(c)) => match c {
             InternalCmd::Pty { shell, cmd } => run_pty_command(shell, cmd, &terminal_session_module()),
@@ -225,6 +235,35 @@ fn shell_integration_module() -> ShellIntegrationModule {
     let dependencies = SharedDependencies::from_env();
     let spec_bundle = SpecBundleBridge::new(build_specs_module(&dependencies).install_spec_bundle);
     build_shell_integration_module(&dependencies, Rc::new(spec_bundle))
+}
+
+/// The diagnostics module (doctor, diagnostic, debug logs), built for the one command that runs. Building only
+/// constructs: nothing is read, looked up or run until a command needs it.
+fn diagnostics_module() -> DiagnosticsModule {
+    let dependencies = SharedDependencies::from_env();
+    let settings = Rc::new(JsonFileSettingsRepository::new(dependencies.data_directory.clone()));
+    let restart_reminder: Rc<dyn RestartReminderRepository> =
+        Rc::new(StateRestartReminderRepository::new(dependencies.data_directory.clone()));
+    let installer = Rc::new(IntegrationInstaller::new(
+        Rc::new(FileDotfileRepository),
+        Rc::new(FileBackupRepository),
+        dependencies.clock.clone(),
+        Rc::new(OsShellEnvironment),
+    ));
+    let spec_bundle = build_specs_module(&dependencies).install_spec_bundle;
+    build_diagnostics_module(
+        &dependencies,
+        settings,
+        restart_reminder.clone(),
+        Rc::new(IntegrationProbeBridge::new(installer.clone(), dependencies.data_directory.clone())),
+        Rc::new(BundledSpecsBridge),
+        Rc::new(CheckFixerBridge::new(
+            installer,
+            restart_reminder,
+            spec_bundle,
+            FileRepairs::new(dependencies.clock.clone()),
+        )),
+    )
 }
 
 /// `tabsmith settings --help` as the root command prints it, with the global `-v`.
