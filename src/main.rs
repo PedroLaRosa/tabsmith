@@ -1,6 +1,5 @@
 //! tabsmith — IDE-style autocomplete for your terminal (dropdown menu + inline ghost text),
 //! driven by the Fig completion specs. See docs/SPEC.md.
-#![allow(dead_code)]
 
 #[cfg(test)]
 mod architecture_tests;
