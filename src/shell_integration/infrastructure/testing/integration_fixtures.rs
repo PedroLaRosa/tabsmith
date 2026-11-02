@@ -9,17 +9,21 @@ use crate::shared::domain::value_objects::shell::Shell;
 use crate::shared::infrastructure::os::executable_lookup::which;
 use crate::shared::infrastructure::system_clock::SystemClock;
 use crate::shell_integration::application::integration_installer::IntegrationInstaller;
+#[cfg(unix)]
 use crate::shell_integration::application::uninstall_tabsmith_use_case::UninstallTabsmithUseCase;
 use crate::shell_integration::domain::entities::integration::Integration;
 use crate::shell_integration::domain::services::manual_install_instructions;
 use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
+#[cfg(unix)]
 use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
 use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
+#[cfg(unix)]
 use crate::shell_integration::infrastructure::adapters::file_data_directory_purger::FileDataDirectoryPurger;
 use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
 use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
 use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
+#[cfg(unix)]
 use crate::shell_integration::infrastructure::cli::uninstall_command::uninstall_and_report;
 use std::path::Path;
 use std::process::Command;
@@ -101,6 +105,7 @@ pub(crate) trait IntegrationOnDisk {
     fn uninstall(&self, paths: &IntegrationPaths) -> Result<(), ShellIntegrationError>;
     fn write_scripts(&self, paths: &IntegrationPaths) -> Result<(), ShellIntegrationError>;
     fn has_traces(&self, paths: &IntegrationPaths) -> bool;
+    #[cfg(unix)]
     fn script_contents(&self, paths: &IntegrationPaths, phase: IntegrationPhase) -> String;
 }
 
@@ -125,6 +130,7 @@ impl IntegrationOnDisk for Integration {
         installer().has_traces(paths, self)
     }
 
+    #[cfg(unix)]
     fn script_contents(&self, paths: &IntegrationPaths, phase: IntegrationPhase) -> String {
         self.script(paths, phase).contents().to_string()
     }
@@ -157,6 +163,7 @@ pub(crate) fn uninstall_dotfiles(
 
 /// Uninstall every integration of `shells` (and purge the data root of `paths`), printing what `tabsmith uninstall`
 /// prints: its exit code.
+#[cfg(unix)]
 pub(crate) fn uninstall_all(paths: &IntegrationPaths, shells: &[Shell], purge: bool) -> i32 {
     uninstall_and_report(
         &UninstallTabsmithUseCase::new(Rc::new(installer()), Rc::new(FileDataDirectoryPurger)),

@@ -51,9 +51,12 @@ pub(crate) fn decide(facts: &LaunchFacts) -> LaunchDecision {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
+    #[cfg(unix)]
     use std::collections::HashMap;
 
+    #[cfg(unix)]
     fn launch_decision(env: &HashMap<String, String>, stdin_ok: bool) -> (bool, String) {
         let d = decide(&LaunchFacts::new(env.clone(), stdin_ok));
         (d.launches(), d.reason().to_string())

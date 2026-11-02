@@ -37,6 +37,7 @@ fn call_default(
     )
 }
 
+#[cfg(all(unix, feature = "embed-specs"))]
 fn find_key<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
     match v {
         Value::Object(m) => m
@@ -50,6 +51,7 @@ fn find_key<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 /// The `generatorContext` object for `custom(tokens, exec, generatorContext)` (SPEC §6.5). An empty `env`
 /// means "session env unknown" → the wrapper's own environment. Test-only: production builds it with
 /// `fig_spec_mapper::generator_context_json`, which keeps an empty env as `{}` (D1, D7).
+#[cfg(unix)]
 fn context_json(context: &GeneratorContext) -> Value {
     let env: Map<String, Value> = if context.env().is_empty() {
         std::env::vars_os()

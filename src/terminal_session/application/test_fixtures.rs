@@ -205,7 +205,6 @@ pub(crate) struct TerminalSessionHarness {
     pub(crate) journal: Rc<IoJournal>,
     pub(crate) engine_calls: Receiver<CompletionEngineCall>,
     pub(crate) live_settings: Rc<InMemoryLiveSettings>,
-    pub(crate) reaper: Rc<RecordingGeneratorProcessReaper>,
     pub(crate) clock: Arc<dyn Clock + Send + Sync>,
     /// The ports `use_cases` is wired over: a test that swaps one wires the use cases again with `use_cases_over`.
     pub(crate) ports: SessionPortsParts,
@@ -263,7 +262,7 @@ impl TerminalSessionHarness {
             screen: screen.clone(),
             writer: writer.clone(),
             shell: shell.clone(),
-            reaper: reaper.clone(),
+            reaper,
             modes: Rc::new(RecordingTerminalModes::new()),
             live_settings: live_settings.clone(),
             session_contexts,
@@ -281,7 +280,7 @@ impl TerminalSessionHarness {
             settings_modified: None,
             now: clock.now_instant(),
         });
-        TerminalSessionHarness { session, screen, writer, shell, journal, engine_calls, live_settings, reaper, clock, ports, use_cases }
+        TerminalSessionHarness { session, screen, writer, shell, journal, engine_calls, live_settings, clock, ports, use_cases }
     }
 
     /// Swaps a port and wires the use cases over the new set again; the session keeps its state.

@@ -16,7 +16,6 @@ use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-const S: u8 = 1;
 const O: u8 = 2;
 const A: u8 = 4;
 const ANY: u8 = 7;

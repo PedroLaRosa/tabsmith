@@ -272,6 +272,7 @@ fn fake_bin(dir: &Path) -> PathBuf {
 }
 
 /// `init` output for `fake` (the snapshot with its binary swapped).
+#[cfg(unix)]
 fn init_for(shell: Shell, when: IntegrationPhase, bin: &str) -> String {
     snapshot(shell, when).replace(&quote(shell, "tabsmith"), &quote(shell, bin))
 }
@@ -742,7 +743,9 @@ fn integrations_bash_prompt_command_array_runs_first_once() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
 const GHOSTTY: &str = "/Applications/Ghostty.app/Contents/Resources/ghostty";
+#[cfg(unix)]
 const VSCODE_BASH: &str =
     "/Applications/Visual Studio Code.app/Contents/Resources/app/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-bash.sh";
 
