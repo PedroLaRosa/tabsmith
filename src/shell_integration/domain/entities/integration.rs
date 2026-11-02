@@ -6,7 +6,7 @@ use crate::shell_integration::domain::value_objects::integration_script::Integra
 use std::path::{Path, PathBuf};
 
 /// One installable integration of a shell.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Integration {
     shell: Shell,
     /// The dotfile that gets the pre/post blocks, or the whole fish `conf.d` file.
@@ -139,6 +139,27 @@ mod tests {
     use super::*;
     use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use crate::shell_integration::infrastructure::testing::integration_fixtures::ctx;
+
+    #[test]
+    fn should_compare_integrations_by_shell_path_and_phase() {
+        let zshrc = Integration::dotfile(Shell::Zsh, PathBuf::from("/home/u/.zshrc"));
+        let same_zshrc = Integration::dotfile(Shell::Zsh, PathBuf::from("/home/u/.zshrc"));
+        let other_shell = Integration::dotfile(Shell::Bash, PathBuf::from("/home/u/.zshrc"));
+        let other_path = Integration::dotfile(Shell::Zsh, PathBuf::from("/home/u/.zprofile"));
+        let fish_pre = Integration::whole_file(Shell::Fish, PathBuf::from("/c/tabsmith.fish"), IntegrationPhase::Pre);
+        let same_fish_pre =
+            Integration::whole_file(Shell::Fish, PathBuf::from("/c/tabsmith.fish"), IntegrationPhase::Pre);
+        let fish_post =
+            Integration::whole_file(Shell::Fish, PathBuf::from("/c/tabsmith.fish"), IntegrationPhase::Post);
+        let fish_dotfile = Integration::dotfile(Shell::Fish, PathBuf::from("/c/tabsmith.fish"));
+
+        assert_eq!(zshrc, same_zshrc);
+        assert_eq!(fish_pre, same_fish_pre);
+        assert_ne!(zshrc, other_shell);
+        assert_ne!(zshrc, other_path);
+        assert_ne!(fish_pre, fish_post);
+        assert_ne!(fish_pre, fish_dotfile);
+    }
 
     /// pwsh is not installed here, so no script test runs its files locally: their bytes are pinned instead.
     #[test]

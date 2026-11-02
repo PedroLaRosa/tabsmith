@@ -6,6 +6,12 @@ use std::cell::Cell;
 pub(crate) trait RestartReminderRepository {
     /// Best effort: a reminder that cannot be saved is dropped.
     fn save_pending(&self);
+
+    /// Whether a reminder was saved and not cleared since.
+    fn is_pending(&self) -> bool;
+
+    /// Best effort: a reminder that cannot be cleared stays as it is.
+    fn clear_pending(&self);
 }
 
 /// Remembers whether it was asked to save the reminder, for tests.
@@ -16,16 +22,17 @@ pub(crate) struct InMemoryRestartReminderRepository {
 }
 
 #[cfg(test)]
-impl InMemoryRestartReminderRepository {
-    pub(crate) fn is_pending(&self) -> bool {
-        self.pending.get()
-    }
-}
-
-#[cfg(test)]
 impl RestartReminderRepository for InMemoryRestartReminderRepository {
     fn save_pending(&self) {
         self.pending.set(true);
+    }
+
+    fn is_pending(&self) -> bool {
+        self.pending.get()
+    }
+
+    fn clear_pending(&self) {
+        self.pending.set(false);
     }
 }
 
@@ -49,5 +56,15 @@ mod tests {
         let pending = repository.is_pending();
 
         assert!(!pending);
+    }
+
+    #[test]
+    fn should_have_no_reminder_pending_after_it_is_cleared() {
+        let repository = InMemoryRestartReminderRepository::default();
+        repository.save_pending();
+
+        repository.clear_pending();
+
+        assert!(!repository.is_pending());
     }
 }
