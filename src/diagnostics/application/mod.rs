@@ -1,3 +1,4 @@
+pub(crate) mod check_group_builder;
 pub(crate) mod doctor_request;
 pub(crate) mod doctor_verdict;
 pub(crate) mod log_paths;
