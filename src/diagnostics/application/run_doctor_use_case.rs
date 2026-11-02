@@ -1,15 +1,19 @@
 use crate::diagnostics::application::check_evaluator::CheckEvaluator;
 use crate::diagnostics::application::check_group_builder::CheckGroupBuilder;
+use crate::diagnostics::application::doctor_request::DoctorRequest;
+use crate::diagnostics::application::doctor_verdict::DoctorVerdict;
 use crate::diagnostics::application::ports::check_fixer::CheckFixer;
 use crate::diagnostics::application::ports::doctor_reporter::DoctorReporter;
 use crate::diagnostics::application::ports::integration_probe::IntegrationProbe;
 use crate::diagnostics::application::ports::system_facts_probe::SystemFactsProbe;
+use crate::diagnostics::domain::diagnostics_error::DiagnosticsError;
 use crate::diagnostics::domain::entities::doctor_run::DoctorRun;
 use crate::diagnostics::domain::value_objects::check::Check;
 use crate::diagnostics::domain::value_objects::check_fix::CheckFix;
 use crate::diagnostics::domain::value_objects::check_group::CheckGroup;
 use crate::diagnostics::domain::value_objects::check_outcome::CheckOutcome;
 use crate::diagnostics::domain::value_objects::check_severity::CheckSeverity;
+use crate::shared::domain::value_objects::shell::Shell;
 use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
 use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
 use std::rc::Rc;
@@ -36,6 +40,55 @@ impl RunDoctorUseCase {
         restart_reminder: Rc<dyn RestartReminderRepository>,
     ) -> Self {
         RunDoctorUseCase { builder, evaluator, fixer, reporter, system, integrations, restart_reminder }
+    }
+
+    /// Runs the checks group by group, then tells the user how it went and whether a terminal restart is due.
+    pub(crate) fn execute(&self, request: DoctorRequest) -> Result<DoctorVerdict, DiagnosticsError> {
+        let paths = self.integrations.locate_paths().map_err(DiagnosticsError::IntegrationPaths)?;
+        let parent = self.system.parent_executable();
+        let current = parent.as_deref().and_then(Shell::from_name);
+        let mut run = DoctorRun::new(request.all(), request.strict());
+        if !run.all() {
+            self.reporter.start_progress();
+        }
+        let ok = self.run_group(&mut run, &self.builder.dotfiles(&paths, current), &paths)
+            && self.run_group(&mut run, &self.builder.setup(&paths), &paths)
+            && self.run_group(&mut run, &self.builder.environment(parent.as_deref()), &paths);
+        if ok {
+            self.run_system_group(&mut run, current, parent.as_deref(), &paths);
+        }
+        self.reporter.stop_progress();
+        self.summarize(&run);
+        self.remind_to_restart();
+        Ok(if run.failed() { DoctorVerdict::Failed } else { DoctorVerdict::Passed })
+    }
+
+    /// What the system group finds is shown but neither ends the run nor counts.
+    fn run_system_group(&self, run: &mut DoctorRun, current: Option<Shell>, parent: Option<&str>, paths: &IntegrationPaths) {
+        let counts = run.counts();
+        self.run_group(run, &self.builder.system(current, parent), paths);
+        run.restore(counts);
+    }
+
+    fn summarize(&self, run: &DoctorRun) {
+        if run.failed() {
+            self.reporter.blank_line();
+            self.reporter.doctor_found_errors();
+        } else {
+            if !run.all() {
+                self.reporter.everything_looks_good();
+            }
+            self.reporter.blank_line();
+            self.reporter.support_hint();
+        }
+        self.reporter.blank_line();
+    }
+
+    fn remind_to_restart(&self) {
+        if self.restart_reminder.is_pending() {
+            self.reporter.restart_notice();
+            self.restart_reminder.clear_pending();
+        }
     }
 
     /// False when an error that could not be repaired ends the run (without `--all`); the remaining groups are not run.
@@ -105,5 +158,7 @@ impl RunDoctorUseCase {
     }
 }
 
+#[cfg(test)]
+mod execute_tests;
 #[cfg(test)]
 mod tests;
