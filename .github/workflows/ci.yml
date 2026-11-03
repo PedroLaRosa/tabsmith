@@ -17,6 +17,15 @@ jobs:
       - name: Install shells for the integration syntax tests
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh fish
+      # /bin/bash is 3.2, which tabsmith does not support (SPEC D15); Homebrew's bin comes first on PATH.
+      - name: Install a supported bash
+        if: runner.os == 'macOS'
+        run: brew install bash
+      # bash on PATH is otherwise System32's WSL launcher, which has no distribution to run.
+      - name: Put Git Bash first on PATH
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo 'C:\Program Files\Git\bin' >> "$GITHUB_PATH"
       - run: cargo build --locked
       - run: cargo test --locked
       - name: Load every bundled spec module

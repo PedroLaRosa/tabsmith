@@ -1,0 +1,14 @@
+BASELINE_CLIPPY=4 scripts/hexagonal-refactor/gate.sh
+python3 -B scripts/hexagonal-refactor/testlock.py . ef807c1 --diff ; python3 -B scripts/hexagonal-refactor/testlock.py . phase9-start --diff
+python3 -B scripts/hexagonal-refactor/testlock.py . phase9-guards --diff        # from the end of run 1
+git diff phase9-guards -- tests/fixtures/terminal_session/characterisation      # EMPTY (from the end of run 1)
+scripts/hexagonal-refactor/phase9-greps.sh phase9-start                         # read every FAIL and REVIEW
+cargo build --locked; OLD=$PWD/target/hexagonal-refactor/baseline-tree/target/debug/tabsmith; NEW=$PWD/target/debug/tabsmith
+for x in precmd inline theme integrations; do diff <(scripts/hexagonal-refactor/$x-diff.sh $OLD) <(scripts/hexagonal-refactor/$x-diff.sh $NEW); done   # all empty
+diff <(python3 -I scripts/hexagonal-refactor/pty-diff.py $OLD) <(python3 -I scripts/hexagonal-refactor/pty-diff.py $NEW)          # empty (from run 1)
+diff <(python3 -I scripts/hexagonal-refactor/session-diff.py $OLD) <(python3 -I scripts/hexagonal-refactor/session-diff.py $NEW)  # empty (from run 1)
+cargo test --locked debug_shell_survives_closed_terminal   # alone, x3
+cargo check --locked --no-default-features --all-targets
+cargo test --locked --release -- --ignored all_bundle_modules                   # `1 passed`
+for i in $(seq 20); do cargo test --locked -- --test-threads=1 pty:: exactly_as_at_the_phase_9_start || break; done
+rm -rf scripts/hexagonal-refactor/__pycache__ ; git status --short                # clean

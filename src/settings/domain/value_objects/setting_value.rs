@@ -1,0 +1,221 @@
+use crate::settings::domain::value_objects::setting_number::SettingNumber;
+use std::collections::BTreeMap;
+
+/// A JSON-shaped setting value. `Object` is sorted by key, like serde_json's map without `preserve_order`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SettingValue {
+    Null,
+    Bool(bool),
+    Number(SettingNumber),
+    Text(String),
+    List(Vec<SettingValue>),
+    Object(BTreeMap<String, SettingValue>),
+}
+
+impl SettingValue {
+    pub(crate) fn as_bool(&self) -> Option<bool> {
+        match self {
+            SettingValue::Bool(value) => Some(*value),
+            SettingValue::Null
+            | SettingValue::Number(_)
+            | SettingValue::Text(_)
+            | SettingValue::List(_)
+            | SettingValue::Object(_) => None,
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> Option<&str> {
+        match self {
+            SettingValue::Text(text) => Some(text),
+            SettingValue::Null
+            | SettingValue::Bool(_)
+            | SettingValue::Number(_)
+            | SettingValue::List(_)
+            | SettingValue::Object(_) => None,
+        }
+    }
+
+    pub(crate) fn as_i64(&self) -> Option<i64> {
+        self.as_number()?.as_i64()
+    }
+
+    pub(crate) fn as_u64(&self) -> Option<u64> {
+        self.as_number()?.as_u64()
+    }
+
+    pub(crate) fn as_f64(&self) -> Option<f64> {
+        self.as_number()?.as_f64()
+    }
+
+    pub(crate) fn as_list(&self) -> Option<&[SettingValue]> {
+        match self {
+            SettingValue::List(items) => Some(items),
+            SettingValue::Null
+            | SettingValue::Bool(_)
+            | SettingValue::Number(_)
+            | SettingValue::Text(_)
+            | SettingValue::Object(_) => None,
+        }
+    }
+
+    pub(crate) fn as_object(&self) -> Option<&BTreeMap<String, SettingValue>> {
+        match self {
+            SettingValue::Object(fields) => Some(fields),
+            SettingValue::Null
+            | SettingValue::Bool(_)
+            | SettingValue::Number(_)
+            | SettingValue::Text(_)
+            | SettingValue::List(_) => None,
+        }
+    }
+
+    fn as_number(&self) -> Option<&SettingNumber> {
+        match self {
+            SettingValue::Number(number) => Some(number),
+            SettingValue::Null
+            | SettingValue::Bool(_)
+            | SettingValue::Text(_)
+            | SettingValue::List(_)
+            | SettingValue::Object(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `settings list` and the saved file print keys sorted: serde_json's map has no insertion order.
+    #[test]
+    fn should_keep_the_keys_of_an_object_sorted_whatever_order_they_came_in() {
+        let entries = [("b", SettingValue::Null), ("a", SettingValue::Bool(true))];
+
+        let value = SettingValue::Object(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value))
+                .collect(),
+        );
+
+        let SettingValue::Object(object) = &value else {
+            unreachable!()
+        };
+        assert_eq!(object.keys().collect::<Vec<_>>(), ["a", "b"]);
+    }
+
+    /// `autocomplete.disableForCommands` keeps the order it was written in.
+    #[test]
+    fn should_keep_a_list_in_the_order_it_was_given() {
+        let items = ["git", "cd"];
+
+        let value = SettingValue::List(
+            items
+                .into_iter()
+                .map(|item| SettingValue::Text(item.to_string()))
+                .collect(),
+        );
+
+        let SettingValue::List(list) = &value else {
+            unreachable!()
+        };
+        let texts: Vec<_> = list
+            .iter()
+            .map(|item| match item {
+                SettingValue::Text(text) => text.as_str(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(texts, items);
+    }
+
+    /// `settings autocomplete.height 5` prints `5` back, not `5.0`.
+    #[test]
+    fn should_tell_an_integer_value_from_the_float_of_the_same_value() {
+        let integer = SettingValue::Number(SettingNumber::from(5u64));
+
+        let float = SettingValue::Number(SettingNumber::from_f64(5.0).unwrap());
+
+        assert_ne!(integer, float);
+    }
+
+    #[test]
+    fn should_read_a_bool_value_as_a_bool() {
+        let value = SettingValue::Bool(true);
+
+        let read = value.as_bool();
+
+        assert_eq!(read, Some(true));
+    }
+
+    #[test]
+    fn should_read_a_text_value_as_a_str() {
+        let value = SettingValue::Text("dark".to_string());
+
+        let read = value.as_str();
+
+        assert_eq!(read, Some("dark"));
+    }
+
+    /// `inline.historyCount: 10.0` is no i64 and `inline.profiles.*.max_tokens: -1` is no u64.
+    #[test]
+    fn should_read_a_number_value_the_way_its_setting_number_reads() {
+        let number = SettingNumber::from(-3i64);
+        let value = SettingValue::Number(number);
+
+        let read = (value.as_i64(), value.as_u64(), value.as_f64());
+
+        assert_eq!(read, (number.as_i64(), number.as_u64(), number.as_f64()));
+    }
+
+    #[test]
+    fn should_read_a_list_value_as_its_items() {
+        let items = vec![SettingValue::Text("git".to_string()), SettingValue::Null];
+        let value = SettingValue::List(items.clone());
+
+        let read = value.as_list();
+
+        assert_eq!(read, Some(items.as_slice()));
+    }
+
+    /// An `inline.profiles.<name>` object.
+    #[test]
+    fn should_read_an_object_value_as_its_fields() {
+        let fields = BTreeMap::from([("model".to_string(), SettingValue::Text("m".to_string()))]);
+        let value = SettingValue::Object(fields.clone());
+
+        let read = value.as_object();
+
+        assert_eq!(read, Some(&fields));
+    }
+
+    /// `settings inline.enabled '"false"'` stores text, so the typed getters fall back to the default.
+    #[test]
+    fn should_not_read_text_that_spells_a_bool_or_a_number_as_one() {
+        let values = [
+            SettingValue::Text("false".to_string()),
+            SettingValue::Text("5".to_string()),
+        ];
+
+        let read: Vec<_> = values
+            .iter()
+            .map(|value| (value.as_bool(), value.as_i64(), value.as_f64()))
+            .collect();
+
+        assert_eq!(read, [(None, None, None), (None, None, None)]);
+    }
+
+    #[test]
+    fn should_not_read_null_as_any_kind() {
+        let value = SettingValue::Null;
+
+        let read = (
+            value.as_bool(),
+            value.as_str(),
+            value.as_u64(),
+            value.as_list(),
+            value.as_object(),
+        );
+
+        assert_eq!(read, (None, None, None, None, None));
+    }
+}

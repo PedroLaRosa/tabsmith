@@ -1,0 +1,16 @@
+ghost lo wor ld
+  stdout=$ echo hel\x1b[?2026h\x1b[?25l\x1b[1;11H\x1b[0m\x1b[90mlo wor ld\x1b[1;11H\x1b[0m\x1b[?25h\x1b[?2026l\x1b[?2026h\x1b[?25l\x1b[1;11H\x1b[0m         \x1b[1;11H\x1b[0m\x1b[?25h\x1b[?2026l\x1b[?2026h\x1b[?25l\x1b[2;4H\x1b[0;38;5;249;48;5;236m \x1b[0;38;5;249;48;5;236;1mpath: \x1b[0;38;5;249;48;5;236;3mA path\x1b[0;38;5;249;48;5;236m                          \x1b[0;38;5;249;48;5;236m \x1b[1;11H\x1b[0m\x1b[90mlo wor ld\x1b[1;11H\x1b[0m\x1b[?25h\x1b[?2026l
+  pty=
+  engine=["Complete(id=1 buffer=\"echo hel\" cursor=8 shell=Bash history_mode=false)"]
+Alt-f: next word
+  stdout=\x1b[?2026h\x1b[?25l\x1b[2;4H\x1b[0m                                        \x1b[1;11H\x1b[0m         \x1b[1;11H\x1b[0m\x1b[?25h\x1b[?2026l\x1b[?2026h\x1b[?25l\x1b[2;4H\x1b[0;38;5;249;48;5;236m \x1b[0;38;5;249;48;5;236;1mpath: \x1b[0;38;5;249;48;5;236;3mA path\x1b[0;38;5;249;48;5;236m                          \x1b[0;38;5;249;48;5;236m \x1b[1;11H\x1b[0m\x1b[?25h\x1b[?2026l
+  pty=lo
+  engine=[]
+echo of the word
+  stdout=\x1b[?2026h\x1b[?25l\x1b[2;4H\x1b[0m                                        \x1b[1;11H\x1b[0m\x1b[?25h\x1b[?2026llo\x1b[?2026h\x1b[?25l\x1b[2;6H\x1b[0;38;5;249;48;5;236m \x1b[0;38;5;249;48;5;236;1mpath: \x1b[0;38;5;249;48;5;236;3mA path\x1b[0;38;5;249;48;5;236m                          \x1b[0;38;5;249;48;5;236m \x1b[1;13H\x1b[0m\x1b[?25h\x1b[?2026l
+  pty=
+  engine=["Complete(id=2 buffer=\"echo hello\" cursor=10 shell=Bash history_mode=false)"]
+Right: the rest
+  stdout=
+  pty=\x1b[C
+  engine=[]

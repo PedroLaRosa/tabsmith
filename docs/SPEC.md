@@ -486,30 +486,34 @@ ponytail: no lock, a line another session appends in between is lost).
 
 ### 4.1 Modules (single crate, `src/`)
 
-| file | responsibility |
+| path | responsibility |
 |---|---|
-| `main.rs` | clap tree, dispatch, `version`, the internal `_` commands. |
-| `cli.rs` | `settings`, `theme`, `inline`, `diagnostic`, `completion`, `debug` (§2.3–2.5, §2.10), `error:` printing. |
-| `logger.rs` | File logger (≈100 lines, no crate). |
-| `settings.rs` | Paths, flat-JSON store (settings/state), typed getters, catalog table, wildcard matcher. |
-| `integrations.rs` | `init` generation, should-launch decision, `_ get-shell`/`_ pre-cmd`, dotfile install/uninstall/status, embedded scripts (`include_str!("../shell/*")`), setup/uninstall flows. |
-| `doctor.rs` | Checks and the run loop. |
-| `pty.rs` | Wrapper: spawn, raw mode / console modes, threads, main loop, interception, insertion/reconciliation, echo hold, resize, panic guard, fallback. |
-| `tracker.rs` | OSC 697 splitter, marker tracker + cell tagging, Windows deferral, edit-buffer extraction, output filter (§5.1, §5.6, §7.5.4). |
-| `keys.rs` | Stdin key decoding, keystroke grammar, keybinding table (§7.2.1–7.2.3). |
-| `menu.rs` | Pure UI state: visibility machine, actions, selection/scroll, common prefix. |
-| `render.rs` | Themes, colour conversion, layout, frame bytes (menu, description, pop-out, ghost), restore spans, full repaint. |
-| `shell_parser.rs` | Shell tokenizer (§6.1). |
-| `spec.rs` | Spec model + normalisation (§6.2). |
-| `specs.rs` | Bundle extraction/cleanup, index, name → file resolution (§9.1, §6.3). |
-| `parser.rs` | Spec loading/versioning, argv state machine (§6.3–6.4). |
-| `suggest.rs` | Suggestion assembly, triggers/cache, templates, filtering, fuzzysort, ranking, insertion text, history rows, first-token items (§6.6–6.10). |
-| `engine.rs` | Engine thread: request pipeline, generator runs, replies, recency, LLM dispatch (§6). |
-| `js.rs` | QuickJS host: prelude, module wrapping, function table, exec, event pump (§9). |
-| `inline.rs` | History store, ghost sources, LLM clients, completion cache, validation (§8). |
-| `types.rs` | Types shared between the threads (§4.3). |
-| `shell/` | `pre.sh`, `post.zsh`, `post.bash`, `pre.fish`, `post.fish`, `pre.ps1`, `post.ps1`. |
-| `assets/` | `specs.tar.zst`, `SPECS_VERSION`, `SPECS_LICENSE` (MIT, Hercules Labs). THIRD_PARTY notices (semver ISC, yaml ISC, strip-json-comments MIT): not shipped yet. |
+| `main.rs` | Entry point: parses the CLI, initialises the logger, runs `bootstrap::cli::run`, exits with its code. |
+| `bootstrap/` | Composition root. `cli.rs`: clap tree, dispatch, `version` and `completion` (§2.10), the internal `_` commands (§2.11), `error:` printing. `engine_server.rs`: the engine thread (§4.3, §6), which serves each `EngineMessage` (`engine_message.rs`, `engine_inbox.rs`) with the completion, history and ghost_text use cases and sends the replies. An `Llm` message goes to `RequestLlmGhostTextUseCase`; a deferred answer runs on an `llm` worker thread (§8.4). `engine_inbox.rs` is the engine thread's single channel (its messages and the spec runtime's events) and implements specs' `RuntimeEventSource`. `channel_completion_engine.rs` implements terminal_session's `CompletionEngine` over that channel and starts the engine thread (`start_completion_engine`). `bridges.rs`, `diagnostics_bridges.rs`: ports that one module declares, implemented over another. |
+| `shared/` | Kernel every module may use; it imports no module. `Shell`, `DataDirectory` (paths, §3.1), shell quoting, the `Clock` port; in `infrastructure/` (shared keeps its implementations at the top of `infrastructure/`, with no `adapters/`): `SystemClock`, `data_directory_from_env.rs` (resolves the data directory from `TABSMITH_HOME`, `TABSMITH_SETTINGS_PATH`, `HOME` / `USERPROFILE`; §3.1, §3.4), `SharedDependencies` (what bootstrap hands every module's `build_<module>_module`), flat-JSON document store (settings/state, §3.2), atomic file writes, `logger.rs` (file logger, no crate), OS helpers, output format, terminal style. |
+| `settings/` | Typed getters (`Settings`), catalog table (`settings_catalog.rs`, §3.3), wildcard matcher (`SettingKeyPattern`), the `settings` command (§2.3). |
+| `history/` | History store (§3.5, §8): `history.jsonl` through `JsonlHistoryRepository`; `RecordCommandUseCase` records each executed command. |
+| `shell_integration/` | `init` generation (§5.3), should-launch decision (§5.2), `_ get-shell`, dotfile install/uninstall/status (§5.5), embedded scripts (`include_str!` of `shell/*`, in `embedded_shell_scripts.rs`), setup/uninstall flows (§2.9). |
+| `specs/` | Spec model + normalisation (§6.2), spec loading/versioning and name → file resolution (§6.3), bundle extraction/cleanup and index (§9.1), QuickJS host: prelude, module wrapping, function table, exec, event pump (`quickjs_spec_runtime.rs`, `quickjs_module_wrapper.rs`, `process_executor.rs`; §9). |
+| `completion/` | Tokenizer (§6.1), argv state machine (§6.3–6.4), suggestion assembly, triggers/cache, templates, filtering, fuzzysort, ranking, insertion text, history rows, first-token items (§6.6–6.10), generator runs, recency and the request pipeline (§6) as use cases (`CompleteCommandLineUseCase`). |
+| `ghost_text/` | Ghost sources (§6.11), LLM clients, completion cache, validation (§8), the `inline` command (§2.5). |
+| `dropdown/` | Pure UI state: visibility machine, actions, selection/scroll, common prefix (`Menu`, §7.1); keystroke grammar, keybinding table (`Keymap`, §7.2.2–7.2.3); themes, colour conversion, layout, row icons (§7.4, §7.7); the `theme` command (§2.4). |
+| `terminal_session/` | Wrapper: spawn, raw mode / console modes, threads, main loop, interception, insertion/reconciliation, echo hold, resize, panic guard, fallback (`infrastructure/pty/`: spawn, raw mode, threads, run loop, panic guard, fallback and `SessionMessage`; key routing, echo hold, insertion reconciliation and resize debounce in `domain/`; §4.3–4.4). `SessionUseCases` wires the session's use cases over `SessionPortsParts`, in production and in tests. OSC 697 splitter, marker tracker + cell tagging, Windows deferral, edit-buffer extraction, output filter (§5.1, §5.6, §7.5.4). Stdin key decoding (`KeyDecoder`, §7.2.1). Frame bytes (menu, description, pop-out, ghost), restore spans, full repaint, icon pixels and the kitty graphics protocol (`overlay_renderer.rs`, `icon_assets.rs`, `kitty_graphics.rs`; §7.4.2, §7.5). The `_ pty`, `_ pre-cmd`, `debug shell` and `debug key-tester` commands. |
+| `diagnostics/` | Checks and the run loop (`doctor`, §2.8), the `diagnostic` report and `debug logs` (§2.10). |
+| `shell/` (repo root) | `pre.sh`, `post.zsh`, `post.bash`, `pre.fish`, `post.fish`, `pre.ps1`, `post.ps1`. |
+| `assets/` (repo root) | `specs.tar.zst`, `SPECS_VERSION`, `SPECS_LICENSE` (MIT, Hercules Labs). THIRD_PARTY notices (semver ISC, yaml ISC, strip-json-comments MIT): not shipped yet. `icons/`: the row icons (PNGs and `template.rgba`, §7.4.2). |
+
+Each module is a vertical slice; a folder exists only when it has content:
+
+```
+src/<module>/
+  mod.rs            declares domain, application, infrastructure; nothing else
+  domain/           entities/, value_objects/, services/, repositories/ (traits), the module's error
+  application/      use cases (*_use_case.rs), application services shared by several use cases (e.g. GeneratorRunner, IntegrationInstaller, CheckEvaluator), DTOs, ports/ (traits)
+  infrastructure/   adapters/ (implement the ports, with the two exceptions below), cli/ (clap handlers), <module>_module.rs (builds the use cases)
+```
+
+Layers depend inward only: `domain` ← `application` ← `infrastructure`. `domain` and `application` import no `infrastructure`, no external crate (except `unicode_width`) and call no `print!`-style macro; ports (traits in `domain/repositories/` or `application/ports/`) are implemented by `infrastructure/adapters/`, with two exceptions: the kernel's `SystemClock` sits at the top of `shared/infrastructure/`, and history's memory-only `InMemoryHistoryRepository` stays in `domain/repositories/`. A module never uses another module's use cases or `infrastructure` (only `shared` is open to every module) and nothing depends on `bootstrap`: a port that one module declares and another serves is implemented in `bootstrap`, the only place that wires modules together. `src/architecture_tests.rs` is the test that enforces these rules on `shared` and the nine modules above; it does not check where a port is implemented.
 
 ### 4.2 Crates (as pinned in `Cargo.toml`)
 
@@ -534,73 +538,110 @@ ponytail: no lock, a line another session appends in between is lost).
 ### 4.3 Threads and data flow
 
 ```text
- real terminal ── stdin bytes ──► [stdin thread] ──Msg::Stdin──┐   unix: blocking read(0)
- real terminal ◄── stdout (pty bytes minus markers + overlay frames) ── [main]
-                                                               │   windows: ReadConsoleInputW; KEY_EVENT (bKeyDown)
- [signals thread] (unix SIGWINCH/TERM/HUP) ──Msg::Resize/Term──┤   uChar → UTF-8 bytes (join surrogate pairs);
- [stdin thread, windows] WINDOW_BUFFER_SIZE_EVENT + 250 ms size poll ──Msg::Resize──┤
- [pty reader] master.read(16 KiB), one credit per read ──Msg::Pty / Msg::PtyEof──►│ main thread: owns Term model,
- [child wait]  waitpid / child.wait() ──Msg::ChildExit(code)──►│ Tracker, Menu, Renderer, Keymap, Decoder, settings
- [engine] ──Msg::Completion / Msg::Ghost──────────────────────►│
-                                                               │──EngineMsg::{Complete, CommandFinished, CommandEnded,
- [pty writer] ◄── Vec<u8> (unbounded) ── main                   │   RecordInsert, Llm, Settings, Session, ToggleFuzzy,
-     └─► master writer (blocking writes never stall main)      │   Shutdown}──► [engine]
- [engine]: owns QuickJS runtime (!Send), spec cache, generator states/caches, recency, history, inline cache.
-     spawns [exec workers] (one per command, timeout), [llm worker] (one per request) and a [recency] saver;
-     exec workers report back on the engine's own channel (EngineMsg::ExecDone).
+ real terminal ── stdin bytes ──► [stdin thread] ──SessionMessage::Stdin────────────────────────────┐
+       unix: blocking read(0)                                                                       │
+       windows: ReadConsoleInputW; KEY_EVENT (bKeyDown) uChar → UTF-8 bytes (join surrogate pairs)  │
+ [signals thread] (unix SIGWINCH/TERM/HUP) ──SessionMessage::{Resize, Term}────────────────────────►┤
+ [stdin thread, windows] WINDOW_BUFFER_SIZE_EVENT ──SessionMessage::Resize─────────────────────────►┤
+ [resize thread, windows] 250 ms size poll ──SessionMessage::Resize────────────────────────────────►┤
+ [pty reader] master.read(16 KiB), one credit per read ──SessionMessage::{Pty, PtyEof}─────────────►┤
+ [child wait]  waitpid / child.wait() ──SessionMessage::ChildExit(code)────────────────────────────►┤
+ [engine] ──SessionMessage::{Completion, Ghost}────────────────────────────────────────────────────►┤
+ [llm worker] ──SessionMessage::Ghost──────────────────────────────────────────────────────────────►┤
+                                                                                                    ▼
+ main thread (SessionRunner): owns its inbox, the TerminalSession (Menu, Keymap, MarkerTracker, KeyDecoder, settings),
+     the TerminalScreen (AlacrittyTerminalScreen: Term model, OutputFilter, OverlayRenderer) and the SessionUseCases
+ real terminal ◄── stdout (pty bytes minus markers + overlay frames) ── [main]               (TerminalWriter port)
+ [main] ──EngineMessage::{Complete, CommandFinished, CommandEnded, RecordInsert, Llm, Settings, Session,
+     ToggleFuzzy, Shutdown}──► [engine]       (CompletionEngine port; bootstrap's ChannelCompletionEngine sends them)
+ [pty writer] ◄── Vec<u8> (unbounded) ── main                                          (WrappedShell::write_input)
+     └─► master writer (blocking writes never stall main)
+ [engine] thread (spawned in bootstrap/engine_server.rs): owns the QuickJS runtime (QuickJsSpecRuntime, !Send) and the
+     EngineInbox; its EngineServer holds the CompletionSession (generator states/caches, recency) and the use cases over
+     the spec cache (QuickJsSpecRepository), the history (HistoryRepository) and the inline cache (GhostTextCache).
+     spawns [exec workers] (tabsmith-exec, one per command, timeout), [llm worker] (llm, one per request) and a
+     [recency] saver (recency); exec workers report back on the engine's own channel (EngineMessage::Runtime).
 ```
+
+Where the threads start (`src/`): the stdin and signals threads (on Windows, the stdin thread and the resize poll
+thread) in `terminal_session/infrastructure/pty/platform_unix.rs` and `platform_windows.rs` (`spawn_input`,
+`spawn_resize`); the PTY reader in `pty_reader.rs` (`spawn_pty_reader`); the PTY writer and the child wait in
+`session_launcher.rs`. The engine thread starts in `bootstrap/engine_server.rs` (`spawn`); its loop is
+`EngineServer::run`, which dispatches each message in `EngineServer::handle`, and which also starts the `llm` worker
+(`answer_llm_ghost_text_request`). The `EngineInbox` is `bootstrap/engine_inbox.rs`;
+`bootstrap/channel_completion_engine.rs` implements the `CompletionEngine` port by sending to it. The exec workers
+start in `specs/infrastructure/adapters/quickjs_spec_runtime.rs`, the recency saver in
+`completion/infrastructure/adapters/state_file_recency_repository.rs`.
 
 PTY credits: the reader takes one of 4 credits before every read; the main loop returns one per chunk it handled. At
 most 4 × 16 KiB are queued, so a flooding child (`yes`) feels backpressure and Ctrl-C is never stuck behind its
-output (an unbounded queue grew to GBs). A batch merges every `Msg::Pty` already queued.
+output (an unbounded queue grew to GBs). A batch merges every `SessionMessage::Pty` already queued.
 
-Messages (all `std::sync::mpsc`; types in `types.rs`):
+Messages (all `std::sync::mpsc`; the comment above each type names its file under `src/`):
 
 ```rust
-enum Msg { Stdin(Vec<u8>), Pty(Vec<u8>), PtyEof, Resize(u16,u16), ChildExit(i32), Term,
-           Completion(Box<Completion>), Ghost{req: u64, text: Option<String>} }
-enum EngineMsg {
-  Complete(Request), CommandFinished(HistoryEntry), CommandEnded /* NoHistory: reset, nothing recorded */,
+// terminal_session/infrastructure/pty/session_message.rs
+enum SessionMessage { Stdin(Vec<u8>), Pty(Vec<u8>), PtyEof, Resize(u16,u16), ChildExit(i32), Term,
+                      Completion(Box<CompletionResult>), Ghost{req: u64, text: Option<String>} }
+// bootstrap/engine_message.rs (Settings: settings/domain/value_objects/settings.rs,
+//   HistoryEntry: history/domain/entities/history_entry.rs, Shell: shared/domain/value_objects/shell.rs)
+enum EngineMessage {
+  Complete(CompletionRequest), CommandFinished(HistoryEntry), CommandEnded /* NoHistory: reset, nothing recorded */,
   RecordInsert{cmd: String, name: String}, Llm{req: u64, buffer: String, cwd: PathBuf, shell: Shell},
-  Settings(Settings), Session(SessionCtx), ToggleFuzzy,
-  ExecDone{id: u64, out: Result<ExecOutput,String>}, Timer{id: u64} /* never sent */, Shutdown }
-struct Request { id: u64, buffer: String, cursor: usize /*byte*/, cwd: PathBuf, shell: Shell, history_mode: bool }
-struct Completion {
-  req: u64, phase: Phase /* Parse | Generators */, error: bool,
+  Settings(Settings), Session{env: HashMap<String,String>, alias: Option<String>} /* from a SessionContext (§2.11) */,
+  ToggleFuzzy, Runtime(RuntimeEvent) /* a generator process finished; EngineInbox hands it to the spec runtime */,
+  Shutdown }
+// specs/application/ports/runtime_event.rs
+struct RuntimeEvent { id: TaskId /* u64 */, output: Result<ProcessOutput, String> }
+// specs/domain/value_objects/process_output.rs (fields private)
+struct ProcessOutput { stdout: String, stderr: String, status: i32 }
+// completion/application/completion_request.rs
+struct CompletionRequest { id: u64, buffer: String, cursor: usize /*byte*/, cwd: PathBuf, shell: Shell, history_mode: bool }
+// completion/domain/value_objects/completion_result.rs (fields private, built from CompletionResultParts)
+struct CompletionResult {
+  req: u64, phase: CompletionPhase /* Parse | Generators */, error: bool,
   buffer: String, cursor: usize,    // what the reply was computed from (reconciliation, §7.3)
   tokens: Vec<String>, command_text: String /* before alias expansion */, command_index: usize,
   arg_key: u64,                     // hash of the current arg's and subcommand's Rc addresses
-  current_arg: Option<ArgInfo{name, description}>,
-  search_term: String, triggered_generators: Vec<GenKey>,
-  items: Vec<Item>,                 // filtered, ranked, insertion precomputed (§6.8)
-  loading: bool, ghost: Option<String>, fuzzy: bool }
+  current_arg: Option<ArgumentHint{name, description}>,
+  search_term: String, triggered_generators: Vec<GeneratorKey>,
+  items: Vec<Suggestion>,           // filtered, ranked, insertion precomputed (§6.8)
+  loading: bool, ghost: Option<String> }
 ```
 
-Main loop (pseudo-code):
+Main loop (pseudo-code; `SessionRunner::run` and `SessionRunner::step` in
+`terminal_session/infrastructure/pty/session_runner.rs`):
 
 ```text
 loop {
   timeout = min(resize, lock, llm debounce, spinner, file poll (2 s), exit grace, redraw grace, held keys)
-  msg = rx.recv_timeout(timeout)
-  match msg:                                        // each handler runs inside `guard` (panic → pass-through)
-    Stdin(b)      → on_input(b)                                    // §7.2.4
-    Pty(b)        → batch = b ++ all queued Pty; on_output(batch); return one credit per chunk   // §4.5
-    Resize(c,r)   → master.resize; term.resize; filter.resize; renderer.drop_clear(); resize_at = now+150ms
-    Completion(c) → on_completion(c)                               // §7.1, §8.4
-    Ghost{req,t}  → if req is the latest request and the LLM request: llm ghost = t; redraw
-    ChildExit(c)  → exit_code = c; Windows: drop the master on a helper thread (ClosePseudoConsole may wait for
-                    pipe room that only credits from this loop free); leave at PtyEof or after 200 ms
-    PtyEof        → leave if the child already exited
-    Term          → exit_code = 129; leave
-    Timeout       → on_timers: resize repaint (§7.6), redraw grace, held keys, lock expiry (§7.3), LLM request
+  msg = inbox.recv_timeout(timeout)                 // timeout = TerminalSession::next_deadline
+  match msg:                                        // Stdin, Pty, Resize, Completion and Ghost run inside `guard`
+                                                    // (panic → pass-through); ChildExit, PtyEof and Term do not
+    Stdin(b)      → a late startup-probe reply is dropped first (§4.4; its OSC 11 background goes to
+                    ApplyTerminalBackgroundUseCase), then HandleKeystrokesUseCase(b)               // §7.2.4
+    Pty(b)        → batch = b ++ all queued Pty; ProcessShellOutputUseCase(batch); return one credit per chunk   // §4.5
+    Resize(c,r)   → ResizeTerminalUseCase: master.resize; term.resize; filter.resize; renderer.drop_clear();
+                    TerminalSession::resize_applied(now) arms the 150 ms quiet spell (ResizeDebounce `settle_at`)
+    Completion(c) → ApplyCompletionResultUseCase(c)                                                // §7.1, §8.4
+    Ghost{req,t}  → ApplyLlmGhostTextUseCase: if req is the latest request and the LLM request: llm ghost = t; redraw
+    ChildExit(c)  → the runner drops the master on a helper thread (Windows only; ClosePseudoConsole may wait for
+                    pipe room that only credits from this loop free), then
+                    HandleShellExitUseCase(ShellEnd::ChildExited(c)): exit_code = c; leave at PtyEof or after 200 ms
+    PtyEof        → HandleShellExitUseCase(ShellEnd::OutputClosed): leave if the child already exited
+    Term          → HandleShellExitUseCase(ShellEnd::Terminated): exit_code = 129; leave
+    Timeout       → nothing of its own; it only wakes the loop for the tick below
+  }
+  after every message and on Timeout, unless the loop is left or the session is in pass-through:
+    HandleTimerTickUseCase: resize repaint (§7.6), redraw grace, held keys, lock expiry (§7.3), LLM request
                     (§8.4), spinner frame, settings/session poll
 }
-cleanup(); exit(exit_code)
+EndSessionUseCase; exit(exit_code)
 ```
 
-Panic guard: a panic in any handler (logged by the panic hook, never printed) writes the cached clear and switches
-the session to plain pass-through (stdin → PTY, PTY → stdout, no tracker/menu/frames) until the child exits; the
-running shell and its jobs are kept. A read whose handler panicked is forwarded raw unless the menu was
+Panic guard: a panic in any guarded handler (logged by the panic hook, never printed) writes the cached clear and
+switches the session to plain pass-through (stdin → PTY, PTY → stdout, no tracker/menu/frames) until the child exits;
+the running shell and its jobs are kept. A read whose handler panicked is forwarded raw unless the menu was
 intercepting (an Enter meant for an item is dropped rather than running the line); a PTY batch goes out raw.
 
 ### 4.4 `_ pty` startup, exit, fallback
@@ -674,27 +715,35 @@ is set; if `SetConsoleMode` fails with that flag, bare `\n` (not preceded by `\r
 Wire format `ESC ] 6 9 7 ; <payload> (BEL | ESC \)`. Payload = all bytes up to the terminator (no `;` splitting,
 no escaping). A payload is either a bare token or `Key=Value` split at the **first** `=`.
 
-| payload | lock-guarded | effect in tracker |
+`ShellMarker::parse` reads the payload; `MarkerTracker::on_marker` takes the marker. The tracker never touches the
+screen: an "inject" below is a `ScreenCommand` that `ShellOutputFeeder` has `TerminalScreen::apply` run on the model,
+in order, at the marker's byte offset; an "event" is a `ShellEvent`, handed on after the batch. The tracker only
+decides: the screen adapter does the tagging (`AlacrittyTerminalScreen::apply` → `cell_tagger::apply`, and
+`mark_line_start` for the line start below).
+
+| payload | lock-guarded | effect in `MarkerTracker` |
 |---|---|---|
-| `StartPrompt` | yes | `has_seen_prompt = true`; inject `ESC]8;;tabsmith:p ESC\` into the model (prompt tag on). |
-| `EndPrompt` | yes; Windows: deferred | If a command cycle is open (NewCmd seen, no PreExec since) inject `ESC]8;;tabsmith:c<n> ESC\`, else inject `ESC]8;; ESC\`. |
-| `NewCmd=<sid>` | no (sid must equal ours, D35; a bare `NewCmd` or another sid is ignored); Windows: deferred | `redraw = (a cycle is open and not preexec)`; `n += 1`; `preexec = false`; `no_history = false`; inject `ESC]8;;tabsmith:c<n> ESC\`; **mark the line start** (below); `line_col0 = cursor column == 0`. Then finish commands: take the stored `ExitCode`; find the innermost pending entry whose `pid` equals the last `PID=` (D38). None → event `NewCmd(None)` (a prompt redraw: SIGWINCH, `zle reset-prompt`, a nested shell's first prompt). Else clear `submitted` and pop that entry and every one nested above it, each with `exit_code`, `end_time = now`, emitting `NewCmd(Some(entry))`, or `CommandEnded` for a blank (NoHistory) entry. |
-| `PreExec` | no; ignored while `preexec` | Apply deferred markers first. `scraped = extract().buffer.trim()`; `command = submitted` (trimmed) when it is non-empty and occurs in `scraped` as a whole run (start of the scrape or after a space) followed only by spaces and then nothing or a newline (D37), else `scraped`; blank when `no_history` (then reset). Push `{command, shell, pid, session_id, cwd, start_time: now}` onto `pending`; `preexec = true`; `pwsh_list_view = false`; inject `ESC]8;; ESC\`; event `PreExec`. |
+| `StartPrompt` | yes | inject `ESC]8;;tabsmith:p ESC\` into the model (prompt tag on): `ScreenCommand::Tag(CellTag::Prompt)`. |
+| `EndPrompt` | yes; Windows: deferred | If a command cycle is open (NewCmd seen, no PreExec since) inject `ESC]8;;tabsmith:c<n> ESC\` (`ScreenCommand::Tag(CellTag::Cycle(n))`), else inject `ESC]8;; ESC\` (`ScreenCommand::ClearTag`). Deferred (Windows, §5.1.4): queued, not applied; `MarkerTracker::end_batch`, which `ShellOutputFeeder::feed` calls after each batch, applies the queue once a batch brought no marker. |
+| `NewCmd=<sid>` | no (sid must equal ours, D35; a bare `NewCmd` or another sid is ignored); Windows: deferred | `redraw = (a cycle is open and not preexec)`; `n += 1`; `preexec = false`; `no_history = false`; inject `ESC]8;;tabsmith:c<n> ESC\` (`ScreenCommand::Tag(CellTag::Cycle(n))`); **mark the line start** (below; `ScreenCommand::MarkLineStart`); `line_col0 = cursor column == 0`. Then finish commands: take the stored `ExitCode`; find the innermost pending entry whose `pid` equals the last `PID=` (D38). None → event `ShellEvent::NewCommand(None)` (a prompt redraw: SIGWINCH, `zle reset-prompt`, a nested shell's first prompt). Else clear `submitted` and pop that entry and every one nested above it, each with `exit_code`, `end_time = now` (`HistoryEntry::finish`), emitting `ShellEvent::NewCommand(Some(entry))`, or `ShellEvent::CommandEnded` for a blank entry (NoHistory, or nothing scraped). |
+| `PreExec` | no; ignored while `preexec` | Apply deferred markers first. `scraped` = `EditBuffer::buffer` trimmed (built as in §5.6; empty when no cycle is open, because `MarkerTracker::edit_buffer_context` is then `None`; `on_marker` answers `MarkerReaction::EditBufferNeeded`; `ShellOutputFeeder` reads the buffer with `TerminalScreen::edit_buffer`; `complete_pre_exec` goes on); `command = submitted` (trimmed) when it is non-empty and occurs in `scraped` as a whole run (start of the scrape or after a space) followed only by spaces and then nothing or a newline (D37), else `scraped`; blank when `no_history` (then reset) or when nothing was scraped. Push `{command, shell, pid, session_id, cwd, start_time: now}` (a `HistoryEntry`) onto `pending`; `preexec = true`; `pwsh_list_view = false`; inject `ESC]8;; ESC\` (`ScreenCommand::ClearTag`); event `ShellEvent::PreExec`. |
 | `NoHistory` | no; ignored while `preexec` | Apply deferred markers first; `no_history = true`: the next PreExec records a blank command (D36). |
 | `OSCLock=<sid>` | – | If sid == ours → `osc_lock = true`. |
 | `OSCUnlock=<sid>` | – | If sid == ours → `osc_lock = false`. |
 | `Dir=<path>` | yes | `cwd = path` (untrimmed; used for generators; tabsmith does **not** `chdir` itself). |
 | `ExitCode=<i32>` | yes | stored; applied to the commands the next `NewCmd` finishes. |
 | `Shell=<name>` | yes | `shell` (name and parsed `Shell`). |
-| `ShellPath=<path>`, `PID=<i32>`, `TTY=<path>`, `User=<name>` | yes (`User`: no) | context (`PID` keys the pending stack). |
+| `PID=<i32>` | yes | `pid` (keys the pending stack). |
 | `ZshAutosuggestionColor=<zle spec>` | yes | suggestion colour (zsh). |
 | `FishSuggestionColor=<fish spec>` | yes | suggestion colour (fish). |
 | `PwshPredictionColor=<SGR params>` | yes | PSReadLine `InlinePredictionColor`, ESC stripped (`[97;2;3m`, `38;5;8`): colours plus required DIM/ITALIC (§5.1.3). |
 | `PwshPrompts=<cont>\x1f<prompt text>…` | yes | PSReadLine `ContinuationPrompt` and `PromptText` entries (SGR stripped, untrimmed), stripped from the pwsh buffer (§5.6). Default continuation `>> `. |
 | `PwshListView=<0\|1>` | yes | PSReadLine ListView predictions active; reset when a command starts. |
+| `ShellPath=<path>`, `TTY=<path>`, `User=<name>` | – | read as `ShellMarker::Ignored`: kept nowhere, used by nothing. `Ignored` is not lock-exempt (`ShellMarker::passes_integration_lock`) and a no-op either way, `User` included. The bash, zsh and fish post scripts still send all three; the pwsh one sends only `User`. |
 | anything else (`Log=`, `DoneSourcing`, …) | – | ignored. |
 
-Empty values (`Key=`) are ignored. Values other than `Dir` and `PwshPrompts` are trimmed.
+Empty values (`Key=`) are ignored. Values other than `NewCmd` (the sid is compared untrimmed, so `NewCmd= <sid>` is
+not ours), `Dir` and `PwshPrompts` are trimmed.
 
 Line start at `NewCmd` (the cursor is where the command line begins): on the cursor's row, every cell before the cursor
 without a tag gets `tabsmith:p` (a prompt drawn without markers: pwsh re-wraps a foreign prompt at ReadLine, §5.4.5).
@@ -703,7 +752,11 @@ redraws only a multi-line prompt's last line, without StartPrompt), at/after the
 continuations → `c<n>` (readline keeps the typed text and moves over it with CUF after a vi-mode switch, or shifts it
 with DCH when leaving i-search).
 
-The wrapper's reaction to the events is in §7.1 (`on_event`).
+The wrapper's reaction to the events is in §7.1 (`TerminalSession::on_shell_event`, called by
+`ProcessShellOutputUseCase`). For each event the use case first forwards `NewCommand(Some(entry))` and `CommandEnded`
+to the engine (`CompletionEngine::command_finished` / `command_ended`, i.e. `EngineMessage::CommandFinished` /
+`CommandEnded`), then calls `on_shell_event`: `NewCommand(Some(entry))` is how a finished command reaches
+`history.jsonl` (§3.5), `CommandEnded` only resets the engine's end-of-command state, nothing recorded (§4.3).
 
 #### 5.1.1 Splitter (stateful, before the VT parser)
 
@@ -724,7 +777,8 @@ CAN/SUB cancel it, `ESC` + other byte ends it and is re-processed. Past 64 KiB t
 
 `OSCLock/OSCUnlock` carry our session id so a nested shell (ssh, a manually started `bash`, a nested tabsmith) that
 also emits 697 cannot overwrite our state. While locked only `NewCmd`, `PreExec`,
-`NoHistory`, `OSCLock`, `OSCUnlock` and `User` are processed. The sid gate (with the bare-`NewCmd` rule, D35) stops
+`NoHistory`, `OSCLock` and `OSCUnlock` are processed (`ShellMarker::passes_integration_lock`; `User` is read as
+`Ignored` and has no effect, locked or not). The sid gate (with the bare-`NewCmd` rule, D35) stops
 untrusted *output* (a file, an ssh banner) from faking prompts; it is not a trust boundary against local programs:
 every child (and a plain subshell, which can unlock) inherits `TABSMITH_SESSION_ID` and could forge markers, but such
 a program can already write `history.jsonl` or the rc files directly.
@@ -2669,20 +2723,60 @@ those generators yield `[]` (risk, §11).
 ## 10. Test plan
 
 `cargo test` (unit tests next to the code, `#[cfg(test)]`; all OSes in CI). Every finding fixed in the four review
-rounds has a regression test next to the code it fixed.
+rounds has a regression test next to the code it fixed. Tests stay in the same file under `#[cfg(test)] mod tests`, and
+a test module over about 500 lines usually goes to a sibling `<file>/tests.rs` (a few shorter ones do too, and
+`architecture_tests.rs`, a test-only file, keeps its `mod tests` inline). Paths in the table are relative to `src/`; a
+directory followed by file names stands for those files in it. `tests/` at the crate root holds data only
+(`tests/fixtures/`, `tests/snapshots/`). Test-only support lives next to what it serves:
+`shared/infrastructure/testing/fixture_log.rs` (the comparison of a log with its frozen file, `P9_WRITE_FIXTURES`) and
+`shared/infrastructure/testing/temp_dir.rs` (the temp-dir helper of the file-system tests),
+`shell_integration/infrastructure/testing/integration_fixtures.rs`, and the `test_fixtures.rs` files of
+`completion/domain`, `completion/application`, `diagnostics/application` and `terminal_session/application` (the
+helpers and use-case harnesses that the tests below share).
 
-| area | tests |
+| where | tests |
 |---|---|
-| `shell_parser` | Every row of the §6.1.3 table; operators without spaces; unterminated quotes (`complete=false`, inner text); escapes in word vs string vs raw string; concatenation `--foo="a b"c`; `$(…)` nesting; `FOO= cmd`; alias cases from §6.1.6; alias with `\|` not expanded; parse-tree fixtures (`tests/fixtures/shell_parser/`). |
-| `parser` | Mock spec (the §6.4 table and the full mock-spec table, as JSON fixtures in `tests/fixtures/parser/cmd_spec.json`); `isRepeatable` limits; `exclusiveOn`/`dependsOn`; persistent option inheritance without mutation; `--` end of options; `loadSpec` locations recursion with `command_index` (`sudo git ` → git spec, generators see `["git",…]`); `spec_location` table; diff merge (`merge_named` order, `remove`, `merge_args` index quirk) on hand-made fixtures; version pick (newest ≤ target, none → newest). |
-| `suggest` | fuzzysort examples (`fs`/`Fuzzy Search` → −16, `test`/`test` → 0, non-match → None); prefix score ladder 0/−1/−2/−3; bucket order A ++ B ++ C; auto-execute rules (dangerous, optional args, hidden setting, onlyShowOnTab); `.` and `/`-folder auto-execute; dedupe ≤ 50; recency boost bands (`75 + ms/1e13`), `priority: 0` → 50, alphabetical setting; triggers (string/fn/threshold/match/change); cache TTL/SWR/max-age; option-chain rewriting (`-la`); history rows priority; insertion table from §6.8 (incl. POSIX and pwsh escaping, `{cursor}`, auto-space, raw-token deletion counts with quotes and escaped spaces). |
-| `menu` | Visibility transitions for: typing, space/new arg, full insertion with and without new arg, generator re-trigger, Esc → stays hidden across tokens, backspace into previous token, large change (paste) vs `just_inserted`, `onlyShowOnTab`, `navigateToHistory`, Up at 0, wrap-around, sticky selection across recompute; common prefix (single item, mixed types, `../`, no prefix → BEL); keybinding parser (`ctrl+k`, `control+K`, `shift+tab`, `shift+a`→`A`, `+`, `ctrl++`, `f12`, unknown modifier ignored, multi-char unknown → dropped); `"ignore"`; stdin decoding table §7.2.1 incl. a chunk with several keys and a bracketed paste. |
-| `render` | Layout: below/above/shrink/hide decisions at various `cy`, `R`; `x0` clamping; truncation with wide chars; colour parsing (`#rgb`, `#rrggbbaa`, `rgb( 1, 2, 3 )`); 256-colour mapping; **round-trip invariant**: model A ← `output`; model B ← `output + frame + clear`; visible grids (chars, fg, bg, flags) equal — for below, above, ghost, wide chars at both span edges, truecolor cells. |
-| `tracker`, `pty` (no real PTY) | OSC splitter across chunk boundaries (split inside `ESC ]`, inside payload, BEL vs ST, non-697 OSC passthrough, 64 KiB flush); markers stripped from output; lock/unlock with foreign sid; `NewCmd=<other sid>` ignored; edit-buffer extraction by feeding a real `alacritty_terminal::Term` with byte transcripts: zsh prompt + command, RPROMPT, PS2 multi-line (real `\n`), wrapped long command, zsh completion listing below (excluded), ghost text in `fg=8` after cursor (excluded) vs typed `fg=8` before cursor (kept), prompt scrolled by output, resize reflow, Windows deferral FIFO; reconciliation byte strings (`cur` ahead / behind `ib`). |
-| `integrations` | `init` snapshots for every (shell, when) under `TABSMITH_INIT_SNAPSHOT_TEST=1` (`insta`-free: compare to files in `tests/snapshots/`, `TABSMITH_BLESS=1` rewrites them); syntax-check snapshots when tools exist: `bash -n` + shellcheck, `zsh -n`, `fish --no-execute`, `pwsh -NoProfile -Command [ScriptBlock]::Create(...)`; the post scripts run in real bash/zsh/fish (markers, hook order, bash-preexec layout, injected-integration reload with fake scripts); dotfile install into a temp HOME: idempotent (install twice → same bytes), shebang kept first, `# tabsmith ignore`, pre-not-first / post-not-last detection, uninstall restores original content (modulo trailing newline), backup created; should-launch decision table from env maps. |
-| `settings` | get/set JSON-or-string parsing, missing key plain vs json, delete wildcard (`autocomplete.*`, `?`), sorted pretty output, corruption handling, mtime reload. |
-| `inline` | Cache test vector (`{"echo hello, world":0.5,…}` → `"e"`→`echo hello, world`, `"ls -a"`→`ls -al`, `"other"`→None); history prompt numbering + 10 240-byte truncation + privacy filter; cleaning (fences, echoed buffer, numbering); `cd` validation; request bodies for both providers serialized exactly as §8.5 (no `temperature`; `output_config` only with effort); response parsing incl. refusal and thinking-before-text. |
-| `js` (`all_bundle_modules` is `#[ignore]`, run in CI with `--release -- --ignored`) | Evaluate all 1 484 modules: each yields a namespace or the documented empties; all 727 root specs normalise; `git` alias directive via a fake exec; `filepaths()` through the native `ls -1ApL` path; `setTimeout` ordering; `Intl.NumberFormat` compact; interrupt handler stops `while(true){}`; legacy string exec (`aws/ecs.js`). |
+| `completion/domain/services/command_line_tokenizer/tests.rs` | Every row of the §6.1.3 table; operators without spaces; unterminated quotes (`complete=false`, inner text); escapes in word vs string vs raw string; concatenation `--foo="a b"c`; `$(…)` nesting; `FOO= cmd`; alias cases from §6.1.6; alias with `\|` not expanded; parse-tree fixtures (`tests/fixtures/shell_parser/`). |
+| `completion/application/command_line_parser/tests.rs` | Mock spec (the §6.4 table and the full mock-spec table, as JSON fixtures in `tests/fixtures/parser/cmd_spec.json`); `isRepeatable` limits; persistent option inheritance without mutation; `--` end of options; `loadSpec` locations recursion with `command_index` (`sudo git ` → git spec, generators see `["git",…]`). |
+| `specs/infrastructure/adapters/fig_spec_mapper/tests.rs` | The JSON fixtures of `tests/fixtures/parser/` read into the spec model: the full mock-spec table; `exclusiveOn`/`dependsOn`. |
+| `specs/domain/services/`: `spec_locator.rs`, `spec_version_selector.rs`; `specs/infrastructure/adapters/fig_version_diff.rs` | `spec_location` table; diff merge (`merge_named` order, `remove`, `merge_args` index quirk) on hand-made fixtures; version pick (newest ≤ target, none → newest). |
+| `completion/domain/services/`: `fuzzy_matcher.rs`, `suggestion_filter.rs` | fuzzysort examples (`fs`/`Fuzzy Search` → −16, `test`/`test` → 0, non-match → None); prefix score ladder 0/−1/−2/−3; bucket order A ++ B ++ C; auto-execute rules (dangerous, optional args, hidden setting, onlyShowOnTab); `.` and `/`-folder auto-execute. |
+| `completion/domain/services/suggestion_ranker.rs` | dedupe ≤ 50; recency boost bands (`75 + ms/1e13`), `priority: 0` → 50, alphabetical setting. |
+| `completion/domain/services/`: `suggestion_assembler.rs`, `history_suggestions.rs` | option-chain rewriting (`-la`); history rows priority. |
+| `completion/domain/services/generator_trigger_policy.rs`; `completion/domain/entities/generator_cache.rs` | triggers (string/fn/threshold/match/change); cache TTL/SWR/max-age. |
+| `completion/domain/services/insertion_composer.rs` | insertion table from §6.8 (incl. POSIX and pwsh escaping, `{cursor}`, auto-space, raw-token deletion counts with quotes and escaped spaces). |
+| `dropdown/domain/entities/menu/tests.rs`; `dropdown/domain/services/common_prefix.rs` | Visibility transitions for: typing, space/new arg, full insertion with and without new arg, generator re-trigger, Esc → stays hidden across tokens, backspace into previous token, large change (paste) vs `just_inserted`, `onlyShowOnTab`, `navigateToHistory`, Up at 0, wrap-around, sticky selection across recompute; common prefix (single item, mixed types, `../`, no prefix → BEL). |
+| `dropdown/domain/services/keystroke_parser.rs`; `dropdown/domain/value_objects/keymap.rs`; `terminal_session/domain/entities/key_decoder.rs` | keybinding parser (`ctrl+k`, `control+K`, `shift+tab`, `shift+a`→`A`, `+`, `ctrl++`, `f12`, unknown modifier ignored, multi-char unknown → dropped); `"ignore"`; stdin decoding table §7.2.1 incl. a chunk with several keys and a bracketed paste. |
+| `dropdown/domain/services/`: `menu_layout_calculator.rs`, `text_fitting.rs`, `color_parser.rs` | Layout: below/above/shrink/hide decisions at various `cy`, `R`; `x0` clamping; truncation with wide chars; colour parsing (`#rgb`, `#rrggbbaa`, `rgb( 1, 2, 3 )`); 256-colour mapping. |
+| `dropdown/domain/services/theme_resolver.rs`; `dropdown/infrastructure/adapters/`: `theme_json_mapper.rs`, `file_theme_repository.rs` | Themes (§7.7): `dark`, `light` and `system` resolve without asking the repository and an empty name is dark; `system` follows the luma of the terminal background (no reply is dark); a custom theme resolves through its palette, a missing one to dark, and one named like a built-in to the built-in. A Fig theme (`version` + `theme{}`) maps to the eight roles and any other JSON value is drawn with the base16 filler, a missing or unparsable colour falling back per colour; a theme file's author is read as an object or a three-item array, and a file that is not an object, a bad author, version or theme, a duplicate author and broken JSON are reported with the serde text, the first colour key that is not a string by name; unknown keys, another version and unparsable colours are accepted. The repository finds a valid theme file and nothing for a missing, unreadable or non-UTF-8 file, a directory named like a theme or no home, reports an invalid file with its path, lists the JSON stems sorted and deduped, never creates the themes directory, joins the name unsanitised and reads the file again on every call. |
+| `terminal_session/infrastructure/adapters/overlay_renderer/tests.rs` | **round-trip invariant**: model A ← `output`; model B ← `output + frame + clear`; visible grids (chars, fg, bg, flags) equal — for below, above, ghost, wide chars at both span edges, truecolor cells. |
+| `terminal_session/domain/entities/marker_splitter.rs` | OSC splitter across chunk boundaries (split inside `ESC ]`, inside payload, BEL vs ST, non-697 OSC passthrough, 64 KiB flush). |
+| `terminal_session/domain/entities/marker_tracker/tests.rs`; `terminal_session/infrastructure/adapters/alacritty_terminal_screen/tests.rs` | markers stripped from output; lock/unlock with foreign sid; `NewCmd=<other sid>` ignored; edit-buffer extraction by feeding a real `alacritty_terminal::Term` with byte transcripts: zsh prompt + command, RPROMPT, PS2 multi-line (real `\n`), wrapped long command, zsh completion listing below (excluded), ghost text in `fg=8` after cursor (excluded) vs typed `fg=8` before cursor (kept), prompt scrolled by output, resize reflow, Windows deferral FIFO. |
+| `terminal_session/domain/services/insertion_reconciler.rs` | reconciliation byte strings (`cur` ahead / behind `ib`). |
+| `terminal_session/infrastructure/adapters/`: `cell_tagger.rs`, `edit_buffer_extractor.rs` | Cell tags on a real `alacritty_terminal::Term` (§5.6): cells written after a tag command are tagged and a clear command stops it; on mark-line-start the untagged cells before the cursor become the prompt and the redrawn cycle cells are tagged again from the cursor; wrapped rows are followed only when a redrawn cycle is given. Suggestion-colour matching of a cell: a cell with only one of the flags of a reported pwsh prediction colour is typed text; a dim or italic cell is the shell suggestion even without a reported prediction colour; named colours above fifteen map to the default colour; indexed and truecolour cells match like the parsed colour; the pending-wrap cursor counts as past the last column. |
+| `terminal_session/infrastructure/adapters/output_filter.rs` | Output filtering (§7.5.4): the keyboard-protocol upgrades (`CSI ?9001h/l`, kitty `CSI … u`, modifyOtherKeys `CSI > … m`) are stripped and other CSI and ESC sequences pass unchanged; a sequence split across batches is held, then stripped or emitted whole; inside the alternate screen the keyboard protocol is kept; DCS and APC strings are tracked across batches (closed by ST, aborted by CAN, a bare LF in the body not rewritten); an overlong sequence is passed through with a bounded carry; the scroll region and a UTF-8 char split across reads are tracked; a bare LF becomes `ESC D` only when asked. |
+| `terminal_session/application/handle_keystrokes_use_case/tests.rs` | The key path over the in-memory ports of the harness: keys are forwarded untouched when there is no command line; the shell write comes only after the frame was drawn and the bell rings before the frame and the write; a read that arrives behind held keys is not decoded and the replayed held keys are decoded again; a key that would act is held while the echo is pending; a split paste, also after a hold reset the decoder, and an unbracketed paste are never intercepted; a menu hidden by the render guards does not intercept and a disabled menu lets Tab through; `Alt+f` accepts the next ghost word and `Right` the whole ghost; Enter sets the submitted line only at the prompt and clears the menu before the line runs; insertions build on keys not yet echoed and are recorded in the engine after the lock is set, nothing when the insertion is dropped while a command runs; the history and fuzzy-search toggles ask the engine again before redrawing; pwsh's list view owns the rows below. |
+| `terminal_session/domain/entities/terminal_session/tests.rs` | The session aggregate with the instant passed in: the shell the tracker saw wins over the wrapper's; the late-probe window stays open until a cursor report closes it; the nearest deadline wakes the loop, each source of a deadline on its own, and only the exit in a pass-through; a changed line is asked for with the next request id and an unchanged one is not asked again, a blank line counts as a request and asks nothing; no command line on the alternate screen or with the cursor off the line; an insertion stays in the basis while the shell echoes nothing and is released at the cap; no action on an empty line before the prompt-redraw grace is over; the menu and the unchanged line survive a prompt redraw; the end of a command makes the same line be asked again; no file poll for a command that starts; the LLM request is scheduled for an error reply with the cursor at the end and not mid-word, and taken once its debounce ran out; a reply for an older request is dropped; the overlay is drawable on a plain line and not under a guard, and held back over a pwsh list view only for a non-empty line; the LLM ghost text of the current request goes behind the local one; Enter waits behind an unmodelled backspace until the reply came; the spinner ticks only while a reply is loading; the files are polled once the interval passed and the next poll armed; the exit is reported once the child exited and the output ended. |
+| `terminal_session/infrastructure/pty/session_runner/tests.rs` | The session event loop without a real PTY (a channel-backed `PtyWrappedShell` over `RecordingMasterPty`): a panic turns the session into a pass-through; a late probe reply is not typed; queued PTY chunks are written as one batch. |
+| `shell_integration/infrastructure/adapters/embedded_shell_scripts/tests.rs` | `init` snapshots for every (shell, when) under `TABSMITH_INIT_SNAPSHOT_TEST=1` (`insta`-free: compare to files in `tests/snapshots/`, `TABSMITH_BLESS=1` rewrites them); syntax-check snapshots when tools exist: `bash -n` + shellcheck, `zsh -n`, `fish --no-execute`, `pwsh -NoProfile -Command [ScriptBlock]::Create(...)` (the syntax checks and the temp-HOME paths are in `shell_integration/infrastructure/testing/integration_fixtures.rs`); the post scripts run in real bash/zsh/fish (markers, hook order, bash-preexec layout, injected-integration reload with fake scripts). |
+| `shell_integration/infrastructure/adapters/file_dotfile_repository/tests.rs`; `shell_integration/application/integration_installer/tests.rs`; `shell_integration/domain/value_objects/dotfile.rs` | dotfile install into a temp HOME: idempotent (install twice → same bytes), shebang kept first, `# tabsmith ignore`, pre-not-first / post-not-last detection, uninstall restores original content (modulo trailing newline), backup created. The first file holds the disk scenarios; the second runs the same rules over in-memory fakes. |
+| `shell_integration/domain/services/launch_policy.rs` | should-launch decision table from env maps. |
+| `settings/infrastructure/adapters/setting_value_json.rs`; `settings/infrastructure/cli/settings_command.rs` | get/set JSON-or-string parsing, missing key plain vs json. |
+| `settings/domain/value_objects/setting_key_pattern.rs`; `settings/application/delete_settings_use_case.rs` | delete wildcard (`autocomplete.*`, `?`). |
+| `settings/infrastructure/adapters/json_file_settings_repository.rs`; `terminal_session/domain/entities/reload_watch.rs`; `terminal_session/application/session_file_poller.rs` | sorted pretty output, corruption handling, mtime reload. |
+| `shared/infrastructure/atomic_file.rs`; `shared/infrastructure/json_document_store.rs` | Atomic writes and the JSON document store (§3.2): a private write creates a `run/<sid>.json` file with mode 0600 in a 0700 directory and fails on a purged data root without recreating it, or on a path without a parent, reporting the bare I/O error; a dotfile is replaced atomically (whoever holds the old file sees it whole, a symlinked dotfile stays a symlink, a dangling relative symlink stays and its target is created, permissions stay, no temp file is left, a read-only file still reports PermissionDenied); a save keeps a symlinked file. The store loads a missing or blank file as an empty document, reports invalid JSON or JSON that is not an object as corrupted (with the parser cause), a file it cannot read with the path it was reading and a failed save as writing the path it was given. |
+| `history/infrastructure/adapters/jsonl_history_repository.rs` | History file (§3.5): every field is written in order with null for absent values; a line missing the command, shell, session id or start time is dropped, missing optional fields load as none and unknown fields are ignored; a missing data root is not recreated (the entry stays in memory) and a blank command is not written; mode 0600 on Unix; a file of 10 000 lines (one corrupt) is not rewritten at load, the append that goes past them rewrites it with the last 5 000, and a file already past 10 000 lines is compacted at load. |
+| `ghost_text/domain/entities/ghost_text_cache.rs`; `ghost_text/domain/services/`: `llm_prompt_builder.rs`, `llm_completion_cleaner.rs` | Cache test vector (`{"echo hello, world":0.5,…}` → `"e"`→`echo hello, world`, `"ls -a"`→`ls -al`, `"other"`→None); history prompt numbering + 10 240-byte truncation + privacy filter; cleaning (fences, echoed buffer, numbering). |
+| `ghost_text/application/llm_ghost_text_job.rs` | `cd` validation. |
+| `ghost_text/infrastructure/adapters/http_llm_client.rs` | request bodies for both providers serialized exactly as §8.5 (no `temperature`; `output_config` only with effort); response parsing incl. refusal and thinking-before-text. |
+| `specs/infrastructure/adapters/quickjs_spec_runtime/tests.rs` (`all_bundle_modules` is `#[ignore]`, run in CI with `--release -- --ignored`; it is compiled with the default `embed-specs` feature) | Load every module of the bundle: each yields a namespace or the documented empties, none fails (the 1 484 entries of `index.json` are counted by `embedded_index_shape` in `specs/infrastructure/adapters/embedded_spec_bundle.rs`); `git` alias directive via a fake exec; `setTimeout` ordering; `Intl.NumberFormat` compact; interrupt handler stops `while(true){}`; legacy string exec. |
+| `specs/infrastructure/adapters/process_executor.rs`; `completion/infrastructure/adapters/fs_directory_lister.rs` | `filepaths()` through the native `ls -1ApL` path. |
+| `bootstrap/engine_server/tests.rs`; `bootstrap/engine_inbox.rs`; `bootstrap/channel_completion_engine.rs` | The completion engine thread (§6, §9.2), where the use cases of several modules are chained. `EngineServer` runs over a real `EngineInbox`, QuickJS runtime and spec repository on the test thread, with a watcher thread that reads the replies and feeds the inbox: a script generator, a `postProcess` function and a templated custom generator each reply again with their rows, a fresh cached custom result is served in the parse reply, bad script input settles with no rows and the rows of a superseded debounced run stay out of the slot; after the inbox is drained only the latest request is served, settings queued after a request are applied before it is served, and a request that arrives with shutdown is dropped; the local ghost text is added to a generator's reply, a history ghost text to the error reply of a command without a spec, and none for a cursor inside a word; an LLM request is answered at once with no ghost text for a source that is not a profile or a provider that cannot be reached; a session update refreshes the first-token items and keeps the engine running. The inbox: a wait aborts on a newer `Complete` and defers the other messages, and a runtime event the engine loop reads reaches the runtime. `ChannelCompletionEngine`: each call of the port is sent as its `EngineMessage`, in order, and an engine that has stopped is ignored. |
+| `bootstrap/bridges.rs`; `bootstrap/diagnostics_bridges.rs` | The bridges that implement the port of one module with the use cases of another: a failed extraction of the spec bundle keeps its whole error chain (`could not extract the completion specs: creating <dir>: <io>`); the integration probe lists and checks integrations like the installer and reads the binary of each installed script (the text between its first two quotes; orphans, unreadable scripts, scripts without quotes and shells not found on `PATH` are skipped); the check fixer installs the integration it is asked to fix, creates the data directory, resets the settings keeping the old bytes named after the clock and installs the spec bundle, each failure with its error text, and marks the restart reminder after installing integrations (even when none was missing) but not after a failed install or after installing the spec bundle; the bundled-specs probe finds the bundle only once the index of this version exists. |
+| `architecture_tests.rs` | Architecture fitness test: walks `src/` and fails when a module listed in `REGISTERED_MODULES` breaks a layer rule, among them: `domain` using `application`, `infrastructure`, `bootstrap`, an external crate other than `unicode_width`, an output macro or the logger; `application` using `infrastructure`, `bootstrap`, an external crate other than `unicode_width` or an output macro; a module using another module's use cases or infrastructure; `shared` using another module; a `mod.rs` holding more than child declarations; a `src/<module>.rs` file, or a file of the module other than `mod.rs` outside its `domain/`, `application/` and `infrastructure/` folders; `#[path]`, `include!` and exported macros; `main.rs` holding more than module declarations and `fn main`, or a `use` item. Test-only code (`#[cfg(test)]` items and sibling `tests.rs` files) is exempt from the domain, application and module-boundary rules only; the `shared`, `mod.rs` and splice rules (`#[path]`, `include!`, exported macros) still apply to it. The rules themselves are tested on source snippets in the same file. |
+| the `application/` layer of every module, e.g. `settings/application/set_setting_use_case.rs`, `completion/application/complete_command_line_use_case.rs`, `diagnostics/application/run_doctor_use_case/tests.rs` | Use-case tests over in-memory fakes: a use case is built over in-memory repositories and recording, capturing or fixed doubles of its ports (`InMemorySettingsRepository`, `CapturingTerminalWriter`, `FixedClock`), which live under `#[cfg(test)]` next to the trait they stand in for (`settings/domain/repositories/settings_repository.rs`, `terminal_session/application/ports/terminal_writer.rs`, `shared/application/ports/clock.rs`); the test runs the use case and reads back what the doubles saw. |
+| `terminal_session/application/session_use_cases/tests.rs`; the `probe`, `passthrough` and `batching` scenarios in `terminal_session/infrastructure/pty/session_runner/tests.rs`; the `tracker_*` scenarios in `terminal_session/infrastructure/adapters/alacritty_terminal_screen/tests.rs` | Characterisation scenarios, each with a log that must equal its frozen file in `tests/fixtures/terminal_session/characterisation/`. The 11 scenarios of `session_use_cases/tests.rs` are whole sessions: `TerminalSessionHarness` (`terminal_session/application/test_fixtures.rs`) wires the use cases over the real screen and in-memory doubles, as production wires them; each scenario (typing, bell, held keys, lifecycle, cleanup, ghost text, lock, resize, LLM ghost text, settings reload, spinner) logs step by step what reached the terminal, the shell and the engine. The `probe`, `passthrough` and `batching` scenarios drive a `SessionRunner` over the ports of that harness and log the same three. The three `tracker_*` scenarios (a bash cycle, the Windows deferral, zsh colours and a nested shell) use no harness, shell or engine: they feed scripted chunks to the real screen, splitter, marker tracker and shell-output feeder and log, per chunk, the filtered bytes for the terminal, the events, the cycle state, the extracted edit buffer and the hyperlink runs of the model (the cell tags). `shared/infrastructure/testing/fixture_log.rs` compares each log with its file: a missing file is created only with `P9_WRITE_FIXTURES=1` (the test still fails, so the file is read before it is frozen); an existing file is never rewritten. |
+| `diagnostics/domain/services/doctor_check_catalog/tests.rs`; `diagnostics/application/`: `check_group_builder/tests.rs`, `check_evaluator/tests.rs`, `run_doctor_use_case/tests.rs`, `run_doctor_use_case/execute_tests.rs` | Doctor, check by check: a check is data and its outcome a pure function of facts, so each test hands the facts to `dotfile_outcome`, `data_directory_outcome`, `scripts_outcome`, `settings_outcome`, `specs_outcome`, `windows_console_outcome`, `terminal_outcome`, `session_outcome`, `inline_outcome`, `os_outcome`, `bash_outcome` or `fish_outcome` and reads the `CheckOutcome` (`Ok`, `Warn`, or `Err` with its reason, info lines and `CheckFix`); the same file tests which checks each group holds, in which order and with which `CheckSeverity` (`Normal`, `Soft`, `Skip`). The application layer is tested over in-memory probes: when a group is built and what it asks, what one check asks when it is evaluated, and the run (header before outcomes, fix and re-run, abort, summary, verdict). |
 
 Smoke / end-to-end: **not automated** (there is no `tests/e2e.rs`). The review rounds ran these flows, and many more,
 with a pyte-based PTY driver (step files of keys/waits/snapshots, temp HOME and `TABSMITH_HOME`) against

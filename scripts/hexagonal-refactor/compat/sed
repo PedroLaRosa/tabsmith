@@ -1,0 +1,4 @@
+#!/bin/bash
+# BSD `sed -i ''` emulation for the Linux container (GNU sed).
+if [ "$1" = "-i" ] && [ "$2" = "" ]; then shift 2; exec /usr/bin/sed -i "$@"; fi
+exec /usr/bin/sed "$@"

@@ -1,0 +1,20 @@
+prompt
+  stdout=$ zzzcmd foo
+  pty=
+  engine=["Complete(id=1 buffer=\"zzzcmd foo\" cursor=10 shell=Bash history_mode=false)"]
+error reply arms the debounce
+  stdout=
+  pty=
+  engine=[]
+debounce due: LLM request
+  stdout=
+  pty=
+  engine=["RequestLlmGhostText(request=1 buffer=\"zzzcmd foo\" shell=Bash)"]
+llm reply: ghost drawn
+  stdout=\x1b[?2026h\x1b[?25l\x1b[1;13H\x1b[0m\x1b[90m bar\x1b[1;13H\x1b[0m\x1b[?25h\x1b[?2026l
+  pty=
+  engine=[]
+stale reply ignored
+  stdout=
+  pty=
+  engine=[]

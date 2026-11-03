@@ -1,0 +1,14 @@
+first step: 3 chunks merged, Stdin stashed
+  stdout=\r\n$ gi
+  pty=
+  engine=["Complete(id=1 buffer=\"gi\" cursor=2 shell=Bash history_mode=false)"]
+  credits returned=3
+the stashed Stdin
+  stdout=
+  pty=t
+  engine=[]
+the last Pty
+  stdout= ch
+  pty=
+  engine=["Complete(id=2 buffer=\"gi ch\" cursor=5 shell=Bash history_mode=false)"]
+  credits returned=1
