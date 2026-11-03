@@ -84,10 +84,6 @@ fn open_log(dir: &std::path::Path, name: &str) -> Option<std::fs::File> {
     Some(file)
 }
 
-pub(crate) fn enabled(level: Level) -> bool {
-    LOGGER.get().is_some_and(|l| level <= l.level)
-}
-
 pub(crate) fn log(level: Level, msg: &str) {
     let Some(l) = LOGGER.get() else { return };
     if level > l.level {
@@ -119,9 +115,6 @@ pub(crate) fn info(msg: &str) {
 }
 pub(crate) fn debug(msg: &str) {
     log(Level::Debug, msg)
-}
-pub(crate) fn trace(msg: &str) {
-    log(Level::Trace, msg)
 }
 
 #[cfg(all(test, unix))]

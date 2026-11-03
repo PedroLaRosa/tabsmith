@@ -11,8 +11,6 @@ pub(crate) struct Suggestion {
     kind: SuggestionKind,
     /// For auto-execute rows: the type of the row it was derived from.
     original_kind: Option<SuggestionKind>,
-    priority: f64,
-    is_dangerous: bool,
     /// e.g. `<file> [mode]...` (SPEC §7.4.2), empty if none.
     args_hint: String,
     /// Char indexes into `title()` to highlight as matching (SPEC §7.4.2).
@@ -24,8 +22,6 @@ pub(crate) struct Suggestion {
     generator: Option<GeneratorKey>,
     /// Matched by prefix (not only fuzzy) — used by the spec ghost source (SPEC §6.11).
     prefix_match: bool,
-    /// `context.templateType` of the generator result (`filepaths`/`folders`/`help`), if any.
-    template_type: Option<String>,
     /// Spec `icon`, if any (SPEC §7.4.2).
     icon: Option<String>,
 }
@@ -37,15 +33,12 @@ pub(crate) struct SuggestionParts {
     pub(crate) description: Option<String>,
     pub(crate) kind: SuggestionKind,
     pub(crate) original_kind: Option<SuggestionKind>,
-    pub(crate) priority: f64,
-    pub(crate) is_dangerous: bool,
     pub(crate) args_hint: String,
     pub(crate) highlight: Vec<usize>,
     pub(crate) query: String,
     pub(crate) insert: Insertion,
     pub(crate) generator: Option<GeneratorKey>,
     pub(crate) prefix_match: bool,
-    pub(crate) template_type: Option<String>,
     pub(crate) icon: Option<String>,
 }
 
@@ -57,15 +50,12 @@ impl Suggestion {
             description,
             kind,
             original_kind,
-            priority,
-            is_dangerous,
             args_hint,
             highlight,
             query,
             insert,
             generator,
             prefix_match,
-            template_type,
             icon,
         } = parts;
         Suggestion {
@@ -74,15 +64,12 @@ impl Suggestion {
             description,
             kind,
             original_kind,
-            priority,
-            is_dangerous,
             args_hint,
             highlight,
             query,
             insert,
             generator,
             prefix_match,
-            template_type,
             icon,
         }
     }

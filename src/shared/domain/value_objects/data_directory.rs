@@ -54,11 +54,13 @@ impl DataDirectory {
     }
 
     /// The dotfile integrations' script files.
+    #[cfg(test)]
     pub(crate) fn shell_dir(&self) -> Result<PathBuf, SharedError> {
         self.under("shell")
     }
 
     /// Copies of rc files taken before an integration rewrites them.
+    #[cfg(test)]
     pub(crate) fn backups_dir(&self) -> Result<PathBuf, SharedError> {
         self.under("backups")
     }

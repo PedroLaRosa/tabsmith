@@ -44,13 +44,6 @@ fn healthy() -> DoctorHarness {
     DoctorHarness::new().with_system(healthy_system()).with_integrations(located_integrations())
 }
 
-fn healthy_with_bash_running() -> DoctorHarness {
-    let integrations = located_integrations().listing(Shell::Bash, vec![bashrc()]).checking(bashrc(), || Ok(()));
-    DoctorHarness::new()
-        .with_system(healthy_system().with_parent_executable("bash"))
-        .with_integrations(integrations)
-}
-
 fn with_a_broken_dotfile_that_cannot_be_repaired() -> DoctorHarness {
     let broken = || Err(ShellIntegrationError::NotInstalled("no block".to_string()));
     let integrations = located_integrations().listing(Shell::Bash, vec![bashrc()]).checking(bashrc(), broken);

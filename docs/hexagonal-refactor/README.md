@@ -19,22 +19,19 @@ implementation session needs that the plan does not.
 | 8 dropdown | done, run in three chunks (8.0a-8.2c and 8.4a; 8.4b; 8.3a-8.7) | `bb7c6b7..1bbe27b`, registration at `da2f950` (tag `phase8-start` at `7aafcef`), see [`phase-8-dropdown.md`](phase-8-dropdown.md) |
 | 9 terminal_session | done, run in six runs (9.0a-9.0d; 9.1a-9.2f; 9.6a-b and 9.3a-i; 9.4a-c and 9.6c; 9.5a-h; 9.6d-f and 9.7) | `858b7b5..b898db1`, registered first at 9.0a (tags `phase9-start` at `858b7b5` and `phase9-guards` at `3fdb6e5`), see [`phase-9-terminal-session.md`](phase-9-terminal-session.md) |
 | 10 diagnostics | done, run in four runs (10.0-10.6; 10.7a-10.11; 10.12a-10.15b; 10.16-10.20) | `b0fe04d..3273a89` (tag `phase10-start` at `b0fe04d`), registered first at 10.0, see [`phase-10-diagnostics.md`](phase-10-diagnostics.md) |
-| 11 cleanup and `docs/SPEC.md` | not started | |
+| 11 cleanup and `docs/SPEC.md` | done, one run | `5eb4305..c0fdccb` on `refactor/hexagonal-cleanup` (tag `phase11-start` at `a2cd91c`), see the Phase 11 notes in [the plan](../hexagonal-refactor-plan.md) |
 
-At `3273a89` (the last code commit of Phase 10; the docs commit that follows changes no code), `scripts/hexagonal-refactor/gate.sh`
-passes with its default budget (`BASELINE_CLIPPY=3`; the tree has 3 clippy warnings, so the default budget has no headroom; the Linux budget of 4 has one lint). `cargo test` has 1995 passed, 0 failed,
-1 ignored (1414 at the end of Phase 9, 283 at the baseline). The 131-command golden CLI capture is byte-identical to the
-baseline and `cargo check --all-targets --target x86_64-pc-windows-gnu` prints `windows: ok`. The test lock against `ef807c1`
-has 0 baseline tests missing, 0 DUPLICATE, 213 CHANGED (each one a reviewed restructuring; 210 at the end of Phase 9) and
-1714 NEW names. Against `phase10-start`: 0 missing, 0 DUPLICATE, 6 CHANGED (the four locked tests that moved with the deletion of
-`doctor.rs` and `cli.rs`, `diagnostic_toml`, `doctor_group_soft_fix_abort`, `doctor_script_bins_skip_orphans` and
-`doctor_version_parsing`, plus two re-homed `load_or_defaults` tests), 581 NEW names and 1 PATH-ONLY.
-`doctor-diff.sh` (470 commands, 11010 lines) is byte-identical to the `af1b304` transcript after the rewire and after the
-deletion; `integrations-diff.sh` and `inline-diff.sh` were empty at the rewire. `phase10-greps.sh` prints no FAIL (groups A, B1-B13,
-B15, D1-D2, E and F are OK; the rest is REVIEW noise listed in the design's section 15). `REGISTERED_MODULES` = all ten modules
-(`completion`, `diagnostics`, `dropdown`, `ghost_text`, `history`, `settings`, `shared`, `shell_integration`, `specs`,
-`terminal_session`). `src/doctor.rs`, `src/cli.rs` and `settings::infrastructure::load_or_defaults` are gone and `src/types.rs`
-holds only `now_ms` and `now_secs`, with no caller. The manual smoke (plan section 8) has never been run and is the user's.
+At `5694ed1` (the last code commit of Phase 11; the SPEC commit `c0fdccb` and the docs commit that follow change no code),
+`scripts/hexagonal-refactor/gate.sh` passes with its default budget (`BASELINE_CLIPPY=3`; the tree has 3 clippy warnings, so there
+is no headroom; the Linux budget of 4 has one lint). `cargo test` has 1995 passed, 0 failed, 1 ignored. Build warnings 0. The
+131-command golden CLI capture is byte-identical to the baseline and `cargo check --all-targets --target x86_64-pc-windows-gnu`
+prints `windows: ok`. The test lock against `ef807c1` has 0 baseline tests missing, 0 DUPLICATE, 213 CHANGED (unchanged since
+Phase 10) and 1714 NEW names. Against `phase11-start`: 2001 tests before and after, and 0 missing, new, changed, path-only or
+duplicate. The seven behaviour-diff transcripts (`integrations`, `inline`, `theme`, `precmd`, `pty`, `session`, `doctor`) are
+byte-identical to the `af1b304` binary, `cargo test --locked --release -- --ignored all_bundle_modules` passes, and
+`phase10-greps.sh` prints no FAIL. `REGISTERED_MODULES` = all ten modules. `src/types.rs`, `src/doctor.rs` and `src/cli.rs` are gone,
+the crate-wide `#![allow(dead_code)]` is gone, and `LEGACY_MODULES` still lists the dead names (two locked tests need it: deviation 1
+of the Phase 11 notes). The refactor plan is complete. The manual smoke (plan section 8) has never been run and is the user's.
 
 ## Files here
 
@@ -166,6 +163,27 @@ Run everything from the repo root. Output goes to `target/hexagonal-refactor/` (
   - Phase 10: doctor checks evaluated over facts with re-probing after fixes.
 
   Each gap is written up in the matching `source-map/*.md` under "Plan gaps".
+
+## Lessons from Phase 11
+
+- **Lifting a blanket `allow(dead_code)` is a six-configuration job.** The lint depends on the platform, the build and the features.
+  Check Linux and `x86_64-pc-windows-gnu`, each with and without `--tests`, plus `--no-default-features`: the default Linux build
+  showed 7 findings, the six together 21. Deleting what Linux flags would have broken Windows (`ToolVersion::components`, read only by
+  the Windows build probe). The tools are `rustup target add x86_64-pc-windows-gnu` and `apt-get install gcc-mingw-w64-x86-64`
+  (run `apt-get update` first). `gate.sh` prints `windows: ok` for any exit 0 and counts no warnings.
+- **Gating a test helper orphans its imports on the platform that skips the callers.** After `#[cfg(unix)]` on a helper, check the
+  Windows test build again for `unused_imports`; four imports and a module's `use super::*` needed the same gate.
+- **A struct-field deletion is safe only per struct.** Two structs with a `fuzzy` field shared one fixture file; deleting by file and
+  line number removed the wrong one and the compiler caught it. Read the surrounding struct literal first.
+- **The gate does not run the acceptance greps.** `phase10-greps.sh` B15 (no cfg in domain) failed after a green gate; run the
+  scripts of the phases whose rules a change touches. Where a rule bites, look for an equivalent change that satisfies it (here the
+  other accessors read through `components`) before relaxing the rule.
+- **A locked test can contradict the plan.** The plan said to empty `LEGACY_MODULES`; two locked tests need it. The lock wins, the
+  deviation is recorded, and the user is told what it would cost to lift.
+- **`cmp` of two crash logs says "different".** `pty-diff.py` with a relative binary path fails on both sides; read the transcript
+  before reporting a behaviour difference.
+- **An independent panel found no defect and still earned its cost**: its prior-art agent was the one that connected the new cfg to
+  the B15 rule. Give such agents the project's own acceptance scripts to read.
 
 ## Lessons from Phase 10
 

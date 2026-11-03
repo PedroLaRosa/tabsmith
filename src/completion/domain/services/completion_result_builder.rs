@@ -87,6 +87,5 @@ pub(crate) fn build_completion_result(
         items,
         loading: session.any_slot_loading(),
         ghost: None,
-        fuzzy: served.fuzzy(),
     })
 }

@@ -86,6 +86,7 @@ impl SpecBundle for EmbeddedSpecBundle {
 
 /// Unpack `archive` (tar.zst) into `<root>/<ver>.tmp-<pid>/`, rename it to `<root>/<ver>/` and [`cleanup`]
 /// (SPEC §9.1). A concurrent extractor that loses the rename deletes its temp dir and uses the winner's.
+#[cfg(any(feature = "embed-specs", test))]
 pub(crate) fn extract_to(archive: &[u8], root: &Path, ver: &str) -> Result<PathBuf, SpecError> {
     let dir = root.join(ver);
     let tmp = root.join(format!("{ver}.tmp-{}", std::process::id()));
@@ -137,6 +138,7 @@ fn cleanup(root: &Path, ver: &str) {
 
 /// Unpack the regular files of a tar.zst into `dst` (parents created on demand). Skips macOS AppleDouble
 /// `._*` entries: the asset was tarred by bsdtar with xattrs, so it holds a `._x` twin for every file.
+#[cfg(any(feature = "embed-specs", test))]
 fn unpack(archive: &[u8], dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     let mut ar = tar::Archive::new(zstd::Decoder::new(archive)?);

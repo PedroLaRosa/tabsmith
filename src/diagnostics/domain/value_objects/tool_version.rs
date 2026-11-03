@@ -23,22 +23,22 @@ impl ToolVersion {
     }
 
     pub(crate) fn major(&self) -> u32 {
-        self.0[0]
+        self.components()[0]
     }
 
     pub(crate) fn minor_or_zero(&self) -> u32 {
-        self.0.get(1).copied().unwrap_or(0)
+        self.components().get(1).copied().unwrap_or(0)
     }
 
     /// Lexicographic on the numbers, without padding zeros: 3.3 is below 3.3.0 and 4 is below 4.4.
     pub(crate) fn is_below(&self, bound: &[u32]) -> bool {
-        self.0.as_slice() < bound
+        self.components() < bound
     }
 }
 
 impl fmt::Display for ToolVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let joined: Vec<String> = self.0.iter().map(u32::to_string).collect();
+        let joined: Vec<String> = self.components().iter().map(u32::to_string).collect();
         f.write_str(&joined.join("."))
     }
 }

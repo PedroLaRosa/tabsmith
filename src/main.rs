@@ -1,6 +1,5 @@
 //! tabsmith — IDE-style autocomplete for your terminal (dropdown menu + inline ghost text),
 //! driven by the Fig completion specs. See docs/SPEC.md.
-#![allow(dead_code)]
 
 #[cfg(test)]
 mod architecture_tests;
@@ -15,7 +14,6 @@ mod shared;
 mod shell_integration;
 mod specs;
 mod terminal_session;
-mod types;
 
 fn main() {
     let cli: bootstrap::cli::Cli = clap::Parser::parse();

@@ -68,8 +68,6 @@ mod tests {
             description: None,
             kind: SuggestionKind::Subcommand,
             original_kind: None,
-            priority: 50.0,
-            is_dangerous: false,
             args_hint: String::new(),
             highlight: Vec::new(),
             query: String::new(),
@@ -81,7 +79,6 @@ mod tests {
             }),
             generator: None,
             prefix_match: true,
-            template_type: None,
             icon: None,
         })
     }
@@ -103,7 +100,6 @@ mod tests {
             items: suggestions,
             loading: false,
             ghost: None,
-            fuzzy: false,
         })
     }
 

@@ -1,30 +1,25 @@
-# Hexagonal refactor: handoff (2026-11-02, after Phase 10: how to start Phase 11)
+# Hexagonal refactor: handoff (2026-11-02, after Phase 11: the plan is complete)
 
 Where the refactor stands, and how to continue in a new session. Read this first, then [`README.md`](README.md),
-[`agent-brief.md`](agent-brief.md), [`phase-10-diagnostics.md`](phase-10-diagnostics.md) (the Phase 10 design: the lazy-doctor
-problem, the file tree, traps, the 12 deviations, hand-offs) and the plan's section 9 "Phase 10 notes" for the conventions.
-**Phase 10 is done (last code commit `3273a89`); Phase 11 is not started.** This file replaces the earlier Phase 9 handoff
-(Phases 0-10 are in the plan's section 9).
+[`agent-brief.md`](agent-brief.md) and the plan's section 9 "Phase 11 notes" (earlier phases' notes hold the conventions).
+**Phases 0 to 11 are done (last code commit `5694ed1`); nothing in the plan is left to build.** This file replaces the earlier
+Phase 10 handoff.
 
 ## The task
 
-The Phase 10 request was to implement the plan's Phase 10 (`diagnostics`: `doctor.rs`, the diagnostic and debug-logs parts of
-`cli.rs`) on the new branch `refactor/hexagonal-diagnostics`, as a refactor: tests locked, behaviour unchanged. **It authorised one
-new PR for that branch, off PR #1's branch (`refactor/hexagonal-architecture`); no step pushed.** Opening the PR is the
-orchestrator's, after the 10.20 close; say in it that the manual smoke is pending and that Phases 8, 9 and 10 are in the diff.
-Nothing else is authorised: ask the user before any other push, tag push or PR. The local remote-tracking ref
-`origin/refactor/hexagonal-dropdown-terminal-session` is still at `d1fdd67` (the end of Phase 9, run 5).
-**Phase 11 (cleanup and `docs/SPEC.md`) is NOT started and must not be started without the user asking for it.** Before it, the
-user owes the manual smoke below.
+The Phase 11 request was to implement the plan's Phase 11 (delete `types.rs`, remove `#![allow(dead_code)]` and what the compiler
+then flags, update `docs/SPEC.md`) as a refactor, tests locked and behaviour unchanged, and to open a new PR for it off PR #1's
+branch (`refactor/hexagonal-architecture`). It ran on the new branch `refactor/hexagonal-cleanup`, cut from `a2cd91c` (the merge of
+PR #4, which carries Phases 8 to 10). Nothing else is authorised: ask the user before any other push, tag push or PR.
 
 ## Where the work lives
 
-- Branch **`refactor/hexagonal-diagnostics`**, created off `refactor/hexagonal-dropdown-terminal-session`. Stay on it; never commit
-  on `main`.
-- Local tags (not pushed): `phase4-start` ... `phase9-guards` and **`phase10-start` = `b0fe04d`** (the testlock baseline of every
-  Phase 10 step; `src/` equals the Phase 9 end). A Phase 11 tag `phase11-start` would be set at the commit that starts it.
-- Code ends at `3273a89`; one `docs:` commit follows (the plan, the glossary, this hand-off, the README, the design's Status line,
-  the args file and the run notes). `git diff 3273a89 HEAD -- src` is empty.
+- Branch **`refactor/hexagonal-cleanup`**, tag `phase11-start` = `a2cd91c` (a local tag, not pushed; its `src/` equals the end of Phase
+  10). Never commit on `main`.
+- Code ends at `5694ed1`; `c0fdccb` is the SPEC commit; one `docs:` commit follows (plan, glossary, README, this hand-off).
+  `git diff 5694ed1 HEAD -- src` is empty.
+- The sandbox clone was shallow: `git fetch --unshallow origin` restores `ef807c1` for the test lock. Tags `phase4-start` to
+  `phase10-start` exist only on the machine of those phases.
 
 ## Binding rules
 
@@ -48,7 +43,7 @@ user owes the manual smoke below.
   agent that runs inside a workflow. Draft docs under `target/` (git-ignored) meanwhile.
 - Never run `cargo clean` (it deletes the whole `target/`: the baseline tree, the golden capture and the `target/p10/` notes), and
   never run cargo from outside the repo root with a relative `CARGO_TARGET_DIR`.
-- **Pushing:** only the one PR above is authorised, and the orchestrator opens it.
+- **Pushing:** only the Phase 11 PR above (`refactor/hexagonal-cleanup`, base `refactor/hexagonal-architecture`) was authorised.
 
 ## Tools (all run from the repo root)
 
@@ -91,33 +86,25 @@ baseline worktree and its binary, the golden capture, the Phase 10 recon notes, 
 | 10, infrastructure (run 3: 10.12a-10.15b) | `9b78c6e..c3e7bfe` | `OsSystemFactsProbe`, `LenientSettings`, `FileRepairs`, the spinner and Ctrl-C handler, `TerminalDoctorReporter`, `FileLogReader`, `OsDiagnosticHost`, `DiagnosticsModule`, the three commands |
 | 10, bridges, rewire, deletion (run 4: 10.16-10.18b) | `e3e20a0..3273a89` | `IntegrationProbeBridge`, `BundledSpecsBridge`, `CheckFixerBridge`; `bootstrap/cli.rs` dispatches to diagnostics; `doctor.rs`, `cli.rs` and `load_or_defaults.rs` deleted; the six locked tests at their homes |
 | 10, docs and close (10.19, 10.20) | the docs commit, then the close | the plan, glossary, README, this hand-off and the design status; the close re-runs the verification |
+| 11, cleanup and SPEC (one run) | `5eb4305..c0fdccb` | `types.rs` deleted; the crate-wide allow removed after 21 findings on six build configurations; SPEC 4.1, 4.3, 5.1, 10; reviewed by `panel-review`; B15 broken and fixed forward (`555acf3`) |
 
-State at `3273a89` (the docs commit after it changes no code; numbers measured in 10.19): full gate `GATE PASS`, build warnings 0,
-1995 passed, 0 failed, 1 ignored (`all_bundle_modules`), clippy 3 (budget 3), golden identical, `windows: ok`; testlock against
-`ef807c1` MISSING 0, DUPLICATE 0, CHANGED 213, NEW 1714; against `phase10-start` MISSING 0, DUPLICATE 0, CHANGED 6 (`diagnostic_toml`,
-`doctor_group_soft_fix_abort`, `doctor_script_bins_skip_orphans`, `doctor_version_parsing`, `should_fall_back_to_the_default_settings_when_they_cannot_be_loaded`,
-`should_give_the_settings_the_repository_loads`), NEW 581, PATH-ONLY 1; `doctor-diff.sh` identical to the baseline transcript after the
-rewire (10.17) and the deletion (10.18a); `integrations-diff.sh` and `inline-diff.sh` empty at 10.17; `phase10-greps.sh` has no FAIL
-(A, B1-B7, B9-B13, B15, D1-D2, E1, E2, E4 and F are OK). The module is 64 files in `src/diagnostics` plus
-`bootstrap/diagnostics_bridges.rs` (645 lines, 23 tests).
+State at `5694ed1`: full gate `GATE PASS`, build warnings 0, 1995 passed, 0 failed, 1 ignored, clippy 3 (budget 3), golden identical,
+`windows: ok`; testlock against `ef807c1` MISSING 0, DUPLICATE 0, CHANGED 213; against `phase11-start` 2001 tests before and after, all
+five categories 0. Seven behaviour-diff transcripts byte-identical to the `af1b304` binary. `src/` changed by +27 and -74 lines.
 
-## Next: Phase 11 (cleanup and documentation), only if the user asks
-
-Phase 11 has no research file. Its inputs are the plan's section 5 "Phase 11" and the Phase 10 notes' hand-offs in section 9. What it
-starts from:
-- `src/types.rs` holds only `now_ms` and `now_secs`, both without a caller: delete the file. `LEGACY_MODULES` in
-  `architecture_tests.rs` lists only dead names now (`cli doctor engine icons inline integrations js keys menu parser pty render
-  shell_parser spec suggest tracker types`): empty it. All ten modules are already in `REGISTERED_MODULES`, so the plan's step
-  "register all 10 modules" is done; what remains is removing the exceptions.
-- Remove `#![allow(dead_code)]` from `main.rs` and delete whatever the compiler flags, including `logger::trace` and `pub` items used
-  only locally. The D7 watch lists are in the Phase 7, 8, 9 and 10 notes; the diagnostics list is `CheckSeverity` accessors used only
-  by tests, the `OperatingSystem::Other` payload, the `InMemory*` and `Recording*` doubles, `DiagnosticsError::DataDirectory` and
-  `ToolVersion::components`. Test-only items get `#[cfg(test)]` instead of deletion (D7).
-- `docs/SPEC.md` is stale and is Phase 11's only: section 4.1 (the module table, including the rows for `pty.rs`, `tracker.rs`,
-  `doctor.rs` and `cli.rs`, around lines 496-498), section 4.3 (message and type names), section 5.1 (it still documents
-  `has_seen_prompt` and the `ShellPath`/`TTY`/`User` context fields) and section 10 (test locations).
-  `docs/native-install-auto-update-plan.md` line 66 also names `doctor.rs`. The README needs no change.
-- `debug_shell_post_script` is still a third wiring place of `RenderInitScriptUseCase`.
+## Next: nothing in the plan; follow-ups for the user to choose
+**The only open acceptance item is the manual smoke** (below). The rest are optional, each recorded in the plan's Phase 11 notes:
+- `LEGACY_MODULES` to an allow-list rule ("a domain or application path may only name a registered module"): stricter, and it
+  needs one locked test fixture line edited (`crate::bootstrapping` in `should_match_whole_path_segments_only`). Deviation 1.
+- A SPEC rename sweep: 17 lines in sections 3, 4.4, 4.5, 5.1.1 and 7 to 9 still say `Msg::`, `EngineMsg`, `on_event`, `ExecDone`.
+- `DataDirectory::shell_dir` and `backups_dir` are `#[cfg(test)]` and duplicate the installer's own `data_root().join("backups")`:
+  delete them with their tests, or use them. The lock keeps the tests, so it is the user's call.
+- `docs/native-install-auto-update-plan.md` proposes a flat `src/update.rs` "like `doctor.rs`"; with this layout it should be an
+  `update/` module with the three layers.
+- Design calls left open since earlier phases: `rgb_to_256` against `dropdown`'s `xterm256` (O4), the `CompletionSession` regrouping,
+  the 728-line `TerminalSession`, `debug_shell_post_script` as a third wiring place of `RenderInitScriptUseCase`, the large test files.
+- CI runs only build and test (no clippy, no `-D warnings`, no `--no-default-features`, no Windows warning count). The six-
+  configuration dead-code check of the README's "Lessons from Phase 11" is the substitute until it does.
 
 ## Waiting on the user
 

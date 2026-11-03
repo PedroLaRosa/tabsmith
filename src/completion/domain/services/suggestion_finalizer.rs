@@ -72,11 +72,8 @@ pub(crate) fn to_item(s: SuggestionCandidate, prefix_match: bool, c: &InsertionC
         description: s.description().clone(),
         kind: s.kind(),
         original_kind: s.original_kind(),
-        priority: s.priority(),
-        is_dangerous: s.is_dangerous(),
         generator: s.generator(),
         prefix_match,
-        template_type: s.template_type().clone(),
         icon: s.icon().clone(),
     })
 }
