@@ -14,8 +14,9 @@ inline gray "ghost text" suggestions. Written in Rust, it works on **macOS, Linu
 - **Dropdown menu** drawn inside the terminal, right under the cursor (or above it at the bottom of the screen).
   Arrow keys / `Ctrl-N` / `Ctrl-P` to move, `Enter` to insert, `Tab` to insert the common prefix, `Esc` to hide,
   `Ctrl-R` history mode, `Ctrl-K` description pop-out.
-- **Hundreds of CLIs** out of the box (git, docker, npm, kubectl, aws, terraform, cargo, …): the official
-  [Fig completion specs](https://github.com/withfig/autocomplete) are embedded and run in QuickJS, including dynamic
+- **Hundreds of CLIs** out of the box (git, docker, npm, kubectl, aws, terraform, cargo, …): the Fig-format
+  completion specs from [`@tabsmith/autocomplete-specs`](https://www.npmjs.com/package/@tabsmith/autocomplete-specs)
+  are embedded and run in QuickJS, including dynamic
   suggestions (git branches, npm scripts, docker containers, files and folders).
 - **Inline ghost text** from your history and the specs; `→` / `End` / `Ctrl-E` / `Ctrl-F` accept it,
   `Alt-F` / `Ctrl-→` accept one word. Optionally backed by an LLM (OpenAI-compatible or Anthropic) with your own key.

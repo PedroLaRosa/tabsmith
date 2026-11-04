@@ -2561,7 +2561,7 @@ else `cwd.join(path)` must canonicalize to a directory. Everything else is valid
 ### 9.1 Bundling (D11)
 
 - `scripts/update-specs.sh [version]` (repo tooling, run by maintainers): download
-  `https://registry.npmjs.org/@withfig/autocomplete/-/autocomplete-<ver>.tgz`, then
+  `https://registry.npmjs.org/@tabsmith/autocomplete-specs/-/autocomplete-specs-<ver>.tgz`, then
   `COPYFILE_DISABLE=1 tar --no-xattrs -C package/build -cf - . | zstd -19 -o assets/specs.tar.zst`, copy
   `package/LICENSE` to `assets/SPECS_LICENSE`, write `<ver>` to `assets/SPECS_VERSION`.
 - `include_bytes!` (cargo feature `embed-specs`, default on; ~4 MB). Every engine start (and `setup`, the doctor fix):

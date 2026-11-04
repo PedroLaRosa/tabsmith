@@ -88,7 +88,7 @@ forks by stars) are 0 commits ahead.
 - **Control, not freshness.** Contributors still PR upstream, so we pull from there (`gh pr list -R withfig/autocomplete`,
   `gh pr checkout <n> -R withfig/autocomplete`). With inflow this thin, the backlog is a one-off windfall; steady
   freshness means authoring updates ourselves or the overlay below.
-- **A frozen build tool.** Pin `@withfig/autocomplete-tools@2.11.0`; vendor it if it ever breaks (MIT).
+- **A frozen build tool.** Pin `@tabsmith/autocomplete-tools@2.11.0`; vendor it if it ever breaks (MIT).
 - **Free trust.** Spec generators call `executeCommand` on users' machines. Review each merged PR's generators; static-only
   specs are low risk.
 
@@ -129,8 +129,9 @@ Commit per step, in the style of `git log` (`docs/git-convention.md` is referenc
    LICENSE and a NOTICE saying it is a modified fork. Pin the build tool in the `build` script instead of a floating `npx`.
 4. **Merge the backlog.** Review each PR (generators first, static specs are quick), run `pnpm test`, skip the old
    conflicting ones unless wanted. For new specs, check the source against the licensing checklist.
-5. **Switch tabsmith.** `scripts/update-specs.sh` downloads the fork's release asset, `SPECS_VERSION` becomes the fork's
-   tag, and `assets/SPECS_LICENSE` stays. Update the README "Install"/license lines and SPEC D11 and its `assets/` row.
+5. **Switch tabsmith.** `scripts/update-specs.sh` downloads the fork's npm package `@tabsmith/autocomplete-specs`,
+   `SPECS_VERSION` becomes its version, and `assets/SPECS_LICENSE` stays. Update the README "Install"/license lines
+   and SPEC D11 and its `assets/` row.
    SPEC says THIRD_PARTY notices are not shipped yet; decide whether this is the moment.
 6. **Weekly triage.** A short routine: list new upstream PRs, review, merge, release.
 
