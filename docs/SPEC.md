@@ -31,7 +31,7 @@ critical path. **SKIP** = deliberately not built (reason given). **(inferred)** 
 | Dotfile backups dir | `~/.tabsmith/backups/` |
 | Marker protocol | OSC `ESC ] 697 ;` |
 | Escape hatch | `# tabsmith ignore` |
-| Completion specs | embedded `@withfig/autocomplete@2.692.3` |
+| Completion specs | embedded `@tabsmith/autocomplete-specs@1.0.0` |
 | Inline model | local sources + optional OpenAI-compatible / Anthropic profiles |
 
 ### 0.2 Engineering constraints
