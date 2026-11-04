@@ -205,12 +205,12 @@ mod tests {
         };
         assert_eq!(spec_location("git", cwd, None), g("git"));
         assert_eq!(
-            spec_location("@withfig/autocomplete-tools", cwd, Some(false)),
-            g("@withfig/autocomplete-tools")
+            spec_location("@tabsmith/autocomplete-tools", cwd, Some(false)),
+            g("@tabsmith/autocomplete-tools")
         );
         assert_eq!(
-            spec_location("@withfig/autocomplete-tools", cwd, None),
-            l("test_cwd/@withfig/", "autocomplete-tools")
+            spec_location("@tabsmith/autocomplete-tools", cwd, None),
+            l("test_cwd/@tabsmith/", "autocomplete-tools")
         );
         assert_eq!(spec_location("./test", cwd, None), l("test_cwd/", "test"));
         assert_eq!(spec_location("~/test", cwd, None), l("~/", "test"));

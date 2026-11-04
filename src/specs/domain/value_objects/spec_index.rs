@@ -3,7 +3,7 @@ use std::collections::HashSet;
 /// `index.json` of the bundled set ∪ `*.js` stems in the user dir.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpecIndex {
-    /// Root spec names (e.g. `git`, `aws`, `@withfig/autocomplete-tools`).
+    /// Root spec names (e.g. `git`, `aws`, `@tabsmith/autocomplete-tools`).
     completions: Vec<String>,
     /// Diff-versioned spec names (`az`, `heroku`, …) → load `<name>/index.js`.
     diff_versioned: HashSet<String>,
