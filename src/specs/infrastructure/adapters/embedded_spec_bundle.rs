@@ -63,13 +63,21 @@ impl EmbeddedSpecBundle {
     pub(crate) fn load_index(&self) -> Result<SpecIndex, SpecError> {
         load_from(
             &self.ensure()?,
-            &self.data_directory.user_specs_dir().map_err(home_unavailable)?,
+            &self
+                .data_directory
+                .user_specs_dir()
+                .map_err(home_unavailable)?,
         )
     }
 
     /// Resolve a global spec name to a file: dev folder (when `autocomplete.developerMode`), then the user dir, then
     /// the extracted bundle; `<name>.js`, else `<name>/index.js`; diff-versioned names go to `<name>/index.js`.
-    pub(crate) fn resolve(&self, name: &str, settings: &Settings, index: &SpecIndex) -> Option<PathBuf> {
+    pub(crate) fn resolve(
+        &self,
+        name: &str,
+        settings: &Settings,
+        index: &SpecIndex,
+    ) -> Option<PathBuf> {
         let mut roots: Vec<PathBuf> = dev_folder(settings).into_iter().collect();
         let specs = self.data_directory.specs_dir().ok()?;
         roots.push(specs.join("user"));
@@ -90,11 +98,15 @@ impl SpecBundle for EmbeddedSpecBundle {
 pub(crate) fn extract_to(archive: &[u8], root: &Path, ver: &str) -> Result<PathBuf, SpecError> {
     let dir = root.join(ver);
     let tmp = root.join(format!("{ver}.tmp-{}", std::process::id()));
-    std::fs::create_dir_all(root).map_err(|e| unavailable(format!("creating {}", root.display()), &e))?;
+    std::fs::create_dir_all(root)
+        .map_err(|e| unavailable(format!("creating {}", root.display()), &e))?;
     let _ = std::fs::remove_dir_all(&tmp);
     if let Err(e) = unpack(archive, &tmp) {
         let _ = std::fs::remove_dir_all(&tmp);
-        return Err(unavailable(format!("extracting specs into {}", tmp.display()), &e));
+        return Err(unavailable(
+            format!("extracting specs into {}", tmp.display()),
+            &e,
+        ));
     }
     if dir.exists() && !dir.join("index.json").is_file() {
         let _ = std::fs::remove_dir_all(&dir); // leftover without an index: replace it
@@ -102,7 +114,10 @@ pub(crate) fn extract_to(archive: &[u8], root: &Path, ver: &str) -> Result<PathB
     if let Err(e) = std::fs::rename(&tmp, &dir) {
         let _ = std::fs::remove_dir_all(&tmp);
         if !dir.join("index.json").is_file() {
-            return Err(unavailable(format!("renaming specs into {}", dir.display()), &e));
+            return Err(unavailable(
+                format!("renaming specs into {}", dir.display()),
+                &e,
+            ));
         }
     }
     touch(&dir);
@@ -179,7 +194,10 @@ pub(crate) fn load_from(bundle: &Path, user: &Path) -> Result<SpecIndex, SpecErr
             }
         }
     }
-    Ok(SpecIndex::new(completions, raw.diff_versioned.into_iter().collect()))
+    Ok(SpecIndex::new(
+        completions,
+        raw.diff_versioned.into_iter().collect(),
+    ))
 }
 
 /// `autocomplete.devCompletionsFolder` (leading `~` = the user's home) when `autocomplete.developerMode` is on.
@@ -191,9 +209,7 @@ fn dev_folder(settings: &Settings) -> Option<PathBuf> {
         return None;
     }
     Some(match Path::new(d).strip_prefix("~") {
-        Ok(rest) => {
-            user_home_from_env().map_or_else(|_| PathBuf::from(d), |h| h.join(rest))
-        }
+        Ok(rest) => user_home_from_env().map_or_else(|_| PathBuf::from(d), |h| h.join(rest)),
         Err(_) => PathBuf::from(d),
     })
 }
@@ -246,12 +262,12 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
-    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use super::*;
     use crate::settings::infrastructure::adapters::setting_value_json::settings_from_json;
-    use std::time::Duration;
+    use crate::shared::infrastructure::testing::temp_dir::TempDir;
     use std::fmt;
     use std::io;
+    use std::time::Duration;
 
     fn tar_zst(files: &[(&str, &str)]) -> Vec<u8> {
         let mut b = tar::Builder::new(Vec::new());
@@ -485,7 +501,10 @@ mod tests {
 
     /// What anyhow's `{:#}` printed for `cause` behind `context`, before the bundle had its own error.
     fn like_anyhow(cause: impl Error + Send + Sync + 'static, context: &str) -> String {
-        format!("{:#}", anyhow::Error::new(cause).context(context.to_string()))
+        format!(
+            "{:#}",
+            anyhow::Error::new(cause).context(context.to_string())
+        )
     }
 
     /// What `tar` wraps in an io::Error: its own text, with the OS error as the source.
@@ -524,7 +543,10 @@ mod tests {
 
         assert_eq!(
             failure,
-            SpecError::BundleUnavailable(like_anyhow(cause(), "extracting specs into /s/1.0.0.tmp-7"))
+            SpecError::BundleUnavailable(like_anyhow(
+                cause(),
+                "extracting specs into /s/1.0.0.tmp-7"
+            ))
         );
     }
 
@@ -560,7 +582,8 @@ mod tests {
     #[test]
     fn should_report_a_build_without_embedded_specs_like_anyhow() {
         let home = TempDir::new("no-embed");
-        let bundle = EmbeddedSpecBundle::new(DataDirectory::new(Some(home.path().to_path_buf()), None));
+        let bundle =
+            EmbeddedSpecBundle::new(DataDirectory::new(Some(home.path().to_path_buf()), None));
 
         let installed = bundle.install();
 
@@ -569,7 +592,10 @@ mod tests {
             installed,
             Err(SpecError::BundleUnavailable(format!(
                 "{:#}",
-                anyhow::anyhow!("no specs in {} (built without the `embed-specs` feature)", dir.display())
+                anyhow::anyhow!(
+                    "no specs in {} (built without the `embed-specs` feature)",
+                    dir.display()
+                )
             )))
         );
     }
