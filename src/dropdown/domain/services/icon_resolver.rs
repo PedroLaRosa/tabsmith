@@ -9,6 +9,10 @@ use crate::dropdown::domain::value_objects::icon_slot::IconSlot;
 use crate::dropdown::domain::value_objects::rgb::Rgb;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
+/// Tints of the templates under the mixin and shortcut badges.
+const SPECIAL_TINT: Rgb = (0x62, 0x8d, 0xad);
+const SHORTCUT_TINT: Rgb = (0x34, 0x98, 0xdb);
+
 /// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
 pub(crate) fn slot(it: &Suggestion, g: GraphicsSupport) -> IconSlot {
     let spec = it.icon();
@@ -16,7 +20,7 @@ pub(crate) fn slot(it: &Suggestion, g: GraphicsSupport) -> IconSlot {
         return text(&emoji);
     }
     if g == GraphicsSupport::Off {
-        return ascii_slot(it.kind());
+        return slot_without_images(it.kind());
     }
     let s = spec
         .and_then(spec_image)
@@ -56,8 +60,8 @@ fn type_image(kind: SuggestionKind) -> IconSlot {
         SuggestionKind::Subcommand => png_slot("command"),
         SuggestionKind::Option => png_slot("option"),
         SuggestionKind::Arg => png_slot("box"),
-        SuggestionKind::Special => badge_slot(Some((0x62, 0x8d, 0xad)), "➡️"),
-        SuggestionKind::Shortcut => badge_slot(Some((0x34, 0x98, 0xdb)), "💡"),
+        SuggestionKind::Special => badge_slot(Some(SPECIAL_TINT), "➡️"),
+        SuggestionKind::Shortcut => badge_slot(Some(SHORTCUT_TINT), "💡"),
         SuggestionKind::AutoExecute => png_slot("carrot"),
         SuggestionKind::File => png_slot("file"),
         SuggestionKind::Folder => png_slot("folder"),
@@ -65,16 +69,17 @@ fn type_image(kind: SuggestionKind) -> IconSlot {
     }
 }
 
-/// Single-character fallback, right-aligned in the two-column slot (SPEC §7.4.2).
-fn ascii_slot(kind: SuggestionKind) -> IconSlot {
+/// One character, right-aligned in the two-column slot (SPEC §7.4.2). A row type whose image is a coloured square
+/// keeps that colour as a chip behind the glyph, so it reads like the image.
+fn slot_without_images(kind: SuggestionKind) -> IconSlot {
     let chip = |c: char, color: Rgb| IconSlot::chip(format!(" {c}"), color);
     match kind {
         SuggestionKind::Subcommand => chip('$', (0x87, 0x39, 0xd0)),
         SuggestionKind::Option => chip('?', (0x5a, 0xcb, 0x5b)),
         SuggestionKind::Arg => chip('*', (0x64, 0x9a, 0xc8)),
         SuggestionKind::AutoExecute => chip('>', (0xd0, 0x39, 0x56)),
-        SuggestionKind::Special => chip('*', (0x62, 0x8d, 0xad)),
-        SuggestionKind::Shortcut => chip('@', (0x34, 0x98, 0xdb)),
+        SuggestionKind::Special => chip('*', SPECIAL_TINT),
+        SuggestionKind::Shortcut => chip('@', SHORTCUT_TINT),
         SuggestionKind::File => text(" f"),
         SuggestionKind::Folder => text(" d"),
         SuggestionKind::History => text(" h"),
