@@ -6,6 +6,7 @@ use crate::dropdown::domain::services::text_fitting::width;
 use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::dropdown::domain::value_objects::icon_id::{placeholders, IconId, ICON_NAMES};
 use crate::dropdown::domain::value_objects::icon_slot::IconSlot;
+use crate::dropdown::domain::value_objects::rgb::Rgb;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
 /// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
@@ -66,20 +67,18 @@ fn type_image(kind: SuggestionKind) -> IconSlot {
 
 /// Single-character fallback, right-aligned in the two-column slot (SPEC §7.4.2).
 fn ascii_slot(kind: SuggestionKind) -> IconSlot {
-    if kind == SuggestionKind::Subcommand {
-        return IconSlot::chip(" $".to_string(), (0x87, 0x39, 0xd0));
+    let chip = |c: char, color: Rgb| IconSlot::chip(format!(" {c}"), color);
+    match kind {
+        SuggestionKind::Subcommand => chip('$', (0x87, 0x39, 0xd0)),
+        SuggestionKind::Option => chip('?', (0x5a, 0xcb, 0x5b)),
+        SuggestionKind::Arg => chip('*', (0x64, 0x9a, 0xc8)),
+        SuggestionKind::AutoExecute => chip('>', (0xd0, 0x39, 0x56)),
+        SuggestionKind::Special => chip('*', (0x62, 0x8d, 0xad)),
+        SuggestionKind::Shortcut => chip('@', (0x34, 0x98, 0xdb)),
+        SuggestionKind::File => text(" f"),
+        SuggestionKind::Folder => text(" d"),
+        SuggestionKind::History => text(" h"),
     }
-    let c = match kind {
-        SuggestionKind::Subcommand => '>',
-        SuggestionKind::Option => '-',
-        SuggestionKind::Arg | SuggestionKind::Special => '*',
-        SuggestionKind::File => 'f',
-        SuggestionKind::Folder => 'd',
-        SuggestionKind::History => 'h',
-        SuggestionKind::Shortcut => '@',
-        SuggestionKind::AutoExecute => '↪',
-    };
-    text(&format!(" {c}"))
 }
 
 fn text(s: &str) -> IconSlot {
@@ -196,7 +195,7 @@ mod tests {
         assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Direct)
             .image()
             .is_some());
-        assert_eq!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off).text(), " -");
+        assert_eq!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off).text(), " ?");
         assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off)
             .image()
             .is_none());
@@ -251,6 +250,30 @@ mod tests {
         assert_eq!(
             (icon.text(), icon.background(), icon.is_badge()),
             (" $", Some((0x87, 0x39, 0xd0)), true)
+        );
+    }
+
+    #[test]
+    fn should_draw_every_coloured_square_icon_without_images_as_a_chip_of_its_colour() {
+        let kinds = [
+            SuggestionKind::Option,
+            SuggestionKind::Arg,
+            SuggestionKind::AutoExecute,
+            SuggestionKind::Special,
+            SuggestionKind::Shortcut,
+        ];
+
+        let icons = kinds.map(|kind| slot(&item("x", kind, ""), GraphicsSupport::Off));
+
+        assert_eq!(
+            icons.map(|icon| (icon.text().to_string(), icon.background())),
+            [
+                (" ?".to_string(), Some((0x5a, 0xcb, 0x5b))),
+                (" *".to_string(), Some((0x64, 0x9a, 0xc8))),
+                (" >".to_string(), Some((0xd0, 0x39, 0x56))),
+                (" *".to_string(), Some((0x62, 0x8d, 0xad))),
+                (" @".to_string(), Some((0x34, 0x98, 0xdb))),
+            ]
         );
     }
 

@@ -357,7 +357,7 @@ fn row_contents() {
         "highlighted query"
     );
     let (row, _, _) = r.list_row(&item("co", SuggestionKind::Option, "c"), true, 20);
-    assert_eq!(strip(&row), "  - co              ");
+    assert_eq!(strip(&row), "  ? co              ");
     assert_eq!(width(&strip(&row)), 20);
     let m = menu(subs(), &s);
     let (row, _) = r.desc_row(&m, 20, Some('⠋'));
