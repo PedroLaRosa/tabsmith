@@ -331,7 +331,8 @@ impl OverlayRenderer {
         let slot = icon_resolver::slot(it, self.images);
         r.put(&base, " ");
         if slot.is_badge() {
-            r.put(&self.pen((255, 255, 255), bg, ""), slot.text());
+            let chip = slot.background().unwrap_or(bg);
+            r.put(&self.pen((255, 255, 255), chip, ""), slot.text());
         } else if let (GraphicsSupport::Tmux, Some(img)) = (self.images, slot.image()) {
             r.put(&self.pen(fg, bg, &icon_id::color(img.value())), slot.text());
         } else {

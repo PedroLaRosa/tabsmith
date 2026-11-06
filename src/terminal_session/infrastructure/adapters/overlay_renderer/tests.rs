@@ -366,6 +366,17 @@ fn row_contents() {
 }
 
 #[test]
+fn should_paint_the_chip_colour_behind_the_icon_glyph_without_images() {
+    let renderer = OverlayRenderer::new(Theme::dark(), true);
+    let subcommand = item("add", SuggestionKind::Subcommand, "");
+
+    let (row, _, _) = renderer.list_row(&subcommand, false, 20);
+
+    let white_on_purple = renderer.pen((255, 255, 255), (0x87, 0x39, 0xd0), "");
+    assert!(row.contains(&format!("{white_on_purple} $")), "{row:?}");
+}
+
+#[test]
 fn images_fill_the_icon_slot() {
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let m = menu(subs(), &s);
@@ -452,16 +463,16 @@ fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
     // may change how a scenario is built, never a value. No scenario depends on time (nothing is loading).
     // Frames without images were re-recorded when their icons became chips; clears and image frames are the originals.
     const EXPECTED: &[(&str, u64, u64)] = &[
-        ("below", 0x42affd9277f69217, 0x3fd0e0c7d118ca9c),
-        ("light_256", 0x0488189f6699ecbf, 0x3fd0e0c7d118ca9c),
-        ("scrolled", 0xff3f0db890d69f5b, 0xb5974c8ab0e1a615),
-        ("above_ghost_popout", 0xcfe500255cb86716, 0x79cfb3d71e636be6),
+        ("below", 0xfc14b1ac4f096e96, 0x3fd0e0c7d118ca9c),
+        ("light_256", 0xb69c0a2e71913a1d, 0x3fd0e0c7d118ca9c),
+        ("scrolled", 0xf1f4307dc0556fc4, 0xb5974c8ab0e1a615),
+        ("above_ghost_popout", 0x15c77f2466a309c3, 0x79cfb3d71e636be6),
         ("arg_hint_wide_ghost", 0x19087c0c1de42343, 0xc4bf1afcc5ae6c08),
-        ("custom_base16", 0xa5ae9451f635c909, 0x3fd0e0c7d118ca9c),
+        ("custom_base16", 0xb32055b162263506, 0x3fd0e0c7d118ca9c),
         ("icons_direct", 0x63e8d0517291ef1c, 0x49c6d5dfc1ea8156),
         ("icons_tmux", 0x66355913b17a2222, 0x22e0c44f71632e9e),
-        ("long_description_bar", 0x3d82d09deef309cf, 0xe0ae15a704c54ab1),
-        ("long_description_popout", 0xa7d11f45ff8d0d49, 0x55f9d31a52e19d65),
+        ("long_description_bar", 0xb3df046cdf5d4ef4, 0xe0ae15a704c54ab1),
+        ("long_description_popout", 0xaf855421af6a521c, 0x55f9d31a52e19d65),
     ];
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let below = screen("\x1b[3;9H\x1b[32m");
