@@ -349,7 +349,7 @@ fn row_contents() {
     let (row, _, _) = r.list_row(&it, false, 20);
     let text: String = strip(&row);
     assert_eq!(
-        text, "  > checkout-a-ver… ",
+        text, "  $ checkout-a-ver… ",
         "no room for the hint, title truncated"
     );
     assert!(
@@ -450,17 +450,18 @@ fn overlay_hashes(r: &mut OverlayRenderer, a: &Model, m: &Menu, frames: &[FrameI
 fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
     // (scenario, hash of every frame, hash of every clear), generated once at the phase8-start tag. A refactor
     // may change how a scenario is built, never a value. No scenario depends on time (nothing is loading).
+    // Frames without images were re-recorded when their icons became chips; clears and image frames are the originals.
     const EXPECTED: &[(&str, u64, u64)] = &[
-        ("below", 0xef119818acef5714, 0x3fd0e0c7d118ca9c),
-        ("light_256", 0xbe62837ba0bae9f2, 0x3fd0e0c7d118ca9c),
-        ("scrolled", 0x5b2dbcd97d614206, 0xb5974c8ab0e1a615),
-        ("above_ghost_popout", 0xf2039310de2aeed9, 0x79cfb3d71e636be6),
+        ("below", 0x42affd9277f69217, 0x3fd0e0c7d118ca9c),
+        ("light_256", 0x0488189f6699ecbf, 0x3fd0e0c7d118ca9c),
+        ("scrolled", 0xff3f0db890d69f5b, 0xb5974c8ab0e1a615),
+        ("above_ghost_popout", 0xcfe500255cb86716, 0x79cfb3d71e636be6),
         ("arg_hint_wide_ghost", 0x19087c0c1de42343, 0xc4bf1afcc5ae6c08),
-        ("custom_base16", 0x3c68886e2010eab3, 0x3fd0e0c7d118ca9c),
+        ("custom_base16", 0xa5ae9451f635c909, 0x3fd0e0c7d118ca9c),
         ("icons_direct", 0x63e8d0517291ef1c, 0x49c6d5dfc1ea8156),
         ("icons_tmux", 0x66355913b17a2222, 0x22e0c44f71632e9e),
-        ("long_description_bar", 0x09e5bda8de7ac765, 0xe0ae15a704c54ab1),
-        ("long_description_popout", 0xe79fca34ee4c38df, 0x55f9d31a52e19d65),
+        ("long_description_bar", 0x3d82d09deef309cf, 0xe0ae15a704c54ab1),
+        ("long_description_popout", 0xa7d11f45ff8d0d49, 0x55f9d31a52e19d65),
     ];
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let below = screen("\x1b[3;9H\x1b[32m");

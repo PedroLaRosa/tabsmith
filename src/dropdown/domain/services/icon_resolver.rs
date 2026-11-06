@@ -66,6 +66,9 @@ fn type_image(kind: SuggestionKind) -> IconSlot {
 
 /// Single-character fallback, right-aligned in the two-column slot (SPEC §7.4.2).
 fn ascii_slot(kind: SuggestionKind) -> IconSlot {
+    if kind == SuggestionKind::Subcommand {
+        return IconSlot::chip(" $".to_string(), (0x87, 0x39, 0xd0));
+    }
     let c = match kind {
         SuggestionKind::Subcommand => '>',
         SuggestionKind::Option => '-',
@@ -237,6 +240,18 @@ mod tests {
             assert_eq!(width(slot(&it(None, k), GraphicsSupport::Off).text()), 2, "{k:?}");
             assert_eq!(width(slot(&it(None, k), GraphicsSupport::Tmux).text()), 2, "{k:?}");
         }
+    }
+
+    #[test]
+    fn should_draw_a_subcommand_without_images_as_a_white_dollar_on_a_purple_chip() {
+        let subcommand = item("x", SuggestionKind::Subcommand, "");
+
+        let icon = slot(&subcommand, GraphicsSupport::Off);
+
+        assert_eq!(
+            (icon.text(), icon.background(), icon.is_badge()),
+            (" $", Some((0x87, 0x39, 0xd0)), true)
+        );
     }
 
     #[test]
