@@ -2326,8 +2326,10 @@ List row for item `s` (selected row uses selected colours):
   placement (`a=T,U=1`), and the slot is two Unicode placeholders (`U+10EEEE` + row/column diacritics, the id in the
   foreground: 256-colour index, or 24-bit plus a top-byte diacritic). tmux keeps, redraws and clears them as text, so
   no placement or delete goes out. A badge cannot sit on a placeholder, so it is drawn as text alone.
-- Without images, ASCII right-aligned in the slot: subcommand ` >`, option ` -`, arg/special ` *`, file ` f`, folder
-  ` d`, history ` h`, shortcut ` @`, auto-execute ` ↪`.
+- Without images (Terminal.app, iTerm2, VS Code, …), one character right-aligned in the slot. A row type whose image
+  is a coloured square keeps that colour as a chip behind the glyph, in white: subcommand ` $` on `#8739d0`, option
+  ` ?` on `#5acb5b`, arg ` *` on `#649ac8`, auto-execute ` >` on `#d03956`, mixin ` *` and shortcut ` @` on their
+  template tints. File ` f`, folder ` d` and history ` h` stay plain.
 - Narrow emoji (`⚙️`) and remote image URLs use the row type's icon: their width differs between terminals, which
   would tear the frame.
 - Title = `display_name` or names joined `", "`. Highlight: prefix mode → for each name whose lowercase starts with

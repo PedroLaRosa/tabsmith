@@ -90,7 +90,7 @@ impl OverlayRenderer {
         }
     }
 
-    /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); ASCII when `Off`.
+    /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); one-character chips when `Off`.
     pub(crate) fn with_images(mut self, g: GraphicsSupport) -> OverlayRenderer {
         self.images = g;
         self
