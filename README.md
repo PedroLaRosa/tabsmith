@@ -29,6 +29,9 @@ cargo install --path .        # or: cargo build --release && cp target/release/t
 tabsmith setup                # adds the shell integration to your dotfiles (asks first)
 ```
 
+With [just](https://just.systems) the same is `just install` then `just setup`; `just --list` shows the other recipes
+(`update-specs`, `refresh-specs`, `test`, …).
+
 Open a new terminal tab and start typing. `tabsmith doctor` checks everything if suggestions don't show up.
 
 To edit your rc file yourself, answer `n` to `setup`: it prints the exact *pre* line for the very top and *post* line
