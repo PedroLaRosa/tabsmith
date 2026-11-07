@@ -1,5 +1,7 @@
 //! Frame bytes for the in-terminal overlay: menu, description bar, pop-out, ghost text, and
 //! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2).
+use crate::completion::domain::value_objects::suggestion::Suggestion;
+use crate::dropdown::domain::entities::menu::{max_rows, Menu};
 use crate::dropdown::domain::services::color_parser::xterm256;
 use crate::dropdown::domain::services::icon_resolver;
 use crate::dropdown::domain::services::menu_describer::describe;
@@ -9,12 +11,10 @@ use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::dropdown::domain::value_objects::icon_id::{self, IconId};
 use crate::dropdown::domain::value_objects::rgb::Rgb;
 use crate::dropdown::domain::value_objects::theme::Theme;
-use crate::terminal_session::infrastructure::adapters::{icon_assets, kitty_graphics};
-use crate::dropdown::domain::entities::menu::{max_rows, Menu};
 use crate::settings::domain::services::settings_catalog::AUTOCOMPLETE_WIDTH;
-use crate::completion::domain::value_objects::suggestion::Suggestion;
 use crate::terminal_session::application::frame_input::FrameInput;
 use crate::terminal_session::infrastructure::adapters::headless_model::Model;
+use crate::terminal_session::infrastructure::adapters::{icon_assets, kitty_graphics};
 use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -90,7 +90,7 @@ impl OverlayRenderer {
         }
     }
 
-    /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); ASCII when `Off`.
+    /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); one-character chips when `Off`.
     pub(crate) fn with_images(mut self, g: GraphicsSupport) -> OverlayRenderer {
         self.images = g;
         self
@@ -319,7 +319,12 @@ impl OverlayRenderer {
 
     /// `' '` + icon slot (two columns) + `' '` + title (match highlight) + (`' '` + dim args hint when room) + pad
     /// (SPEC §7.4.2). The image, if any, goes over the slot.
-    fn list_row(&self, it: &Suggestion, selected: bool, w: usize) -> (String, String, Option<IconId>) {
+    fn list_row(
+        &self,
+        it: &Suggestion,
+        selected: bool,
+        w: usize,
+    ) -> (String, String, Option<IconId>) {
         let t = &self.theme;
         let (fg, bg, mbg) = if selected {
             (t.selected_text(), t.selected_bg(), t.selected_matching_bg())
@@ -331,7 +336,8 @@ impl OverlayRenderer {
         let slot = icon_resolver::slot(it, self.images);
         r.put(&base, " ");
         if slot.is_badge() {
-            r.put(&self.pen((255, 255, 255), bg, ""), slot.text());
+            let chip = slot.background().unwrap_or(bg);
+            r.put(&self.pen((255, 255, 255), chip, ""), slot.text());
         } else if let (GraphicsSupport::Tmux, Some(img)) = (self.images, slot.image()) {
             r.put(&self.pen(fg, bg, &icon_id::color(img.value())), slot.text());
         } else {

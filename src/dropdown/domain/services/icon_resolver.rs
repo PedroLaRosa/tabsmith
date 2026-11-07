@@ -6,7 +6,12 @@ use crate::dropdown::domain::services::text_fitting::width;
 use crate::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::dropdown::domain::value_objects::icon_id::{placeholders, IconId, ICON_NAMES};
 use crate::dropdown::domain::value_objects::icon_slot::IconSlot;
+use crate::dropdown::domain::value_objects::rgb::Rgb;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
+
+/// Tints of the templates under the mixin and shortcut badges.
+const SPECIAL_TINT: Rgb = (0x62, 0x8d, 0xad);
+const SHORTCUT_TINT: Rgb = (0x34, 0x98, 0xdb);
 
 /// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
 pub(crate) fn slot(it: &Suggestion, g: GraphicsSupport) -> IconSlot {
@@ -15,7 +20,7 @@ pub(crate) fn slot(it: &Suggestion, g: GraphicsSupport) -> IconSlot {
         return text(&emoji);
     }
     if g == GraphicsSupport::Off {
-        return ascii_slot(it.kind());
+        return slot_without_images(it.kind());
     }
     let s = spec
         .and_then(spec_image)
@@ -55,8 +60,8 @@ fn type_image(kind: SuggestionKind) -> IconSlot {
         SuggestionKind::Subcommand => png_slot("command"),
         SuggestionKind::Option => png_slot("option"),
         SuggestionKind::Arg => png_slot("box"),
-        SuggestionKind::Special => badge_slot(Some((0x62, 0x8d, 0xad)), "➡️"),
-        SuggestionKind::Shortcut => badge_slot(Some((0x34, 0x98, 0xdb)), "💡"),
+        SuggestionKind::Special => badge_slot(Some(SPECIAL_TINT), "➡️"),
+        SuggestionKind::Shortcut => badge_slot(Some(SHORTCUT_TINT), "💡"),
         SuggestionKind::AutoExecute => png_slot("carrot"),
         SuggestionKind::File => png_slot("file"),
         SuggestionKind::Folder => png_slot("folder"),
@@ -64,19 +69,21 @@ fn type_image(kind: SuggestionKind) -> IconSlot {
     }
 }
 
-/// Single-character fallback, right-aligned in the two-column slot (SPEC §7.4.2).
-fn ascii_slot(kind: SuggestionKind) -> IconSlot {
-    let c = match kind {
-        SuggestionKind::Subcommand => '>',
-        SuggestionKind::Option => '-',
-        SuggestionKind::Arg | SuggestionKind::Special => '*',
-        SuggestionKind::File => 'f',
-        SuggestionKind::Folder => 'd',
-        SuggestionKind::History => 'h',
-        SuggestionKind::Shortcut => '@',
-        SuggestionKind::AutoExecute => '↪',
-    };
-    text(&format!(" {c}"))
+/// One character, right-aligned in the two-column slot (SPEC §7.4.2). A row type whose image is a coloured square
+/// keeps that colour as a chip behind the glyph, so it reads like the image.
+fn slot_without_images(kind: SuggestionKind) -> IconSlot {
+    let chip = |c: char, color: Rgb| IconSlot::chip(format!(" {c}"), color);
+    match kind {
+        SuggestionKind::Subcommand => chip('$', (0x87, 0x39, 0xd0)),
+        SuggestionKind::Option => chip('?', (0x5a, 0xcb, 0x5b)),
+        SuggestionKind::Arg => chip('*', (0x64, 0x9a, 0xc8)),
+        SuggestionKind::AutoExecute => chip('>', (0xd0, 0x39, 0x56)),
+        SuggestionKind::Special => chip('*', SPECIAL_TINT),
+        SuggestionKind::Shortcut => chip('@', SHORTCUT_TINT),
+        SuggestionKind::File => text(" f"),
+        SuggestionKind::Folder => text(" d"),
+        SuggestionKind::History => text(" h"),
+    }
 }
 
 fn text(s: &str) -> IconSlot {
@@ -162,7 +169,8 @@ mod tests {
         );
         assert_eq!(
             s.image().map(IconId::value),
-            ICON_NAMES.iter()
+            ICON_NAMES
+                .iter()
                 .position(|n| *n == "git")
                 .map(|i| i as u32 + 1)
         );
@@ -172,7 +180,8 @@ mod tests {
         );
         assert_eq!(
             s.image().map(IconId::value),
-            ICON_NAMES.iter()
+            ICON_NAMES
+                .iter()
                 .position(|n| *n == "template")
                 .map(|i| i as u32 + 1)
         );
@@ -184,19 +193,22 @@ mod tests {
             ),
             GraphicsSupport::Direct,
         );
-        assert!(
-            s.is_badge()
-                && s.text() == "🔥"
-                && matches!(s.image(), Some(IconId::Tinted(..)))
-        );
+        assert!(s.is_badge() && s.text() == "🔥" && matches!(s.image(), Some(IconId::Tinted(..))));
         // Type defaults with images; ASCII without.
-        assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Direct)
-            .image()
-            .is_some());
-        assert_eq!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off).text(), " -");
-        assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off)
-            .image()
-            .is_none());
+        assert!(
+            slot(&it(None, SuggestionKind::Option), GraphicsSupport::Direct)
+                .image()
+                .is_some()
+        );
+        assert_eq!(
+            slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off).text(),
+            " ?"
+        );
+        assert!(
+            slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off)
+                .image()
+                .is_none()
+        );
         assert_eq!(
             slot(&it(None, SuggestionKind::History), GraphicsSupport::Direct).text(),
             "📚"
@@ -234,9 +246,53 @@ mod tests {
                 2,
                 "{k:?}"
             );
-            assert_eq!(width(slot(&it(None, k), GraphicsSupport::Off).text()), 2, "{k:?}");
-            assert_eq!(width(slot(&it(None, k), GraphicsSupport::Tmux).text()), 2, "{k:?}");
+            assert_eq!(
+                width(slot(&it(None, k), GraphicsSupport::Off).text()),
+                2,
+                "{k:?}"
+            );
+            assert_eq!(
+                width(slot(&it(None, k), GraphicsSupport::Tmux).text()),
+                2,
+                "{k:?}"
+            );
         }
+    }
+
+    #[test]
+    fn should_draw_a_subcommand_without_images_as_a_white_dollar_on_a_purple_chip() {
+        let subcommand = item("x", SuggestionKind::Subcommand, "");
+
+        let icon = slot(&subcommand, GraphicsSupport::Off);
+
+        assert_eq!(
+            (icon.text(), icon.background(), icon.is_badge()),
+            (" $", Some((0x87, 0x39, 0xd0)), true)
+        );
+    }
+
+    #[test]
+    fn should_draw_every_coloured_square_icon_without_images_as_a_chip_of_its_colour() {
+        let kinds = [
+            SuggestionKind::Option,
+            SuggestionKind::Arg,
+            SuggestionKind::AutoExecute,
+            SuggestionKind::Special,
+            SuggestionKind::Shortcut,
+        ];
+
+        let icons = kinds.map(|kind| slot(&item("x", kind, ""), GraphicsSupport::Off));
+
+        assert_eq!(
+            icons.map(|icon| (icon.text().to_string(), icon.background())),
+            [
+                (" ?".to_string(), Some((0x5a, 0xcb, 0x5b))),
+                (" *".to_string(), Some((0x64, 0x9a, 0xc8))),
+                (" >".to_string(), Some((0xd0, 0x39, 0x56))),
+                (" *".to_string(), Some((0x62, 0x8d, 0xad))),
+                (" @".to_string(), Some((0x34, 0x98, 0xdb))),
+            ]
+        );
     }
 
     #[test]
