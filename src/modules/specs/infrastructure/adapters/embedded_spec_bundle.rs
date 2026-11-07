@@ -494,7 +494,7 @@ mod tests {
     fn embedded_index_shape() {
         let b = testing::bundle_subset(&["index.json"]);
         let idx = load_from(b.path(), &b.path().join("user")).unwrap();
-        assert_eq!(idx.completions().len(), 1493);
+        assert_eq!(idx.completions().len(), 1495);
         assert_eq!(idx.diff_versioned().len(), 6);
         assert!(idx.diff_versioned().contains("heroku"));
     }
