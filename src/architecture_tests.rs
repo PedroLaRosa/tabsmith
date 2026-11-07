@@ -116,6 +116,13 @@ fn misplaced_files(modules: &Path, module: &str) -> Vec<String> {
         .collect()
 }
 
+/// The registered modules that still have a folder or a `<module>.rs` file directly under `src`: a second copy
+/// there compiles with a `mod <module>;` in main.rs, which the crate-root check accepts, and no rule would read it.
+fn registered_modules_left_at_the_crate_root(src: &Path) -> Vec<String> {
+    let candidates = REGISTERED_MODULES.iter().flat_map(|module| [module.to_string(), format!("{module}.rs")]);
+    candidates.filter(|name| src.join(name).exists()).collect()
+}
+
 const LAYERS: &[&str] = &["domain", "application", "infrastructure"];
 
 /// `path` (relative to `src/modules`) is `<module>/mod.rs` or a file somewhere inside `<module>/<layer>/`.
@@ -493,6 +500,16 @@ mod tests {
         let report = registered_module_violations(&root.join(MODULES_FOLDER), &external_crates(&cargo_toml));
 
         assert!(report.is_empty(), "architecture rules broken:\n{}", report.join("\n"));
+    }
+
+    #[test]
+    fn should_keep_every_registered_module_out_of_the_crate_root() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        let left_behind = registered_modules_left_at_the_crate_root(&src);
+
+        let message = format!("registered modules live in {MODULES_FOLDER}, where the layer rules read them");
+        assert!(left_behind.is_empty(), "{message}:\n{}", left_behind.join("\n"));
     }
 
     /// Every module sees the crate root's private items as `crate::<name>` and the `modules` folder's as
@@ -1323,5 +1340,14 @@ mod tests {
         let misplaced = misplaced_files(src.path(), "settings");
 
         assert_eq!(misplaced, Vec::<String>::new());
+    }
+
+    #[test]
+    fn should_flag_a_registered_module_left_at_the_crate_root() {
+        let src = source_tree(&["history/mod.rs", "settings.rs", "bootstrap/mod.rs", "modules/mod.rs"]);
+
+        let left_behind = registered_modules_left_at_the_crate_root(src.path());
+
+        assert_eq!(left_behind, ["history", "settings.rs"]);
     }
 }
