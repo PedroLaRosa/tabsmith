@@ -243,7 +243,7 @@ Not in the table: `icon_assets` (the embedded PNGs and the template RGBA; `tinte
 | `SessionRunner` / `SessionMessage` | Adapter (driver) | The event loop, the panic pass-through and the batching / the messages of its one inbox. | `pty::Session` (driver half) / `types::Msg` |
 
 ## diagnostics
-As built in Phase 10 (`src/diagnostics`, 64 files). A **check is data**: it carries a name, a severity and a subject, never a closure and never I/O. The rules live in the domain; the facts come through ports, one check at a time, so doctor stays lazy.
+As built in Phase 10 (`src/modules/diagnostics`, 64 files). A **check is data**: it carries a name, a severity and a subject, never a closure and never I/O. The rules live in the domain; the facts come through ports, one check at a time, so doctor stays lazy.
 
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
