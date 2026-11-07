@@ -7,7 +7,15 @@ use std::path::{Path, PathBuf};
 /// Modules that follow the hexagonal layout; each phase registers the module it finishes. `bootstrap` is the
 /// composition root and is never registered.
 const REGISTERED_MODULES: &[&str] = &[
-    "completion", "diagnostics", "dropdown", "ghost_text", "history", "settings", "shared", "shell_integration", "specs",
+    "completion",
+    "diagnostics",
+    "dropdown",
+    "ghost_text",
+    "history",
+    "settings",
+    "shared",
+    "shell_integration",
+    "specs",
     "terminal_session",
 ];
 
@@ -88,11 +96,15 @@ fn registered_module_violations(modules: &Path, external_crates: &[String]) -> V
         }
         for file in rust_files(&modules.join(module)) {
             let path = relative_path(modules, &file);
-            let source = fs::read_to_string(&file).unwrap_or_else(|err| panic!("read {path}: {err}"));
+            let source =
+                fs::read_to_string(&file).unwrap_or_else(|err| panic!("read {path}: {err}"));
             let lines: Vec<&str> = source.lines().collect();
             for Violation { line, rule } in violations(&path, &source, external_crates) {
                 let code = lines[line - 1].trim();
-                report.push(format!("{MODULES_FOLDER}/{path}:{line}: {}: {code}", rule.description()));
+                report.push(format!(
+                    "{MODULES_FOLDER}/{path}:{line}: {}: {code}",
+                    rule.description()
+                ));
             }
         }
     }
@@ -109,7 +121,11 @@ const MISPLACED_FILE: &str =
 fn misplaced_files(modules: &Path, module: &str) -> Vec<String> {
     let root_file = modules.join(format!("{module}.rs"));
     let module_files = rust_files(&modules.join(module));
-    let misplaced = root_file.exists().then_some(root_file).into_iter().chain(module_files);
+    let misplaced = root_file
+        .exists()
+        .then_some(root_file)
+        .into_iter()
+        .chain(module_files);
     misplaced
         .map(|file| relative_path(modules, &file))
         .filter(|path| !in_the_module_layout(path))
@@ -119,7 +135,9 @@ fn misplaced_files(modules: &Path, module: &str) -> Vec<String> {
 /// The registered modules that still have a folder or a `<module>.rs` file directly under `src`: a second copy
 /// there compiles with a `mod <module>;` in main.rs, which the crate-root check accepts, and no rule would read it.
 fn registered_modules_left_at_the_crate_root(src: &Path) -> Vec<String> {
-    let candidates = REGISTERED_MODULES.iter().flat_map(|module| [module.to_string(), format!("{module}.rs")]);
+    let candidates = REGISTERED_MODULES
+        .iter()
+        .flat_map(|module| [module.to_string(), format!("{module}.rs")]);
     candidates.filter(|name| src.join(name).exists()).collect()
 }
 
@@ -153,7 +171,10 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
 /// `file` relative to `base`, `/`-separated on every platform.
 fn relative_path(base: &Path, file: &Path) -> String {
     let relative = file.strip_prefix(base).expect("file under base");
-    let components: Vec<_> = relative.components().map(|part| part.as_os_str().to_string_lossy()).collect();
+    let components: Vec<_> = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect();
     components.join("/")
 }
 
@@ -166,7 +187,8 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
     let layer = components.next();
     // ponytail: a `tests.rs` or `<what>_tests.rs` file below a module is taken to be the body of a `#[cfg(test)]
     // mod ...;` (the plan's sibling test file); read the parent's declaration if a production file is ever named so.
-    let test_file = path.ends_with("/tests.rs") || (path.contains('/') && path.ends_with("_tests.rs"));
+    let test_file =
+        path.ends_with("/tests.rs") || (path.contains('/') && path.ends_with("_tests.rs"));
     let mut open_braces = Vec::new();
     let mut test_only_item = TestOnlyItem::default();
     let imported_names = ImportedNames::in_source(source);
@@ -180,23 +202,37 @@ fn violations(path: &str, source: &str, external_crates: &[String]) -> Vec<Viola
         let checks = [
             (
                 Rule::DomainLayer,
-                production && layer == Some("domain") && breaks_domain_layer(code, &paths, external_crates),
+                production
+                    && layer == Some("domain")
+                    && breaks_domain_layer(code, &paths, external_crates),
             ),
             (
                 Rule::ApplicationLayer,
-                production && layer == Some("application") && breaks_application_layer(code, &paths, external_crates),
+                production
+                    && layer == Some("application")
+                    && breaks_application_layer(code, &paths, external_crates),
             ),
             (
                 Rule::ModuleBoundary,
                 production
-                    && (crosses_module_boundary(module, &resolved) || reaches_the_composition_root(layer, &resolved)),
+                    && (crosses_module_boundary(module, &resolved)
+                        || reaches_the_composition_root(layer, &resolved)),
             ),
-            (Rule::SharedKernel, module == "shared" && leaves_the_shared_kernel(&paths)),
-            (Rule::ModuleDeclarations, path.ends_with("/mod.rs") && !only_declares_children(code)),
+            (
+                Rule::SharedKernel,
+                module == "shared" && leaves_the_shared_kernel(&paths),
+            ),
+            (
+                Rule::ModuleDeclarations,
+                path.ends_with("/mod.rs") && !only_declares_children(code),
+            ),
             (Rule::SplicedCode, splices_in_unread_code(code)),
         ];
         let broken = checks.into_iter().filter(|(_, is_broken)| *is_broken);
-        found.extend(broken.map(|(rule, _)| Violation { line: index + 1, rule }));
+        found.extend(broken.map(|(rule, _)| Violation {
+            line: index + 1,
+            rule,
+        }));
     }
     found
 }
@@ -218,7 +254,10 @@ impl TestOnlyItem {
     /// Before the line's braces are read: a test-only attribute opens an item at the current brace depth.
     fn open_at(&mut self, code: &str, depth: usize) {
         if self.depth.is_none() && is_test_only_attribute(code) {
-            *self = TestOnlyItem { depth: Some(depth), ..Self::default() };
+            *self = TestOnlyItem {
+                depth: Some(depth),
+                ..Self::default()
+            };
         }
     }
 
@@ -228,7 +267,8 @@ impl TestOnlyItem {
             return false;
         };
         self.has_body |= code.contains('{');
-        self.open_groups += code.matches(['(', '[']).count() as isize - code.matches([')', ']']).count() as isize;
+        self.open_groups +=
+            code.matches(['(', '[']).count() as isize - code.matches([')', ']']).count() as isize;
         let ends = if self.has_body {
             depth <= start
         } else {
@@ -282,7 +322,9 @@ impl<'a> ImportedNames<'a> {
 
 /// `line` up to its `//` comment; the `//` of a `scheme://` URL does not start one.
 fn without_line_comment(line: &str) -> &str {
-    let comment = line.match_indices("//").find(|(start, _)| !line[..*start].ends_with(':'));
+    let comment = line
+        .match_indices("//")
+        .find(|(start, _)| !line[..*start].ends_with(':'));
     comment.map_or(line, |(start, _)| &line[..start])
 }
 
@@ -309,7 +351,10 @@ fn paths_in<'a>(code: &'a str, open_braces: &mut Vec<Vec<&'a str>>) -> Vec<Vec<&
         if !chunk.is_empty() {
             previous_words = (previous_words.1, chunk);
         }
-        let segments: Vec<&str> = chunk.split("::").filter(|segment| !segment.is_empty()).collect();
+        let segments: Vec<&str> = chunk
+            .split("::")
+            .filter(|segment| !segment.is_empty())
+            .collect();
         if piece.ends_with("::{") {
             open_braces.push(segments);
             continue;
@@ -334,7 +379,9 @@ fn is_path_char(c: char) -> bool {
 /// The domain keeps the application rule and uses neither the application layer nor the logger.
 fn breaks_domain_layer(code: &str, paths: &[Vec<&str>], external_crates: &[String]) -> bool {
     breaks_application_layer(code, paths, external_crates)
-        || paths.iter().any(|path| path.contains(&"application") || path.contains(&"logger"))
+        || paths
+            .iter()
+            .any(|path| path.contains(&"application") || path.contains(&"logger"))
 }
 
 /// std plus unicode-width: no infrastructure, no composition root, no legacy module, no external crate, no output.
@@ -356,18 +403,22 @@ fn is_a_legacy_module(path: &[&str]) -> bool {
 // ponytail: macro names only. std is allowed, so output through a `std::io` handle (`writeln!(std::io::stderr(),
 // ..)`, `stdout().write_all(..)`) passes; flag `io::stdout`/`io::stderr` paths if domain or application writes one.
 fn writes_output(code: &str) -> bool {
-    macro_names(code).any(|name| matches!(name, "print" | "println" | "eprint" | "eprintln" | "dbg"))
+    macro_names(code)
+        .any(|name| matches!(name, "print" | "println" | "eprint" | "eprintln" | "dbg"))
 }
 
 /// The name of every macro `code` calls, without its path (`std::println!` is `println`).
 fn macro_names(code: &str) -> impl Iterator<Item = &str> {
-    let calls = code.split_inclusive(|c: char| !is_path_char(c)).filter_map(|piece| piece.strip_suffix('!'));
+    let calls = code
+        .split_inclusive(|c: char| !is_path_char(c))
+        .filter_map(|piece| piece.strip_suffix('!'));
     calls.map(|path| path.rsplit("::").next().unwrap_or(path))
 }
 
 /// Nothing depends on bootstrap (plan section 2). Rules 1-2 already report it from domain and application files.
 fn reaches_the_composition_root(layer: Option<&str>, paths: &[Vec<&str>]) -> bool {
-    !matches!(layer, Some("domain" | "application")) && paths.iter().any(|path| is_the_composition_root(path))
+    !matches!(layer, Some("domain" | "application"))
+        && paths.iter().any(|path| is_the_composition_root(path))
 }
 
 fn is_the_composition_root(path: &[&str]) -> bool {
@@ -395,7 +446,9 @@ fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
         ["crate", "modules", module, "infrastructure", ..] => *module != own_module,
         ["crate", "modules", module, rest @ ..] => {
             *module != own_module
-                && rest.iter().any(|segment| segment.contains("_use_case") || segment.contains("UseCase"))
+                && rest
+                    .iter()
+                    .any(|segment| segment.contains("_use_case") || segment.contains("UseCase"))
         }
         _ => false,
     })
@@ -416,12 +469,17 @@ fn leaves_the_shared_kernel(paths: &[Vec<&str>]) -> bool {
 fn only_declares_children(code: &str) -> bool {
     let code = code.trim();
     let item = match code.strip_prefix('#') {
-        Some(_) => code.rsplit_once(']').map_or("", |(_, item)| item.trim_start()),
+        Some(_) => code
+            .rsplit_once(']')
+            .map_or("", |(_, item)| item.trim_start()),
         None => code,
     };
     let declaration = item.strip_prefix("pub(crate) ").unwrap_or(item);
-    let child = declaration.strip_prefix("mod ").and_then(|rest| rest.strip_suffix(';'));
-    item.is_empty() || child.is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+    let child = declaration
+        .strip_prefix("mod ")
+        .and_then(|rest| rest.strip_suffix(';'));
+    item.is_empty()
+        || child.is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
 }
 
 /// `#[path = ..]` and `include!` compile a file the rules never read into the module; `#[macro_export]` and
@@ -431,7 +489,8 @@ fn only_declares_children(code: &str) -> bool {
 // src for these if one shows up.
 fn splices_in_unread_code(code: &str) -> bool {
     let attributes = ["#[path", "#[macro_export", "#[macro_use"];
-    attributes.iter().any(|attribute| code.contains(attribute)) || macro_names(code).any(|name| name == "include")
+    attributes.iter().any(|attribute| code.contains(attribute))
+        || macro_names(code).any(|name| name == "include")
 }
 
 /// The lines of a namespace root (`root_source`: main.rs, whose items every module sees as `crate::<name>`, or
@@ -444,7 +503,8 @@ fn crate_root_back_doors(root_source: &str) -> Vec<&str> {
     let mut found = Vec::new();
     for line in root_source.lines() {
         let code = without_line_comment(line);
-        let root_item = depth == 0 && !only_declares_children(code) && !code.starts_with("fn main(");
+        let root_item =
+            depth == 0 && !only_declares_children(code) && !code.starts_with("fn main(");
         if root_item || imports_or_re_exports(code) || splices_in_unread_code(code) {
             found.push(line);
         }
@@ -455,7 +515,8 @@ fn crate_root_back_doors(root_source: &str) -> Vec<&str> {
 
 /// A `use` item (`use`, `pub(crate) use`, a glob).
 fn imports_or_re_exports(code: &str) -> bool {
-    code.split(|c: char| !is_path_char(c)).any(|word| word == "use")
+    code.split(|c: char| !is_path_char(c))
+        .any(|word| word == "use")
 }
 
 /// Crate names (`-` read as `_`) from `[dependencies]` and every `[target.*.dependencies]` table.
@@ -498,9 +559,14 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml");
 
-        let report = registered_module_violations(&root.join(MODULES_FOLDER), &external_crates(&cargo_toml));
+        let report =
+            registered_module_violations(&root.join(MODULES_FOLDER), &external_crates(&cargo_toml));
 
-        assert!(report.is_empty(), "architecture rules broken:\n{}", report.join("\n"));
+        assert!(
+            report.is_empty(),
+            "architecture rules broken:\n{}",
+            report.join("\n")
+        );
     }
 
     #[test]
@@ -509,8 +575,13 @@ mod tests {
 
         let left_behind = registered_modules_left_at_the_crate_root(&src);
 
-        let message = format!("registered modules live in {MODULES_FOLDER}, where the layer rules read them");
-        assert!(left_behind.is_empty(), "{message}:\n{}", left_behind.join("\n"));
+        let message =
+            format!("registered modules live in {MODULES_FOLDER}, where the layer rules read them");
+        assert!(
+            left_behind.is_empty(),
+            "{message}:\n{}",
+            left_behind.join("\n")
+        );
     }
 
     /// Every module sees the crate root's private items as `crate::<name>` and the `modules` folder's as
@@ -524,13 +595,21 @@ mod tests {
         let back_doors: Vec<String> = namespace_roots
             .iter()
             .flat_map(|file| {
-                let source = fs::read_to_string(root.join(file)).unwrap_or_else(|err| panic!("read {file}: {err}"));
-                crate_root_back_doors(&source).into_iter().map(|line| format!("{file}: {line}")).collect::<Vec<_>>()
+                let source = fs::read_to_string(root.join(file))
+                    .unwrap_or_else(|err| panic!("read {file}: {err}"));
+                crate_root_back_doors(&source)
+                    .into_iter()
+                    .map(|line| format!("{file}: {line}"))
+                    .collect::<Vec<_>>()
             })
             .collect();
 
         let message = "a namespace root holds more than its module declarations and fn main, so every module can use these";
-        assert!(back_doors.is_empty(), "{message}:\n{}", back_doors.join("\n"));
+        assert!(
+            back_doors.is_empty(),
+            "{message}:\n{}",
+            back_doors.join("\n")
+        );
     }
 
     /// A crate-root `type` alias or wrapper fn is a `crate::<name>` path rules 1-3 cannot read, as a `use` item is.
@@ -577,7 +656,14 @@ mod tests {
 
         let found = crate_root_back_doors(main_rs);
 
-        assert_eq!(found, ["#[path = \"leak.rs\"]", "#[macro_use]", "    include!(\"leak.rs\");"]);
+        assert_eq!(
+            found,
+            [
+                "#[path = \"leak.rs\"]",
+                "#[macro_use]",
+                "    include!(\"leak.rs\");"
+            ]
+        );
     }
 
     #[test]
@@ -591,8 +677,14 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 2, rule: Rule::DomainLayer },
-                Violation { line: 3, rule: Rule::DomainLayer },
+                Violation {
+                    line: 2,
+                    rule: Rule::DomainLayer
+                },
+                Violation {
+                    line: 3,
+                    rule: Rule::DomainLayer
+                },
             ]
         );
     }
@@ -603,7 +695,13 @@ mod tests {
 
         let found = violations_in("settings/domain/settings.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::DomainLayer
+            }]
+        );
     }
 
     #[test]
@@ -617,8 +715,14 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 1, rule: Rule::DomainLayer },
-                Violation { line: 3, rule: Rule::DomainLayer },
+                Violation {
+                    line: 1,
+                    rule: Rule::DomainLayer
+                },
+                Violation {
+                    line: 3,
+                    rule: Rule::DomainLayer
+                },
             ]
         );
     }
@@ -635,9 +739,18 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 1, rule: Rule::DomainLayer },
-                Violation { line: 3, rule: Rule::DomainLayer },
-                Violation { line: 4, rule: Rule::DomainLayer },
+                Violation {
+                    line: 1,
+                    rule: Rule::DomainLayer
+                },
+                Violation {
+                    line: 3,
+                    rule: Rule::DomainLayer
+                },
+                Violation {
+                    line: 4,
+                    rule: Rule::DomainLayer
+                },
             ]
         );
     }
@@ -664,7 +777,13 @@ mod tests {
 
         let found = violations_in("shared/infrastructure/json_document_store.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 3, rule: Rule::SharedKernel }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 3,
+                rule: Rule::SharedKernel
+            }]
+        );
     }
 
     #[test]
@@ -701,8 +820,14 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 2, rule: Rule::ApplicationLayer },
-                Violation { line: 3, rule: Rule::ApplicationLayer },
+                Violation {
+                    line: 2,
+                    rule: Rule::ApplicationLayer
+                },
+                Violation {
+                    line: 3,
+                    rule: Rule::ApplicationLayer
+                },
             ]
         );
     }
@@ -718,8 +843,14 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 1, rule: Rule::ApplicationLayer },
-                Violation { line: 3, rule: Rule::ApplicationLayer },
+                Violation {
+                    line: 1,
+                    rule: Rule::ApplicationLayer
+                },
+                Violation {
+                    line: 3,
+                    rule: Rule::ApplicationLayer
+                },
             ]
         );
     }
@@ -735,8 +866,14 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 2, rule: Rule::ModuleBoundary },
-                Violation { line: 3, rule: Rule::ModuleBoundary },
+                Violation {
+                    line: 2,
+                    rule: Rule::ModuleBoundary
+                },
+                Violation {
+                    line: 3,
+                    rule: Rule::ModuleBoundary
+                },
             ]
         );
     }
@@ -752,8 +889,14 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 2, rule: Rule::SharedKernel },
-                Violation { line: 3, rule: Rule::SharedKernel },
+                Violation {
+                    line: 2,
+                    rule: Rule::SharedKernel
+                },
+                Violation {
+                    line: 3,
+                    rule: Rule::SharedKernel
+                },
             ]
         );
     }
@@ -765,7 +908,13 @@ mod tests {
 
         let found = violations_in("shared/infrastructure/system_clock.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::SharedKernel }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::SharedKernel
+            }]
+        );
     }
 
     #[test]
@@ -780,7 +929,10 @@ mod tests {
 
         let names = external_crates(cargo_toml);
 
-        assert_eq!(names, ["anyhow", "unicode_width", "signal_hook", "windows_sys"]);
+        assert_eq!(
+            names,
+            ["anyhow", "unicode_width", "signal_hook", "windows_sys"]
+        );
     }
 
     #[test]
@@ -790,7 +942,10 @@ mod tests {
                       use crate::modules::shared::application::ports::clock::Clock;\n\
                       use std::rc::Rc;\n";
 
-        let found = violations_in("shell_integration/application/install_integration_use_case.rs", source);
+        let found = violations_in(
+            "shell_integration/application/install_integration_use_case.rs",
+            source,
+        );
 
         assert_eq!(found, vec![]);
     }
@@ -799,9 +954,18 @@ mod tests {
     fn should_flag_another_modules_use_case_imported_as_a_module() {
         let source = "use crate::modules::specs::application::install_spec_bundle_use_case;\n";
 
-        let found = violations_in("shell_integration/infrastructure/shell_integration_module.rs", source);
+        let found = violations_in(
+            "shell_integration/infrastructure/shell_integration_module.rs",
+            source,
+        );
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
@@ -810,25 +974,51 @@ mod tests {
 
         let found = violations_in("completion/infrastructure/completion_module.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
     fn should_flag_another_modules_use_case_re_exported_by_its_type_name_outside_its_file() {
-        let source = "use crate::modules::specs::application::installers::InstallSpecBundleUseCase;\n";
+        let source =
+            "use crate::modules::specs::application::installers::InstallSpecBundleUseCase;\n";
 
-        let found = violations_in("shell_integration/infrastructure/shell_integration_module.rs", source);
+        let found = violations_in(
+            "shell_integration/infrastructure/shell_integration_module.rs",
+            source,
+        );
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
-    fn should_flag_another_modules_use_case_re_exported_by_its_type_name_outside_its_application_layer() {
+    fn should_flag_another_modules_use_case_re_exported_by_its_type_name_outside_its_application_layer(
+    ) {
         let source = "use crate::modules::specs::InstallSpecBundleUseCase;\n";
 
-        let found = violations_in("shell_integration/infrastructure/shell_integration_module.rs", source);
+        let found = violations_in(
+            "shell_integration/infrastructure/shell_integration_module.rs",
+            source,
+        );
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
@@ -838,7 +1028,13 @@ mod tests {
 
         let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 2,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
@@ -848,7 +1044,13 @@ mod tests {
 
         let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 2,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
@@ -858,7 +1060,13 @@ mod tests {
 
         let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 2,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
@@ -868,7 +1076,13 @@ mod tests {
 
         let found = violations_in("ghost_text/infrastructure/ghost_text_module.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
@@ -897,7 +1111,8 @@ mod tests {
 
     #[test]
     fn should_not_flag_a_shared_file_that_uses_the_kernel_or_an_external_crate() {
-        let source = "use crate::modules::shared::domain::value_objects::data_directory::DataDirectory;\n\
+        let source =
+            "use crate::modules::shared::domain::value_objects::data_directory::DataDirectory;\n\
                       use serde_json::Value;\n\
                       let text = std::fs::read_to_string(path)?;\n";
 
@@ -908,10 +1123,14 @@ mod tests {
 
     #[test]
     fn should_not_flag_a_modules_infrastructure_that_uses_the_shared_infrastructure() {
-        let source = "use crate::modules::shared::infrastructure::json_document_store::JsonDocumentStore;\n\
+        let source =
+            "use crate::modules::shared::infrastructure::json_document_store::JsonDocumentStore;\n\
                       crate::modules::shared::infrastructure::logger::warn(\"unknown key\");\n";
 
-        let found = violations_in("settings/infrastructure/json_file_settings_repository.rs", source);
+        let found = violations_in(
+            "settings/infrastructure/json_file_settings_repository.rs",
+            source,
+        );
 
         assert_eq!(found, vec![]);
     }
@@ -929,8 +1148,14 @@ mod tests {
         assert_eq!(
             found,
             [
-                vec![Violation { line: 1, rule: Rule::DomainLayer }],
-                vec![Violation { line: 1, rule: Rule::ApplicationLayer }],
+                vec![Violation {
+                    line: 1,
+                    rule: Rule::DomainLayer
+                }],
+                vec![Violation {
+                    line: 1,
+                    rule: Rule::ApplicationLayer
+                }],
             ]
         );
     }
@@ -944,14 +1169,23 @@ mod tests {
 
         let found = [
             violations_in("history/domain/entities/history_entry.rs", domain),
-            violations_in("history/application/record_command_use_case.rs", application),
+            violations_in(
+                "history/application/record_command_use_case.rs",
+                application,
+            ),
         ];
 
         assert_eq!(
             found,
             [
-                vec![Violation { line: 2, rule: Rule::DomainLayer }],
-                vec![Violation { line: 2, rule: Rule::ApplicationLayer }],
+                vec![Violation {
+                    line: 2,
+                    rule: Rule::DomainLayer
+                }],
+                vec![Violation {
+                    line: 2,
+                    rule: Rule::ApplicationLayer
+                }],
             ]
         );
     }
@@ -991,9 +1225,18 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 3, rule: Rule::DomainLayer },
-                Violation { line: 6, rule: Rule::DomainLayer },
-                Violation { line: 12, rule: Rule::DomainLayer },
+                Violation {
+                    line: 3,
+                    rule: Rule::DomainLayer
+                },
+                Violation {
+                    line: 6,
+                    rule: Rule::DomainLayer
+                },
+                Violation {
+                    line: 12,
+                    rule: Rule::DomainLayer
+                },
             ]
         );
     }
@@ -1012,8 +1255,14 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 4, rule: Rule::DomainLayer },
-                Violation { line: 6, rule: Rule::DomainLayer },
+                Violation {
+                    line: 4,
+                    rule: Rule::DomainLayer
+                },
+                Violation {
+                    line: 6,
+                    rule: Rule::DomainLayer
+                },
             ]
         );
     }
@@ -1028,7 +1277,13 @@ mod tests {
 
         let found = violations_in("dropdown/domain/menu_event.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 4, rule: Rule::DomainLayer }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 4,
+                rule: Rule::DomainLayer
+            }]
+        );
     }
 
     #[test]
@@ -1041,7 +1296,13 @@ mod tests {
 
         let found = violations_in("dropdown/domain/menu_event.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 5, rule: Rule::DomainLayer }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 5,
+                rule: Rule::DomainLayer
+            }]
+        );
     }
 
     #[test]
@@ -1091,14 +1352,23 @@ mod tests {
 
         let found = [
             violations_in("shared/infrastructure/json_document_store.rs", module),
-            violations_in("shared/infrastructure/json_document_store/tests.rs", tests_file),
+            violations_in(
+                "shared/infrastructure/json_document_store/tests.rs",
+                tests_file,
+            ),
         ];
 
         assert_eq!(
             found,
             [
-                vec![Violation { line: 3, rule: Rule::SharedKernel }],
-                vec![Violation { line: 1, rule: Rule::SharedKernel }],
+                vec![Violation {
+                    line: 3,
+                    rule: Rule::SharedKernel
+                }],
+                vec![Violation {
+                    line: 1,
+                    rule: Rule::SharedKernel
+                }],
             ]
         );
     }
@@ -1110,7 +1380,13 @@ mod tests {
 
         let found = violations_in("settings/infrastructure/cli/settings_command.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 2, rule: Rule::ModuleBoundary }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 2,
+                rule: Rule::ModuleBoundary
+            }]
+        );
     }
 
     #[test]
@@ -1131,14 +1407,32 @@ mod tests {
             found,
             [
                 vec![
-                    Violation { line: 1, rule: Rule::DomainLayer },
-                    Violation { line: 2, rule: Rule::DomainLayer },
-                    Violation { line: 3, rule: Rule::DomainLayer },
-                    Violation { line: 4, rule: Rule::DomainLayer },
+                    Violation {
+                        line: 1,
+                        rule: Rule::DomainLayer
+                    },
+                    Violation {
+                        line: 2,
+                        rule: Rule::DomainLayer
+                    },
+                    Violation {
+                        line: 3,
+                        rule: Rule::DomainLayer
+                    },
+                    Violation {
+                        line: 4,
+                        rule: Rule::DomainLayer
+                    },
                 ],
                 vec![
-                    Violation { line: 1, rule: Rule::ApplicationLayer },
-                    Violation { line: 2, rule: Rule::ApplicationLayer },
+                    Violation {
+                        line: 1,
+                        rule: Rule::ApplicationLayer
+                    },
+                    Violation {
+                        line: 2,
+                        rule: Rule::ApplicationLayer
+                    },
                 ],
             ]
         );
@@ -1163,7 +1457,13 @@ mod tests {
 
         let found = violations_in("settings/domain/settings.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::DomainLayer
+            }]
+        );
     }
 
     #[test]
@@ -1172,9 +1472,18 @@ mod tests {
                       let value: Option<probe_serde::de::IgnoredAny> = None;\n\
                       extern crate unicode_width as width;\n";
 
-        let found = violations_in("shell_integration/domain/value_objects/init_script.rs", source);
+        let found = violations_in(
+            "shell_integration/domain/value_objects/init_script.rs",
+            source,
+        );
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::DomainLayer
+            }]
+        );
     }
 
     #[test]
@@ -1184,12 +1493,19 @@ mod tests {
 
         let found = violations_in("specs/domain/spec.rs", source);
 
-        assert_eq!(found, vec![Violation { line: 1, rule: Rule::DomainLayer }]);
+        assert_eq!(
+            found,
+            vec![Violation {
+                line: 1,
+                rule: Rule::DomainLayer
+            }]
+        );
     }
 
     #[test]
     fn should_not_flag_an_infrastructure_file_that_uses_the_application_layer() {
-        let source = "use crate::modules::settings::application::set_setting_use_case::SetSettingUseCase;\n";
+        let source =
+            "use crate::modules::settings::application::set_setting_use_case::SetSettingUseCase;\n";
 
         let found = violations_in("settings/infrastructure/settings_module.rs", source);
 
@@ -1209,9 +1525,18 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 2, rule: Rule::ModuleDeclarations },
-                Violation { line: 3, rule: Rule::ModuleDeclarations },
-                Violation { line: 4, rule: Rule::ModuleDeclarations },
+                Violation {
+                    line: 2,
+                    rule: Rule::ModuleDeclarations
+                },
+                Violation {
+                    line: 3,
+                    rule: Rule::ModuleDeclarations
+                },
+                Violation {
+                    line: 4,
+                    rule: Rule::ModuleDeclarations
+                },
             ]
         );
     }
@@ -1232,9 +1557,18 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                Violation { line: 5, rule: Rule::ModuleDeclarations },
-                Violation { line: 6, rule: Rule::ModuleDeclarations },
-                Violation { line: 7, rule: Rule::ModuleDeclarations },
+                Violation {
+                    line: 5,
+                    rule: Rule::ModuleDeclarations
+                },
+                Violation {
+                    line: 6,
+                    rule: Rule::ModuleDeclarations
+                },
+                Violation {
+                    line: 7,
+                    rule: Rule::ModuleDeclarations
+                },
             ]
         );
     }
@@ -1255,8 +1589,14 @@ mod tests {
         assert_eq!(
             found,
             [
-                vec![Violation { line: 1, rule: Rule::SplicedCode }],
-                vec![Violation { line: 2, rule: Rule::SplicedCode }],
+                vec![Violation {
+                    line: 1,
+                    rule: Rule::SplicedCode
+                }],
+                vec![Violation {
+                    line: 2,
+                    rule: Rule::SplicedCode
+                }],
             ]
         );
     }
@@ -1279,8 +1619,14 @@ mod tests {
         assert_eq!(
             found,
             [
-                vec![Violation { line: 1, rule: Rule::SplicedCode }],
-                vec![Violation { line: 1, rule: Rule::SplicedCode }],
+                vec![Violation {
+                    line: 1,
+                    rule: Rule::SplicedCode
+                }],
+                vec![Violation {
+                    line: 1,
+                    rule: Rule::SplicedCode
+                }],
             ]
         );
     }
@@ -1296,7 +1642,11 @@ mod tests {
 
     #[test]
     fn should_flag_a_file_directly_under_the_module_folder_other_than_mod_rs() {
-        let src = source_tree(&["settings/mod.rs", "settings/helpers.rs", "settings/domain/settings.rs"]);
+        let src = source_tree(&[
+            "settings/mod.rs",
+            "settings/helpers.rs",
+            "settings/domain/settings.rs",
+        ]);
 
         let misplaced = misplaced_files(src.path(), "settings");
 
@@ -1306,7 +1656,11 @@ mod tests {
     /// `settings/domain.rs` next to `settings/domain/` is legal Rust, but its layer would read as `domain.rs`.
     #[test]
     fn should_flag_a_layer_root_file_next_to_its_layer_folder() {
-        let src = source_tree(&["settings/mod.rs", "settings/domain.rs", "settings/domain/settings.rs"]);
+        let src = source_tree(&[
+            "settings/mod.rs",
+            "settings/domain.rs",
+            "settings/domain/settings.rs",
+        ]);
 
         let misplaced = misplaced_files(src.path(), "settings");
 
@@ -1325,7 +1679,10 @@ mod tests {
 
         let misplaced = misplaced_files(src.path(), "settings");
 
-        assert_eq!(misplaced, ["settings/aplication/leak.rs", "settings/model/leak.rs"]);
+        assert_eq!(
+            misplaced,
+            ["settings/aplication/leak.rs", "settings/model/leak.rs"]
+        );
     }
 
     #[test]
@@ -1345,7 +1702,12 @@ mod tests {
 
     #[test]
     fn should_flag_a_registered_module_left_at_the_crate_root() {
-        let src = source_tree(&["history/mod.rs", "settings.rs", "bootstrap/mod.rs", "modules/mod.rs"]);
+        let src = source_tree(&[
+            "history/mod.rs",
+            "settings.rs",
+            "bootstrap/mod.rs",
+            "modules/mod.rs",
+        ]);
 
         let left_behind = registered_modules_left_at_the_crate_root(src.path());
 
