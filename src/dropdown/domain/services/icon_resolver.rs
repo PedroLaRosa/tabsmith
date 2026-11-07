@@ -169,7 +169,8 @@ mod tests {
         );
         assert_eq!(
             s.image().map(IconId::value),
-            ICON_NAMES.iter()
+            ICON_NAMES
+                .iter()
                 .position(|n| *n == "git")
                 .map(|i| i as u32 + 1)
         );
@@ -179,7 +180,8 @@ mod tests {
         );
         assert_eq!(
             s.image().map(IconId::value),
-            ICON_NAMES.iter()
+            ICON_NAMES
+                .iter()
                 .position(|n| *n == "template")
                 .map(|i| i as u32 + 1)
         );
@@ -191,19 +193,22 @@ mod tests {
             ),
             GraphicsSupport::Direct,
         );
-        assert!(
-            s.is_badge()
-                && s.text() == "🔥"
-                && matches!(s.image(), Some(IconId::Tinted(..)))
-        );
+        assert!(s.is_badge() && s.text() == "🔥" && matches!(s.image(), Some(IconId::Tinted(..))));
         // Type defaults with images; ASCII without.
-        assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Direct)
-            .image()
-            .is_some());
-        assert_eq!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off).text(), " ?");
-        assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off)
-            .image()
-            .is_none());
+        assert!(
+            slot(&it(None, SuggestionKind::Option), GraphicsSupport::Direct)
+                .image()
+                .is_some()
+        );
+        assert_eq!(
+            slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off).text(),
+            " ?"
+        );
+        assert!(
+            slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off)
+                .image()
+                .is_none()
+        );
         assert_eq!(
             slot(&it(None, SuggestionKind::History), GraphicsSupport::Direct).text(),
             "📚"
@@ -241,8 +246,16 @@ mod tests {
                 2,
                 "{k:?}"
             );
-            assert_eq!(width(slot(&it(None, k), GraphicsSupport::Off).text()), 2, "{k:?}");
-            assert_eq!(width(slot(&it(None, k), GraphicsSupport::Tmux).text()), 2, "{k:?}");
+            assert_eq!(
+                width(slot(&it(None, k), GraphicsSupport::Off).text()),
+                2,
+                "{k:?}"
+            );
+            assert_eq!(
+                width(slot(&it(None, k), GraphicsSupport::Tmux).text()),
+                2,
+                "{k:?}"
+            );
         }
     }
 

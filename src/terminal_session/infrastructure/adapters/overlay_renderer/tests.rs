@@ -1,8 +1,7 @@
 use super::*;
-use crate::settings::domain::value_objects::settings::Settings;
-use std::time::{Duration, Instant};
 use crate::completion::domain::test_fixtures::{comp, item, settings};
 use crate::dropdown::infrastructure::adapters::theme_json_mapper::theme_palette_from_json;
+use crate::settings::domain::value_objects::settings::Settings;
 use crate::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 use crate::terminal_session::application::ports::terminal_screen::TerminalScreen;
 use crate::terminal_session::domain::services::render_guard::allows_drawing;
@@ -11,6 +10,7 @@ use crate::terminal_session::infrastructure::adapters::alacritty_terminal_screen
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::term::Config;
 use alacritty_terminal::vte::ansi::Processor;
+use std::time::{Duration, Instant};
 
 struct Size(usize, usize);
 
@@ -70,8 +70,7 @@ fn assert_same(a: &Model, b: &Model) {
 fn differs(a: &Model, b: &Model) -> bool {
     let (ga, gb) = (a.grid(), b.grid());
     (0..ga.screen_lines()).any(|y| {
-        (0..ga.columns())
-            .any(|x| ga[Line(y as i32)][Column(x)] != gb[Line(y as i32)][Column(x)])
+        (0..ga.columns()).any(|x| ga[Line(y as i32)][Column(x)] != gb[Line(y as i32)][Column(x)])
     })
 }
 
@@ -89,8 +88,12 @@ fn subs() -> Vec<Suggestion> {
         .map(|n| item(n, SuggestionKind::Subcommand, "c"))
         .collect();
     v[0] = v[0].clone().with_args_hint("<br>".into());
-    v[1] = v[1].clone().with_names(vec!["cherry-pick".into(), "cp".into()]);
-    v[2] = v[2].clone().with_description(Some("multi\nline 中文 description".into()));
+    v[1] = v[1]
+        .clone()
+        .with_names(vec!["cherry-pick".into(), "cp".into()]);
+    v[2] = v[2]
+        .clone()
+        .with_description(Some("multi\nline 中文 description".into()));
     v
 }
 
@@ -177,10 +180,12 @@ fn round_trip_below_wide_edges_truecolor() {
 
 #[test]
 fn round_trip_above_ghost_popout() {
-    let s =
-        settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
+    let s = settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
     let mut m = menu(subs(), &s);
-    m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &s);
+    m.handle(
+        crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown,
+        &s,
+    );
     // Cursor on the bottom row 13, after `$ ec`: menu above on rows 8..=12 (wide chars, colours), x0 = 0;
     // pop-out right of the list (0 + 20 + 30 <= 60).
     let mut out = String::from_utf8(screen("")).unwrap();
@@ -239,7 +244,8 @@ fn round_trip_arg_hint_spinner_and_wide_ghost() {
 }
 
 #[test]
-fn should_show_the_spinner_only_after_the_menu_has_been_loading_for_more_than_200_ms_at_the_given_instant() {
+fn should_show_the_spinner_only_after_the_menu_has_been_loading_for_more_than_200_ms_at_the_given_instant(
+) {
     let s = Settings::default();
     let t0 = Instant::now();
     let mut m = Menu::new();
@@ -252,7 +258,9 @@ fn should_show_the_spinner_only_after_the_menu_has_been_loading_for_more_than_20
             ..input(&s, None)
         };
         let mut r = OverlayRenderer::new(Theme::light(), true);
-        String::from_utf8(r.frame(&a, &m, &at)).unwrap().contains(glyph)
+        String::from_utf8(r.frame(&a, &m, &at))
+            .unwrap()
+            .contains(glyph)
     };
 
     let shown = (drawn_at(199), drawn_at(201));
@@ -344,7 +352,11 @@ fn truncation_and_wrap_spinner() {
 fn row_contents() {
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let r = OverlayRenderer::new(Theme::dark(), true);
-    let mut it = item("checkout-a-very-long-name", SuggestionKind::Subcommand, "ch");
+    let mut it = item(
+        "checkout-a-very-long-name",
+        SuggestionKind::Subcommand,
+        "ch",
+    );
     it = it.with_args_hint("<branch>".into());
     let (row, _, _) = r.list_row(&it, false, 20);
     let text: String = strip(&row);
@@ -448,7 +460,12 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 /// Draws `frames` one after the other and hashes every frame, then every clear (taken after each frame).
-fn overlay_hashes(r: &mut OverlayRenderer, a: &Model, m: &Menu, frames: &[FrameInput]) -> (u64, u64) {
+fn overlay_hashes(
+    r: &mut OverlayRenderer,
+    a: &Model,
+    m: &Menu,
+    frames: &[FrameInput],
+) -> (u64, u64) {
     let (mut drawn, mut cleared) = (Vec::new(), Vec::new());
     for inp in frames {
         drawn.extend(r.frame(a, m, inp));
@@ -467,12 +484,24 @@ fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
         ("light_256", 0xb69c0a2e71913a1d, 0x3fd0e0c7d118ca9c),
         ("scrolled", 0xf1f4307dc0556fc4, 0xb5974c8ab0e1a615),
         ("above_ghost_popout", 0x15c77f2466a309c3, 0x79cfb3d71e636be6),
-        ("arg_hint_wide_ghost", 0x19087c0c1de42343, 0xc4bf1afcc5ae6c08),
+        (
+            "arg_hint_wide_ghost",
+            0x19087c0c1de42343,
+            0xc4bf1afcc5ae6c08,
+        ),
         ("custom_base16", 0xb32055b162263506, 0x3fd0e0c7d118ca9c),
         ("icons_direct", 0x63e8d0517291ef1c, 0x49c6d5dfc1ea8156),
         ("icons_tmux", 0x66355913b17a2222, 0x22e0c44f71632e9e),
-        ("long_description_bar", 0xb3df046cdf5d4ef4, 0xe0ae15a704c54ab1),
-        ("long_description_popout", 0xaf855421af6a521c, 0x55f9d31a52e19d65),
+        (
+            "long_description_bar",
+            0xb3df046cdf5d4ef4,
+            0xe0ae15a704c54ab1,
+        ),
+        (
+            "long_description_popout",
+            0xaf855421af6a521c,
+            0x55f9d31a52e19d65,
+        ),
     ];
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let below = screen("\x1b[3;9H\x1b[32m");
@@ -500,8 +529,14 @@ fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
     // Scrolled: two rows high, third row selected, whose description has a newline and wide characters.
     let tall = settings(r#"{"autocomplete.width": 20, "autocomplete.height": 2}"#);
     let mut m = menu(subs(), &tall);
-    m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &tall);
-    m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &tall);
+    m.handle(
+        crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown,
+        &tall,
+    );
+    m.handle(
+        crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown,
+        &tall,
+    );
     let mut r = OverlayRenderer::new(Theme::dark(), true);
     got.push((
         "scrolled",
@@ -512,7 +547,10 @@ fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
     let always =
         settings(r#"{"autocomplete.width": 20, "autocomplete.alwaysShowDescription": true}"#);
     let mut m = menu(subs(), &always);
-    m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &always);
+    m.handle(
+        crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown,
+        &always,
+    );
     let mut out = String::from_utf8(screen("")).unwrap();
     out += "\r\n\r\n\r\n\r\n\r\n$ ec          \x1b[36m[rprompt]\x1b[0m\x1b[14;5H";
     let a = model(60, 14, &[out.as_bytes()]);
@@ -536,7 +574,10 @@ fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
 
     // The custom theme over the list, second row selected.
     let mut m = menu(subs(), &s);
-    m.handle(crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown, &s);
+    m.handle(
+        crate::dropdown::domain::value_objects::key_action::KeyAction::NavigateDown,
+        &s,
+    );
     let a = model(40, 12, &[&below]);
     let mut r = OverlayRenderer::new(custom(), true);
     got.push((
