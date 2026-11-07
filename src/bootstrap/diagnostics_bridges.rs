@@ -1,23 +1,23 @@
 //! The diagnostics module's ports over the shell integrations and the specs, wired here because only bootstrap may
 //! join modules.
-use crate::diagnostics::application::ports::bundled_specs_probe::BundledSpecsProbe;
-use crate::diagnostics::application::ports::check_fixer::CheckFixer;
-use crate::diagnostics::application::ports::integration_probe::IntegrationProbe;
-use crate::diagnostics::domain::value_objects::check_fix::CheckFix;
-use crate::diagnostics::infrastructure::adapters::file_repairs::FileRepairs;
-use crate::shared::domain::value_objects::data_directory::DataDirectory;
-use crate::shared::domain::value_objects::shell::Shell;
-use crate::shared::infrastructure::os::executable_lookup::which;
-use crate::shell_integration::application::integration_installer::IntegrationInstaller;
-use crate::shell_integration::domain::entities::integration::Integration;
-use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
-use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
-use crate::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
-use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
-use crate::shell_integration::infrastructure::adapters::os_shell_environment::integration_paths_from;
-use crate::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
-use crate::specs::application::install_spec_bundle_use_case::InstallSpecBundleUseCase;
-use crate::specs::infrastructure::adapters::embedded_spec_bundle::version;
+use crate::modules::diagnostics::application::ports::bundled_specs_probe::BundledSpecsProbe;
+use crate::modules::diagnostics::application::ports::check_fixer::CheckFixer;
+use crate::modules::diagnostics::application::ports::integration_probe::IntegrationProbe;
+use crate::modules::diagnostics::domain::value_objects::check_fix::CheckFix;
+use crate::modules::diagnostics::infrastructure::adapters::file_repairs::FileRepairs;
+use crate::modules::shared::domain::value_objects::data_directory::DataDirectory;
+use crate::modules::shared::domain::value_objects::shell::Shell;
+use crate::modules::shared::infrastructure::os::executable_lookup::which;
+use crate::modules::shell_integration::application::integration_installer::IntegrationInstaller;
+use crate::modules::shell_integration::domain::entities::integration::Integration;
+use crate::modules::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
+use crate::modules::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::modules::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
+use crate::modules::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
+use crate::modules::shell_integration::infrastructure::adapters::os_shell_environment::integration_paths_from;
+use crate::modules::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
+use crate::modules::specs::application::install_spec_bundle_use_case::InstallSpecBundleUseCase;
+use crate::modules::specs::infrastructure::adapters::embedded_spec_bundle::version;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -183,15 +183,15 @@ fn rendered(error: anyhow::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::application::ports::clock::FixedClock;
-    use crate::shared::infrastructure::testing::temp_dir::TempDir;
-    use crate::shell_integration::domain::repositories::restart_reminder_repository::InMemoryRestartReminderRepository;
-    use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
-    use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
-    use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
-    use crate::specs::application::ports::spec_bundle::RecordingSpecBundle;
-    use crate::shell_integration::infrastructure::testing::integration_fixtures::install_dotfiles;
-    use crate::specs::domain::spec_error::SpecError;
+    use crate::modules::shared::application::ports::clock::FixedClock;
+    use crate::modules::shared::infrastructure::testing::temp_dir::TempDir;
+    use crate::modules::shell_integration::domain::repositories::restart_reminder_repository::InMemoryRestartReminderRepository;
+    use crate::modules::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
+    use crate::modules::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
+    use crate::modules::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
+    use crate::modules::specs::application::ports::spec_bundle::RecordingSpecBundle;
+    use crate::modules::shell_integration::infrastructure::testing::integration_fixtures::install_dotfiles;
+    use crate::modules::specs::domain::spec_error::SpecError;
     use std::sync::Arc;
 
     fn installer() -> Rc<IntegrationInstaller> {
