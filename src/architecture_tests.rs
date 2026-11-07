@@ -60,7 +60,7 @@ impl Rule {
                  dbg!, ..)"
             }
             Rule::ModuleBoundary => "uses another module's use case (or use case container) or infrastructure, or bootstrap",
-            Rule::SharedKernel => "shared uses a crate module other than shared",
+            Rule::SharedKernel => "shared uses bootstrap, the modules namespace or a module other than shared",
             Rule::ModuleDeclarations => "a mod.rs imports, re-exports or holds an item; it only declares its children",
             Rule::SplicedCode => {
                 "compiles in a file the rules never read (#[path], include!) or hands a macro to other modules \
@@ -388,7 +388,7 @@ fn is_forbidden_external_crate(root: &str, external_crates: &[String]) -> bool {
 // ponytail: a use case re-exported under another name (`type Installer = ..UseCase;`, a wrapper fn), an `as` rename,
 // a `super::` path, and an adapter re-exported by a legacy file (`crate::types::X` from a
 // `pub(crate) use crate::modules::specs::infrastructure::..` in a flat file such as the retired src/types.rs) still pass; read every file of the module for
-// those, as rule 6 reads mod.rs, and the legacy files for `pub(crate) use crate::<module>::..`, if one shows up.
+// those, as rule 6 reads mod.rs, and the legacy files for `pub(crate) use crate::modules::<module>::..`, if one shows up.
 fn crosses_module_boundary(own_module: &str, paths: &[Vec<&str>]) -> bool {
     paths.iter().any(|path| match path.as_slice() {
         ["crate", "modules", "shared", ..] => false,
@@ -426,7 +426,7 @@ fn only_declares_children(code: &str) -> bool {
 
 /// `#[path = ..]` and `include!` compile a file the rules never read into the module; `#[macro_export]` and
 /// `#[macro_use]` hand a macro to modules that call it as `crate::name!` or `name!`, a path rules 1-3 cannot read.
-// ponytail: only the registered modules and main.rs are read, so a macro exported from bootstrap or a legacy file
+// ponytail: only the registered modules, main.rs and modules/mod.rs are read, so a macro exported from bootstrap or a legacy file
 // still passes, and so do `#[cfg_attr(.., path = ..)]` and a space after `#[` or before `!`. Read every file under
 // src for these if one shows up.
 fn splices_in_unread_code(code: &str) -> bool {
@@ -434,14 +434,15 @@ fn splices_in_unread_code(code: &str) -> bool {
     attributes.iter().any(|attribute| code.contains(attribute)) || macro_names(code).any(|name| name == "include")
 }
 
-/// The lines of `main_rs` every module would see as `crate::<name>`, a path rules 1-3 cannot read as the shared
+/// The lines of a namespace root (`root_source`: main.rs, whose items every module sees as `crate::<name>`, or
+/// modules/mod.rs, as `crate::modules::<name>`), a path rules 1-3 cannot read as the shared
 /// infrastructure or bootstrap: a crate-root item other than a child declaration or `fn main` (a `type` alias, a
 /// wrapper fn), and a `use` or a splice (`#[path]`, `include!`, a macro handed on) anywhere.
 // ponytail: braces are counted per line, so an unpaired brace in a string literal shifts what counts as the crate root.
-fn crate_root_back_doors(main_rs: &str) -> Vec<&str> {
+fn crate_root_back_doors(root_source: &str) -> Vec<&str> {
     let mut depth = 0;
     let mut found = Vec::new();
-    for line in main_rs.lines() {
+    for line in root_source.lines() {
         let code = without_line_comment(line);
         let root_item = depth == 0 && !only_declares_children(code) && !code.starts_with("fn main(");
         if root_item || imports_or_re_exports(code) || splices_in_unread_code(code) {
@@ -481,7 +482,7 @@ mod tests {
         violations(path, source, &external_crates)
     }
 
-    /// A `src` folder holding an empty file at each of `files` (relative, `/`-separated).
+    /// A folder standing for `src` (or `src/modules`), holding an empty file at each of `files` (relative, `/`-separated).
     fn source_tree(files: &[&str]) -> TempDir {
         let src = TempDir::new("architecture");
         for file in files {

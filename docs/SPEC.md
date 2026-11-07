@@ -490,7 +490,7 @@ ponytail: no lock, a line another session appends in between is lost).
 |---|---|
 | `main.rs` | Entry point: parses the CLI, initialises the logger, runs `bootstrap::cli::run`, exits with its code. |
 | `bootstrap/` | Composition root. `cli.rs`: clap tree, dispatch, `version` and `completion` (§2.10), the internal `_` commands (§2.11), `error:` printing. `engine_server.rs`: the engine thread (§4.3, §6), which serves each `EngineMessage` (`engine_message.rs`, `engine_inbox.rs`) with the completion, history and ghost_text use cases and sends the replies. An `Llm` message goes to `RequestLlmGhostTextUseCase`; a deferred answer runs on an `llm` worker thread (§8.4). `engine_inbox.rs` is the engine thread's single channel (its messages and the spec runtime's events) and implements specs' `RuntimeEventSource`. `channel_completion_engine.rs` implements terminal_session's `CompletionEngine` over that channel and starts the engine thread (`start_completion_engine`). `bridges.rs`, `diagnostics_bridges.rs`: ports that one module declares, implemented over another. |
-| `modules/` | The ten hexagonal modules below, each a vertical slice. Its `mod.rs` only declares them, as `main.rs` only declares `bootstrap` and `modules`. |
+| `modules/` | The ten hexagonal modules below, each a vertical slice. Its `mod.rs` only declares them, as `main.rs` declares only `bootstrap` and `modules` (plus the test-only `architecture_tests`) besides `fn main`. |
 | `modules/shared/` | Kernel every module may use; it imports no module. `Shell`, `DataDirectory` (paths, §3.1), shell quoting, the `Clock` port; in `infrastructure/` (shared keeps its implementations at the top of `infrastructure/`, with no `adapters/`): `SystemClock`, `data_directory_from_env.rs` (resolves the data directory from `TABSMITH_HOME`, `TABSMITH_SETTINGS_PATH`, `HOME` / `USERPROFILE`; §3.1, §3.4), `SharedDependencies` (what bootstrap hands every module's `build_<module>_module`), flat-JSON document store (settings/state, §3.2), atomic file writes, `logger.rs` (file logger, no crate), OS helpers, output format, terminal style. |
 | `modules/settings/` | Typed getters (`Settings`), catalog table (`settings_catalog.rs`, §3.3), wildcard matcher (`SettingKeyPattern`), the `settings` command (§2.3). |
 | `modules/history/` | History store (§3.5, §8): `history.jsonl` through `JsonlHistoryRepository`; `RecordCommandUseCase` records each executed command. |
@@ -564,7 +564,7 @@ Layers depend inward only: `domain` ← `application` ← `infrastructure`. `dom
      [recency] saver (recency); exec workers report back on the engine's own channel (EngineMessage::Runtime).
 ```
 
-Where the threads start (`src/`): the stdin and signals threads (on Windows, the stdin thread and the resize poll
+Where the threads start (paths are relative to `src/modules/`, `bootstrap/` to `src/`): the stdin and signals threads (on Windows, the stdin thread and the resize poll
 thread) in `terminal_session/infrastructure/pty/platform_unix.rs` and `platform_windows.rs` (`spawn_input`,
 `spawn_resize`); the PTY reader in `pty_reader.rs` (`spawn_pty_reader`); the PTY writer and the child wait in
 `session_launcher.rs`. The engine thread starts in `bootstrap/engine_server.rs` (`spawn`); its loop is
@@ -578,7 +578,7 @@ PTY credits: the reader takes one of 4 credits before every read; the main loop 
 most 4 × 16 KiB are queued, so a flooding child (`yes`) feels backpressure and Ctrl-C is never stuck behind its
 output (an unbounded queue grew to GBs). A batch merges every `SessionMessage::Pty` already queued.
 
-Messages (all `std::sync::mpsc`; the comment above each type names its file under `src/`):
+Messages (all `std::sync::mpsc`; the comment above each type names its file under `src/modules/`, or `src/` for `bootstrap/`):
 
 ```rust
 // terminal_session/infrastructure/pty/session_message.rs
@@ -2726,7 +2726,7 @@ those generators yield `[]` (risk, §11).
 `cargo test` (unit tests next to the code, `#[cfg(test)]`; all OSes in CI). Every finding fixed in the four review
 rounds has a regression test next to the code it fixed. Tests stay in the same file under `#[cfg(test)] mod tests`, and
 a test module over about 500 lines usually goes to a sibling `<file>/tests.rs` (a few shorter ones do too, and
-`architecture_tests.rs`, a test-only file, keeps its `mod tests` inline). Paths in the table are relative to `src/`; a
+`architecture_tests.rs`, a test-only file, keeps its `mod tests` inline). Module paths in the table are relative to `src/modules/` (`bootstrap/` and `architecture_tests.rs` to `src/`); a
 directory followed by file names stands for those files in it. `tests/` at the crate root holds data only
 (`tests/fixtures/`, `tests/snapshots/`). Test-only support lives next to what it serves:
 `shared/infrastructure/testing/fixture_log.rs` (the comparison of a log with its frozen file, `P9_WRITE_FIXTURES`) and
