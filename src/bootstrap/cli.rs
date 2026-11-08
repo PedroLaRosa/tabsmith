@@ -4,48 +4,48 @@
 use crate::bootstrap::bridges::{GeneratorProcessBridge, SpecBundleBridge};
 use crate::bootstrap::channel_completion_engine::start_completion_engine;
 use crate::bootstrap::diagnostics_bridges::{BundledSpecsBridge, CheckFixerBridge, IntegrationProbeBridge};
-use crate::diagnostics::infrastructure::adapters::file_repairs::FileRepairs;
-use crate::diagnostics::infrastructure::cli::debug_logs_command::run_debug_logs_command;
-use crate::diagnostics::infrastructure::cli::diagnostic_command::{run_diagnostic_command, DiagnosticArgs};
-use crate::diagnostics::infrastructure::cli::doctor_command::{run_doctor_command, DoctorArgs};
-use crate::diagnostics::infrastructure::diagnostics_module::{build_diagnostics_module, DiagnosticsModule};
-use crate::dropdown::infrastructure::cli::theme_command::{run_theme_command, ThemeArgs};
-use crate::dropdown::infrastructure::dropdown_module::{build_dropdown_module, DropdownModule};
-use crate::ghost_text::infrastructure::cli::inline_command::{run_inline_command, InlineCmd};
-use crate::ghost_text::infrastructure::inline_command_module::{
+use crate::modules::diagnostics::infrastructure::adapters::file_repairs::FileRepairs;
+use crate::modules::diagnostics::infrastructure::cli::debug_logs_command::run_debug_logs_command;
+use crate::modules::diagnostics::infrastructure::cli::diagnostic_command::{run_diagnostic_command, DiagnosticArgs};
+use crate::modules::diagnostics::infrastructure::cli::doctor_command::{run_doctor_command, DoctorArgs};
+use crate::modules::diagnostics::infrastructure::diagnostics_module::{build_diagnostics_module, DiagnosticsModule};
+use crate::modules::dropdown::infrastructure::cli::theme_command::{run_theme_command, ThemeArgs};
+use crate::modules::dropdown::infrastructure::dropdown_module::{build_dropdown_module, DropdownModule};
+use crate::modules::ghost_text::infrastructure::cli::inline_command::{run_inline_command, InlineCmd};
+use crate::modules::ghost_text::infrastructure::inline_command_module::{
     build_inline_command_module, InlineCommandModule,
 };
-use crate::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
-use crate::settings::infrastructure::cli::settings_command::{run_settings_command, SettingsArgs};
-use crate::settings::infrastructure::settings_module::build_settings_module;
-use crate::shared::domain::value_objects::shell::Shell;
-use crate::shared::infrastructure::data_directory_from_env::data_directory_from_env;
-use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
-use crate::shared::infrastructure::terminal_style::epaint;
-use crate::shell_integration::application::integration_installer::IntegrationInstaller;
-use crate::shell_integration::application::render_init_script_use_case::RenderInitScriptUseCase;
-use crate::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
-use crate::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
-use crate::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
-use crate::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
-use crate::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
-use crate::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
-use crate::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
-use crate::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
-use crate::shell_integration::infrastructure::cli::init_command::{init_script, run_init_command, InitArgs, ShellArg};
-use crate::shell_integration::infrastructure::cli::integrations_command::{run_integrations_command, IntegrationsCmd};
-use crate::shell_integration::infrastructure::cli::setup_command::{run_setup_command, SetupArgs};
-use crate::shell_integration::infrastructure::cli::should_launch_command::run_should_launch_command;
-use crate::shell_integration::infrastructure::cli::uninstall_command::{run_uninstall_command, UninstallArgs};
-use crate::shell_integration::infrastructure::shell_integration_module::{
+use crate::modules::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
+use crate::modules::settings::infrastructure::cli::settings_command::{run_settings_command, SettingsArgs};
+use crate::modules::settings::infrastructure::settings_module::build_settings_module;
+use crate::modules::shared::domain::value_objects::shell::Shell;
+use crate::modules::shared::infrastructure::data_directory_from_env::data_directory_from_env;
+use crate::modules::shared::infrastructure::shared_dependencies::SharedDependencies;
+use crate::modules::shared::infrastructure::terminal_style::epaint;
+use crate::modules::shell_integration::application::integration_installer::IntegrationInstaller;
+use crate::modules::shell_integration::application::render_init_script_use_case::RenderInitScriptUseCase;
+use crate::modules::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
+use crate::modules::shell_integration::domain::value_objects::integration_phase::IntegrationPhase;
+use crate::modules::shell_integration::infrastructure::adapters::embedded_shell_scripts::EmbeddedShellScripts;
+use crate::modules::shell_integration::infrastructure::adapters::file_backup_repository::FileBackupRepository;
+use crate::modules::shell_integration::infrastructure::adapters::file_dotfile_repository::FileDotfileRepository;
+use crate::modules::shell_integration::infrastructure::adapters::os_shell_environment::OsShellEnvironment;
+use crate::modules::shell_integration::infrastructure::adapters::state_restart_reminder_repository::StateRestartReminderRepository;
+use crate::modules::shell_integration::infrastructure::cli::get_shell_command::run_get_shell_command;
+use crate::modules::shell_integration::infrastructure::cli::init_command::{init_script, run_init_command, InitArgs, ShellArg};
+use crate::modules::shell_integration::infrastructure::cli::integrations_command::{run_integrations_command, IntegrationsCmd};
+use crate::modules::shell_integration::infrastructure::cli::setup_command::{run_setup_command, SetupArgs};
+use crate::modules::shell_integration::infrastructure::cli::should_launch_command::run_should_launch_command;
+use crate::modules::shell_integration::infrastructure::cli::uninstall_command::{run_uninstall_command, UninstallArgs};
+use crate::modules::shell_integration::infrastructure::shell_integration_module::{
     build_shell_integration_module, ShellIntegrationModule,
 };
-use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::terminal_session::infrastructure::cli::debug_shell_command::run_debug_shell_command;
-use crate::terminal_session::infrastructure::cli::key_tester_command::run_key_tester_command;
-use crate::terminal_session::infrastructure::cli::pre_cmd_command::run_pre_cmd_command;
-use crate::terminal_session::infrastructure::cli::pty_command::run_pty_command;
-use crate::terminal_session::infrastructure::terminal_session_module::{
+use crate::modules::specs::infrastructure::specs_module::build_specs_module;
+use crate::modules::terminal_session::infrastructure::cli::debug_shell_command::run_debug_shell_command;
+use crate::modules::terminal_session::infrastructure::cli::key_tester_command::run_key_tester_command;
+use crate::modules::terminal_session::infrastructure::cli::pre_cmd_command::run_pre_cmd_command;
+use crate::modules::terminal_session::infrastructure::cli::pty_command::run_pty_command;
+use crate::modules::terminal_session::infrastructure::terminal_session_module::{
     build_terminal_session_module, TerminalSessionModule,
 };
 use anyhow::Result;

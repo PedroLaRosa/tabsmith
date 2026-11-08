@@ -1,9 +1,9 @@
 use crate::bootstrap::engine_message::EngineMessage;
-use crate::specs::application::ports::runtime_event::RuntimeEvent;
-use crate::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
-use crate::specs::application::ports::runtime_event_sink::RuntimeEventSink;
-use crate::specs::application::ports::runtime_event_source::RuntimeEventSource;
-use crate::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
+use crate::modules::specs::application::ports::runtime_event::RuntimeEvent;
+use crate::modules::specs::application::ports::runtime_event_poll::RuntimeEventPoll;
+use crate::modules::specs::application::ports::runtime_event_sink::RuntimeEventSink;
+use crate::modules::specs::application::ports::runtime_event_source::RuntimeEventSource;
+use crate::modules::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -96,14 +96,14 @@ impl RuntimeEventSource for EngineInbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::application::completion_request::CompletionRequest;
-    use crate::settings::domain::value_objects::settings::Settings;
-    use crate::shared::domain::value_objects::shell::Shell;
-    use crate::specs::application::ports::spec_runtime::SpecRuntime;
-    use crate::specs::domain::spec_error::SpecError;
-    use crate::specs::domain::value_objects::exec_request::ExecRequest;
-    use crate::specs::domain::value_objects::generator_context::GeneratorContext;
-    use crate::specs::domain::value_objects::process_output::ProcessOutput;
+    use crate::modules::completion::application::completion_request::CompletionRequest;
+    use crate::modules::settings::domain::value_objects::settings::Settings;
+    use crate::modules::shared::domain::value_objects::shell::Shell;
+    use crate::modules::specs::application::ports::spec_runtime::SpecRuntime;
+    use crate::modules::specs::domain::spec_error::SpecError;
+    use crate::modules::specs::domain::value_objects::exec_request::ExecRequest;
+    use crate::modules::specs::domain::value_objects::generator_context::GeneratorContext;
+    use crate::modules::specs::domain::value_objects::process_output::ProcessOutput;
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::rc::Rc;

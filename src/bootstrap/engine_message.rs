@@ -1,8 +1,8 @@
-use crate::completion::application::completion_request::CompletionRequest;
-use crate::history::domain::entities::history_entry::HistoryEntry;
-use crate::settings::domain::value_objects::settings::Settings;
-use crate::shared::domain::value_objects::shell::Shell;
-use crate::specs::application::ports::runtime_event::RuntimeEvent;
+use crate::modules::completion::application::completion_request::CompletionRequest;
+use crate::modules::history::domain::entities::history_entry::HistoryEntry;
+use crate::modules::settings::domain::value_objects::settings::Settings;
+use crate::modules::shared::domain::value_objects::shell::Shell;
+use crate::modules::specs::application::ports::runtime_event::RuntimeEvent;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

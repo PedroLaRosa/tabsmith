@@ -2,27 +2,27 @@
 //! on that thread; the server owns the inbox instance and dispatches each `EngineMessage` to the completion use cases
 //! and the ghost_text use cases (the engine-server event table, plan §4). Only the latest request is served; while
 //! generators run, a request is replied again whenever one of its generators finishes (phase `Generators`).
-use crate::ghost_text::application::llm_ghost_text_answer::LlmGhostTextAnswer;
-use crate::ghost_text::application::llm_ghost_text_request::LlmGhostTextRequest;
-use crate::ghost_text::infrastructure::ghost_text_module::{build_ghost_text_module, GhostTextModule};
-use crate::shared::infrastructure::logger;
-use crate::shared::infrastructure::shared_dependencies::SharedDependencies;
-use crate::completion::application::completion_notice::CompletionNotice;
-use crate::completion::domain::entities::completion_session::CompletionSession;
-use crate::completion::infrastructure::completion_module::{build_completion_module, CompletionModule};
-use crate::settings::domain::value_objects::settings::Settings;
-use crate::completion::application::completion_request::CompletionRequest;
-use crate::completion::domain::value_objects::completion_result::CompletionResult;
-use crate::specs::domain::value_objects::spec_index::SpecIndex;
-use crate::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
-use crate::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
-use crate::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
-use crate::specs::infrastructure::specs_module::build_specs_module;
-use crate::history::application::record_command_use_case::RecordCommandUseCase;
-use crate::history::infrastructure::history_module::{build_history_module, HistoryModule};
+use crate::modules::ghost_text::application::llm_ghost_text_answer::LlmGhostTextAnswer;
+use crate::modules::ghost_text::application::llm_ghost_text_request::LlmGhostTextRequest;
+use crate::modules::ghost_text::infrastructure::ghost_text_module::{build_ghost_text_module, GhostTextModule};
+use crate::modules::shared::infrastructure::logger;
+use crate::modules::shared::infrastructure::shared_dependencies::SharedDependencies;
+use crate::modules::completion::application::completion_notice::CompletionNotice;
+use crate::modules::completion::domain::entities::completion_session::CompletionSession;
+use crate::modules::completion::infrastructure::completion_module::{build_completion_module, CompletionModule};
+use crate::modules::settings::domain::value_objects::settings::Settings;
+use crate::modules::completion::application::completion_request::CompletionRequest;
+use crate::modules::completion::domain::value_objects::completion_result::CompletionResult;
+use crate::modules::specs::domain::value_objects::spec_index::SpecIndex;
+use crate::modules::specs::infrastructure::adapters::embedded_spec_bundle::EmbeddedSpecBundle;
+use crate::modules::specs::infrastructure::adapters::quickjs_spec_repository::QuickJsSpecRepository;
+use crate::modules::specs::infrastructure::adapters::quickjs_spec_runtime::QuickJsSpecRuntime;
+use crate::modules::specs::infrastructure::specs_module::build_specs_module;
+use crate::modules::history::application::record_command_use_case::RecordCommandUseCase;
+use crate::modules::history::infrastructure::history_module::{build_history_module, HistoryModule};
 use crate::bootstrap::engine_inbox::EngineInbox;
 use crate::bootstrap::engine_message::EngineMessage;
-use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
+use crate::modules::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Sender};
 

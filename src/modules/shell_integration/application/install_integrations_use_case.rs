@@ -1,0 +1,123 @@
+use crate::modules::shared::domain::value_objects::shell::Shell;
+use crate::modules::shell_integration::application::integration_failure::IntegrationFailure;
+use crate::modules::shell_integration::application::integration_installer::IntegrationInstaller;
+use crate::modules::shell_integration::domain::repositories::restart_reminder_repository::RestartReminderRepository;
+use crate::modules::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
+use std::rc::Rc;
+
+/// `tabsmith integrations install`: installs what is missing and reminds doctor that terminals opened before need a
+/// restart.
+pub(crate) struct InstallIntegrationsUseCase {
+    installer: Rc<IntegrationInstaller>,
+    restart_reminder: Rc<dyn RestartReminderRepository>,
+}
+
+impl InstallIntegrationsUseCase {
+    pub(crate) fn new(
+        installer: Rc<IntegrationInstaller>,
+        restart_reminder: Rc<dyn RestartReminderRepository>,
+    ) -> Self {
+        InstallIntegrationsUseCase {
+            installer,
+            restart_reminder,
+        }
+    }
+
+    /// Ok(true) if something was installed.
+    pub(crate) fn execute(
+        &self,
+        paths: &IntegrationPaths,
+        shells: &[Shell],
+    ) -> Result<bool, Vec<IntegrationFailure>> {
+        let installed = self.installer.install_missing(paths, shells)?;
+        if installed {
+            self.restart_reminder.save_pending();
+        }
+        Ok(installed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::shared::application::ports::clock::FixedClock;
+    use crate::modules::shell_integration::application::ports::shell_environment::RecordingShellEnvironment;
+    use crate::modules::shell_integration::domain::repositories::backup_repository::InMemoryBackupRepository;
+    use crate::modules::shell_integration::domain::repositories::dotfile_repository::InMemoryDotfileRepository;
+    use crate::modules::shell_integration::domain::repositories::restart_reminder_repository::InMemoryRestartReminderRepository;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// The installer over in-memory dotfiles and backups, a fixed clock and `environment`.
+    fn installer(environment: RecordingShellEnvironment) -> Rc<IntegrationInstaller> {
+        Rc::new(IntegrationInstaller::new(
+            Rc::new(InMemoryDotfileRepository::default()),
+            Rc::new(InMemoryBackupRepository::default()),
+            Arc::new(FixedClock::new(1_700_000_123_999)),
+            Rc::new(environment),
+        ))
+    }
+
+    /// No pwsh `$PROFILE` known, so listing pwsh asks the environment.
+    fn paths() -> IntegrationPaths {
+        IntegrationPaths::new(
+            PathBuf::from("/home/u"),
+            PathBuf::from("/home/u/.tabsmith"),
+            "/usr/local/bin/tabsmith".into(),
+            None,
+            PathBuf::from("/home/u/.config/fish"),
+            None,
+        )
+    }
+
+    #[test]
+    fn should_save_the_restart_reminder_when_something_was_installed() {
+        let restart_reminder = Rc::new(InMemoryRestartReminderRepository::default());
+        let use_case = InstallIntegrationsUseCase::new(
+            installer(RecordingShellEnvironment::default()),
+            restart_reminder.clone(),
+        );
+
+        let installed = use_case.execute(&paths(), &[Shell::Zsh]);
+
+        assert!(
+            matches!(installed, Ok(true)) && restart_reminder.is_pending(),
+            "{installed:?}"
+        );
+    }
+
+    #[test]
+    fn should_save_no_restart_reminder_when_everything_already_was_installed() {
+        let installer = installer(RecordingShellEnvironment::default());
+        installer.install_missing(&paths(), &[Shell::Zsh]).unwrap();
+        let restart_reminder = Rc::new(InMemoryRestartReminderRepository::default());
+        let use_case = InstallIntegrationsUseCase::new(installer, restart_reminder.clone());
+
+        let installed = use_case.execute(&paths(), &[Shell::Zsh]);
+
+        assert!(
+            matches!(installed, Ok(false)) && !restart_reminder.is_pending(),
+            "{installed:?}"
+        );
+    }
+
+    /// zsh is installed, but pwsh cannot be listed: the run fails, so no reminder.
+    #[test]
+    fn should_save_no_restart_reminder_when_the_run_failed() {
+        let restart_reminder = Rc::new(InMemoryRestartReminderRepository::default());
+        let use_case = InstallIntegrationsUseCase::new(
+            installer(
+                RecordingShellEnvironment::default()
+                    .with_pwsh_profile(Err("pwsh printed an empty $PROFILE".into())),
+            ),
+            restart_reminder.clone(),
+        );
+
+        let installed = use_case.execute(&paths(), &[Shell::Zsh, Shell::Pwsh]);
+
+        assert!(
+            installed.is_err() && !restart_reminder.is_pending(),
+            "{installed:?}"
+        );
+    }
+}
