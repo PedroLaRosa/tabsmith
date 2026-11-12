@@ -1,12 +1,12 @@
 //! The terminal session's `CompletionEngine` port over the engine thread's inbox, wired here because only bootstrap
 //! may join modules.
 use crate::bootstrap::engine_message::EngineMessage;
-use crate::completion::application::completion_request::CompletionRequest;
-use crate::history::domain::entities::history_entry::HistoryEntry;
-use crate::settings::domain::value_objects::settings::Settings;
-use crate::shared::domain::value_objects::shell::Shell;
-use crate::terminal_session::application::ports::completion_engine::CompletionEngine;
-use crate::terminal_session::infrastructure::pty::session_message::SessionMessage;
+use crate::modules::completion::application::completion_request::CompletionRequest;
+use crate::modules::history::domain::entities::history_entry::HistoryEntry;
+use crate::modules::settings::domain::value_objects::settings::Settings;
+use crate::modules::shared::domain::value_objects::shell::Shell;
+use crate::modules::terminal_session::application::ports::completion_engine::CompletionEngine;
+use crate::modules::terminal_session::infrastructure::pty::session_message::SessionMessage;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -72,8 +72,8 @@ impl CompletionEngine for ChannelCompletionEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::domain::entities::history_entry::HistoryEntryPrimitives;
-    use crate::settings::domain::value_objects::setting_value::SettingValue;
+    use crate::modules::history::domain::entities::history_entry::HistoryEntryPrimitives;
+    use crate::modules::settings::domain::value_objects::setting_value::SettingValue;
     use std::panic::AssertUnwindSafe;
     use std::path::Path;
     use std::sync::mpsc;

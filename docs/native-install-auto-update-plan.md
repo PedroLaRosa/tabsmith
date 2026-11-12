@@ -443,3 +443,5 @@ Implemented on `feat/native-install`, one commit per GREEN and REFACTOR. Where t
   `publish` fails its signature check until the maintainer runs step 0 and commits the real public key.
 - **Unsupported platforms.** `build_self_update_module` returns `None` where no release carries a binary;
   `tabsmith update` then says so and exits 1, and the background check does nothing.
+- **`src/modules/`.** `main` moved every hexagonal module under `src/modules/` while this was built (PR #12), so the
+  module is `src/modules/self_update/` (`crate::modules::self_update::…`), not the `src/self_update/` of the tree above.

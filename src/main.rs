@@ -4,26 +4,16 @@
 #[cfg(test)]
 mod architecture_tests;
 mod bootstrap;
-mod completion;
-mod diagnostics;
-mod dropdown;
-mod ghost_text;
-mod history;
-mod self_update;
-mod settings;
-mod shared;
-mod shell_integration;
-mod specs;
-mod terminal_session;
+mod modules;
 
 fn main() {
     let cli: bootstrap::cli::Cli = clap::Parser::parse();
     let is_pty = cli.runs_pty();
-    shared::infrastructure::logger::init(
+    modules::shared::infrastructure::logger::init(
         if is_pty { "pty" } else { "cli" },
         cli.verbose(),
         !is_pty,
-        &shared::infrastructure::data_directory_from_env::data_directory_from_env(),
+        &modules::shared::infrastructure::data_directory_from_env::data_directory_from_env(),
     );
 
     let result = bootstrap::cli::run(cli);
@@ -31,7 +21,7 @@ fn main() {
     match result {
         Ok(code) => std::process::exit(code),
         Err(err) => {
-            shared::infrastructure::logger::error(&format!("{err:#}"));
+            modules::shared::infrastructure::logger::error(&format!("{err:#}"));
             bootstrap::cli::print_error(&err);
             std::process::exit(1);
         }

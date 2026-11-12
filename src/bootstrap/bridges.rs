@@ -1,9 +1,9 @@
 //! Ports of one module implemented over another module, wired here because only bootstrap may join modules.
-use crate::shell_integration::application::ports::spec_bundle_installer::SpecBundleInstaller;
-use crate::shell_integration::domain::shell_integration_error::ShellIntegrationError;
-use crate::specs::application::install_spec_bundle_use_case::InstallSpecBundleUseCase;
-use crate::specs::infrastructure::adapters::process_executor::kill_live_children;
-use crate::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
+use crate::modules::shell_integration::application::ports::spec_bundle_installer::SpecBundleInstaller;
+use crate::modules::shell_integration::domain::shell_integration_error::ShellIntegrationError;
+use crate::modules::specs::application::install_spec_bundle_use_case::InstallSpecBundleUseCase;
+use crate::modules::specs::infrastructure::adapters::process_executor::kill_live_children;
+use crate::modules::terminal_session::application::ports::generator_process_reaper::GeneratorProcessReaper;
 
 /// setup's spec bundle, extracted by the specs module (specs' InstallSpecBundleUseCase).
 pub(crate) struct SpecBundleBridge {
