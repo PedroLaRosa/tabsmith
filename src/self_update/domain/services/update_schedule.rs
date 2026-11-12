@@ -6,13 +6,11 @@ const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 pub(crate) struct UpdateSchedule;
 
 impl UpdateSchedule {
+    /// Due when there was no check yet, a day has passed since the last one, or the last one is in the future (the
+    /// clock was set back): every case without a known wait left.
     pub(crate) fn is_due(last_check_secs: Option<u64>, now_secs: u64) -> bool {
-        match last_check_secs {
-            None => true,
-            Some(last_check_secs) => now_secs
-                .checked_sub(last_check_secs)
-                .is_none_or(|elapsed| elapsed >= CHECK_INTERVAL_SECS),
-        }
+        let elapsed_secs = last_check_secs.and_then(|last_check_secs| now_secs.checked_sub(last_check_secs));
+        elapsed_secs.is_none_or(|elapsed_secs| elapsed_secs >= CHECK_INTERVAL_SECS)
     }
 }
 
