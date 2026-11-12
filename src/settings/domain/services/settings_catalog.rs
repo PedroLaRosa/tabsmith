@@ -200,6 +200,12 @@ static CATALOG: &[SettingDefinition] = &[
         "49",
         "History lines sent to the LLM",
     ),
+    SettingDefinition::new(
+        APP_DISABLE_AUTOUPDATES,
+        "bool",
+        "false",
+        "Never update in the background (tabsmith update still works)",
+    ),
 ];
 
 /// Every documented setting (SPEC §3.3).
@@ -381,6 +387,19 @@ mod tests {
         let read = (
             settings.bool(AUTOCOMPLETE_DISABLE),
             default(AUTOCOMPLETE_DISABLE),
+        );
+
+        assert_eq!(read, (false, Some("false")));
+    }
+
+    /// self_update/application/update_tabsmith_use_case.rs: `bool("app.disableAutoupdates")`, background check only.
+    #[test]
+    fn should_default_autoupdates_to_not_disabled() {
+        let settings = Settings::default();
+
+        let read = (
+            settings.bool(APP_DISABLE_AUTOUPDATES),
+            default(APP_DISABLE_AUTOUPDATES),
         );
 
         assert_eq!(read, (false, Some("false")));

@@ -14,7 +14,7 @@ impl ListSettingDefinitionsUseCase {
 mod tests {
     use super::*;
 
-    /// `settings list --all` shows the 28 documented settings, `autocomplete.disable` first.
+    /// `settings list --all` shows the 29 documented settings, `autocomplete.disable` first.
     #[test]
     fn should_list_every_documented_setting_in_catalog_order() {
         let use_case = ListSettingDefinitionsUseCase;
@@ -23,7 +23,7 @@ mod tests {
 
         assert_eq!(
             (definitions.len(), definitions[0].key()),
-            (28, "autocomplete.disable")
+            (29, "autocomplete.disable")
         );
     }
 }
