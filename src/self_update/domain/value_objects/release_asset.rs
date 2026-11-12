@@ -6,16 +6,17 @@ pub(crate) struct ReleaseAsset {
 
 impl ReleaseAsset {
     pub(crate) fn for_platform(os: &str, arch: &str) -> Option<Self> {
-        let os = match os {
-            "macos" => "darwin",
-            _ => "linux",
+        let (os, extension) = match os {
+            "macos" => ("darwin", ""),
+            "windows" => ("win32", ".exe"),
+            _ => ("linux", ""),
         };
         let arch = match arch {
             "aarch64" => "arm64",
             _ => "x64",
         };
         Some(ReleaseAsset {
-            name: format!("tabsmith-{os}-{arch}"),
+            name: format!("tabsmith-{os}-{arch}{extension}"),
         })
     }
 
@@ -44,5 +45,12 @@ mod tests {
         let name = asset_name("linux", "x86_64");
 
         assert_eq!(name.as_deref(), Some("tabsmith-linux-x64"));
+    }
+
+    #[test]
+    fn should_name_the_windows_asset_win32_with_the_exe_extension() {
+        let name = asset_name("windows", "x86_64");
+
+        assert_eq!(name.as_deref(), Some("tabsmith-win32-x64.exe"));
     }
 }
