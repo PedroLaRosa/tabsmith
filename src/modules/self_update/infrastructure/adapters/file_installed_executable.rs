@@ -25,12 +25,13 @@ impl FileInstalledExecutable {
         FileInstalledExecutable { executable, user_home }
     }
 
-    /// Next to the executable, so the final rename stays on one filesystem; named per process, so two tabs updating
-    /// at once never write the same file.
-    fn staged_path(&self) -> PathBuf {
-        let name = format!(".tabsmith-update-{}{}", std::process::id(), std::env::consts::EXE_SUFFIX);
-        self.executable.with_file_name(name)
-    }
+}
+
+/// Next to the executable, so the final rename stays on one filesystem; named per process, so two tabs updating at
+/// once never write the same file.
+fn staged_path(executable: &Path) -> PathBuf {
+    let name = format!(".tabsmith-update-{}{}", std::process::id(), std::env::consts::EXE_SUFFIX);
+    executable.with_file_name(name)
 }
 
 impl InstalledExecutable for FileInstalledExecutable {
@@ -41,11 +42,14 @@ impl InstalledExecutable for FileInstalledExecutable {
         InstallLocation::new(resolved(&self.executable), resolved(&native_dir))
     }
 
+    /// The resolved file is replaced, the one `location` judged native: renaming over a symlink to it (macOS reports
+    /// the binary as invoked) would leave the native install old and turn the link into a copy.
     fn replace(&self, bytes: &[u8], expected_version: &str) -> Result<(), SelfUpdateError> {
-        let staged = self.staged_path();
+        let executable = resolved(&self.executable);
+        let staged = staged_path(&executable);
         let replaced = stage(&staged, bytes)
             .and_then(|()| check_version(&staged, expected_version))
-            .and_then(|()| swap_into_place(&staged, &self.executable));
+            .and_then(|()| swap_into_place(&staged, &executable));
         if replaced.is_err() {
             let _ = fs::remove_file(&staged);
         }
@@ -222,5 +226,23 @@ mod tests {
         let location = FileInstalledExecutable::new(executable, home).location();
 
         assert!(location.is_native());
+    }
+
+    /// macOS reports the running binary as it was invoked, here through a link on PATH to the native install: the
+    /// file judged native is the one replaced.
+    #[test]
+    fn should_replace_the_native_binary_a_symlink_points_at_and_keep_the_symlink() {
+        let temp_dir = TempDir::new("self-update-through-link");
+        let home = temp_dir.path().join("home");
+        let (_, native) = native_install_under(&home);
+        let path_dir = temp_dir.path().join("opt-homebrew-bin");
+        fs::create_dir_all(&path_dir).unwrap();
+        let link = path_dir.join("tabsmith");
+        std::os::unix::fs::symlink(&native, &link).unwrap();
+
+        FileInstalledExecutable::new(link.clone(), home).replace(RELEASE_9_9_9, "9.9.9").unwrap();
+
+        let link_kept = fs::symlink_metadata(&link).unwrap().file_type().is_symlink();
+        assert_eq!((fs::read(&native).unwrap(), link_kept), (RELEASE_9_9_9.to_vec(), true));
     }
 }
