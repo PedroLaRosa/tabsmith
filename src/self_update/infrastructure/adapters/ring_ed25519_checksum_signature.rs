@@ -45,7 +45,7 @@ mod tests {
     const TEST_1_SIGNATURE: &str = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
 
     fn bytes(hex: &str) -> Vec<u8> {
-        (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+        decode_hex(hex).unwrap()
     }
 
     #[test]
