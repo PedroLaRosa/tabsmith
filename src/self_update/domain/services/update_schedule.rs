@@ -9,7 +9,9 @@ impl UpdateSchedule {
     pub(crate) fn is_due(last_check_secs: Option<u64>, now_secs: u64) -> bool {
         match last_check_secs {
             None => true,
-            Some(last_check_secs) => now_secs.saturating_sub(last_check_secs) >= CHECK_INTERVAL_SECS,
+            Some(last_check_secs) => now_secs
+                .checked_sub(last_check_secs)
+                .is_none_or(|elapsed| elapsed >= CHECK_INTERVAL_SECS),
         }
     }
 }
@@ -41,6 +43,16 @@ mod tests {
     #[test]
     fn should_be_due_a_whole_day_after_the_last_check() {
         let last_check_secs = Some(NOW_SECS - 24 * 60 * 60);
+
+        let due = UpdateSchedule::is_due(last_check_secs, NOW_SECS);
+
+        assert!(due);
+    }
+
+    /// A clock set back would otherwise hold off every check until it caught up again.
+    #[test]
+    fn should_be_due_when_the_last_check_is_in_the_future() {
+        let last_check_secs = Some(NOW_SECS + 60);
 
         let due = UpdateSchedule::is_due(last_check_secs, NOW_SECS);
 
