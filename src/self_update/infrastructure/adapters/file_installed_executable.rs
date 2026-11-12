@@ -34,8 +34,9 @@ impl FileInstalledExecutable {
 }
 
 impl InstalledExecutable for FileInstalledExecutable {
+    /// Both paths with symlinks resolved where they exist: Linux reports the running binary that way.
     fn location(&self) -> InstallLocation {
-        InstallLocation::new(self.executable.clone(), self.user_home.clone())
+        InstallLocation::new(resolved(&self.executable), resolved(&self.user_home))
     }
 
     fn replace(&self, bytes: &[u8], expected_version: &str) -> Result<(), SelfUpdateError> {
@@ -48,6 +49,10 @@ impl InstalledExecutable for FileInstalledExecutable {
         }
         replaced
     }
+}
+
+fn resolved(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// `bytes` at `path`, executable.
@@ -129,11 +134,15 @@ mod tests {
 
     /// An old binary at `<temp>/home/.local/bin/tabsmith`, and its path.
     fn native_install(temp_dir: &TempDir) -> (FileInstalledExecutable, PathBuf) {
-        let home = temp_dir.path().join("home");
+        native_install_under(&temp_dir.path().join("home"))
+    }
+
+    /// An old binary at `<home>/.local/bin/tabsmith`, and its path.
+    fn native_install_under(home: &Path) -> (FileInstalledExecutable, PathBuf) {
         let executable = home.join(".local").join("bin").join("tabsmith");
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, b"old binary").unwrap();
-        (FileInstalledExecutable::new(executable.clone(), home), executable)
+        (FileInstalledExecutable::new(executable.clone(), home.to_path_buf()), executable)
     }
 
     #[test]
@@ -180,5 +189,19 @@ mod tests {
         installed.replace(RELEASE_9_9_9, "9.9.9").unwrap();
 
         assert_eq!(fs::read(&running_session).unwrap(), b"old binary");
+    }
+
+    /// On Linux the running binary's path comes with symlinks resolved, so the home has to be resolved too.
+    #[test]
+    fn should_take_the_local_bin_of_a_symlinked_home_for_the_native_install() {
+        let temp_dir = TempDir::new("self-update-symlinked-home");
+        let real_home = temp_dir.path().join("real-home");
+        let (_, executable) = native_install_under(&real_home);
+        let home = temp_dir.path().join("home");
+        std::os::unix::fs::symlink(&real_home, &home).unwrap();
+
+        let location = FileInstalledExecutable::new(executable, home).location();
+
+        assert!(location.is_native());
     }
 }
