@@ -1,5 +1,5 @@
 #[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::collections::HashMap;
 
@@ -16,6 +16,7 @@ pub(crate) trait ReleaseChannel {
 pub(crate) struct InMemoryReleaseChannel {
     latest_version: String,
     files: HashMap<String, Vec<u8>>,
+    latest_version_requests: Cell<usize>,
     downloads: RefCell<Vec<String>>,
 }
 
@@ -25,6 +26,7 @@ impl InMemoryReleaseChannel {
         InMemoryReleaseChannel {
             latest_version: latest_version.to_string(),
             files: HashMap::new(),
+            latest_version_requests: Cell::new(0),
             downloads: RefCell::new(Vec::new()),
         }
     }
@@ -33,6 +35,11 @@ impl InMemoryReleaseChannel {
     pub(crate) fn with_file(mut self, file: &str, bytes: &[u8]) -> Self {
         self.files.insert(file.to_string(), bytes.to_vec());
         self
+    }
+
+    /// How many times the latest version was asked for.
+    pub(crate) fn latest_version_requests(&self) -> usize {
+        self.latest_version_requests.get()
     }
 
     /// The files downloaded so far, in order.
@@ -44,6 +51,7 @@ impl InMemoryReleaseChannel {
 #[cfg(test)]
 impl ReleaseChannel for InMemoryReleaseChannel {
     fn latest_version(&self) -> String {
+        self.latest_version_requests.set(self.latest_version_requests.get() + 1);
         self.latest_version.clone()
     }
 

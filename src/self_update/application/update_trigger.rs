@@ -3,4 +3,6 @@
 pub(crate) enum UpdateTrigger {
     /// `tabsmith update`.
     Manual,
+    /// The background check when a terminal tab opens.
+    Scheduled,
 }

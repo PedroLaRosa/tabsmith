@@ -3,13 +3,18 @@ use crate::self_update::application::ports::installed_executable::InstalledExecu
 use crate::self_update::application::ports::release_channel::ReleaseChannel;
 use crate::self_update::application::ports::sha256_digest::Sha256Digest;
 use crate::self_update::application::update_trigger::UpdateTrigger;
+use crate::self_update::domain::repositories::update_check_repository::UpdateCheckRepository;
 use crate::self_update::domain::self_update_error::SelfUpdateError;
+use crate::self_update::domain::services::update_schedule::UpdateSchedule;
 use crate::self_update::domain::value_objects::checksum_list::ChecksumList;
 use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
+use crate::self_update::domain::value_objects::skip_reason::SkipReason;
 use crate::self_update::domain::value_objects::update_outcome::UpdateOutcome;
+use crate::shared::application::ports::clock::Clock;
 use crate::specs::domain::value_objects::semantic_version::SemanticVersion;
 use std::cmp::Ordering;
 use std::rc::Rc;
+use std::sync::Arc;
 
 const CHECKSUMS_FILE: &str = "SHA256SUMS";
 const CHECKSUMS_SIGNATURE_FILE: &str = "SHA256SUMS.sig";
@@ -22,6 +27,8 @@ pub(crate) struct UpdateTabsmithUseCase {
     digest: Rc<dyn Sha256Digest>,
     signature: Rc<dyn ChecksumSignature>,
     executable: Rc<dyn InstalledExecutable>,
+    update_checks: Rc<dyn UpdateCheckRepository>,
+    clock: Arc<dyn Clock + Send + Sync>,
 }
 
 /// What [`UpdateTabsmithUseCase`] is built from.
@@ -34,6 +41,8 @@ pub(crate) struct UpdateTabsmithParts {
     pub(crate) digest: Rc<dyn Sha256Digest>,
     pub(crate) signature: Rc<dyn ChecksumSignature>,
     pub(crate) executable: Rc<dyn InstalledExecutable>,
+    pub(crate) update_checks: Rc<dyn UpdateCheckRepository>,
+    pub(crate) clock: Arc<dyn Clock + Send + Sync>,
 }
 
 impl UpdateTabsmithUseCase {
@@ -45,10 +54,17 @@ impl UpdateTabsmithUseCase {
             digest: parts.digest,
             signature: parts.signature,
             executable: parts.executable,
+            update_checks: parts.update_checks,
+            clock: parts.clock,
         }
     }
 
-    pub(crate) fn execute(&self, _trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
+    pub(crate) fn execute(&self, trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
+        if trigger == UpdateTrigger::Scheduled
+            && !UpdateSchedule::is_due(self.update_checks.last_check_secs(), self.clock.now_secs())
+        {
+            return Ok(UpdateOutcome::Skipped(SkipReason::NotDue));
+        }
         let location = self.executable.location();
         if !location.is_native() {
             return Err(SelfUpdateError::NotNativeInstall {
@@ -113,13 +129,18 @@ mod tests {
     use crate::self_update::application::ports::installed_executable::InMemoryExecutable;
     use crate::self_update::application::ports::release_channel::InMemoryReleaseChannel;
     use crate::self_update::application::ports::sha256_digest::HexEncodingDigest;
+    use crate::self_update::domain::repositories::update_check_repository::InMemoryUpdateCheckRepository;
     use crate::self_update::domain::value_objects::install_location::InstallLocation;
     use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
+    use crate::self_update::domain::value_objects::skip_reason::SkipReason;
+    use crate::shared::application::ports::clock::FixedClock;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     const CURRENT: &str = "0.1.0";
     const NEWER: &str = "0.2.0";
     const ASSET: &str = "tabsmith-linux-x64";
+    const NOW_SECS: u64 = 1_700_000_000;
 
     /// The newer release, holding `binary` and the `sums` listing it, signed.
     fn signed_release(sums: &str, binary: &[u8]) -> InMemoryReleaseChannel {
@@ -134,11 +155,12 @@ mod tests {
         signed_release(&format!("6f6b  {ASSET}\n"), b"ok")
     }
 
-    /// One test's fakes, built fresh: the release channel it is given, and the native install of `/home/ana`
-    /// running version 0.1.0 for linux-x64.
+    /// One test's fakes, built fresh: the release channel it is given, the native install of `/home/ana` running
+    /// version 0.1.0 for linux-x64, no update check yet, and a clock stopped at `NOW_SECS`.
     struct Fakes {
         channel: Rc<InMemoryReleaseChannel>,
         executable: Rc<InMemoryExecutable>,
+        update_checks: Rc<InMemoryUpdateCheckRepository>,
     }
 
     impl Fakes {
@@ -146,6 +168,7 @@ mod tests {
             Fakes {
                 channel: Rc::new(channel),
                 executable: Rc::new(InMemoryExecutable::default()),
+                update_checks: Rc::new(InMemoryUpdateCheckRepository::default()),
             }
         }
 
@@ -162,6 +185,8 @@ mod tests {
                 digest: Rc::new(HexEncodingDigest),
                 signature: Rc::new(PrefixedChecksumSignature),
                 executable: self.executable.clone(),
+                update_checks: self.update_checks.clone(),
+                clock: Arc::new(FixedClock::new(NOW_SECS * 1000)),
             })
         }
     }
@@ -284,6 +309,19 @@ mod tests {
                 Vec::<String>::new(),
                 None
             )
+        );
+    }
+
+    #[test]
+    fn should_skip_a_scheduled_check_within_a_day_of_the_last_without_asking_the_channel() {
+        let fakes = Fakes::new(good_release());
+        fakes.update_checks.record_check(NOW_SECS - 60 * 60);
+
+        let outcome = fakes.use_case().execute(UpdateTrigger::Scheduled);
+
+        assert_eq!(
+            (outcome, fakes.channel.latest_version_requests(), fakes.executable.installed_bytes()),
+            (Ok(UpdateOutcome::Skipped(SkipReason::NotDue)), 0, None)
         );
     }
 }
