@@ -122,49 +122,70 @@ mod tests {
     const ASSET: &str = "tabsmith-linux-x64";
 
     /// The newer release, holding `binary` and the `sums` listing it, signed.
-    fn signed_release(sums: &str, binary: &[u8]) -> Rc<InMemoryReleaseChannel> {
-        Rc::new(
-            InMemoryReleaseChannel::new(NEWER)
-                .with_file("SHA256SUMS", sums.as_bytes())
-                .with_file("SHA256SUMS.sig", format!("sig:{sums}").as_bytes())
-                .with_file(ASSET, binary),
-        )
+    fn signed_release(sums: &str, binary: &[u8]) -> InMemoryReleaseChannel {
+        InMemoryReleaseChannel::new(NEWER)
+            .with_file("SHA256SUMS", sums.as_bytes())
+            .with_file("SHA256SUMS.sig", format!("sig:{sums}").as_bytes())
+            .with_file(ASSET, binary)
     }
 
-    fn use_case(channel: &Rc<InMemoryReleaseChannel>, executable: &Rc<InMemoryExecutable>) -> UpdateTabsmithUseCase {
-        UpdateTabsmithUseCase::new(UpdateTabsmithParts {
-            current_version: CURRENT.to_string(),
-            asset: ReleaseAsset::for_platform("linux", "x86_64").unwrap(),
-            channel: channel.clone(),
-            digest: Rc::new(HexEncodingDigest),
-            signature: Rc::new(PrefixedChecksumSignature),
-            executable: executable.clone(),
-        })
+    /// The newer release whose binary is `ok`, correctly listed and signed.
+    fn good_release() -> InMemoryReleaseChannel {
+        signed_release(&format!("6f6b  {ASSET}\n"), b"ok")
+    }
+
+    /// One test's fakes, built fresh: the release channel it is given, and the native install of `/home/ana`
+    /// running version 0.1.0 for linux-x64.
+    struct Fakes {
+        channel: Rc<InMemoryReleaseChannel>,
+        executable: Rc<InMemoryExecutable>,
+    }
+
+    impl Fakes {
+        fn new(channel: InMemoryReleaseChannel) -> Self {
+            Fakes {
+                channel: Rc::new(channel),
+                executable: Rc::new(InMemoryExecutable::default()),
+            }
+        }
+
+        fn installed_at(mut self, location: InstallLocation) -> Self {
+            self.executable = Rc::new(InMemoryExecutable::at(location));
+            self
+        }
+
+        fn use_case(&self) -> UpdateTabsmithUseCase {
+            UpdateTabsmithUseCase::new(UpdateTabsmithParts {
+                current_version: CURRENT.to_string(),
+                asset: ReleaseAsset::for_platform("linux", "x86_64").unwrap(),
+                channel: self.channel.clone(),
+                digest: Rc::new(HexEncodingDigest),
+                signature: Rc::new(PrefixedChecksumSignature),
+                executable: self.executable.clone(),
+            })
+        }
     }
 
     #[test]
     fn should_be_up_to_date_without_downloading_when_the_latest_release_is_the_running_version() {
-        let channel = Rc::new(InMemoryReleaseChannel::new(CURRENT));
-        let use_case = use_case(&channel, &Rc::new(InMemoryExecutable::default()));
+        let fakes = Fakes::new(InMemoryReleaseChannel::new(CURRENT));
 
-        let outcome = use_case.execute(UpdateTrigger::Manual);
+        let outcome = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (outcome, channel.downloads()),
+            (outcome, fakes.channel.downloads()),
             (Ok(UpdateOutcome::UpToDate(CURRENT.to_string())), Vec::<String>::new())
         );
     }
 
     #[test]
     fn should_replace_the_executable_with_the_binary_of_a_newer_release() {
-        let channel = signed_release(&format!("6f6b  {ASSET}\n"), b"ok");
-        let executable = Rc::new(InMemoryExecutable::default());
-        let use_case = use_case(&channel, &executable);
+        let fakes = Fakes::new(good_release());
 
-        let outcome = use_case.execute(UpdateTrigger::Manual);
+        let outcome = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (outcome, executable.installed_bytes()),
+            (outcome, fakes.executable.installed_bytes()),
             (
                 Ok(UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() }),
                 Some(b"ok".to_vec())
@@ -174,48 +195,41 @@ mod tests {
 
     #[test]
     fn should_leave_the_executable_untouched_when_the_binary_does_not_match_its_checksum() {
-        let channel = signed_release(&format!("0000  {ASSET}\n"), b"ok");
-        let executable = Rc::new(InMemoryExecutable::default());
-        let use_case = use_case(&channel, &executable);
+        let fakes = Fakes::new(signed_release(&format!("0000  {ASSET}\n"), b"ok"));
 
-        let result = use_case.execute(UpdateTrigger::Manual);
+        let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, executable.installed_bytes()),
+            (result, fakes.executable.installed_bytes()),
             (Err(SelfUpdateError::ChecksumMismatch { asset: ASSET.to_string() }), None)
         );
     }
 
     #[test]
     fn should_leave_the_executable_untouched_when_sha256sums_does_not_list_the_binary() {
-        let channel = signed_release("6f6b  tabsmith-darwin-arm64\n", b"ok");
-        let executable = Rc::new(InMemoryExecutable::default());
-        let use_case = use_case(&channel, &executable);
+        let fakes = Fakes::new(signed_release("6f6b  tabsmith-darwin-arm64\n", b"ok"));
 
-        let result = use_case.execute(UpdateTrigger::Manual);
+        let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, executable.installed_bytes()),
+            (result, fakes.executable.installed_bytes()),
             (Err(SelfUpdateError::MissingChecksum { asset: ASSET.to_string() }), None)
         );
     }
 
     #[test]
     fn should_not_download_the_binary_when_the_checksums_signature_does_not_verify() {
-        let sums = format!("6f6b  {ASSET}\n");
-        let channel = Rc::new(
+        let fakes = Fakes::new(
             InMemoryReleaseChannel::new(NEWER)
-                .with_file("SHA256SUMS", sums.as_bytes())
+                .with_file("SHA256SUMS", format!("6f6b  {ASSET}\n").as_bytes())
                 .with_file("SHA256SUMS.sig", b"sig:signed by someone else")
                 .with_file(ASSET, b"ok"),
         );
-        let executable = Rc::new(InMemoryExecutable::default());
-        let use_case = use_case(&channel, &executable);
 
-        let result = use_case.execute(UpdateTrigger::Manual);
+        let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, channel.downloads(), executable.installed_bytes()),
+            (result, fakes.channel.downloads(), fakes.executable.installed_bytes()),
             (
                 Err(SelfUpdateError::UntrustedChecksums),
                 vec!["SHA256SUMS".to_string(), "SHA256SUMS.sig".to_string()],
@@ -226,14 +240,12 @@ mod tests {
 
     #[test]
     fn should_download_nothing_when_the_latest_version_is_not_a_version() {
-        let channel = Rc::new(InMemoryReleaseChannel::new("<!DOCTYPE html>"));
-        let executable = Rc::new(InMemoryExecutable::default());
-        let use_case = use_case(&channel, &executable);
+        let fakes = Fakes::new(InMemoryReleaseChannel::new("<!DOCTYPE html>"));
 
-        let result = use_case.execute(UpdateTrigger::Manual);
+        let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, channel.downloads(), executable.installed_bytes()),
+            (result, fakes.channel.downloads(), fakes.executable.installed_bytes()),
             (
                 Err(SelfUpdateError::InvalidVersion { version: "<!DOCTYPE html>".to_string() }),
                 Vec::<String>::new(),
@@ -245,31 +257,28 @@ mod tests {
     /// Decision 8: only a newer release installs, so the updater never downgrades.
     #[test]
     fn should_stay_on_the_running_version_when_the_latest_release_is_older() {
-        let channel = Rc::new(InMemoryReleaseChannel::new("0.0.9"));
-        let use_case = use_case(&channel, &Rc::new(InMemoryExecutable::default()));
+        let fakes = Fakes::new(InMemoryReleaseChannel::new("0.0.9"));
 
-        let outcome = use_case.execute(UpdateTrigger::Manual);
+        let outcome = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (outcome, channel.downloads()),
+            (outcome, fakes.channel.downloads()),
             (Ok(UpdateOutcome::UpToDate(CURRENT.to_string())), Vec::<String>::new())
         );
     }
 
     #[test]
     fn should_refuse_a_manual_update_of_an_install_outside_the_native_location() {
-        let channel = signed_release(&format!("6f6b  {ASSET}\n"), b"ok");
         let cargo_install = InstallLocation::new(
             PathBuf::from("/home/ana/.cargo/bin/tabsmith"),
             PathBuf::from("/home/ana"),
         );
-        let executable = Rc::new(InMemoryExecutable::at(cargo_install));
-        let use_case = use_case(&channel, &executable);
+        let fakes = Fakes::new(good_release()).installed_at(cargo_install);
 
-        let result = use_case.execute(UpdateTrigger::Manual);
+        let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, channel.downloads(), executable.installed_bytes()),
+            (result, fakes.channel.downloads(), fakes.executable.installed_bytes()),
             (
                 Err(SelfUpdateError::NotNativeInstall { path: PathBuf::from("/home/ana/.cargo/bin/tabsmith") }),
                 Vec::<String>::new(),
