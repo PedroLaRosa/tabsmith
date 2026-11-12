@@ -12,9 +12,10 @@ impl InstallLocation {
         InstallLocation { executable, user_home }
     }
 
-    /// The binary is `<user home>/.local/bin/tabsmith`, where the installers put it.
+    /// The binary is `<user home>/.local/bin/tabsmith` (`tabsmith.exe` on Windows), where the installers put it.
     pub(crate) fn is_native(&self) -> bool {
-        self.executable == self.user_home.join(".local").join("bin").join("tabsmith")
+        let native_dir = self.user_home.join(".local").join("bin");
+        ["tabsmith", "tabsmith.exe"].iter().any(|name| self.executable == native_dir.join(name))
     }
 }
 
@@ -42,5 +43,14 @@ mod tests {
         let native = location.is_native();
 
         assert!(!native);
+    }
+
+    #[test]
+    fn should_be_native_as_the_windows_executable_in_the_local_bin_of_the_user_home() {
+        let location = location("/home/ana/.local/bin/tabsmith.exe");
+
+        let native = location.is_native();
+
+        assert!(native);
     }
 }
