@@ -1,6 +1,24 @@
 //! `tabsmith update` (SPEC §2.10).
 
+use crate::self_update::application::update_trigger::UpdateTrigger;
 use crate::self_update::domain::value_objects::update_outcome::UpdateOutcome;
+use crate::self_update::infrastructure::self_update_module::SelfUpdateModule;
+use anyhow::{bail, Result};
+
+/// Runs `update`; `module` is `None` on a platform no release carries a binary for. Every failure is an error that
+/// says what went wrong (and, outside `~/.local/bin`, how to update instead), so the command exits 1.
+pub(crate) fn run_update_command(module: Option<&SelfUpdateModule>) -> Result<i32> {
+    let Some(module) = module else {
+        bail!(
+            "tabsmith has no release for {}-{}; update it the way you installed it",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+    };
+    let outcome = module.update_tabsmith.execute(UpdateTrigger::Manual)?;
+    println!("{}", update_report(&outcome));
+    Ok(0)
+}
 
 /// What `tabsmith update` prints once it is done.
 fn update_report(outcome: &UpdateOutcome) -> String {
