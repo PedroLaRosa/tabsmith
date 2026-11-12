@@ -1,25 +1,30 @@
 use std::path::{Path, PathBuf};
 
-/// Where the running tabsmith binary is, and the user home it is judged against.
+/// Where the running tabsmith binary is, and the native install's directory it is judged against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstallLocation {
     executable: PathBuf,
-    user_home: PathBuf,
+    native_dir: PathBuf,
 }
 
 impl InstallLocation {
-    pub(crate) fn new(executable: PathBuf, user_home: PathBuf) -> Self {
-        InstallLocation { executable, user_home }
+    /// `<user home>/.local/bin`, where the installers put tabsmith.
+    pub(crate) fn native_dir(user_home: &Path) -> PathBuf {
+        user_home.join(".local").join("bin")
+    }
+
+    /// `native_dir` is [`InstallLocation::native_dir`] of the user's home, resolved the same way as `executable`.
+    pub(crate) fn new(executable: PathBuf, native_dir: PathBuf) -> Self {
+        InstallLocation { executable, native_dir }
     }
 
     pub(crate) fn executable(&self) -> &Path {
         &self.executable
     }
 
-    /// The binary is `<user home>/.local/bin/tabsmith` (`tabsmith.exe` on Windows), where the installers put it.
+    /// The binary is `tabsmith` (`tabsmith.exe` on Windows) in the native directory.
     pub(crate) fn is_native(&self) -> bool {
-        let native_dir = self.user_home.join(".local").join("bin");
-        ["tabsmith", "tabsmith.exe"].iter().any(|name| self.executable == native_dir.join(name))
+        ["tabsmith", "tabsmith.exe"].iter().any(|name| self.executable == self.native_dir.join(name))
     }
 }
 
@@ -28,7 +33,7 @@ mod tests {
     use super::*;
 
     fn location(executable: &str) -> InstallLocation {
-        InstallLocation::new(PathBuf::from(executable), PathBuf::from("/home/ana"))
+        InstallLocation::new(PathBuf::from(executable), InstallLocation::native_dir(Path::new("/home/ana")))
     }
 
     #[test]

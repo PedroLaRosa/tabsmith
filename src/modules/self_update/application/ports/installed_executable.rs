@@ -3,7 +3,7 @@ use crate::modules::self_update::domain::value_objects::install_location::Instal
 #[cfg(test)]
 use std::cell::RefCell;
 #[cfg(test)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The tabsmith binary this process runs from.
 pub(crate) trait InstalledExecutable {
@@ -52,7 +52,7 @@ impl Default for InMemoryExecutable {
     fn default() -> Self {
         InMemoryExecutable::at(InstallLocation::new(
             PathBuf::from("/home/ana/.local/bin/tabsmith"),
-            PathBuf::from("/home/ana"),
+            InstallLocation::native_dir(Path::new("/home/ana")),
         ))
     }
 }

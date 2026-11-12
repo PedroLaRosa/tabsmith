@@ -175,7 +175,7 @@ mod tests {
     use crate::modules::settings::domain::value_objects::setting_value::SettingValue;
     use crate::modules::settings::domain::value_objects::settings::Settings;
     use crate::modules::shared::application::ports::clock::FixedClock;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     const CURRENT: &str = "0.1.0";
@@ -340,7 +340,7 @@ mod tests {
     fn should_refuse_a_manual_update_of_an_install_outside_the_native_location() {
         let cargo_install = InstallLocation::new(
             PathBuf::from("/home/ana/.cargo/bin/tabsmith"),
-            PathBuf::from("/home/ana"),
+            InstallLocation::native_dir(Path::new("/home/ana")),
         );
         let fakes = Fakes::new(good_release()).with_executable(InMemoryExecutable::at(cargo_install));
 
@@ -401,7 +401,7 @@ mod tests {
     fn should_skip_a_scheduled_check_of_an_install_outside_the_native_location() {
         let dev_build = InstallLocation::new(
             PathBuf::from("/home/ana/src/tabsmith/target/debug/tabsmith"),
-            PathBuf::from("/home/ana"),
+            InstallLocation::native_dir(Path::new("/home/ana")),
         );
         let fakes = Fakes::new(good_release()).with_executable(InMemoryExecutable::at(dev_build));
 
@@ -431,7 +431,7 @@ mod tests {
     fn should_record_no_check_for_an_install_outside_the_native_location() {
         let cargo_install = InstallLocation::new(
             PathBuf::from("/home/ana/.cargo/bin/tabsmith"),
-            PathBuf::from("/home/ana"),
+            InstallLocation::native_dir(Path::new("/home/ana")),
         );
         let fakes = Fakes::new(good_release()).with_executable(InMemoryExecutable::at(cargo_install));
 

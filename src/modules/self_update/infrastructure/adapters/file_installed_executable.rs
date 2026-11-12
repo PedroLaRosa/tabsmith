@@ -36,7 +36,7 @@ impl FileInstalledExecutable {
 impl InstalledExecutable for FileInstalledExecutable {
     /// Both paths with symlinks resolved where they exist: Linux reports the running binary that way.
     fn location(&self) -> InstallLocation {
-        InstallLocation::new(resolved(&self.executable), resolved(&self.user_home))
+        InstallLocation::new(resolved(&self.executable), InstallLocation::native_dir(&resolved(&self.user_home)))
     }
 
     fn replace(&self, bytes: &[u8], expected_version: &str) -> Result<(), SelfUpdateError> {
