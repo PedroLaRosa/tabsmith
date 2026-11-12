@@ -12,6 +12,7 @@ const REGISTERED_MODULES: &[&str] = &[
     "dropdown",
     "ghost_text",
     "history",
+    "self_update",
     "settings",
     "shared",
     "shell_integration",

@@ -15,6 +15,9 @@ use crate::modules::ghost_text::infrastructure::cli::inline_command::{run_inline
 use crate::modules::ghost_text::infrastructure::inline_command_module::{
     build_inline_command_module, InlineCommandModule,
 };
+use crate::modules::self_update::infrastructure::cli::background_update::start_background_update;
+use crate::modules::self_update::infrastructure::cli::update_command::run_update_command;
+use crate::modules::self_update::infrastructure::self_update_module::{build_self_update_module, SelfUpdateModule};
 use crate::modules::settings::infrastructure::adapters::json_file_settings_repository::JsonFileSettingsRepository;
 use crate::modules::settings::infrastructure::cli::settings_command::{run_settings_command, SettingsArgs};
 use crate::modules::settings::infrastructure::settings_module::build_settings_module;
@@ -88,6 +91,8 @@ enum Command {
     Setup(SetupArgs),
     /// Uninstall tabsmith
     Uninstall(UninstallArgs),
+    /// Update tabsmith to the latest release
+    Update,
     /// Show the version
     #[command(hide = true)]
     Version,
@@ -171,6 +176,7 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
         Some(Command::Doctor(a)) => run_doctor_command(a, diagnostics_module),
         Some(Command::Setup(a)) => run_setup_command(a, &shell_integration_module()),
         Some(Command::Uninstall(a)) => run_uninstall_command(a, &shell_integration_module()),
+        Some(Command::Update) => run_update_command(self_update_module().as_ref()),
         Some(Command::Version) => {
             println!("tabsmith {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
@@ -185,7 +191,10 @@ pub(crate) fn run(cli: Cli) -> Result<i32> {
             DebugCmd::Logs => run_debug_logs_command(&diagnostics_module()),
         },
         Some(Command::Internal(c)) => match c {
-            InternalCmd::Pty { shell, cmd } => run_pty_command(shell, cmd, &terminal_session_module()),
+            InternalCmd::Pty { shell, cmd } => {
+                start_background_update(self_update_module);
+                run_pty_command(shell, cmd, &terminal_session_module())
+            }
             InternalCmd::ShouldLaunch => run_should_launch_command(&shell_integration_module()),
             InternalCmd::GetShell => run_get_shell_command(),
             InternalCmd::PreCmd { alias } => run_pre_cmd_command(alias, &terminal_session_module()),
@@ -206,6 +215,14 @@ pub(crate) fn terminal_session_module() -> TerminalSessionModule {
         Rc::new(GeneratorProcessBridge),
         start_completion_engine,
     )
+}
+
+/// The self-update module over the settings file the environment names; `None` on a platform without release
+/// binaries. Built on the thread that runs the update.
+fn self_update_module() -> Option<SelfUpdateModule> {
+    let dependencies = SharedDependencies::from_env();
+    let settings = Rc::new(JsonFileSettingsRepository::new(dependencies.data_directory.clone()));
+    build_self_update_module(&dependencies, settings)
 }
 
 /// The debug shell's post-integration script, rendered for the shell it starts.

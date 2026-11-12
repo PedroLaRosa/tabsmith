@@ -8,7 +8,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
 | `Shell` | VO | A supported shell: Bash, Zsh, Fish, Pwsh. Built from a path or name. | `types::Shell` |
-| `DataDirectory` | VO | tabsmith's home (`~/.tabsmith` or `TABSMITH_HOME`) and every path under it: settings, state, history, run, logs, themes, shell, backups, specs (`shell_dir` and `backups_dir` are `#[cfg(test)]`: only their tests call them). | `settings::{home, settings_path, state_path}` + ad-hoc joins |
+| `DataDirectory` | VO | tabsmith's home (`~/.tabsmith` or `TABSMITH_HOME`) and every path under it: settings, state, history, the update-check marker, run, logs, themes, shell, backups, specs (`shell_dir` and `backups_dir` are `#[cfg(test)]`: only their tests call them). | `settings::{home, settings_path, state_path}` + ad-hoc joins |
 | `ShellQuoting` | Domain service | Quote a string for a shell (POSIX single quotes, pwsh smart quotes). | `integrations::{quote, pwsh_sq}` |
 | `Clock` | Port | Wall-clock ms/secs and monotonic `Instant`. | `types::{now_ms, now_secs}`, `Instant::now()` |
 
@@ -21,7 +21,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `SettingNumber` | VO | The number inside `SettingValue::Number`: unsigned, negative or float, read as i64/u64/f64 exactly like serde_json's `Number`, so `5` never becomes `5.0`. | `serde_json::Number` in settings |
 | `SettingKeyPattern` | VO | Wildcard pattern (`*`, `?`) for bulk delete. | `wildcard_match` |
 | `SettingDefinition` | VO | Catalog entry: key, type, default, description. | `CatalogEntry` |
-| `SettingsCatalog` | Domain service | The 28 definitions and the single source of defaults. | `CATALOG` + duplicated call-site defaults |
+| `SettingsCatalog` | Domain service | The 29 definitions and the single source of defaults. | `CATALOG` + duplicated call-site defaults |
 | `SettingsEditor` | Port | Opens the settings file in the user's editor, waits, and tells whether the editor exited successfully. | `cli::open_settings` (its editor launch) |
 
 ## history
@@ -292,6 +292,29 @@ As built in Phase 10 (`src/modules/diagnostics`, 64 files). A **check is data**:
 | `DiagnosticsModule`, `build_diagnostics_module` | Module | The three use cases over the adapters; building only constructs (no env read, no PATH lookup, no spawn, no file opened). | |
 | `IntegrationProbeBridge`, `BundledSpecsBridge`, `CheckFixerBridge` | Bridges (`bootstrap/diagnostics_bridges.rs`) | The only code that names `IntegrationInstaller`, `integration_failures_error`, `embedded_spec_bundle::version` and `InstallSpecBundleUseCase` on behalf of diagnostics. `CheckFixerBridge` applies a fix with five explicit arms, renders any failure with `{:#}` and marks the restart reminder after an `Ok` iff `CheckFix::marks_restart_reminder()`. | `IntegrationInstaller` wiring in `doctor.rs` |
 
+## self_update
+The native install updating itself (`tabsmith update`, and the background check at `_ pty` start; SPEC §2.10,
+D50–D52). New in the native install plan ([`native-install-auto-update-plan.md`](native-install-auto-update-plan.md)),
+so nothing is replaced.
+
+| Term | Kind | Meaning | Replaces |
+|---|---|---|---|
+| native install | concept (`InstallLocation::is_native`) | The binary the installers put at `~/.local/bin/tabsmith` (`%USERPROFILE%\.local\bin\tabsmith.exe`). Only it updates itself; a cargo install, a `target/` build or a package manager's copy is updated the way it was installed. | – |
+| `InstallLocation` | VO | Where the running binary is and the user home it is judged against (symlinks resolved by the adapter). | – |
+| release channel | Port (`ReleaseChannel`) | Where releases are published: the latest release's version, and any file of the release of a version. `GithubReleaseChannel` reads GitHub Releases. | – |
+| release asset | VO (`ReleaseAsset`) | The file of a release holding one platform's binary, `tabsmith-<os>-<arch>[.exe]` (`darwin`/`linux`/`win32`, `x64`/`arm64`). None for a platform without a build. | – |
+| checksum list | VO (`ChecksumList`) | A release's `SHA256SUMS`: the hex digest of each asset, as `sha256sum` writes it (text or binary mode). | – |
+| checksum signature | Port (`ChecksumSignature`) | `SHA256SUMS.sig`: the release signing key's ed25519 signature over `SHA256SUMS`. Checked before the binary is downloaded. `RingEd25519ChecksumSignature` checks it with ring. | – |
+| release signing key | concept | The ed25519 key pair releases are signed with. Its public half is `scripts/release-signing-key.pub`, compiled into every binary; its private half is `RELEASE_SIGNING_KEY`, a secret of the gated `release` environment. | – |
+| `Sha256Digest` | Port | SHA-256 as lowercase hex (`RingSha256Digest`). | – |
+| `InstalledExecutable` | Port | The binary this process runs from: its `InstallLocation`, and `replace` with a checked new binary (it must print `tabsmith <version>`, then is renamed in; `FileInstalledExecutable`). | – |
+| update check | concept (`UpdateCheckRepository`, `UpdateSchedule`) | One background look for a newer release. At most one a day: its time is the mtime of `~/.tabsmith/update-check`, recorded before the release channel is asked. A last check in the future counts as due. | – |
+| update trigger | VO (`UpdateTrigger`) | What asked for the update: `Manual` (`tabsmith update`: no setting or schedule, an error outside the native install) or `Scheduled` (the background check). | – |
+| `UpdateOutcome` | VO | `Skipped(SkipReason)`, `UpToDate(version)` or `Updated { from, to }`. | – |
+| `SkipReason` | VO | Why a background check did nothing: `NotNative`, `Disabled` (`app.disableAutoupdates`) or `NotDue`. | – |
+| `SelfUpdateError` | Domain error | Why an update did not happen; the executable is always left as it was: not the native install, channel unavailable, invalid version, untrusted checksums, missing checksum, checksum mismatch, install failed. | – |
+| `UpdateTabsmithUseCase` | Use case | The one update flow for both triggers (a use case may not call another one). | – |
+
 ## Words with more than one meaning: use the qualified name, never the bare word
 | Word | Name for each meaning |
 |---|---|
@@ -309,10 +332,10 @@ As built in Phase 10 (`src/modules/diagnostics`, 64 files). A **check is data**:
 | cache | `GeneratorCache`, `GhostTextCache`, `ParsePrefixCache` (in `CompletionSession`), first-token cache (in `CompletionSession`), spec cache and module cache (inside adapters), detected CLI version memo and in-flight version probes (inside `QuickJsSpecRepository`) |
 | profile | pwsh `$PROFILE` (the pwsh dotfile, carried by `IntegrationPaths`) · `LlmProfile` |
 | script | `IntegrationScript` (files tabsmith writes) · `InitScript` / `InitScriptTemplates` (what `init` prints) · `GeneratorScript` (spec) |
-| version | the bundle version (`assets/SPECS_VERSION`, `specs/<version>`) · the CLI version (`SemanticVersion`) · the diff version (a key of a diff-versioned spec's `versions`) |
+| version | the bundle version (`assets/SPECS_VERSION`, `specs/<version>`) · the CLI version (`SemanticVersion`) · the diff version (a key of a diff-versioned spec's `versions`) · tabsmith's release version (the latest release's `VERSION` file, compared with the running version as a `SemanticVersion`) |
 | theme file | `ThemeDefinition` (the strict read: its author, for the `theme NAME` banner) · `ThemePalette` (the lenient read: its colour roles, for drawing) |
 | run | `DoctorRun` (one doctor run and its counts) · `RunDoctorUseCase` (the use case that drives it) · the `run/` directory of session files (`DataDirectory::run_dir`) |
-| check | `Check` (a doctor line, data) · `check` of the `IntegrationProbe` (does an integration's dotfile hold its block) · `CheckSubject` (what a check evaluates) |
+| check | `Check` (a doctor line, data) · `check` of the `IntegrationProbe` (does an integration's dotfile hold its block) · `CheckSubject` (what a check evaluates) · the update check (self_update's daily background look for a release) |
 | probe | a diagnostics port that asks the machine (`SystemFactsProbe`, `IntegrationProbe`, `BundledSpecsProbe`) · the terminal probe of `terminal_session` (`probe_terminal`: cursor position and OSC 11 at start-up) |
 | report | `DiagnosticReport` (what `tabsmith diagnostic` prints) · `DoctorReporter` (the port that prints a doctor run) · `report_session_context` (`_ pre-cmd`) |
 | fix | `CheckFix` (data: what to do) · `CheckFixer::fix` (doing it) · `fixing` (the reporter line `Attempting to fix automatically...`) |

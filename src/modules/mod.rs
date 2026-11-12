@@ -3,6 +3,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod dropdown;
 pub(crate) mod ghost_text;
 pub(crate) mod history;
+pub(crate) mod self_update;
 pub(crate) mod settings;
 pub(crate) mod shared;
 pub(crate) mod shell_integration;
