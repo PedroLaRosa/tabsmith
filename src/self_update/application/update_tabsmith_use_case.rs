@@ -10,6 +10,8 @@ use crate::self_update::domain::value_objects::checksum_list::ChecksumList;
 use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 use crate::self_update::domain::value_objects::skip_reason::SkipReason;
 use crate::self_update::domain::value_objects::update_outcome::UpdateOutcome;
+use crate::settings::domain::repositories::settings_repository::SettingsRepository;
+use crate::settings::domain::services::settings_catalog::APP_DISABLE_AUTOUPDATES;
 use crate::shared::application::ports::clock::Clock;
 use crate::specs::domain::value_objects::semantic_version::SemanticVersion;
 use std::cmp::Ordering;
@@ -28,6 +30,7 @@ pub(crate) struct UpdateTabsmithUseCase {
     signature: Rc<dyn ChecksumSignature>,
     executable: Rc<dyn InstalledExecutable>,
     update_checks: Rc<dyn UpdateCheckRepository>,
+    settings: Rc<dyn SettingsRepository>,
     clock: Arc<dyn Clock + Send + Sync>,
 }
 
@@ -42,6 +45,8 @@ pub(crate) struct UpdateTabsmithParts {
     pub(crate) signature: Rc<dyn ChecksumSignature>,
     pub(crate) executable: Rc<dyn InstalledExecutable>,
     pub(crate) update_checks: Rc<dyn UpdateCheckRepository>,
+    /// Read by the background check only; unreadable settings count as none, as in the terminal session.
+    pub(crate) settings: Rc<dyn SettingsRepository>,
     pub(crate) clock: Arc<dyn Clock + Send + Sync>,
 }
 
@@ -55,12 +60,16 @@ impl UpdateTabsmithUseCase {
             signature: parts.signature,
             executable: parts.executable,
             update_checks: parts.update_checks,
+            settings: parts.settings,
             clock: parts.clock,
         }
     }
 
     pub(crate) fn execute(&self, trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
         if trigger == UpdateTrigger::Scheduled {
+            if self.settings.load().unwrap_or_default().bool(APP_DISABLE_AUTOUPDATES) {
+                return Ok(UpdateOutcome::Skipped(SkipReason::Disabled));
+            }
             let now_secs = self.clock.now_secs();
             if !UpdateSchedule::is_due(self.update_checks.last_check_secs(), now_secs) {
                 return Ok(UpdateOutcome::Skipped(SkipReason::NotDue));
@@ -131,6 +140,10 @@ mod tests {
     use crate::self_update::application::ports::installed_executable::InMemoryExecutable;
     use crate::self_update::application::ports::release_channel::InMemoryReleaseChannel;
     use crate::self_update::application::ports::sha256_digest::HexEncodingDigest;
+    use crate::settings::domain::repositories::settings_repository::{InMemorySettingsRepository, SettingsRepository};
+    use crate::settings::domain::services::settings_catalog::APP_DISABLE_AUTOUPDATES;
+    use crate::settings::domain::value_objects::setting_value::SettingValue;
+    use crate::settings::domain::value_objects::settings::Settings;
     use crate::self_update::domain::repositories::update_check_repository::InMemoryUpdateCheckRepository;
     use crate::self_update::domain::value_objects::install_location::InstallLocation;
     use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
@@ -158,11 +171,12 @@ mod tests {
     }
 
     /// One test's fakes, built fresh: the release channel it is given, the native install of `/home/ana` running
-    /// version 0.1.0 for linux-x64, no update check yet, and a clock stopped at `NOW_SECS`.
+    /// version 0.1.0 for linux-x64, no update check yet, no settings, and a clock stopped at `NOW_SECS`.
     struct Fakes {
         channel: Rc<InMemoryReleaseChannel>,
         executable: Rc<InMemoryExecutable>,
         update_checks: Rc<InMemoryUpdateCheckRepository>,
+        settings: Rc<InMemorySettingsRepository>,
     }
 
     impl Fakes {
@@ -171,6 +185,7 @@ mod tests {
                 channel: Rc::new(channel),
                 executable: Rc::new(InMemoryExecutable::default()),
                 update_checks: Rc::new(InMemoryUpdateCheckRepository::default()),
+                settings: Rc::new(InMemorySettingsRepository::default()),
             }
         }
 
@@ -188,6 +203,7 @@ mod tests {
                 signature: Rc::new(PrefixedChecksumSignature),
                 executable: self.executable.clone(),
                 update_checks: self.update_checks.clone(),
+                settings: self.settings.clone(),
                 clock: Arc::new(FixedClock::new(NOW_SECS * 1000)),
             })
         }
@@ -337,6 +353,20 @@ mod tests {
         assert_eq!(
             (result, fakes.update_checks.last_check_secs()),
             (Err(SelfUpdateError::ChannelUnavailable("connection refused".to_string())), Some(NOW_SECS))
+        );
+    }
+
+    #[test]
+    fn should_skip_a_scheduled_check_without_recording_it_when_autoupdates_are_disabled() {
+        let fakes = Fakes::new(good_release());
+        let disabled = Settings::default().with(APP_DISABLE_AUTOUPDATES, SettingValue::Bool(true));
+        fakes.settings.save(&disabled).unwrap();
+
+        let outcome = fakes.use_case().execute(UpdateTrigger::Scheduled);
+
+        assert_eq!(
+            (outcome, fakes.update_checks.last_check_secs(), fakes.channel.latest_version_requests()),
+            (Ok(UpdateOutcome::Skipped(SkipReason::Disabled)), None, 0)
         );
     }
 }

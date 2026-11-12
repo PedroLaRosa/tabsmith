@@ -33,6 +33,7 @@ pub(crate) const INLINE_ENABLED: &str = "inline.enabled";
 pub(crate) const INLINE_SOURCE: &str = "inline.source";
 pub(crate) const INLINE_DEBOUNCE_MS: &str = "inline.debounceMs";
 pub(crate) const INLINE_HISTORY_COUNT: &str = "inline.historyCount";
+pub(crate) const APP_DISABLE_AUTOUPDATES: &str = "app.disableAutoupdates";
 
 /// `default` is a JSON literal, or empty when the key has none (templates like `<name>`).
 static CATALOG: &[SettingDefinition] = &[
