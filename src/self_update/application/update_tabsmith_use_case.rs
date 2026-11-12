@@ -1,3 +1,4 @@
+use crate::self_update::application::ports::checksum_signature::ChecksumSignature;
 use crate::self_update::application::ports::installed_executable::InstalledExecutable;
 use crate::self_update::application::ports::release_channel::ReleaseChannel;
 use crate::self_update::application::ports::sha256_digest::Sha256Digest;
@@ -14,6 +15,7 @@ pub(crate) struct UpdateTabsmithUseCase {
     asset: ReleaseAsset,
     channel: Rc<dyn ReleaseChannel>,
     digest: Rc<dyn Sha256Digest>,
+    signature: Rc<dyn ChecksumSignature>,
     executable: Rc<dyn InstalledExecutable>,
 }
 
@@ -25,6 +27,7 @@ pub(crate) struct UpdateTabsmithParts {
     pub(crate) asset: ReleaseAsset,
     pub(crate) channel: Rc<dyn ReleaseChannel>,
     pub(crate) digest: Rc<dyn Sha256Digest>,
+    pub(crate) signature: Rc<dyn ChecksumSignature>,
     pub(crate) executable: Rc<dyn InstalledExecutable>,
 }
 
@@ -35,6 +38,7 @@ impl UpdateTabsmithUseCase {
             asset: parts.asset,
             channel: parts.channel,
             digest: parts.digest,
+            signature: parts.signature,
             executable: parts.executable,
         }
     }
@@ -52,9 +56,14 @@ impl UpdateTabsmithUseCase {
         })
     }
 
-    /// This platform's binary from the release of `version`, once it matches the release's `SHA256SUMS`.
+    /// This platform's binary from the release of `version`, once it matches the release's `SHA256SUMS` and that file
+    /// carries the release signing key's signature. The binary is downloaded only after the signature checks out.
     fn verified_binary(&self, version: &str) -> Result<Vec<u8>, SelfUpdateError> {
         let sums = self.channel.download(version, "SHA256SUMS");
+        let signature = self.channel.download(version, "SHA256SUMS.sig");
+        if !self.signature.is_authentic(&sums, &signature) {
+            return Err(SelfUpdateError::UntrustedChecksums);
+        }
         let listed_digest = ChecksumList::parse(&String::from_utf8_lossy(&sums))
             .digest_for(&self.asset)
             .map(str::to_string)
@@ -74,6 +83,7 @@ impl UpdateTabsmithUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::self_update::application::ports::checksum_signature::PrefixedChecksumSignature;
     use crate::self_update::application::ports::installed_executable::InMemoryExecutable;
     use crate::self_update::application::ports::release_channel::InMemoryReleaseChannel;
     use crate::self_update::application::ports::sha256_digest::HexEncodingDigest;
@@ -99,6 +109,7 @@ mod tests {
             asset: ReleaseAsset::for_platform("linux", "x86_64").unwrap(),
             channel: channel.clone(),
             digest: Rc::new(HexEncodingDigest),
+            signature: Rc::new(PrefixedChecksumSignature),
             executable: executable.clone(),
         })
     }
@@ -158,6 +169,30 @@ mod tests {
         assert_eq!(
             (result, executable.installed_bytes()),
             (Err(SelfUpdateError::MissingChecksum { asset: ASSET.to_string() }), None)
+        );
+    }
+
+    #[test]
+    fn should_not_download_the_binary_when_the_checksums_signature_does_not_verify() {
+        let sums = format!("6f6b  {ASSET}\n");
+        let channel = Rc::new(
+            InMemoryReleaseChannel::new(NEWER)
+                .with_file("SHA256SUMS", sums.as_bytes())
+                .with_file("SHA256SUMS.sig", b"sig:signed by someone else")
+                .with_file(ASSET, b"ok"),
+        );
+        let executable = Rc::new(InMemoryExecutable::default());
+        let use_case = use_case(&channel, &executable);
+
+        let result = use_case.execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (result, channel.downloads(), executable.installed_bytes()),
+            (
+                Err(SelfUpdateError::UntrustedChecksums),
+                vec!["SHA256SUMS".to_string(), "SHA256SUMS.sig".to_string()],
+                None
+            )
         );
     }
 }
