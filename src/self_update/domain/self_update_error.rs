@@ -46,3 +46,38 @@ impl fmt::Display for SelfUpdateError {
 }
 
 impl std::error::Error for SelfUpdateError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `tabsmith update` prints these after `error:`; the background check logs them to pty.log.
+    #[test]
+    fn should_describe_each_update_failure() {
+        let failures = [
+            SelfUpdateError::NotNativeInstall { path: PathBuf::from("/home/ana/.cargo/bin/tabsmith") },
+            SelfUpdateError::ChannelUnavailable("connection refused".to_string()),
+            SelfUpdateError::InvalidVersion { version: "<!DOCTYPE html>".to_string() },
+            SelfUpdateError::UntrustedChecksums,
+            SelfUpdateError::MissingChecksum { asset: "tabsmith-linux-x64".to_string() },
+            SelfUpdateError::ChecksumMismatch { asset: "tabsmith-linux-x64".to_string() },
+            SelfUpdateError::InstallFailed("tabsmith --version printed tabsmith 0.1.0".to_string()),
+        ];
+
+        let described: Vec<String> = failures.iter().map(ToString::to_string).collect();
+
+        assert_eq!(
+            described,
+            [
+                "tabsmith runs from /home/ana/.cargo/bin/tabsmith, not ~/.local/bin; update it the way you installed it \
+                 (e.g. cargo install --path .)",
+                "could not download the latest release: connection refused",
+                "the latest release has no valid version: \"<!DOCTYPE html>\"",
+                "the release's SHA256SUMS is not signed by the tabsmith release signing key",
+                "the release's SHA256SUMS does not list tabsmith-linux-x64",
+                "the downloaded tabsmith-linux-x64 does not match its checksum in SHA256SUMS",
+                "could not install the new tabsmith: tabsmith --version printed tabsmith 0.1.0",
+            ]
+        );
+    }
+}
