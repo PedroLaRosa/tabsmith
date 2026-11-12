@@ -24,6 +24,37 @@ inline gray "ghost text" suggestions. Written in Rust, it works on **macOS, Linu
 
 ## Install
 
+macOS, Linux, WSL:
+
+```sh
+curl -fsSL https://github.com/PedroLaRosa/tabsmith/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/PedroLaRosa/tabsmith/releases/latest/download/install.ps1 | iex
+```
+
+Windows cmd:
+
+```bat
+curl -fsSL https://github.com/PedroLaRosa/tabsmith/releases/latest/download/install.cmd -o install.cmd && install.cmd && del install.cmd
+```
+
+The installer downloads the binary for your platform, checks it against the release's `SHA256SUMS`, puts it at
+`~/.local/bin/tabsmith` (`%USERPROFILE%\.local\bin\tabsmith.exe`, added to your user `PATH`) and, on a first
+install, runs `tabsmith setup`, which adds the shell integration to your dotfiles (it asks first). To install a
+specific version, pass it on: `| sh -s 0.2.0`, `& ([scriptblock]::Create((irm https://github.com/PedroLaRosa/tabsmith/releases/latest/download/install.ps1))) 0.2.0`
+or `install.cmd 0.2.0`.
+
+Platforms: macOS 11+ (Apple Silicon and Intel); any Linux or WSL on x64 or arm64, Alpine included (static musl
+binaries); Windows 10+ on x64 or arm64.
+
+To check a downloaded binary by hand: `gh release verify-asset vX.Y.Z ./tabsmith-<platform>`.
+
+From source (this install does not update itself):
+
 ```sh
 cargo install --path .        # or: cargo build --release && cp target/release/tabsmith ~/.local/bin/
 tabsmith setup                # adds the shell integration to your dotfiles (asks first)
@@ -44,6 +75,25 @@ but `doctor` then reports the integration as missing, and its automatic fix adds
 
 fish: `tabsmith integrations install dotfiles fish` (writes `conf.d/00_tabsmith_pre.fish` / `99_tabsmith_post.fish`).
 
+### Updating
+
+An install made with the one-liners updates itself: when a terminal tab opens, tabsmith looks for a newer release at
+most once a day, in the background. It installs one only if its `SHA256SUMS` carries the release signing key's
+signature and the binary matches it; the next tab runs the new version. What happened is logged to
+`~/.tabsmith/logs/pty.log`.
+
+```sh
+tabsmith update                                    # update now
+tabsmith settings app.disableAutoupdates true      # no background updates (tabsmith update still works)
+```
+
+A copy installed any other way (cargo, a `target/` build) is never touched: update it the way you installed it.
+
+### Uninstall
+
+`tabsmith uninstall` (add `--purge` to also delete `~/.tabsmith`), then delete `~/.local/bin/tabsmith` (Windows:
+`%USERPROFILE%\.local\bin\tabsmith.exe*`).
+
 ## Commands
 
 | Command | |
@@ -57,6 +107,7 @@ fish: `tabsmith integrations install dotfiles fish` (writes `conf.d/00_tabsmith_
 | `tabsmith init <shell> <pre\|post>` | Print the integration code |
 | `tabsmith doctor [--all] [--strict]` | Diagnose and fix common problems |
 | `tabsmith setup` / `tabsmith uninstall [--purge]` | Install / remove the integration |
+| `tabsmith update` | Update a native install to the latest release |
 | `tabsmith diagnostic`, `tabsmith debug key-tester\|shell\|logs` | Troubleshooting |
 
 ## Settings
@@ -123,6 +174,38 @@ screen cells, restoring them exactly afterwards. Design details: [`docs/SPEC.md`
 - In VS Code's terminal every shell start runs `code --locate-shell-integration-path` (the VS Code CLI's start-up time).
 - Logs in `~/.tabsmith/logs` are not rotated; two `integrations install` runs at the same moment can duplicate the
   dotfile blocks.
+- Updates trust tabsmith's built-in root certificates, not the system's: behind a TLS-inspecting proxy `tabsmith update`
+  fails (the installers use the system's, so rerunning the one-liner works). Release binaries are not notarized or
+  Authenticode-signed; downloads through `curl` and PowerShell are not quarantined, but one saved from a browser is.
+
+## Releasing
+
+Maintainers only; `main` is protected, so a release goes through a pull request.
+
+1. Open a PR that bumps `version` in `Cargo.toml`; merge it once CI is green.
+2. On the merged `main`: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. The release workflow tests and builds the six binaries, then waits: approve its `publish` job (the `release`
+   environment). It writes `VERSION` and `SHA256SUMS`, signs `SHA256SUMS`, checks the signature against the key the
+   binaries carry, and publishes the release. The `verify` jobs then run the one-liners and `tabsmith update` from the
+   previous release on macOS, Linux x64/arm64, Alpine and Windows x64/arm64.
+4. If `verify` fails, `gh release delete vX.Y.Z` puts `latest` back on the previous release; fix forward with the next
+   patch version (an immutable release's tag cannot be used again).
+
+One-time setup, before the first release (needs a repo admin):
+
+1. Generate the release signing key outside the repo with OpenSSL 3 (on macOS `/usr/bin/openssl` is LibreSSL: `brew
+   install openssl@3` and use `$(brew --prefix openssl@3)/bin/openssl`), and commit the public half:
+   ```sh
+   openssl genpkey -algorithm ed25519 -out ~/tabsmith-release-key.pem
+   openssl pkey -in ~/tabsmith-release-key.pem -pubout -outform DER | tail -c 32 | xxd -p -c 32 > scripts/release-signing-key.pub
+   ```
+   Never commit the `.pem`. Until this is done, `scripts/release-signing-key.pub` holds a placeholder whose private
+   half was thrown away: nothing can be signed for it, so `publish` refuses to release.
+2. Create the `release` environment (Settings → Environments) with the maintainer as required reviewer and deployments
+   limited to `v*` tags, then `gh secret set RELEASE_SIGNING_KEY --env release < ~/tabsmith-release-key.pem`. Move the
+   `.pem` into a password manager and delete the file: a lost key means installed copies cannot update (users rerun
+   the installer).
+3. Turn on immutable releases (Settings → General → Releases); it only applies to releases created afterwards.
 
 ## Licence
 
