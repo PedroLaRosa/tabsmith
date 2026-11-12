@@ -12,8 +12,9 @@ impl InstallLocation {
         InstallLocation { executable, user_home }
     }
 
+    /// The binary is `<user home>/.local/bin/tabsmith`, where the installers put it.
     pub(crate) fn is_native(&self) -> bool {
-        true
+        self.executable == self.user_home.join(".local").join("bin").join("tabsmith")
     }
 }
 
@@ -32,5 +33,14 @@ mod tests {
         let native = location.is_native();
 
         assert!(native);
+    }
+
+    #[test]
+    fn should_not_be_native_as_a_cargo_build_in_target() {
+        let location = location("/home/ana/src/tabsmith/target/release/tabsmith");
+
+        let native = location.is_native();
+
+        assert!(!native);
     }
 }
