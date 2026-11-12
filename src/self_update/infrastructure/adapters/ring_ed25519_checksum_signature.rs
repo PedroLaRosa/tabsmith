@@ -67,4 +67,13 @@ mod tests {
 
         assert!(!authentic);
     }
+
+    #[test]
+    fn should_refuse_every_signature_when_the_key_is_not_hex() {
+        let checksum_signature = RingEd25519ChecksumSignature::new("not a key");
+
+        let authentic = checksum_signature.is_authentic(b"", &bytes(TEST_1_SIGNATURE));
+
+        assert!(!authentic);
+    }
 }
