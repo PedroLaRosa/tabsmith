@@ -111,9 +111,9 @@ function Get-TabsmithListedDigest([string]$SumsFile, [string]$Asset) {
     return $null
 }
 
-# A running tabsmith.exe can be renamed but not replaced or deleted: it steps aside as tabsmith.exe.<pid>.old, the
-# new file takes its name, and it comes back if that fails. Copies left by earlier updates are deleted first, best
-# effort (one still running stays until a later run).
+# A running tabsmith.exe can be renamed but not replaced or deleted: it steps aside as
+# tabsmith.exe.<pid>.<ticks>.old, the new file takes its name, and it comes back if that fails. Copies left by earlier
+# updates are deleted first, best effort (one still running stays until a later run).
 function Move-TabsmithIntoPlace([string]$Staged, [string]$Exe) {
     Get-ChildItem -LiteralPath (Split-Path -Parent $Exe) -Filter 'tabsmith.exe.*.old' -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
@@ -121,7 +121,9 @@ function Move-TabsmithIntoPlace([string]$Staged, [string]$Exe) {
         Move-Item -Force -LiteralPath $Staged -Destination $Exe
         return
     }
-    $old = "$Exe.$PID.old"
+    # Unique per call: `irm | iex` runs in the user's session, so a second run in the same window has the same $PID
+    # while the first run's copy may still be running (that window's own tabsmith session).
+    $old = "$Exe.$PID.$([DateTime]::UtcNow.Ticks).old"
     Move-Item -Force -LiteralPath $Exe -Destination $old
     try {
         Move-Item -Force -LiteralPath $Staged -Destination $Exe
