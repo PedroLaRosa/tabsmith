@@ -55,11 +55,14 @@ impl UpdateTabsmithUseCase {
     /// This platform's binary from the release of `version`, once it matches the release's `SHA256SUMS`.
     fn verified_binary(&self, version: &str) -> Result<Vec<u8>, SelfUpdateError> {
         let sums = self.channel.download(version, "SHA256SUMS");
-        let binary = self.channel.download(version, self.asset.name());
         let listed_digest = ChecksumList::parse(&String::from_utf8_lossy(&sums))
             .digest_for(&self.asset)
-            .map(str::to_string);
-        if listed_digest != Some(self.digest.hex_digest(&binary)) {
+            .map(str::to_string)
+            .ok_or_else(|| SelfUpdateError::MissingChecksum {
+                asset: self.asset.name().to_string(),
+            })?;
+        let binary = self.channel.download(version, self.asset.name());
+        if self.digest.hex_digest(&binary) != listed_digest {
             return Err(SelfUpdateError::ChecksumMismatch {
                 asset: self.asset.name().to_string(),
             });
@@ -141,6 +144,20 @@ mod tests {
         assert_eq!(
             (result, executable.installed_bytes()),
             (Err(SelfUpdateError::ChecksumMismatch { asset: ASSET.to_string() }), None)
+        );
+    }
+
+    #[test]
+    fn should_leave_the_executable_untouched_when_sha256sums_does_not_list_the_binary() {
+        let channel = signed_release("6f6b  tabsmith-darwin-arm64\n", b"ok");
+        let executable = Rc::new(InMemoryExecutable::default());
+        let use_case = use_case(&channel, &executable);
+
+        let result = use_case.execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (result, executable.installed_bytes()),
+            (Err(SelfUpdateError::MissingChecksum { asset: ASSET.to_string() }), None)
         );
     }
 }
