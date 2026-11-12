@@ -8,7 +8,9 @@ fn update_report(outcome: &UpdateOutcome) -> String {
         UpdateOutcome::Updated { from, to } => {
             format!("Updated tabsmith from {from} to {to}. Open a new terminal to use it.")
         }
-        _ => String::new(),
+        UpdateOutcome::UpToDate(version) => format!("tabsmith is up to date ({version})"),
+        // Only the background check skips; `tabsmith update` passes every gate it has.
+        UpdateOutcome::Skipped(_) => String::new(),
     }
 }
 
@@ -23,5 +25,14 @@ mod tests {
         let report = update_report(&outcome);
 
         assert_eq!(report, "Updated tabsmith from 0.1.0 to 0.2.0. Open a new terminal to use it.");
+    }
+
+    #[test]
+    fn should_tell_the_user_the_running_version_is_the_latest() {
+        let outcome = UpdateOutcome::UpToDate("0.2.0".to_string());
+
+        let report = update_report(&outcome);
+
+        assert_eq!(report, "tabsmith is up to date (0.2.0)");
     }
 }
