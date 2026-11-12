@@ -16,6 +16,9 @@ pub(crate) enum SelfUpdateError {
     MissingChecksum { asset: String },
     /// The downloaded binary is not the one `SHA256SUMS` lists.
     ChecksumMismatch { asset: String },
+    /// The verified binary could not take the executable's place (it did not run as the expected version, or the
+    /// file could not be written or renamed); the text holds the cause.
+    InstallFailed(String),
 }
 
 impl fmt::Display for SelfUpdateError {
@@ -37,6 +40,7 @@ impl fmt::Display for SelfUpdateError {
             SelfUpdateError::ChecksumMismatch { asset } => {
                 write!(f, "the downloaded {asset} does not match its checksum in SHA256SUMS")
             }
+            SelfUpdateError::InstallFailed(reason) => write!(f, "could not install the new tabsmith: {reason}"),
         }
     }
 }

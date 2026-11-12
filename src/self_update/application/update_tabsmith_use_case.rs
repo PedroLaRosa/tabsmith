@@ -87,7 +87,7 @@ impl UpdateTabsmithUseCase {
             return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
         };
         let binary = self.verified_binary(&latest_version)?;
-        self.executable.replace(&binary, &latest_version);
+        self.executable.replace(&binary, &latest_version)?;
         Ok(UpdateOutcome::Updated {
             from: self.current_version.clone(),
             to: latest_version,
@@ -212,8 +212,8 @@ mod tests {
             }
         }
 
-        fn installed_at(mut self, location: InstallLocation) -> Self {
-            self.executable = Rc::new(InMemoryExecutable::at(location));
+        fn with_executable(mut self, executable: InMemoryExecutable) -> Self {
+            self.executable = Rc::new(executable);
             self
         }
 
@@ -339,7 +339,7 @@ mod tests {
             PathBuf::from("/home/ana/.cargo/bin/tabsmith"),
             PathBuf::from("/home/ana"),
         );
-        let fakes = Fakes::new(good_release()).installed_at(cargo_install);
+        let fakes = Fakes::new(good_release()).with_executable(InMemoryExecutable::at(cargo_install));
 
         let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
@@ -400,13 +400,26 @@ mod tests {
             PathBuf::from("/home/ana/src/tabsmith/target/debug/tabsmith"),
             PathBuf::from("/home/ana"),
         );
-        let fakes = Fakes::new(good_release()).installed_at(dev_build);
+        let fakes = Fakes::new(good_release()).with_executable(InMemoryExecutable::at(dev_build));
 
         let outcome = fakes.use_case().execute(UpdateTrigger::Scheduled);
 
         assert_eq!(
             (outcome, fakes.channel.latest_version_requests()),
             (Ok(UpdateOutcome::Skipped(SkipReason::NotNative)), 0)
+        );
+    }
+
+    #[test]
+    fn should_report_a_binary_the_executable_refused_to_take() {
+        let refusing = InMemoryExecutable::refusing("tabsmith --version printed tabsmith 0.1.0");
+        let fakes = Fakes::new(good_release()).with_executable(refusing);
+
+        let result = fakes.use_case().execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (result, fakes.executable.installed_bytes()),
+            (Err(SelfUpdateError::InstallFailed("tabsmith --version printed tabsmith 0.1.0".to_string())), None)
         );
     }
 }
