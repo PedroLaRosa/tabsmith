@@ -414,3 +414,32 @@ run between the write and the rename, and none of its methods leave that gap. Ma
 - A `doctor` row for the last update result: add if users can't find the logs.
 - Locking between two tabs that check at the same moment: both download, both renames are atomic, and the last one
   wins with the same bytes. Add a lock if the logs show it causing trouble.
+
+## As built
+
+Implemented on `feat/native-install`, one commit per GREEN and REFACTOR. Where the code differs from the plan above:
+
+- **Native gate first.** `UpdateTabsmithUseCase` checks the install location before the setting and the schedule, so a
+  cargo install or a dev build never writes `update-check` at every tab (the plan recorded the check first). A
+  `Scheduled` run outside the native install is `Skipped(NotNative)`, as step 2 of the flow says; that and the
+  no-downgrade rule of decision 8 got their own tests.
+- **More use case tests.** Besides 13–22: an older latest release stays `UpToDate`; a binary the executable refuses
+  (`InstalledExecutable::replace` is fallible) is `Err(InstallFailed)`; a non-native background check records nothing.
+- **Symlinks.** `FileInstalledExecutable::location` resolves both paths, since Linux reports the running binary with
+  symlinks resolved and a symlinked home would otherwise never be native (test with a real symlink).
+- **Panics before the session's hook.** `catch_unwind` alone does not keep the default hook from printing, so
+  `start_background_update` wraps the hook: a panic on the `self-update` thread is logged until `run_pty_session`
+  installs its own logging hook.
+- **Installers run the binary.** Like the updater, `install.sh` and `install.ps1` run `<staged> --version` and refuse a
+  binary that does not start before it replaces anything. `install.ps1` reads the arch from `OSArchitecture`, the
+  `PROCESSOR_ARCHITECTURE*` variables and `Win32_Processor`, any ARM64 sign winning.
+- **No toolchain action.** `release.yml` installs the toolchain with the `rustup` every hosted runner ships, so
+  `dtolnay/rust-toolchain` (an extra third-party action in the path to signed binaries) is not used there. The
+  checkout and artifact actions are pinned to the SHAs of v4.2.2, v4.6.2 and v4.3.0.
+- **Installer checks on every push.** `ci.yml`'s `test` job also runs `sh -n` + shellcheck on `install.sh` and parses
+  `install.ps1` under Windows PowerShell 5.1 and PowerShell 7 (job key and matrix unchanged).
+- **Placeholder key.** Step 0 needs a repo admin, so `scripts/release-signing-key.pub` holds a key whose private half
+  was generated in a pipe and discarded. It is well-formed (CI is green) but nothing can be signed for it, so
+  `publish` fails its signature check until the maintainer runs step 0 and commits the real public key.
+- **Unsupported platforms.** `build_self_update_module` returns `None` where no release carries a binary;
+  `tabsmith update` then says so and exits 1, and the background check does nothing.
