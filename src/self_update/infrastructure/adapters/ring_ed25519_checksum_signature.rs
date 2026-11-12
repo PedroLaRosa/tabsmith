@@ -1,18 +1,39 @@
 use crate::self_update::application::ports::checksum_signature::ChecksumSignature;
+use ring::signature::{UnparsedPublicKey, ED25519};
 
 /// Checks `SHA256SUMS.sig` as an ed25519 signature, with ring, against the release signing key.
-pub(crate) struct RingEd25519ChecksumSignature;
+pub(crate) struct RingEd25519ChecksumSignature {
+    public_key: Vec<u8>,
+}
 
 impl RingEd25519ChecksumSignature {
-    pub(crate) fn new(_public_key_hex: &str) -> Self {
-        RingEd25519ChecksumSignature
+    /// `public_key_hex` is the raw 32-byte key in hex, as `scripts/release-signing-key.pub` holds it. A key that is
+    /// not hex verifies nothing, so a broken key file fails closed.
+    pub(crate) fn new(public_key_hex: &str) -> Self {
+        RingEd25519ChecksumSignature {
+            public_key: decode_hex(public_key_hex).unwrap_or_default(),
+        }
     }
 }
 
 impl ChecksumSignature for RingEd25519ChecksumSignature {
-    fn is_authentic(&self, _sums: &[u8], _signature: &[u8]) -> bool {
-        true
+    fn is_authentic(&self, sums: &[u8], signature: &[u8]) -> bool {
+        UnparsedPublicKey::new(&ED25519, &self.public_key)
+            .verify(sums, signature)
+            .is_ok()
     }
+}
+
+/// The bytes `text` spells in hex, surrounding whitespace ignored (the key file ends in a newline).
+fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim();
+    if text.len() % 2 != 0 {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|start| u8::from_str_radix(text.get(start..start + 2)?, 16).ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -34,5 +55,16 @@ mod tests {
         let authentic = checksum_signature.is_authentic(b"", &bytes(TEST_1_SIGNATURE));
 
         assert!(authentic);
+    }
+
+    #[test]
+    fn should_refuse_the_rfc_8032_test_1_signature_with_one_byte_flipped() {
+        let checksum_signature = RingEd25519ChecksumSignature::new(TEST_1_PUBLIC_KEY);
+        let mut tampered = bytes(TEST_1_SIGNATURE);
+        tampered[0] ^= 0x01;
+
+        let authentic = checksum_signature.is_authentic(b"", &tampered);
+
+        assert!(!authentic);
     }
 }
