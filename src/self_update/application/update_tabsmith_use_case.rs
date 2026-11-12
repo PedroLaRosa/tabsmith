@@ -67,12 +67,9 @@ impl UpdateTabsmithUseCase {
 
     pub(crate) fn execute(&self, trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
         if trigger == UpdateTrigger::Scheduled {
-            if self.settings.load().unwrap_or_default().bool(APP_DISABLE_AUTOUPDATES) {
-                return Ok(UpdateOutcome::Skipped(SkipReason::Disabled));
-            }
             let now_secs = self.clock.now_secs();
-            if !UpdateSchedule::is_due(self.update_checks.last_check_secs(), now_secs) {
-                return Ok(UpdateOutcome::Skipped(SkipReason::NotDue));
+            if let Some(reason) = self.reason_to_skip(now_secs) {
+                return Ok(UpdateOutcome::Skipped(reason));
             }
             self.update_checks.record_check(now_secs);
         }
@@ -91,6 +88,16 @@ impl UpdateTabsmithUseCase {
             from: self.current_version.clone(),
             to: latest_version,
         })
+    }
+
+    /// Why the background check should do nothing at `now_secs`: autoupdates are off, or the last check is under a day
+    /// old.
+    fn reason_to_skip(&self, now_secs: u64) -> Option<SkipReason> {
+        if self.settings.load().unwrap_or_default().bool(APP_DISABLE_AUTOUPDATES) {
+            return Some(SkipReason::Disabled);
+        }
+        let is_due = UpdateSchedule::is_due(self.update_checks.last_check_secs(), now_secs);
+        (!is_due).then_some(SkipReason::NotDue)
     }
 
     /// The latest release's version, normalised, when it is newer than the running one; `None` when it is not.
