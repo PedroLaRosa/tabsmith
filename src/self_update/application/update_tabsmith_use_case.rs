@@ -1,6 +1,9 @@
 use crate::self_update::application::ports::installed_executable::InstalledExecutable;
 use crate::self_update::application::ports::release_channel::ReleaseChannel;
+use crate::self_update::application::ports::sha256_digest::Sha256Digest;
 use crate::self_update::application::update_trigger::UpdateTrigger;
+use crate::self_update::domain::self_update_error::SelfUpdateError;
+use crate::self_update::domain::value_objects::checksum_list::ChecksumList;
 use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 use crate::self_update::domain::value_objects::update_outcome::UpdateOutcome;
 use std::rc::Rc;
@@ -10,6 +13,7 @@ pub(crate) struct UpdateTabsmithUseCase {
     current_version: String,
     asset: ReleaseAsset,
     channel: Rc<dyn ReleaseChannel>,
+    digest: Rc<dyn Sha256Digest>,
     executable: Rc<dyn InstalledExecutable>,
 }
 
@@ -20,6 +24,7 @@ pub(crate) struct UpdateTabsmithParts {
     /// The release file that holds this platform's binary.
     pub(crate) asset: ReleaseAsset,
     pub(crate) channel: Rc<dyn ReleaseChannel>,
+    pub(crate) digest: Rc<dyn Sha256Digest>,
     pub(crate) executable: Rc<dyn InstalledExecutable>,
 }
 
@@ -29,21 +34,31 @@ impl UpdateTabsmithUseCase {
             current_version: parts.current_version,
             asset: parts.asset,
             channel: parts.channel,
+            digest: parts.digest,
             executable: parts.executable,
         }
     }
 
-    pub(crate) fn execute(&self, _trigger: UpdateTrigger) -> UpdateOutcome {
+    pub(crate) fn execute(&self, _trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
         let latest_version = self.channel.latest_version();
         if latest_version == self.current_version {
-            return UpdateOutcome::UpToDate(self.current_version.clone());
+            return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
         }
+        let sums = self.channel.download(&latest_version, "SHA256SUMS");
         let binary = self.channel.download(&latest_version, self.asset.name());
+        let listed_digest = ChecksumList::parse(&String::from_utf8_lossy(&sums))
+            .digest_for(&self.asset)
+            .map(str::to_string);
+        if listed_digest != Some(self.digest.hex_digest(&binary)) {
+            return Err(SelfUpdateError::ChecksumMismatch {
+                asset: self.asset.name().to_string(),
+            });
+        }
         self.executable.replace(&binary, &latest_version);
-        UpdateOutcome::Updated {
+        Ok(UpdateOutcome::Updated {
             from: self.current_version.clone(),
             to: latest_version,
-        }
+        })
     }
 }
 
@@ -52,6 +67,7 @@ mod tests {
     use super::*;
     use crate::self_update::application::ports::installed_executable::InMemoryExecutable;
     use crate::self_update::application::ports::release_channel::InMemoryReleaseChannel;
+    use crate::self_update::application::ports::sha256_digest::HexEncodingDigest;
     use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 
     const CURRENT: &str = "0.1.0";
@@ -73,6 +89,7 @@ mod tests {
             current_version: CURRENT.to_string(),
             asset: ReleaseAsset::for_platform("linux", "x86_64").unwrap(),
             channel: channel.clone(),
+            digest: Rc::new(HexEncodingDigest),
             executable: executable.clone(),
         })
     }
@@ -86,7 +103,7 @@ mod tests {
 
         assert_eq!(
             (outcome, channel.downloads()),
-            (UpdateOutcome::UpToDate(CURRENT.to_string()), Vec::<String>::new())
+            (Ok(UpdateOutcome::UpToDate(CURRENT.to_string())), Vec::<String>::new())
         );
     }
 
@@ -101,9 +118,23 @@ mod tests {
         assert_eq!(
             (outcome, executable.installed_bytes()),
             (
-                UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() },
+                Ok(UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() }),
                 Some(b"ok".to_vec())
             )
+        );
+    }
+
+    #[test]
+    fn should_leave_the_executable_untouched_when_the_binary_does_not_match_its_checksum() {
+        let channel = signed_release(&format!("0000  {ASSET}\n"), b"ok");
+        let executable = Rc::new(InMemoryExecutable::default());
+        let use_case = use_case(&channel, &executable);
+
+        let result = use_case.execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (result, executable.installed_bytes()),
+            (Err(SelfUpdateError::ChecksumMismatch { asset: ASSET.to_string() }), None)
         );
     }
 }
