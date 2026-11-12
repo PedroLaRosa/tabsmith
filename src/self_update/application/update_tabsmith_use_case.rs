@@ -49,21 +49,26 @@ impl UpdateTabsmithUseCase {
     }
 
     pub(crate) fn execute(&self, _trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
-        let latest_version = self.channel.latest_version();
-        let Some(latest) = SemanticVersion::parse(&latest_version) else {
-            return Err(SelfUpdateError::InvalidVersion { version: latest_version });
-        };
-        let current = SemanticVersion::parse(&self.current_version).unwrap_or_default();
-        if latest.compare(&current) != Ordering::Greater {
+        let Some(latest_version) = self.newer_release()? else {
             return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
-        }
-        let latest_version = latest.to_string();
+        };
         let binary = self.verified_binary(&latest_version)?;
         self.executable.replace(&binary, &latest_version);
         Ok(UpdateOutcome::Updated {
             from: self.current_version.clone(),
             to: latest_version,
         })
+    }
+
+    /// The latest release's version, normalised, when it is newer than the running one; `None` when it is not.
+    fn newer_release(&self) -> Result<Option<String>, SelfUpdateError> {
+        let latest_version = self.channel.latest_version();
+        let Some(latest) = SemanticVersion::parse(&latest_version) else {
+            return Err(SelfUpdateError::InvalidVersion { version: latest_version });
+        };
+        let current = SemanticVersion::parse(&self.current_version).unwrap_or_default();
+        let is_newer = latest.compare(&current) == Ordering::Greater;
+        Ok(is_newer.then(|| latest.to_string()))
     }
 
     /// This platform's binary from the release of `version`, once it matches the release's trusted `SHA256SUMS`.
