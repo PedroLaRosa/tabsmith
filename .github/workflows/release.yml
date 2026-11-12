@@ -1,0 +1,244 @@
+name: release
+
+# A pushed v* tag builds, signs and publishes a release (README "Releasing"). A pull request that touches this
+# workflow or an installer gets a dry run of the test and build jobs; publish and verify only run on a tag.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/install.*'
+
+# Read-only by default: ci.yml runs with this token too. Only publish can write.
+permissions:
+  contents: read
+
+# Every action is pinned to a full commit SHA (a tag can be moved to new code; a SHA cannot), since whatever the
+# build job produces gets signed. The Rust toolchain comes from the rustup the hosted runners ship, not an action.
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: test
+    name: build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: darwin-arm64, target: aarch64-apple-darwin, runner: macos-latest }
+          - { platform: darwin-x64, target: x86_64-apple-darwin, runner: macos-latest }
+          - { platform: linux-x64, target: x86_64-unknown-linux-musl, runner: ubuntu-latest }
+          - { platform: linux-arm64, target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm }
+          - { platform: win32-x64, target: x86_64-pc-windows-msvc, runner: windows-latest }
+          - { platform: win32-arm64, target: aarch64-pc-windows-msvc, runner: windows-11-arm }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      EXE: ${{ startsWith(matrix.platform, 'win32') && '.exe' || '' }}
+      # Static CRT on Windows, so a fresh install needs no vcruntime140.dll.
+      RUSTFLAGS: ${{ startsWith(matrix.platform, 'win32') && '-C target-feature=+crt-static' || '' }}
+      # One static musl binary per Linux arch; ring, zstd and QuickJS compile their C with musl-gcc.
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install the Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --target "${{ matrix.target }}"
+          rustup default stable
+      - name: Install musl-tools
+        if: startsWith(matrix.platform, 'linux')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        shell: bash
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+      # darwin-x64 is cross-built on Apple Silicon, where it would run under Rosetta (if installed) and prove little.
+      - name: Smoke test
+        if: matrix.platform != 'darwin-x64'
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          printed=$("target/${{ matrix.target }}/release/tabsmith$EXE" --version)
+          echo "$printed"
+          [ "$printed" = "tabsmith $version" ]
+      - name: Name the binary after its platform
+        shell: bash
+        run: |
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/tabsmith$EXE" "dist/tabsmith-${{ matrix.platform }}$EXE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tabsmith-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Waits for the maintainer's approval, and is the only job that can read RELEASE_SIGNING_KEY.
+    environment: release
+    permissions:
+      contents: write
+      attestations: read
+    outputs:
+      previous: ${{ steps.previous.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Check the tag is the version in Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME is not v$version, the version in Cargo.toml"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Find the release this one follows
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 \
+            --json tagName --jq '.[0].tagName // ""')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          pattern: tabsmith-*
+          merge-multiple: true
+      - name: Write VERSION and SHA256SUMS, and add the installers
+        working-directory: dist
+        run: |
+          printf '%s\n' "$VERSION" > VERSION
+          sha256sum tabsmith-* > SHA256SUMS
+          cp ../scripts/install.sh ../scripts/install.ps1 ../scripts/install.cmd .
+          cat SHA256SUMS
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          key="$RUNNER_TEMP/release-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key")
+          openssl pkeyutl -sign -rawin -inkey "$key" -in SHA256SUMS -out SHA256SUMS.sig
+      # The public key compiled into the binaries, as DER: the ed25519 SubjectPublicKeyInfo header, then the key.
+      - name: Check the signature against the key the binaries carry
+        working-directory: dist
+        run: |
+          der="$RUNNER_TEMP/release-signing-key.der"
+          { printf '302a300506032b6570032100'; tr -d ' \n' < ../scripts/release-signing-key.pub; } | xxd -r -p > "$der"
+          if ! openssl pkeyutl -verify -pubin -keyform DER -inkey "$der" -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig; then
+            echo "::error::RELEASE_SIGNING_KEY is not the private half of scripts/release-signing-key.pub; nothing was published"
+            exit 1
+          fi
+      # The assets go up while the release is a draft, since an immutable release locks them once published. So
+      # releases/latest/download never points at a release with files missing.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes dist/*
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+      - name: Check the release is immutable and attested
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release verify "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+
+  # The real one-liners against the published release, then `tabsmith update` from the release before it: the end-to-end
+  # test of the installers, GithubReleaseChannel and the signature check. If it fails, `gh release delete <tag>` puts
+  # latest back on the previous release; fix forward with the next patch version (an immutable tag cannot be reused).
+  verify:
+    needs: publish
+    name: verify (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      PREVIOUS: ${{ needs.publish.outputs.previous }}
+      INSTALL_SH: https://github.com/${{ github.repository }}/releases/latest/download/install.sh
+    steps:
+      - name: Install with the one-liner
+        run: |
+          curl -fsSL "$INSTALL_SH" | sh -s "${GITHUB_REF_NAME#v}"
+          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith ${GITHUB_REF_NAME#v}" ]
+      - name: Update from the previous release
+        if: env.PREVIOUS != ''
+        run: |
+          curl -fsSL "$INSTALL_SH" | sh -s "${PREVIOUS#v}"
+          "$HOME/.local/bin/tabsmith" update
+          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith ${GITHUB_REF_NAME#v}" ]
+
+  verify-alpine:
+    needs: publish
+    runs-on: ubuntu-latest
+    container: alpine:3.20
+    env:
+      PREVIOUS: ${{ needs.publish.outputs.previous }}
+      INSTALL_SH: https://github.com/${{ github.repository }}/releases/latest/download/install.sh
+    steps:
+      - name: Install with the one-liner
+        shell: sh
+        run: |
+          apk add --no-cache curl
+          curl -fsSL "$INSTALL_SH" | sh -s "${GITHUB_REF_NAME#v}"
+          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith ${GITHUB_REF_NAME#v}" ]
+      - name: Update from the previous release
+        if: env.PREVIOUS != ''
+        shell: sh
+        run: |
+          curl -fsSL "$INSTALL_SH" | sh -s "${PREVIOUS#v}"
+          "$HOME/.local/bin/tabsmith" update
+          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith ${GITHUB_REF_NAME#v}" ]
+
+  verify-windows:
+    needs: publish
+    name: verify (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      PREVIOUS: ${{ needs.publish.outputs.previous }}
+      RELEASES: https://github.com/${{ github.repository }}/releases
+    steps:
+      - name: Install with the PowerShell one-liner
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          & ([scriptblock]::Create((irm "$env:RELEASES/latest/download/install.ps1"))) $version
+          $printed = & "$env:USERPROFILE\.local\bin\tabsmith.exe" --version
+          if ($printed -ne "tabsmith $version") { throw "installed $printed, not tabsmith $version" }
+      # Runs the installer under Windows PowerShell 5.1 and replaces the exe installed by the step before. The step is
+      # itself a batch file, so it needs `call` to come back from install.cmd (a prompt does not).
+      - name: Install with the cmd one-liner
+        shell: cmd
+        run: |
+          curl -fsSL %RELEASES%/latest/download/install.cmd -o install.cmd && call install.cmd %GITHUB_REF_NAME:~1% && del install.cmd
+      - name: Check the cmd install
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $printed = & "$env:USERPROFILE\.local\bin\tabsmith.exe" --version
+          if ($printed -ne "tabsmith $version") { throw "installed $printed, not tabsmith $version" }
+      - name: Update from the previous release
+        if: env.PREVIOUS != ''
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          & ([scriptblock]::Create((irm "$env:RELEASES/latest/download/install.ps1"))) $env:PREVIOUS.TrimStart('v')
+          & "$env:USERPROFILE\.local\bin\tabsmith.exe" update
+          if ($LASTEXITCODE -ne 0) { throw "tabsmith update failed" }
+          $printed = & "$env:USERPROFILE\.local\bin\tabsmith.exe" --version
+          if ($printed -ne "tabsmith $version") { throw "updated to $printed, not tabsmith $version" }

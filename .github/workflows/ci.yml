@@ -1,8 +1,12 @@
 name: ci
 
 on:
+  # Branches only: a pushed v* tag runs this through release.yml instead of twice.
   push:
+    branches: ['**']
   pull_request:
+  # release.yml runs this as the gate before it builds the release binaries.
+  workflow_call:
 
 jobs:
   test:
@@ -26,6 +30,24 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: echo 'C:\Program Files\Git\bin' >> "$GITHUB_PATH"
+      - name: Check the POSIX installer
+        if: runner.os == 'Linux'
+        run: sh -n scripts/install.sh && shellcheck --shell=sh scripts/install.sh
+      # The installer runs under Windows PowerShell 5.1 (install.cmd, `irm | iex`) and PowerShell 7.
+      - name: Parse the PowerShell installer with Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error "$($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
+      - name: Parse the PowerShell installer with PowerShell 7
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error "$($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
       - run: cargo build --locked
       - run: cargo test --locked
       - name: Load every bundled spec module
