@@ -34,9 +34,11 @@ impl FileInstalledExecutable {
 }
 
 impl InstalledExecutable for FileInstalledExecutable {
-    /// Both paths with symlinks resolved where they exist: Linux reports the running binary that way.
+    /// The binary and the native directory with every symlink resolved where they exist: Linux reports the running
+    /// binary that way, and the home, `~/.local` or `~/.local/bin` may each be a link (a dotfiles tree, another disk).
     fn location(&self) -> InstallLocation {
-        InstallLocation::new(resolved(&self.executable), InstallLocation::native_dir(&resolved(&self.user_home)))
+        let native_dir = InstallLocation::native_dir(&self.user_home);
+        InstallLocation::new(resolved(&self.executable), resolved(&native_dir))
     }
 
     fn replace(&self, bytes: &[u8], expected_version: &str) -> Result<(), SelfUpdateError> {
@@ -199,6 +201,23 @@ mod tests {
         let (_, executable) = native_install_under(&real_home);
         let home = temp_dir.path().join("home");
         std::os::unix::fs::symlink(&real_home, &home).unwrap();
+
+        let location = FileInstalledExecutable::new(executable, home).location();
+
+        assert!(location.is_native());
+    }
+
+    /// GNU stow folds `~/.local/bin` into a symlink to a dotfiles tree; the installer's `mv` follows it.
+    #[test]
+    fn should_take_a_symlinked_local_bin_for_the_native_directory() {
+        let temp_dir = TempDir::new("self-update-symlinked-bin");
+        let dotfiles_bin = temp_dir.path().join("dotfiles").join("bin");
+        fs::create_dir_all(&dotfiles_bin).unwrap();
+        let executable = dotfiles_bin.join("tabsmith");
+        fs::write(&executable, b"old binary").unwrap();
+        let home = temp_dir.path().join("home");
+        fs::create_dir_all(home.join(".local")).unwrap();
+        std::os::unix::fs::symlink(&dotfiles_bin, home.join(".local").join("bin")).unwrap();
 
         let location = FileInstalledExecutable::new(executable, home).location();
 
