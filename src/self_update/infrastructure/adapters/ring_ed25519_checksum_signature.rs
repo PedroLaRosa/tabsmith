@@ -1,6 +1,10 @@
 use crate::self_update::application::ports::checksum_signature::ChecksumSignature;
 use ring::signature::{UnparsedPublicKey, ED25519};
 
+/// The public half of the release signing key, compiled in: every installed binary carries it forward, so only
+/// releases signed with its private half (the `release` environment's `RELEASE_SIGNING_KEY`) update tabsmith.
+pub(crate) const RELEASE_SIGNING_KEY_HEX: &str = include_str!("../../../../scripts/release-signing-key.pub");
+
 /// Checks `SHA256SUMS.sig` as an ed25519 signature, with ring, against the release signing key.
 pub(crate) struct RingEd25519ChecksumSignature {
     public_key: Vec<u8>,
@@ -75,5 +79,13 @@ mod tests {
         let authentic = checksum_signature.is_authentic(b"", &bytes(TEST_1_SIGNATURE));
 
         assert!(!authentic);
+    }
+
+    /// A malformed key file fails CI here instead of failing every update in the field.
+    #[test]
+    fn should_ship_a_release_signing_key_of_32_bytes() {
+        let key = decode_hex(RELEASE_SIGNING_KEY_HEX);
+
+        assert_eq!(key.map(|key| key.len()), Some(32));
     }
 }
