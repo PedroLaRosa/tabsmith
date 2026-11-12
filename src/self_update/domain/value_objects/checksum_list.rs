@@ -8,13 +8,9 @@ pub(crate) struct ChecksumList {
 
 impl ChecksumList {
     pub(crate) fn parse(text: &str) -> Self {
-        let entries = text
-            .lines()
-            .filter_map(|line| line.split_once(' '))
-            .filter_map(|(digest, marked_file)| Some((marked_file.strip_prefix([' ', '*'])?, digest)))
-            .map(|(file, digest)| (file.to_string(), digest.to_string()))
-            .collect();
-        ChecksumList { entries }
+        ChecksumList {
+            entries: text.lines().filter_map(file_and_digest).collect(),
+        }
     }
 
     /// The hex digest listed for `asset`.
@@ -24,6 +20,13 @@ impl ChecksumList {
             .find(|(file, _)| file == asset.name())
             .map(|(_, digest)| digest.as_str())
     }
+}
+
+/// `<digest>  <file>` or `<digest> *<file>` as `(file, digest)`; any other line is not an entry.
+fn file_and_digest(line: &str) -> Option<(String, String)> {
+    let (digest, marked_file) = line.split_once(' ')?;
+    let file = marked_file.strip_prefix([' ', '*'])?;
+    Some((file.to_string(), digest.to_string()))
 }
 
 #[cfg(test)]
