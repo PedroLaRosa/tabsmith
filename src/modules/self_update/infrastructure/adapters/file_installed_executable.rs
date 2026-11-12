@@ -27,11 +27,32 @@ impl FileInstalledExecutable {
 
 }
 
+const STAGED_PREFIX: &str = ".tabsmith-update-";
+
+/// How old a staged binary has to be to count as abandoned: far past a download and a version check, so a tab
+/// updating at the same moment keeps its own.
+const ABANDONED_AFTER: Duration = Duration::from_secs(10 * 60);
+
 /// Next to the executable, so the final rename stays on one filesystem; named per process, so two tabs updating at
 /// once never write the same file.
 fn staged_path(executable: &Path) -> PathBuf {
-    let name = format!(".tabsmith-update-{}{}", std::process::id(), std::env::consts::EXE_SUFFIX);
+    let name = format!("{STAGED_PREFIX}{}{}", std::process::id(), std::env::consts::EXE_SUFFIX);
     executable.with_file_name(name)
+}
+
+/// Staged binaries that an update stopped between staging and the rename (a closed tab, Ctrl-C) left next to the
+/// executable, removed best effort: nothing else would ever delete them.
+fn remove_abandoned_staged_files(executable: &Path) {
+    let Some(entries) = executable.parent().and_then(|dir| fs::read_dir(dir).ok()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let is_staged = entry.file_name().to_string_lossy().starts_with(STAGED_PREFIX);
+        let age = entry.metadata().and_then(|metadata| metadata.modified()).ok().and_then(|modified| modified.elapsed().ok());
+        if is_staged && age.is_some_and(|age| age >= ABANDONED_AFTER) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 impl InstalledExecutable for FileInstalledExecutable {
@@ -46,6 +67,7 @@ impl InstalledExecutable for FileInstalledExecutable {
     /// the binary as invoked) would leave the native install old and turn the link into a copy.
     fn replace(&self, bytes: &[u8], expected_version: &str) -> Result<(), SelfUpdateError> {
         let executable = resolved(&self.executable);
+        remove_abandoned_staged_files(&executable);
         let staged = staged_path(&executable);
         let replaced = stage(&staged, bytes)
             .and_then(|()| check_version(&staged, expected_version))
@@ -244,5 +266,20 @@ mod tests {
 
         let link_kept = fs::symlink_metadata(&link).unwrap().file_type().is_symlink();
         assert_eq!((fs::read(&native).unwrap(), link_kept), (RELEASE_9_9_9.to_vec(), true));
+    }
+
+    /// A tab closed (or `tabsmith update` interrupted) between staging and the rename leaves its staged binary behind.
+    #[test]
+    fn should_remove_a_staged_binary_left_behind_by_an_interrupted_update() {
+        let temp_dir = TempDir::new("self-update-leftover");
+        let (installed, executable) = native_install(&temp_dir);
+        let leftover = executable.with_file_name(".tabsmith-update-4242");
+        fs::write(&leftover, b"half a binary").unwrap();
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+        fs::File::options().write(true).open(&leftover).unwrap().set_modified(two_hours_ago).unwrap();
+
+        installed.replace(RELEASE_9_9_9, "9.9.9").unwrap();
+
+        assert!(!leftover.exists());
     }
 }
