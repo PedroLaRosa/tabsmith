@@ -9,7 +9,8 @@ impl ReleaseAsset {
         let (os, extension) = match os {
             "macos" => ("darwin", ""),
             "windows" => ("win32", ".exe"),
-            _ => ("linux", ""),
+            "linux" => ("linux", ""),
+            _ => return None,
         };
         let arch = match arch {
             "aarch64" => "arm64",
@@ -52,5 +53,12 @@ mod tests {
         let name = asset_name("windows", "x86_64");
 
         assert_eq!(name.as_deref(), Some("tabsmith-win32-x64.exe"));
+    }
+
+    #[test]
+    fn should_have_no_asset_for_an_operating_system_without_a_build() {
+        let name = asset_name("freebsd", "x86_64");
+
+        assert_eq!(name, None);
     }
 }
