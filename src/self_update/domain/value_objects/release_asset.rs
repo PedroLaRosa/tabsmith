@@ -14,7 +14,8 @@ impl ReleaseAsset {
         };
         let arch = match arch {
             "aarch64" => "arm64",
-            _ => "x64",
+            "x86_64" => "x64",
+            _ => return None,
         };
         Some(ReleaseAsset {
             name: format!("tabsmith-{os}-{arch}{extension}"),
@@ -58,6 +59,13 @@ mod tests {
     #[test]
     fn should_have_no_asset_for_an_operating_system_without_a_build() {
         let name = asset_name("freebsd", "x86_64");
+
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn should_have_no_asset_for_an_architecture_without_a_build() {
+        let name = asset_name("linux", "riscv64");
 
         assert_eq!(name, None);
     }
