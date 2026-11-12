@@ -116,19 +116,29 @@ fn swap_into_place(staged: &Path, executable: &Path) -> Result<(), SelfUpdateErr
 }
 
 /// Windows lets a running image be renamed but not replaced or deleted: the running file steps aside as
-/// `tabsmith.exe.<pid>.old`, the new one takes its name, and the old one comes back if that fails. Copies left
+/// `tabsmith.exe.<pid>.<nanos>.old`, the new one takes its name, and the old one comes back if that fails. Copies left
 /// from earlier updates are deleted first, best effort (one still running stays).
 #[cfg(windows)]
 fn swap_into_place(staged: &Path, executable: &Path) -> Result<(), SelfUpdateError> {
     remove_old_copies(executable);
-    let file_name = executable.file_name().unwrap_or_default().to_string_lossy();
-    let old = executable.with_file_name(format!("{file_name}.{}.old", std::process::id()));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    let old = old_copy_path(executable, std::process::id(), nanos);
     fs::rename(executable, &old).map_err(io_failure(executable))?;
     if let Err(error) = fs::rename(staged, executable) {
         let _ = fs::rename(&old, executable);
         return Err(io_failure(executable)(error));
     }
     Ok(())
+}
+
+/// `<executable>.<pid>.<nanos>.old`: unique even when Windows reuses a process id while an earlier copy still runs.
+#[cfg(any(windows, test))]
+fn old_copy_path(executable: &Path, pid: u32, nanos: u128) -> PathBuf {
+    let file_name = executable.file_name().unwrap_or_default().to_string_lossy();
+    executable.with_file_name(format!("{file_name}.{pid}.{nanos}.old"))
 }
 
 #[cfg(windows)]
@@ -294,5 +304,15 @@ mod tests {
         installed.replace(RELEASE_9_9_9, "9.9.9").unwrap();
 
         assert!(other_tab.exists());
+    }
+
+    /// Windows reuses process ids, and an `.old` copy from an earlier update may still be running in another tab.
+    #[test]
+    fn should_name_the_old_copy_after_the_process_and_the_moment() {
+        let executable = Path::new("/home/ana/.local/bin/tabsmith.exe");
+
+        let old_copy = old_copy_path(executable, 4242, 1_700_000_000_123_456_789);
+
+        assert_eq!(old_copy, Path::new("/home/ana/.local/bin/tabsmith.exe.4242.1700000000123456789.old"));
     }
 }
