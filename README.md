@@ -51,12 +51,12 @@ or `install.cmd 0.2.0`.
 Platforms: macOS 11+ (Apple Silicon and Intel); any Linux or WSL on x64 or arm64, Alpine included (static musl
 binaries); Windows 10+ on x64 or arm64.
 
-To check a downloaded binary by hand: `gh release verify-asset vX.Y.Z ./tabsmith-<platform>`.
+To check a downloaded binary by hand: `gh release verify-asset -R PedroLaRosa/tabsmith vX.Y.Z ./tabsmith-<platform>`.
 
-From source (this install does not update itself):
+From source (`~/.cargo/bin/tabsmith`; this install does not update itself):
 
 ```sh
-cargo install --path .        # or: cargo build --release && cp target/release/tabsmith ~/.local/bin/
+cargo install --path .
 tabsmith setup                # adds the shell integration to your dotfiles (asks first)
 ```
 
@@ -90,7 +90,9 @@ tabsmith update                                    # update now
 tabsmith settings app.disableAutoupdates true      # no background updates (tabsmith update still works)
 ```
 
-A copy installed any other way (cargo, a `target/` build) is never touched: update it the way you installed it.
+A copy anywhere but `~/.local/bin` (cargo's `~/.cargo/bin`, a `target/` build) is never touched: update it the way
+you installed it. A binary you put at `~/.local/bin/tabsmith` yourself is the native install, so release builds replace
+it (unless `app.disableAutoupdates` is set).
 
 ### Uninstall
 
@@ -185,7 +187,8 @@ screen cells, restoring them exactly afterwards. Design details: [`docs/SPEC.md`
 
 Maintainers only; `main` is protected, so a release goes through a pull request.
 
-1. Open a PR that bumps `version` in `Cargo.toml`; merge it once CI is green.
+1. Open a PR that bumps `version` in `Cargo.toml` and commits the `Cargo.lock` that follows (any `cargo build`
+   updates it; CI and the release build with `--locked`); merge it once CI is green.
 2. On the merged `main`: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The release workflow tests and builds the six binaries, then waits: approve its `publish` job (the `release`
    environment). It writes `VERSION` and `SHA256SUMS`, signs `SHA256SUMS`, checks the signature against the key the

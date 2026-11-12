@@ -445,3 +445,13 @@ Implemented on `feat/native-install`, one commit per GREEN and REFACTOR. Where t
   `tabsmith update` then says so and exits 1, and the background check does nothing.
 - **`src/modules/`.** `main` moved every hexagonal module under `src/modules/` while this was built (PR #12), so the
   module is `src/modules/self_update/` (`crate::modules::self_update::…`), not the `src/self_update/` of the tree above.
+- **Review fixes.** An independent review of the finished branch (four areas, each finding checked by a second,
+  adversarial reviewer) confirmed these, now fixed test-first: `location` resolves the whole native directory
+  (`InstallLocation` takes it, from `InstallLocation::native_dir`), so a symlinked `~/.local` or `~/.local/bin` is
+  native; `replace` renames over the resolved file, not a PATH symlink to it (macOS reports the binary as invoked);
+  staged binaries an interrupted update left behind are removed once ten minutes old; the Windows old copy is
+  `tabsmith.exe.<pid>.<nanos>.old` (`<pid>.<ticks>` in `install.ps1`), since PIDs and PowerShell sessions repeat;
+  `install.cmd` turns TLS 1.2 on before its first download; `publish` downloads the six build artifacts by name and
+  signs only if `dist` holds exactly those binaries, and `ci.yml` (which runs inside the release run) pins its actions
+  too; README fixes for `verify-asset -R`, `Cargo.lock` in the bump PR, and `~/.local/bin` being the native install
+  whoever puts a binary there.
