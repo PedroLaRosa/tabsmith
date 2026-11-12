@@ -66,17 +66,20 @@ impl UpdateTabsmithUseCase {
         }
     }
 
+    /// Only the native install updates, so anything else is left alone before any other gate. The background check
+    /// then skips while autoupdates are off or the last check is under a day old, and records itself before asking the
+    /// release channel.
     pub(crate) fn execute(&self, trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
+        let location = self.executable.location();
+        if !location.is_native() {
+            return outside_the_native_install(trigger, &location);
+        }
         if trigger == UpdateTrigger::Scheduled {
             let now_secs = self.clock.now_secs();
             if let Some(reason) = self.reason_to_skip(now_secs) {
                 return Ok(UpdateOutcome::Skipped(reason));
             }
             self.update_checks.record_check(now_secs);
-        }
-        let location = self.executable.location();
-        if !location.is_native() {
-            return outside_the_native_install(trigger, &location);
         }
         self.update_to_newer_release()
     }
@@ -421,5 +424,19 @@ mod tests {
             (result, fakes.executable.installed_bytes()),
             (Err(SelfUpdateError::InstallFailed("tabsmith --version printed tabsmith 0.1.0".to_string())), None)
         );
+    }
+
+    /// "Does nothing unless native": cargo installs and dev builds never write the update-check marker.
+    #[test]
+    fn should_record_no_check_for_an_install_outside_the_native_location() {
+        let cargo_install = InstallLocation::new(
+            PathBuf::from("/home/ana/.cargo/bin/tabsmith"),
+            PathBuf::from("/home/ana"),
+        );
+        let fakes = Fakes::new(good_release()).with_executable(InMemoryExecutable::at(cargo_install));
+
+        fakes.use_case().execute(UpdateTrigger::Scheduled).unwrap();
+
+        assert_eq!(fakes.update_checks.last_check_secs(), None);
     }
 }
