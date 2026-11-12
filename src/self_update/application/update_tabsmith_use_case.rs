@@ -9,6 +9,9 @@ use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 use crate::self_update::domain::value_objects::update_outcome::UpdateOutcome;
 use std::rc::Rc;
 
+const CHECKSUMS_FILE: &str = "SHA256SUMS";
+const CHECKSUMS_SIGNATURE_FILE: &str = "SHA256SUMS.sig";
+
 /// Brings the native install to the latest release (`tabsmith update`, and the background check at `_ pty` start).
 pub(crate) struct UpdateTabsmithUseCase {
     current_version: String,
@@ -56,17 +59,11 @@ impl UpdateTabsmithUseCase {
         })
     }
 
-    /// This platform's binary from the release of `version`, once it matches the release's `SHA256SUMS` and that file
-    /// carries the release signing key's signature. The binary is downloaded only after the signature checks out.
+    /// This platform's binary from the release of `version`, once it matches the release's trusted `SHA256SUMS`.
     fn verified_binary(&self, version: &str) -> Result<Vec<u8>, SelfUpdateError> {
-        let sums = self.channel.download(version, "SHA256SUMS");
-        let signature = self.channel.download(version, "SHA256SUMS.sig");
-        if !self.signature.is_authentic(&sums, &signature) {
-            return Err(SelfUpdateError::UntrustedChecksums);
-        }
-        let listed_digest = ChecksumList::parse(&String::from_utf8_lossy(&sums))
+        let checksums = self.trusted_checksums(version)?;
+        let listed_digest = checksums
             .digest_for(&self.asset)
-            .map(str::to_string)
             .ok_or_else(|| SelfUpdateError::MissingChecksum {
                 asset: self.asset.name().to_string(),
             })?;
@@ -77,6 +74,17 @@ impl UpdateTabsmithUseCase {
             });
         }
         Ok(binary)
+    }
+
+    /// The release's `SHA256SUMS`, once `SHA256SUMS.sig` shows the release signing key signed it. Nothing else of the
+    /// release is downloaded before this check.
+    fn trusted_checksums(&self, version: &str) -> Result<ChecksumList, SelfUpdateError> {
+        let sums = self.channel.download(version, CHECKSUMS_FILE);
+        let signature = self.channel.download(version, CHECKSUMS_SIGNATURE_FILE);
+        if !self.signature.is_authentic(&sums, &signature) {
+            return Err(SelfUpdateError::UntrustedChecksums);
+        }
+        Ok(ChecksumList::parse(&String::from_utf8_lossy(&sums)))
     }
 }
 
