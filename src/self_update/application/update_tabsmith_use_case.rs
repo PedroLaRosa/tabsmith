@@ -44,8 +44,18 @@ impl UpdateTabsmithUseCase {
         if latest_version == self.current_version {
             return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
         }
-        let sums = self.channel.download(&latest_version, "SHA256SUMS");
-        let binary = self.channel.download(&latest_version, self.asset.name());
+        let binary = self.verified_binary(&latest_version)?;
+        self.executable.replace(&binary, &latest_version);
+        Ok(UpdateOutcome::Updated {
+            from: self.current_version.clone(),
+            to: latest_version,
+        })
+    }
+
+    /// This platform's binary from the release of `version`, once it matches the release's `SHA256SUMS`.
+    fn verified_binary(&self, version: &str) -> Result<Vec<u8>, SelfUpdateError> {
+        let sums = self.channel.download(version, "SHA256SUMS");
+        let binary = self.channel.download(version, self.asset.name());
         let listed_digest = ChecksumList::parse(&String::from_utf8_lossy(&sums))
             .digest_for(&self.asset)
             .map(str::to_string);
@@ -54,11 +64,7 @@ impl UpdateTabsmithUseCase {
                 asset: self.asset.name().to_string(),
             });
         }
-        self.executable.replace(&binary, &latest_version);
-        Ok(UpdateOutcome::Updated {
-            from: self.current_version.clone(),
-            to: latest_version,
-        })
+        Ok(binary)
     }
 }
 
