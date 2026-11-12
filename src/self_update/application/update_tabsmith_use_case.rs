@@ -8,6 +8,7 @@ use crate::self_update::domain::value_objects::checksum_list::ChecksumList;
 use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 use crate::self_update::domain::value_objects::update_outcome::UpdateOutcome;
 use crate::specs::domain::value_objects::semantic_version::SemanticVersion;
+use std::cmp::Ordering;
 use std::rc::Rc;
 
 const CHECKSUMS_FILE: &str = "SHA256SUMS";
@@ -49,12 +50,14 @@ impl UpdateTabsmithUseCase {
 
     pub(crate) fn execute(&self, _trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
         let latest_version = self.channel.latest_version();
-        if SemanticVersion::parse(&latest_version).is_none() {
+        let Some(latest) = SemanticVersion::parse(&latest_version) else {
             return Err(SelfUpdateError::InvalidVersion { version: latest_version });
-        }
-        if latest_version == self.current_version {
+        };
+        let current = SemanticVersion::parse(&self.current_version).unwrap_or_default();
+        if latest.compare(&current) != Ordering::Greater {
             return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
         }
+        let latest_version = latest.to_string();
         let binary = self.verified_binary(&latest_version)?;
         self.executable.replace(&binary, &latest_version);
         Ok(UpdateOutcome::Updated {
@@ -223,6 +226,20 @@ mod tests {
                 Vec::<String>::new(),
                 None
             )
+        );
+    }
+
+    /// Decision 8: only a newer release installs, so the updater never downgrades.
+    #[test]
+    fn should_stay_on_the_running_version_when_the_latest_release_is_older() {
+        let channel = Rc::new(InMemoryReleaseChannel::new("0.0.9"));
+        let use_case = use_case(&channel, &Rc::new(InMemoryExecutable::default()));
+
+        let outcome = use_case.execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (outcome, channel.downloads()),
+            (Ok(UpdateOutcome::UpToDate(CURRENT.to_string())), Vec::<String>::new())
         );
     }
 }
