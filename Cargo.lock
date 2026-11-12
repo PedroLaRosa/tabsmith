@@ -1251,6 +1251,7 @@ dependencies = [
  "crossterm",
  "libc",
  "portable-pty",
+ "ring",
  "rquickjs",
  "serde",
  "serde_json",
