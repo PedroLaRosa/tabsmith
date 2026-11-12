@@ -1,22 +1,16 @@
-/// The file of a release that holds the tabsmith binary for one platform.
+/// The file of a release that holds the tabsmith binary for one platform, named as Claude Code names its platforms:
+/// `tabsmith-<os>-<arch>`, plus `.exe` on Windows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReleaseAsset {
     name: String,
 }
 
 impl ReleaseAsset {
+    /// The asset for `os` and `arch` as Rust names them (`std::env::consts::{OS, ARCH}`); `None` when no release
+    /// carries a build for that platform.
     pub(crate) fn for_platform(os: &str, arch: &str) -> Option<Self> {
-        let (os, extension) = match os {
-            "macos" => ("darwin", ""),
-            "windows" => ("win32", ".exe"),
-            "linux" => ("linux", ""),
-            _ => return None,
-        };
-        let arch = match arch {
-            "aarch64" => "arm64",
-            "x86_64" => "x64",
-            _ => return None,
-        };
+        let (os, extension) = release_os(os)?;
+        let arch = release_arch(arch)?;
         Some(ReleaseAsset {
             name: format!("tabsmith-{os}-{arch}{extension}"),
         })
@@ -24,6 +18,24 @@ impl ReleaseAsset {
 
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+}
+
+/// The release's name for `os`, and the extension its binaries carry.
+fn release_os(os: &str) -> Option<(&'static str, &'static str)> {
+    match os {
+        "macos" => Some(("darwin", "")),
+        "linux" => Some(("linux", "")),
+        "windows" => Some(("win32", ".exe")),
+        _ => None,
+    }
+}
+
+fn release_arch(arch: &str) -> Option<&'static str> {
+    match arch {
+        "aarch64" => Some("arm64"),
+        "x86_64" => Some("x64"),
+        _ => None,
     }
 }
 
