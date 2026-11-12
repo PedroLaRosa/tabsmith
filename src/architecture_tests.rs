@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 /// Modules that follow the hexagonal layout; each phase registers the module it finishes. `bootstrap` is the
 /// composition root and is never registered.
 const REGISTERED_MODULES: &[&str] = &[
-    "completion", "diagnostics", "dropdown", "ghost_text", "history", "settings", "shared", "shell_integration", "specs",
-    "terminal_session",
+    "completion", "diagnostics", "dropdown", "ghost_text", "history", "self_update", "settings", "shared",
+    "shell_integration", "specs", "terminal_session",
 ];
 
 /// The flat files the refactor is emptying (`src/<name>.rs`). Domain and application never use them: they reach

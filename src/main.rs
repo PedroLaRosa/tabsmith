@@ -9,6 +9,7 @@ mod diagnostics;
 mod dropdown;
 mod ghost_text;
 mod history;
+mod self_update;
 mod settings;
 mod shared;
 mod shell_integration;
