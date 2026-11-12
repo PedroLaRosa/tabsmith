@@ -75,9 +75,12 @@ impl UpdateTabsmithUseCase {
         }
         let location = self.executable.location();
         if !location.is_native() {
-            return Err(SelfUpdateError::NotNativeInstall {
-                path: location.executable().to_path_buf(),
-            });
+            return match trigger {
+                UpdateTrigger::Manual => Err(SelfUpdateError::NotNativeInstall {
+                    path: location.executable().to_path_buf(),
+                }),
+                UpdateTrigger::Scheduled => Ok(UpdateOutcome::Skipped(SkipReason::NotNative)),
+            };
         }
         let Some(latest_version) = self.newer_release()? else {
             return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
@@ -374,6 +377,23 @@ mod tests {
         assert_eq!(
             (outcome, fakes.update_checks.last_check_secs(), fakes.channel.latest_version_requests()),
             (Ok(UpdateOutcome::Skipped(SkipReason::Disabled)), None, 0)
+        );
+    }
+
+    /// Background checks leave cargo installs and dev builds alone without an error to log at every tab.
+    #[test]
+    fn should_skip_a_scheduled_check_of_an_install_outside_the_native_location() {
+        let dev_build = InstallLocation::new(
+            PathBuf::from("/home/ana/src/tabsmith/target/debug/tabsmith"),
+            PathBuf::from("/home/ana"),
+        );
+        let fakes = Fakes::new(good_release()).installed_at(dev_build);
+
+        let outcome = fakes.use_case().execute(UpdateTrigger::Scheduled);
+
+        assert_eq!(
+            (outcome, fakes.channel.latest_version_requests()),
+            (Ok(UpdateOutcome::Skipped(SkipReason::NotNative)), 0)
         );
     }
 }

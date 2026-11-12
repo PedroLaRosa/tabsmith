@@ -5,4 +5,6 @@ pub(crate) enum SkipReason {
     Disabled,
     /// The last check was less than a day ago.
     NotDue,
+    /// tabsmith does not run from the native install, so whatever installed it updates it.
+    NotNative,
 }
