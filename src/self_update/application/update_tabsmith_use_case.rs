@@ -167,13 +167,13 @@ mod tests {
     use crate::self_update::application::ports::installed_executable::InMemoryExecutable;
     use crate::self_update::application::ports::release_channel::InMemoryReleaseChannel;
     use crate::self_update::application::ports::sha256_digest::HexEncodingDigest;
+    use crate::self_update::domain::repositories::update_check_repository::InMemoryUpdateCheckRepository;
+    use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
+    use crate::self_update::domain::value_objects::skip_reason::SkipReason;
     use crate::settings::domain::repositories::settings_repository::{InMemorySettingsRepository, SettingsRepository};
     use crate::settings::domain::services::settings_catalog::APP_DISABLE_AUTOUPDATES;
     use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::settings::domain::value_objects::settings::Settings;
-    use crate::self_update::domain::repositories::update_check_repository::InMemoryUpdateCheckRepository;
-    use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
-    use crate::self_update::domain::value_objects::skip_reason::SkipReason;
     use crate::shared::application::ports::clock::FixedClock;
     use std::path::PathBuf;
     use std::sync::Arc;
