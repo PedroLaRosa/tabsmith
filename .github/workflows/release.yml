@@ -14,8 +14,9 @@ on:
 permissions:
   contents: read
 
-# Every action is pinned to a full commit SHA (a tag can be moved to new code; a SHA cannot), since whatever the
-# build job produces gets signed. The Rust toolchain comes from the rustup the hosted runners ship, not an action.
+# Every action in this run, ci.yml's included, is pinned to a full commit SHA (a tag can be moved to new code; a SHA
+# cannot), since whatever the build job produces gets signed. The Rust toolchain comes from the rustup the hosted
+# runners ship, not an action.
 jobs:
   test:
     uses: ./.github/workflows/ci.yml
@@ -109,11 +110,41 @@ jobs:
           tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 \
             --json tagName --jq '.[0].tagName // ""')
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # Each build artifact by its exact name, never by pattern: any job in this run can upload artifacts (ci.yml runs
+      # in it too), and a pattern would sweep a planted one into what gets signed. A planted artifact that takes one of
+      # these names first makes that build's own upload fail instead.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: tabsmith-darwin-arm64
           path: dist
-          pattern: tabsmith-*
-          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tabsmith-darwin-x64
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tabsmith-linux-x64
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tabsmith-linux-arm64
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tabsmith-win32-x64
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tabsmith-win32-arm64
+          path: dist
+      - name: Check dist holds exactly the six release binaries
+        run: |
+          expected="tabsmith-darwin-arm64 tabsmith-darwin-x64 tabsmith-linux-arm64 tabsmith-linux-x64 tabsmith-win32-arm64.exe tabsmith-win32-x64.exe"
+          actual=$(find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::dist holds '$actual', not the six release binaries; nothing was signed"
+            exit 1
+          fi
       - name: Write VERSION and SHA256SUMS, and add the installers
         working-directory: dist
         run: |
