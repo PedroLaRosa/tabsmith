@@ -168,4 +168,17 @@ mod tests {
             )
         );
     }
+
+    /// Decision 3: a new inode. A hard link stands in for a session still running the old binary.
+    #[test]
+    fn should_leave_the_old_file_whole_for_sessions_still_running_it() {
+        let temp_dir = TempDir::new("self-update-inode");
+        let (installed, executable) = native_install(&temp_dir);
+        let running_session = temp_dir.path().join("running-session");
+        fs::hard_link(&executable, &running_session).unwrap();
+
+        installed.replace(RELEASE_9_9_9, "9.9.9").unwrap();
+
+        assert_eq!(fs::read(&running_session).unwrap(), b"old binary");
+    }
 }
