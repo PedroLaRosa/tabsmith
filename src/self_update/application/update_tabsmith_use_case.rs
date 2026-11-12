@@ -55,7 +55,18 @@ mod tests {
     use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 
     const CURRENT: &str = "0.1.0";
+    const NEWER: &str = "0.2.0";
     const ASSET: &str = "tabsmith-linux-x64";
+
+    /// The newer release, holding `binary` and the `sums` listing it, signed.
+    fn signed_release(sums: &str, binary: &[u8]) -> Rc<InMemoryReleaseChannel> {
+        Rc::new(
+            InMemoryReleaseChannel::new(NEWER)
+                .with_file("SHA256SUMS", sums.as_bytes())
+                .with_file("SHA256SUMS.sig", format!("sig:{sums}").as_bytes())
+                .with_file(ASSET, binary),
+        )
+    }
 
     fn use_case(channel: &Rc<InMemoryReleaseChannel>, executable: &Rc<InMemoryExecutable>) -> UpdateTabsmithUseCase {
         UpdateTabsmithUseCase::new(UpdateTabsmithParts {
@@ -81,12 +92,7 @@ mod tests {
 
     #[test]
     fn should_replace_the_executable_with_the_binary_of_a_newer_release() {
-        let channel = Rc::new(
-            InMemoryReleaseChannel::new("0.2.0")
-                .with_file("SHA256SUMS", format!("6f6b  {ASSET}\n").as_bytes())
-                .with_file("SHA256SUMS.sig", format!("sig:6f6b  {ASSET}\n").as_bytes())
-                .with_file(ASSET, b"ok"),
-        );
+        let channel = signed_release(&format!("6f6b  {ASSET}\n"), b"ok");
         let executable = Rc::new(InMemoryExecutable::default());
         let use_case = use_case(&channel, &executable);
 
@@ -95,7 +101,7 @@ mod tests {
         assert_eq!(
             (outcome, executable.installed_bytes()),
             (
-                UpdateOutcome::Updated { from: CURRENT.to_string(), to: "0.2.0".to_string() },
+                UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() },
                 Some(b"ok".to_vec())
             )
         );
