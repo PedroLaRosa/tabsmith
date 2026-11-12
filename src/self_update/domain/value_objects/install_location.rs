@@ -53,4 +53,13 @@ mod tests {
 
         assert!(native);
     }
+
+    #[test]
+    fn should_not_be_native_as_a_cargo_install() {
+        let location = location("/home/ana/.cargo/bin/tabsmith");
+
+        let native = location.is_native();
+
+        assert!(!native);
+    }
 }
