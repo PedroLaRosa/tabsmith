@@ -49,6 +49,12 @@ impl UpdateTabsmithUseCase {
     }
 
     pub(crate) fn execute(&self, _trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
+        let location = self.executable.location();
+        if !location.is_native() {
+            return Err(SelfUpdateError::NotNativeInstall {
+                path: location.executable().to_path_buf(),
+            });
+        }
         let Some(latest_version) = self.newer_release()? else {
             return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
         };
@@ -107,7 +113,9 @@ mod tests {
     use crate::self_update::application::ports::installed_executable::InMemoryExecutable;
     use crate::self_update::application::ports::release_channel::InMemoryReleaseChannel;
     use crate::self_update::application::ports::sha256_digest::HexEncodingDigest;
+    use crate::self_update::domain::value_objects::install_location::InstallLocation;
     use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
+    use std::path::PathBuf;
 
     const CURRENT: &str = "0.1.0";
     const NEWER: &str = "0.2.0";
@@ -245,6 +253,28 @@ mod tests {
         assert_eq!(
             (outcome, channel.downloads()),
             (Ok(UpdateOutcome::UpToDate(CURRENT.to_string())), Vec::<String>::new())
+        );
+    }
+
+    #[test]
+    fn should_refuse_a_manual_update_of_an_install_outside_the_native_location() {
+        let channel = signed_release(&format!("6f6b  {ASSET}\n"), b"ok");
+        let cargo_install = InstallLocation::new(
+            PathBuf::from("/home/ana/.cargo/bin/tabsmith"),
+            PathBuf::from("/home/ana"),
+        );
+        let executable = Rc::new(InMemoryExecutable::at(cargo_install));
+        let use_case = use_case(&channel, &executable);
+
+        let result = use_case.execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (result, channel.downloads(), executable.installed_bytes()),
+            (
+                Err(SelfUpdateError::NotNativeInstall { path: PathBuf::from("/home/ana/.cargo/bin/tabsmith") }),
+                Vec::<String>::new(),
+                None
+            )
         );
     }
 }

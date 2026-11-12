@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Where the running tabsmith binary is, and the user home it is judged against.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10,6 +10,10 @@ pub(crate) struct InstallLocation {
 impl InstallLocation {
     pub(crate) fn new(executable: PathBuf, user_home: PathBuf) -> Self {
         InstallLocation { executable, user_home }
+    }
+
+    pub(crate) fn executable(&self) -> &Path {
+        &self.executable
     }
 
     /// The binary is `<user home>/.local/bin/tabsmith` (`tabsmith.exe` on Windows), where the installers put it.
