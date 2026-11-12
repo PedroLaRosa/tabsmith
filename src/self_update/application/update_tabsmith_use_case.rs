@@ -7,6 +7,7 @@ use crate::self_update::domain::self_update_error::SelfUpdateError;
 use crate::self_update::domain::value_objects::checksum_list::ChecksumList;
 use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 use crate::self_update::domain::value_objects::update_outcome::UpdateOutcome;
+use crate::specs::domain::value_objects::semantic_version::SemanticVersion;
 use std::rc::Rc;
 
 const CHECKSUMS_FILE: &str = "SHA256SUMS";
@@ -48,6 +49,9 @@ impl UpdateTabsmithUseCase {
 
     pub(crate) fn execute(&self, _trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
         let latest_version = self.channel.latest_version();
+        if SemanticVersion::parse(&latest_version).is_none() {
+            return Err(SelfUpdateError::InvalidVersion { version: latest_version });
+        }
         if latest_version == self.current_version {
             return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
         }
@@ -199,6 +203,24 @@ mod tests {
             (
                 Err(SelfUpdateError::UntrustedChecksums),
                 vec!["SHA256SUMS".to_string(), "SHA256SUMS.sig".to_string()],
+                None
+            )
+        );
+    }
+
+    #[test]
+    fn should_download_nothing_when_the_latest_version_is_not_a_version() {
+        let channel = Rc::new(InMemoryReleaseChannel::new("<!DOCTYPE html>"));
+        let executable = Rc::new(InMemoryExecutable::default());
+        let use_case = use_case(&channel, &executable);
+
+        let result = use_case.execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (result, channel.downloads(), executable.installed_bytes()),
+            (
+                Err(SelfUpdateError::InvalidVersion { version: "<!DOCTYPE html>".to_string() }),
+                Vec::<String>::new(),
                 None
             )
         );
