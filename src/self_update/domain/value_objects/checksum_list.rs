@@ -54,4 +54,13 @@ mod tests {
 
         assert_eq!(digest, Some("bb22"));
     }
+
+    #[test]
+    fn should_have_no_digest_for_an_asset_it_does_not_list() {
+        let sums = ChecksumList::parse("aa11  tabsmith-linux-x64\n");
+
+        let digest = sums.digest_for(&darwin_arm64());
+
+        assert_eq!(digest, None);
+    }
 }
