@@ -7,6 +7,7 @@ use crate::self_update::domain::repositories::update_check_repository::UpdateChe
 use crate::self_update::domain::self_update_error::SelfUpdateError;
 use crate::self_update::domain::services::update_schedule::UpdateSchedule;
 use crate::self_update::domain::value_objects::checksum_list::ChecksumList;
+use crate::self_update::domain::value_objects::install_location::InstallLocation;
 use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 use crate::self_update::domain::value_objects::skip_reason::SkipReason;
 use crate::self_update::domain::value_objects::update_outcome::UpdateOutcome;
@@ -75,13 +76,13 @@ impl UpdateTabsmithUseCase {
         }
         let location = self.executable.location();
         if !location.is_native() {
-            return match trigger {
-                UpdateTrigger::Manual => Err(SelfUpdateError::NotNativeInstall {
-                    path: location.executable().to_path_buf(),
-                }),
-                UpdateTrigger::Scheduled => Ok(UpdateOutcome::Skipped(SkipReason::NotNative)),
-            };
+            return outside_the_native_install(trigger, &location);
         }
+        self.update_to_newer_release()
+    }
+
+    /// Installs the latest release when it is newer than the running binary and every check on it passes.
+    fn update_to_newer_release(&self) -> Result<UpdateOutcome, SelfUpdateError> {
         let Some(latest_version) = self.newer_release()? else {
             return Ok(UpdateOutcome::UpToDate(self.current_version.clone()));
         };
@@ -143,6 +144,19 @@ impl UpdateTabsmithUseCase {
     }
 }
 
+/// `tabsmith update` says how to update instead; the background check leaves the install alone without a word.
+fn outside_the_native_install(
+    trigger: UpdateTrigger,
+    location: &InstallLocation,
+) -> Result<UpdateOutcome, SelfUpdateError> {
+    match trigger {
+        UpdateTrigger::Manual => Err(SelfUpdateError::NotNativeInstall {
+            path: location.executable().to_path_buf(),
+        }),
+        UpdateTrigger::Scheduled => Ok(UpdateOutcome::Skipped(SkipReason::NotNative)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,7 +169,6 @@ mod tests {
     use crate::settings::domain::value_objects::setting_value::SettingValue;
     use crate::settings::domain::value_objects::settings::Settings;
     use crate::self_update::domain::repositories::update_check_repository::InMemoryUpdateCheckRepository;
-    use crate::self_update::domain::value_objects::install_location::InstallLocation;
     use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
     use crate::self_update::domain::value_objects::skip_reason::SkipReason;
     use crate::shared::application::ports::clock::FixedClock;
