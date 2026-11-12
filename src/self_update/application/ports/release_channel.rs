@@ -1,3 +1,4 @@
+use crate::self_update::domain::self_update_error::SelfUpdateError;
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
 #[cfg(test)]
@@ -5,16 +6,17 @@ use std::collections::HashMap;
 
 /// Where tabsmith's releases are published.
 pub(crate) trait ReleaseChannel {
-    /// The version of the latest release.
-    fn latest_version(&self) -> String;
+    /// The version of the latest release, as published.
+    fn latest_version(&self) -> Result<String, SelfUpdateError>;
     /// The file named `file` of the release of `version`.
-    fn download(&self, version: &str, file: &str) -> Vec<u8>;
+    fn download(&self, version: &str, file: &str) -> Result<Vec<u8>, SelfUpdateError>;
 }
 
-/// A latest version and the files of its release, kept in memory; it remembers which files were downloaded.
+/// A latest version and the files of its release, kept in memory, or a channel that cannot be reached; it remembers
+/// what it was asked for. A file the release does not carry fails to download, as a missing release asset does.
 #[cfg(test)]
 pub(crate) struct InMemoryReleaseChannel {
-    latest_version: String,
+    latest_version: Result<String, SelfUpdateError>,
     files: HashMap<String, Vec<u8>>,
     latest_version_requests: Cell<usize>,
     downloads: RefCell<Vec<String>>,
@@ -23,8 +25,17 @@ pub(crate) struct InMemoryReleaseChannel {
 #[cfg(test)]
 impl InMemoryReleaseChannel {
     pub(crate) fn new(latest_version: &str) -> Self {
+        Self::answering(Ok(latest_version.to_string()))
+    }
+
+    /// Every request fails with `connection refused`.
+    pub(crate) fn unreachable() -> Self {
+        Self::answering(Err(SelfUpdateError::ChannelUnavailable("connection refused".to_string())))
+    }
+
+    fn answering(latest_version: Result<String, SelfUpdateError>) -> Self {
         InMemoryReleaseChannel {
-            latest_version: latest_version.to_string(),
+            latest_version,
             files: HashMap::new(),
             latest_version_requests: Cell::new(0),
             downloads: RefCell::new(Vec::new()),
@@ -50,13 +61,16 @@ impl InMemoryReleaseChannel {
 
 #[cfg(test)]
 impl ReleaseChannel for InMemoryReleaseChannel {
-    fn latest_version(&self) -> String {
+    fn latest_version(&self) -> Result<String, SelfUpdateError> {
         self.latest_version_requests.set(self.latest_version_requests.get() + 1);
         self.latest_version.clone()
     }
 
-    fn download(&self, _version: &str, file: &str) -> Vec<u8> {
+    fn download(&self, _version: &str, file: &str) -> Result<Vec<u8>, SelfUpdateError> {
         self.downloads.borrow_mut().push(file.to_string());
-        self.files.get(file).cloned().unwrap_or_default()
+        self.files
+            .get(file)
+            .cloned()
+            .ok_or_else(|| SelfUpdateError::ChannelUnavailable(format!("{file}: 404 Not Found")))
     }
 }

@@ -4,6 +4,8 @@ use std::path::PathBuf;
 /// Why an update did not happen. Every failure leaves the executable as it was.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SelfUpdateError {
+    /// The release channel could not be reached or did not have a file; the text is its own error.
+    ChannelUnavailable(String),
     /// tabsmith runs from `path`, not from the native install, so whatever installed it updates it.
     NotNativeInstall { path: PathBuf },
     /// The latest release names a version that is not `MAJOR.MINOR.PATCH`.
@@ -19,6 +21,7 @@ pub(crate) enum SelfUpdateError {
 impl fmt::Display for SelfUpdateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            SelfUpdateError::ChannelUnavailable(reason) => write!(f, "could not download the latest release: {reason}"),
             SelfUpdateError::NotNativeInstall { path } => write!(
                 f,
                 "tabsmith runs from {}, not ~/.local/bin; update it the way you installed it (e.g. cargo install --path .)",

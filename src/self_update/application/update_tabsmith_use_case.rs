@@ -60,10 +60,12 @@ impl UpdateTabsmithUseCase {
     }
 
     pub(crate) fn execute(&self, trigger: UpdateTrigger) -> Result<UpdateOutcome, SelfUpdateError> {
-        if trigger == UpdateTrigger::Scheduled
-            && !UpdateSchedule::is_due(self.update_checks.last_check_secs(), self.clock.now_secs())
-        {
-            return Ok(UpdateOutcome::Skipped(SkipReason::NotDue));
+        if trigger == UpdateTrigger::Scheduled {
+            let now_secs = self.clock.now_secs();
+            if !UpdateSchedule::is_due(self.update_checks.last_check_secs(), now_secs) {
+                return Ok(UpdateOutcome::Skipped(SkipReason::NotDue));
+            }
+            self.update_checks.record_check(now_secs);
         }
         let location = self.executable.location();
         if !location.is_native() {
@@ -84,7 +86,7 @@ impl UpdateTabsmithUseCase {
 
     /// The latest release's version, normalised, when it is newer than the running one; `None` when it is not.
     fn newer_release(&self) -> Result<Option<String>, SelfUpdateError> {
-        let latest_version = self.channel.latest_version();
+        let latest_version = self.channel.latest_version()?;
         let Some(latest) = SemanticVersion::parse(&latest_version) else {
             return Err(SelfUpdateError::InvalidVersion { version: latest_version });
         };
@@ -101,7 +103,7 @@ impl UpdateTabsmithUseCase {
             .ok_or_else(|| SelfUpdateError::MissingChecksum {
                 asset: self.asset.name().to_string(),
             })?;
-        let binary = self.channel.download(version, self.asset.name());
+        let binary = self.channel.download(version, self.asset.name())?;
         if self.digest.hex_digest(&binary) != listed_digest {
             return Err(SelfUpdateError::ChecksumMismatch {
                 asset: self.asset.name().to_string(),
@@ -113,8 +115,8 @@ impl UpdateTabsmithUseCase {
     /// The release's `SHA256SUMS`, once `SHA256SUMS.sig` shows the release signing key signed it. Nothing else of the
     /// release is downloaded before this check.
     fn trusted_checksums(&self, version: &str) -> Result<ChecksumList, SelfUpdateError> {
-        let sums = self.channel.download(version, CHECKSUMS_FILE);
-        let signature = self.channel.download(version, CHECKSUMS_SIGNATURE_FILE);
+        let sums = self.channel.download(version, CHECKSUMS_FILE)?;
+        let signature = self.channel.download(version, CHECKSUMS_SIGNATURE_FILE)?;
         if !self.signature.is_authentic(&sums, &signature) {
             return Err(SelfUpdateError::UntrustedChecksums);
         }
@@ -322,6 +324,19 @@ mod tests {
         assert_eq!(
             (outcome, fakes.channel.latest_version_requests(), fakes.executable.installed_bytes()),
             (Ok(UpdateOutcome::Skipped(SkipReason::NotDue)), 0, None)
+        );
+    }
+
+    /// Recorded first, so a release channel that is down is not asked again at every new tab.
+    #[test]
+    fn should_record_a_due_scheduled_check_even_when_the_channel_fails() {
+        let fakes = Fakes::new(InMemoryReleaseChannel::unreachable());
+
+        let result = fakes.use_case().execute(UpdateTrigger::Scheduled);
+
+        assert_eq!(
+            (result, fakes.update_checks.last_check_secs()),
+            (Err(SelfUpdateError::ChannelUnavailable("connection refused".to_string())), Some(NOW_SECS))
         );
     }
 }
