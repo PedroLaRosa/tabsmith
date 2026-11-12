@@ -1,5 +1,7 @@
 #[cfg(test)]
 use std::cell::RefCell;
+#[cfg(test)]
+use std::collections::HashMap;
 
 /// Where tabsmith's releases are published.
 pub(crate) trait ReleaseChannel {
@@ -13,6 +15,7 @@ pub(crate) trait ReleaseChannel {
 #[cfg(test)]
 pub(crate) struct InMemoryReleaseChannel {
     latest_version: String,
+    files: HashMap<String, Vec<u8>>,
     downloads: RefCell<Vec<String>>,
 }
 
@@ -21,8 +24,15 @@ impl InMemoryReleaseChannel {
     pub(crate) fn new(latest_version: &str) -> Self {
         InMemoryReleaseChannel {
             latest_version: latest_version.to_string(),
+            files: HashMap::new(),
             downloads: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The latest release also carries `file`, holding `bytes`.
+    pub(crate) fn with_file(mut self, file: &str, bytes: &[u8]) -> Self {
+        self.files.insert(file.to_string(), bytes.to_vec());
+        self
     }
 
     /// The files downloaded so far, in order.
@@ -39,6 +49,6 @@ impl ReleaseChannel for InMemoryReleaseChannel {
 
     fn download(&self, _version: &str, file: &str) -> Vec<u8> {
         self.downloads.borrow_mut().push(file.to_string());
-        Vec::new()
+        self.files.get(file).cloned().unwrap_or_default()
     }
 }
