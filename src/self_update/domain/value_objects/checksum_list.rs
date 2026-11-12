@@ -1,6 +1,7 @@
 use crate::self_update::domain::value_objects::release_asset::ReleaseAsset;
 
-/// A release's `SHA256SUMS`: one `<hex digest>  <file name>` line per asset, as `sha256sum` writes it.
+/// A release's `SHA256SUMS`: one `<hex digest>  <file name>` line per asset, as `sha256sum` writes it (`<hex digest>
+/// *<file name>` in binary mode).
 pub(crate) struct ChecksumList {
     entries: Vec<(String, String)>,
 }
@@ -9,8 +10,9 @@ impl ChecksumList {
     pub(crate) fn parse(text: &str) -> Self {
         let entries = text
             .lines()
-            .filter_map(|line| line.split_once("  "))
-            .map(|(digest, file)| (file.to_string(), digest.to_string()))
+            .filter_map(|line| line.split_once(' '))
+            .filter_map(|(digest, marked_file)| Some((marked_file.strip_prefix([' ', '*'])?, digest)))
+            .map(|(file, digest)| (file.to_string(), digest.to_string()))
             .collect();
         ChecksumList { entries }
     }
@@ -35,6 +37,15 @@ mod tests {
     #[test]
     fn should_find_the_digest_of_an_asset_in_sha256sum_output() {
         let sums = ChecksumList::parse("aa11  tabsmith-linux-x64\nbb22  tabsmith-darwin-arm64\n");
+
+        let digest = sums.digest_for(&darwin_arm64());
+
+        assert_eq!(digest, Some("bb22"));
+    }
+
+    #[test]
+    fn should_read_a_binary_mode_line() {
+        let sums = ChecksumList::parse("bb22 *tabsmith-darwin-arm64\n");
 
         let digest = sums.digest_for(&darwin_arm64());
 
