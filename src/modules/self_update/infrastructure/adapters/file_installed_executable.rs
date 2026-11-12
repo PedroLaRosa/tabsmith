@@ -282,4 +282,17 @@ mod tests {
 
         assert!(!leftover.exists());
     }
+
+    /// Two tabs may update at the same moment: the other one's staged binary is not abandoned yet.
+    #[test]
+    fn should_keep_the_staged_binary_of_an_update_still_running_in_another_tab() {
+        let temp_dir = TempDir::new("self-update-other-tab");
+        let (installed, executable) = native_install(&temp_dir);
+        let other_tab = executable.with_file_name(".tabsmith-update-4242");
+        fs::write(&other_tab, RELEASE_9_9_9).unwrap();
+
+        installed.replace(RELEASE_9_9_9, "9.9.9").unwrap();
+
+        assert!(other_tab.exists());
+    }
 }
