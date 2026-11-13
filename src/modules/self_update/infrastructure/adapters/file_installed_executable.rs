@@ -116,8 +116,8 @@ fn swap_into_place(staged: &Path, executable: &Path) -> Result<(), SelfUpdateErr
 }
 
 /// Windows lets a running image be renamed but not replaced or deleted: the running file steps aside as
-/// `tabsmith.exe.<pid>.<nanos>.old`, the new one takes its name, and the old one comes back if that fails. Copies left
-/// from earlier updates are deleted first, best effort (one still running stays).
+/// `tabsmith.exe.<pid>.<nanos>.old`. Copies left from earlier updates are deleted first, best effort (one still
+/// running stays).
 #[cfg(windows)]
 fn swap_into_place(staged: &Path, executable: &Path) -> Result<(), SelfUpdateError> {
     remove_old_copies(executable);
@@ -125,10 +125,16 @@ fn swap_into_place(staged: &Path, executable: &Path) -> Result<(), SelfUpdateErr
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
         .unwrap_or_default();
-    let old = old_copy_path(executable, std::process::id(), nanos);
-    fs::rename(executable, &old).map_err(io_failure(executable))?;
+    swap_aside(staged, executable, &old_copy_path(executable, std::process::id(), nanos))
+}
+
+/// The executable steps aside as `old`, the staged binary takes its name, and the old one comes back if that fails.
+/// Built on every platform under test, so the Windows steps are tested where they cannot run for real.
+#[cfg(any(windows, test))]
+fn swap_aside(staged: &Path, executable: &Path, old: &Path) -> Result<(), SelfUpdateError> {
+    fs::rename(executable, old).map_err(io_failure(executable))?;
     if let Err(error) = fs::rename(staged, executable) {
-        let _ = fs::rename(&old, executable);
+        let _ = fs::rename(old, executable);
         return Err(io_failure(executable)(error));
     }
     Ok(())
@@ -141,7 +147,7 @@ fn old_copy_path(executable: &Path, pid: u32, nanos: u128) -> PathBuf {
     executable.with_file_name(format!("{file_name}.{pid}.{nanos}.old"))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn remove_old_copies(executable: &Path) {
     let (Some(dir), Some(file_name)) = (executable.parent(), executable.file_name()) else {
         return;
@@ -323,6 +329,23 @@ mod tests {
 
         assert!(other_tab.exists());
     }
+}
+
+/// The Windows swap's steps, run on every platform: renaming files nobody runs behaves alike everywhere.
+#[cfg(test)]
+mod swap_aside_tests {
+    use super::*;
+    use crate::modules::shared::infrastructure::testing::temp_dir::TempDir;
+    use std::fs;
+
+    /// `<temp>/tabsmith.exe` holding the old binary, and the staged new one next to it.
+    fn executable_and_staged(temp_dir: &TempDir) -> (PathBuf, PathBuf) {
+        let executable = temp_dir.path().join("tabsmith.exe");
+        fs::write(&executable, b"old binary").unwrap();
+        let staged = temp_dir.path().join(".tabsmith-update-4242.exe");
+        fs::write(&staged, b"new binary").unwrap();
+        (executable, staged)
+    }
 
     /// Windows reuses process ids, and an `.old` copy from an earlier update may still be running in another tab.
     #[test]
@@ -332,5 +355,53 @@ mod tests {
         let old_copy = old_copy_path(executable, 4242, 1_700_000_000_123_456_789);
 
         assert_eq!(old_copy, Path::new("/home/ana/.local/bin/tabsmith.exe.4242.1700000000123456789.old"));
+    }
+
+    #[test]
+    fn should_put_the_staged_binary_in_place_and_keep_the_running_one_aside() {
+        let temp_dir = TempDir::new("self-update-swap-aside");
+        let (executable, staged) = executable_and_staged(&temp_dir);
+        let old = temp_dir.path().join("tabsmith.exe.4242.1.old");
+
+        swap_aside(&staged, &executable, &old).unwrap();
+
+        assert_eq!(
+            (fs::read(&executable).unwrap(), fs::read(&old).unwrap(), staged.exists()),
+            (b"new binary".to_vec(), b"old binary".to_vec(), false)
+        );
+    }
+
+    /// The executable is never left missing: a staged binary that cannot take its name puts the old one back.
+    #[test]
+    fn should_put_the_running_binary_back_when_the_staged_one_cannot_take_its_name() {
+        let temp_dir = TempDir::new("self-update-swap-back");
+        let (executable, staged) = executable_and_staged(&temp_dir);
+        fs::remove_file(&staged).unwrap();
+        let old = temp_dir.path().join("tabsmith.exe.4242.1.old");
+
+        let result = swap_aside(&staged, &executable, &old);
+
+        assert_eq!(
+            (matches!(result, Err(SelfUpdateError::InstallFailed(_))), fs::read(&executable).unwrap(), old.exists()),
+            (true, b"old binary".to_vec(), false)
+        );
+    }
+
+    #[test]
+    fn should_remove_only_the_old_copies_earlier_updates_left() {
+        let temp_dir = TempDir::new("self-update-old-copies");
+        let (executable, _) = executable_and_staged(&temp_dir);
+        for name in ["tabsmith.exe.4242.1.old", "tabsmith.exe.bak", "other.exe.4242.1.old"] {
+            fs::write(temp_dir.path().join(name), b"").unwrap();
+        }
+
+        remove_old_copies(&executable);
+
+        let mut left: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, [".tabsmith-update-4242.exe", "other.exe.4242.1.old", "tabsmith.exe", "tabsmith.exe.bak"]);
     }
 }
