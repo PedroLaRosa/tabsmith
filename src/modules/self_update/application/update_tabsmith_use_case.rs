@@ -427,6 +427,24 @@ mod tests {
         );
     }
 
+    /// The setting turns off the background check only; `tabsmith update` still works.
+    #[test]
+    fn should_update_on_a_manual_request_even_when_autoupdates_are_disabled() {
+        let fakes = Fakes::new(good_release());
+        let disabled = Settings::default().with(APP_DISABLE_AUTOUPDATES, SettingValue::Bool(true));
+        fakes.settings.save(&disabled).unwrap();
+
+        let outcome = fakes.use_case().execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (outcome, fakes.executable.installed_bytes()),
+            (
+                Ok(UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() }),
+                Some(b"ok".to_vec())
+            )
+        );
+    }
+
     /// Background checks leave cargo installs and dev builds alone without an error to log at every tab.
     #[test]
     fn should_skip_a_scheduled_check_of_an_install_outside_the_native_location() {
