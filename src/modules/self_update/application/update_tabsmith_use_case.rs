@@ -5,7 +5,7 @@ use crate::modules::self_update::application::ports::sha256_digest::Sha256Digest
 use crate::modules::self_update::application::update_trigger::UpdateTrigger;
 use crate::modules::self_update::domain::repositories::update_check_repository::UpdateCheckRepository;
 use crate::modules::self_update::domain::self_update_error::SelfUpdateError;
-use crate::modules::self_update::domain::services::update_schedule::UpdateSchedule;
+use crate::modules::self_update::domain::services::update_schedule;
 use crate::modules::self_update::domain::value_objects::checksum_list::ChecksumList;
 use crate::modules::self_update::domain::value_objects::install_location::InstallLocation;
 use crate::modules::self_update::domain::value_objects::release_asset::ReleaseAsset;
@@ -103,7 +103,7 @@ impl UpdateTabsmithUseCase {
         if self.settings.load().unwrap_or_default().bool(APP_DISABLE_AUTOUPDATES) {
             return Some(SkipReason::Disabled);
         }
-        let is_due = UpdateSchedule::is_due(self.update_checks.last_check_secs(), now_secs);
+        let is_due = update_schedule::is_due(self.update_checks.last_check_secs(), now_secs);
         (!is_due).then_some(SkipReason::NotDue)
     }
 

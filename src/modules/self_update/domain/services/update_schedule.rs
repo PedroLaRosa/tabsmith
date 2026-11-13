@@ -2,16 +2,11 @@
 // ponytail: a fixed day, as Claude Code's startup check; make it a setting if anyone needs another interval.
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 
-/// When a background update check is due.
-pub(crate) struct UpdateSchedule;
-
-impl UpdateSchedule {
-    /// Due when there was no check yet, a day has passed since the last one, or the last one is in the future (the
-    /// clock was set back): every case without a known wait left.
-    pub(crate) fn is_due(last_check_secs: Option<u64>, now_secs: u64) -> bool {
-        let elapsed_secs = last_check_secs.and_then(|last_check_secs| now_secs.checked_sub(last_check_secs));
-        elapsed_secs.is_none_or(|elapsed_secs| elapsed_secs >= CHECK_INTERVAL_SECS)
-    }
+/// Whether a background update check is due: there was no check yet, a day has passed since the last one, or the
+/// last one is in the future (the clock was set back): every case without a known wait left.
+pub(crate) fn is_due(last_check_secs: Option<u64>, now_secs: u64) -> bool {
+    let elapsed_secs = last_check_secs.and_then(|last_check_secs| now_secs.checked_sub(last_check_secs));
+    elapsed_secs.is_none_or(|elapsed_secs| elapsed_secs >= CHECK_INTERVAL_SECS)
 }
 
 #[cfg(test)]
@@ -24,7 +19,7 @@ mod tests {
     fn should_be_due_when_tabsmith_never_checked() {
         let last_check_secs = None;
 
-        let due = UpdateSchedule::is_due(last_check_secs, NOW_SECS);
+        let due = is_due(last_check_secs, NOW_SECS);
 
         assert!(due);
     }
@@ -33,7 +28,7 @@ mod tests {
     fn should_not_be_due_less_than_a_day_after_the_last_check() {
         let last_check_secs = Some(NOW_SECS - 23 * 60 * 60);
 
-        let due = UpdateSchedule::is_due(last_check_secs, NOW_SECS);
+        let due = is_due(last_check_secs, NOW_SECS);
 
         assert!(!due);
     }
@@ -42,7 +37,7 @@ mod tests {
     fn should_be_due_a_whole_day_after_the_last_check() {
         let last_check_secs = Some(NOW_SECS - 24 * 60 * 60);
 
-        let due = UpdateSchedule::is_due(last_check_secs, NOW_SECS);
+        let due = is_due(last_check_secs, NOW_SECS);
 
         assert!(due);
     }
@@ -52,7 +47,7 @@ mod tests {
     fn should_be_due_when_the_last_check_is_in_the_future() {
         let last_check_secs = Some(NOW_SECS + 60);
 
-        let due = UpdateSchedule::is_due(last_check_secs, NOW_SECS);
+        let due = is_due(last_check_secs, NOW_SECS);
 
         assert!(due);
     }

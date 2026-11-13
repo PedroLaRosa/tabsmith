@@ -308,7 +308,7 @@ so nothing is replaced.
 | release signing key | concept | The ed25519 key pair releases are signed with. Its public half is `scripts/release-signing-key.pub`, compiled into every binary; its private half is `RELEASE_SIGNING_KEY`, a secret of the gated `release` environment. | – |
 | `Sha256Digest` | Port | SHA-256 as lowercase hex (`RingSha256Digest`). | – |
 | `InstalledExecutable` | Port | The binary this process runs from: its `InstallLocation`, and `replace` with a checked new binary (it must print `tabsmith <version>`, then is renamed in; `FileInstalledExecutable`). | – |
-| update check | concept (`UpdateCheckRepository`, `UpdateSchedule`) | One background look for a newer release. At most one a day: its time is the mtime of `~/.tabsmith/update-check`, recorded before the release channel is asked. A last check in the future counts as due. | – |
+| update check | concept (`UpdateCheckRepository`, `update_schedule::is_due`) | One background look for a newer release. At most one a day: its time is the mtime of `~/.tabsmith/update-check`, recorded before the release channel is asked. A last check in the future counts as due. | – |
 | update trigger | VO (`UpdateTrigger`) | What asked for the update: `Manual` (`tabsmith update`: no setting or schedule, an error outside the native install) or `Scheduled` (the background check). | – |
 | `UpdateOutcome` | VO | `Skipped(SkipReason)`, `UpToDate(version)` or `Updated { from, to }`. | – |
 | `SkipReason` | VO | Why a background check did nothing: `NotNative`, `Disabled` (`app.disableAutoupdates`) or `NotDue`. | – |
