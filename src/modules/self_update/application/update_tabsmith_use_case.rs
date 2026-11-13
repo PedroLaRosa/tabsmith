@@ -317,6 +317,27 @@ mod tests {
         );
     }
 
+    /// A release published without its signature, or still uploading it, is as untrusted as a bad signature.
+    #[test]
+    fn should_not_download_the_binary_of_a_release_without_a_checksums_signature() {
+        let fakes = Fakes::new(
+            InMemoryReleaseChannel::new(NEWER)
+                .with_file("SHA256SUMS", format!("6f6b  {ASSET}\n").as_bytes())
+                .with_file(ASSET, b"ok"),
+        );
+
+        let result = fakes.use_case().execute(UpdateTrigger::Manual);
+
+        assert_eq!(
+            (result, fakes.channel.downloads(), fakes.executable.installed_bytes()),
+            (
+                Err(SelfUpdateError::ChannelUnavailable("SHA256SUMS.sig: 404 Not Found".to_string())),
+                vec!["SHA256SUMS".to_string(), "SHA256SUMS.sig".to_string()],
+                None
+            )
+        );
+    }
+
     #[test]
     fn should_download_nothing_when_the_latest_version_is_not_a_version() {
         let fakes = Fakes::new(InMemoryReleaseChannel::new("<!DOCTYPE html>"));
