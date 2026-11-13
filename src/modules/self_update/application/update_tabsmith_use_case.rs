@@ -170,7 +170,9 @@ mod tests {
     use crate::modules::self_update::domain::repositories::update_check_repository::InMemoryUpdateCheckRepository;
     use crate::modules::self_update::domain::value_objects::release_asset::ReleaseAsset;
     use crate::modules::self_update::domain::value_objects::skip_reason::SkipReason;
-    use crate::modules::settings::domain::repositories::settings_repository::{InMemorySettingsRepository, SettingsRepository};
+    use crate::modules::settings::domain::repositories::settings_repository::{
+        InMemorySettingsRepository, SettingsRepository, UnreadableSettingsRepository,
+    };
     use crate::modules::settings::domain::services::settings_catalog::APP_DISABLE_AUTOUPDATES;
     use crate::modules::settings::domain::value_objects::setting_value::SettingValue;
     use crate::modules::settings::domain::value_objects::settings::Settings;
@@ -202,7 +204,7 @@ mod tests {
         channel: Rc<InMemoryReleaseChannel>,
         executable: Rc<InMemoryExecutable>,
         update_checks: Rc<InMemoryUpdateCheckRepository>,
-        settings: Rc<InMemorySettingsRepository>,
+        settings: Rc<dyn SettingsRepository>,
     }
 
     impl Fakes {
@@ -217,6 +219,11 @@ mod tests {
 
         fn with_executable(mut self, executable: InMemoryExecutable) -> Self {
             self.executable = Rc::new(executable);
+            self
+        }
+
+        fn with_settings(mut self, settings: Rc<dyn SettingsRepository>) -> Self {
+            self.settings = settings;
             self
         }
 
@@ -442,6 +449,19 @@ mod tests {
                 Ok(UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() }),
                 Some(b"ok".to_vec())
             )
+        );
+    }
+
+    /// Unreadable settings count as none, as in the terminal session, so a broken settings.json never stops updates.
+    #[test]
+    fn should_update_on_schedule_when_the_settings_cannot_be_read() {
+        let fakes = Fakes::new(good_release()).with_settings(Rc::new(UnreadableSettingsRepository::default()));
+
+        let outcome = fakes.use_case().execute(UpdateTrigger::Scheduled);
+
+        assert_eq!(
+            (outcome, fakes.update_checks.last_check_secs()),
+            (Ok(UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() }), Some(NOW_SECS))
         );
     }
 
