@@ -300,7 +300,7 @@ so nothing is replaced.
 | Term | Kind | Meaning | Replaces |
 |---|---|---|---|
 | native install | concept (`InstallLocation::is_native`) | The binary the installers put at `~/.local/bin/tabsmith` (`%USERPROFILE%\.local\bin\tabsmith.exe`). Only it updates itself; a cargo install, a `target/` build or a package manager's copy is updated the way it was installed. | – |
-| `InstallLocation` | VO | Where the running binary is and the user home it is judged against (symlinks resolved by the adapter). | – |
+| `InstallLocation` | VO | Where the running binary is and the native install's directory (`~/.local/bin`) it is judged against (symlinks resolved by the adapter). | – |
 | release channel | Port (`ReleaseChannel`) | Where releases are published: the latest release's version, and any file of the release of a version. `GithubReleaseChannel` reads GitHub Releases. | – |
 | release asset | VO (`ReleaseAsset`) | The file of a release holding one platform's binary, `tabsmith-<os>-<arch>[.exe]` (`darwin`/`linux`/`win32`, `x64`/`arm64`). None for a platform without a build. | – |
 | checksum list | VO (`ChecksumList`) | A release's `SHA256SUMS`: the hex digest of each asset, as `sha256sum` writes it (text or binary mode). | – |

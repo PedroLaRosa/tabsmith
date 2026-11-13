@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// The tabsmith binary this process runs from.
 pub(crate) trait InstalledExecutable {
-    /// Where it is, and the user home that tells whether that is the native install.
+    /// Where it is, and the native install's directory that tells whether that is the native install.
     fn location(&self) -> InstallLocation;
     /// Puts `bytes`, the binary of the release of `expected_version`, in place of the executable, once it runs and
     /// reports that version. A failure is `InstallFailed` and leaves the executable as it was.
