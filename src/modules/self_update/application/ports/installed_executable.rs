@@ -15,12 +15,13 @@ pub(crate) trait InstalledExecutable {
 }
 
 /// An executable kept in memory, by default the native install of `/home/ana`: it remembers the bytes it was
-/// replaced with, or refuses every replacement for the reason it was given.
+/// replaced with and the version they had to report, or refuses every replacement for the reason it was given.
 #[cfg(test)]
 pub(crate) struct InMemoryExecutable {
     location: InstallLocation,
     refusal: Option<String>,
     installed_bytes: RefCell<Option<Vec<u8>>>,
+    checked_version: RefCell<Option<String>>,
 }
 
 #[cfg(test)]
@@ -30,6 +31,7 @@ impl InMemoryExecutable {
             location,
             refusal: None,
             installed_bytes: RefCell::new(None),
+            checked_version: RefCell::new(None),
         }
     }
 
@@ -44,6 +46,11 @@ impl InMemoryExecutable {
     /// The bytes of the last replacement; `None` while the executable is untouched.
     pub(crate) fn installed_bytes(&self) -> Option<Vec<u8>> {
         self.installed_bytes.borrow().clone()
+    }
+
+    /// The version the last replacement had to report; `None` while the executable is untouched.
+    pub(crate) fn checked_version(&self) -> Option<String> {
+        self.checked_version.borrow().clone()
     }
 }
 
@@ -63,11 +70,12 @@ impl InstalledExecutable for InMemoryExecutable {
         self.location.clone()
     }
 
-    fn replace(&self, bytes: &[u8], _expected_version: &str) -> Result<(), SelfUpdateError> {
+    fn replace(&self, bytes: &[u8], expected_version: &str) -> Result<(), SelfUpdateError> {
         if let Some(reason) = &self.refusal {
             return Err(SelfUpdateError::InstallFailed(reason.clone()));
         }
         *self.installed_bytes.borrow_mut() = Some(bytes.to_vec());
+        *self.checked_version.borrow_mut() = Some(expected_version.to_string());
         Ok(())
     }
 }

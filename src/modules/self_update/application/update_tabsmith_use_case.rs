@@ -262,6 +262,16 @@ mod tests {
         );
     }
 
+    /// The new binary is checked against the release it came from, not the running one.
+    #[test]
+    fn should_require_the_new_binary_to_report_the_latest_version() {
+        let fakes = Fakes::new(good_release());
+
+        fakes.use_case().execute(UpdateTrigger::Manual).unwrap();
+
+        assert_eq!(fakes.executable.checked_version(), Some(NEWER.to_string()));
+    }
+
     #[test]
     fn should_leave_the_executable_untouched_when_the_binary_does_not_match_its_checksum() {
         let fakes = Fakes::new(signed_release(&format!("0000  {ASSET}\n"), b"ok"));
