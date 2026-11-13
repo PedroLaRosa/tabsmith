@@ -101,6 +101,13 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME is not v$version, the version in Cargo.toml"
             exit 1
           fi
+          # Every release goes out as latest, and every native install takes latest: no prerelease channel yet.
+          case "$version" in
+            *[-+]*)
+              echo "::error::$version is a prerelease or carries build metadata; every native install would take it"
+              exit 1
+              ;;
+          esac
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Find the release this one follows
         id: previous
