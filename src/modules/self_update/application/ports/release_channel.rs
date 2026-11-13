@@ -13,7 +13,8 @@ pub(crate) trait ReleaseChannel {
 }
 
 /// A latest version and the files of its release, kept in memory, or a channel that cannot be reached; it remembers
-/// what it was asked for. A file the release does not carry fails to download, as a missing release asset does.
+/// what it was asked for. A file the release does not carry, or one asked of any other release, fails to download,
+/// as a missing release asset does.
 #[cfg(test)]
 pub(crate) struct InMemoryReleaseChannel {
     latest_version: Result<String, SelfUpdateError>,
@@ -66,10 +67,13 @@ impl ReleaseChannel for InMemoryReleaseChannel {
         self.latest_version.clone()
     }
 
-    fn download(&self, _version: &str, file: &str) -> Result<Vec<u8>, SelfUpdateError> {
+    /// Only the latest release's files exist: asking another version's release for one is a 404 too.
+    fn download(&self, version: &str, file: &str) -> Result<Vec<u8>, SelfUpdateError> {
         self.downloads.borrow_mut().push(file.to_string());
+        let is_latest = self.latest_version.as_ref().is_ok_and(|latest| latest == version);
         self.files
             .get(file)
+            .filter(|_| is_latest)
             .cloned()
             .ok_or_else(|| SelfUpdateError::ChannelUnavailable(format!("{file}: 404 Not Found")))
     }
