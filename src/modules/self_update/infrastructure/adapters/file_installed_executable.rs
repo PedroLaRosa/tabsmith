@@ -216,6 +216,24 @@ mod tests {
         );
     }
 
+    /// A download cut short is no program at all: the version check cannot even start it.
+    #[test]
+    fn should_leave_the_executable_and_no_temp_file_when_the_binary_does_not_run() {
+        let temp_dir = TempDir::new("self-update-not-a-binary");
+        let (installed, executable) = native_install(&temp_dir);
+
+        let result = installed.replace(b"half a download", "9.9.9");
+
+        let bin_dir: Vec<_> = fs::read_dir(executable.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            (matches!(result, Err(SelfUpdateError::InstallFailed(_))), fs::read(&executable).unwrap(), bin_dir),
+            (true, b"old binary".to_vec(), vec![std::ffi::OsString::from("tabsmith")])
+        );
+    }
+
     /// Decision 3: a new inode. A hard link stands in for a session still running the old binary.
     #[test]
     fn should_leave_the_old_file_whole_for_sessions_still_running_it() {
