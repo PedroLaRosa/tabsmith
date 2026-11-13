@@ -3,8 +3,11 @@ use crate::modules::self_update::domain::self_update_error::SelfUpdateError;
 use std::time::Duration;
 
 const RELEASES_URL: &str = "https://github.com/PedroLaRosa/tabsmith/releases";
-/// For a whole request, the binary download included.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// A connection, or a read, that makes no progress this long fails.
+const STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// For a whole request, the binary download included: a ~10 MB binary needs over a minute below ~1.3 Mbit/s, and the
+/// check of the day is already recorded, so a tighter limit would keep a slow link from ever updating.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Above ureq's 10 MB default, which a release binary can pass.
 const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -20,6 +23,8 @@ impl GithubReleaseChannel {
     pub(crate) fn new() -> Self {
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(REQUEST_TIMEOUT))
+            .timeout_connect(Some(STALL_TIMEOUT))
+            .timeout_per_read(Some(STALL_TIMEOUT))
             .https_only(true)
             .user_agent(format!("tabsmith/{}", env!("CARGO_PKG_VERSION")))
             .build()
