@@ -1,13 +1,27 @@
 name: release
 
-# Push a tag `vX.Y.Z` (matching Cargo.toml) to build and publish; run manually for a build-only dry run.
+# Manual only: Actions → release → Run workflow, on main. Publishes v<version in Cargo.toml>.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::run this on main, not $GITHUB_REF"; exit 1; }
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if git ls-remote --exit-code --tags origin "v$version" >/dev/null; then
+            echo "::error::v$version already exists: bump version in Cargo.toml first"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: check
     uses: ./.github/workflows/ci.yml
 
   build:
@@ -53,17 +67,15 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Tag must match the Cargo.toml version
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "::error::tag $GITHUB_REF_NAME != v$version (Cargo.toml)"; exit 1; }
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -71,9 +83,7 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: |
-          echo "${GITHUB_REF_NAME#v}" > VERSION
+          echo "$VERSION" > VERSION
           sha256sum tabsmith-* > SHA256SUMS
-      # gh uploads every asset before the release goes live, so latest/download never sees a half-filled release.
-      - run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # Creates the v<version> tag on the commit that was built. gh uploads every asset before the release goes live.
+      - run: gh release create "v$VERSION" --target "$GITHUB_SHA" --generate-notes dist/*
