@@ -99,6 +99,9 @@ critical path. **SKIP** = deliberately not built (reason given). **(inferred)** 
 | D47 | bash `PROMPT_COMMAND` layout | `_ts_first` / `_ts_last` are stripped from any element and re-added around the user's commands; bash-preexec's `__bp_interactive_mode` stays after `_ts_last`; the string form is kept until bash-preexec installed itself; array form on bash ≥ 5.1; inside VS Code's integration its prompt command runs ours. | DEBUG-trap preexec hooks (bash-preexec, VS Code) never fired or fired at prompt time; user prompt commands saw `_ts_first`'s `PIPESTATUS`. |
 | D48 | zsh prompt themes | powerlevel10k's `_p9k_set_prompt` is wrapped; zle `line-init` and `line-pre-redraw` re-wrap a PS1 replaced after precmd. | A precmd-last wrap loses to p10k and to async/streaming themes: no markers at all. |
 | D49 | fish prompt wrappers | `printf '%s'` (not `%b`), `$argv` forwarded to the user's functions, erased user prompts stay erased, `--private` forwarded to the wrapped fish, `_ pre-cmd` backgrounded inside `sh -c`. | Naive wrappers interpret backslashes (`\c` cut the prompt), break fish 4 transient prompts, resurrect erased prompts, drop private mode and clobber `$last_pid`. |
+| D50 | Native install location | One fixed file, `~/.local/bin/tabsmith` (`%USERPROFILE%\.local\bin\tabsmith.exe`), replaced by renaming a checked copy over it (Windows: the running exe steps aside as `tabsmith.exe.<pid>.<nanos>.old` first); no `versions/` folder. The copy is checked against `SHA256SUMS` and must print `tabsmith <version>` before the rename. The running binary and `~/.local/bin` are compared, and the binary replaced, with symlinks resolved; staged copies an interrupted update left behind are removed once ten minutes old. | The rc scripts embed the running binary's absolute path (§5.5) and Linux resolves symlinks, so a symlink into `versions/` would pin every rc to one version. A rename keeps the old inode for running sessions (macOS SIGKILLs a signed binary overwritten in place), and a truncated download never becomes the file every new terminal execs. |
+| D51 | Background update | Started by `bootstrap` just before the `_ pty` session, on its own `self-update` thread, which builds its own module (modules hold `Rc`). At most once a day (`update-check` marker, recorded before the release channel is asked), only for the native install, never with `app.disableAutoupdates`. Results go to `pty.log`, never the terminal; the new version runs from the next tab. | A module may not call another module's use case, so `terminal_session` cannot start it. cargo installs, `target/` builds and package managers update the way they were installed. |
+| D52 | Signed checksums | Every release carries `SHA256SUMS.sig`, an ed25519 signature over `SHA256SUMS` by the release signing key; its public half (`scripts/release-signing-key.pub`) is compiled in. The updater refuses a release whose signature does not verify, before downloading the binary. The installers do not check it. | `SHA256SUMS` sits in the same release as the binaries: whoever can publish a release can publish matching checksums. The private key lives in the gated `release` environment. A first install trusts the release over HTTPS, as Claude Code's first install trusts its own domain. |
 
 ---
 
@@ -147,11 +150,12 @@ critical path. **SKIP** = deliberately not built (reason given). **(inferred)** 
 | F39 | Spec CDN | SKIP | D11. `tabsmith specs update` (download npm tarball): SHOULD, post-v1. |
 | F40 | `settings`, `theme`, `inline`, `integrations`, `init`, `doctor`, `setup`, `uninstall`, `version` | **MUST** | §2. |
 | F41 | `diagnostic`, `completion`, `debug key-tester/shell/logs` | SHOULD | §2. |
-| F42 | `issue`, `hook`, `update`, `login/logout/whoami/profile/user`, `chat/mcp/agent/translate`, `telemetry`, `launch/quit/restart/dashboard`, `_ local-state`, `debug diagnostics/fix-permissions/build/app/…` | SKIP | Out of scope (desktop app, auth, AI chat, telemetry) or need the socket tabsmith does not have. |
+| F42 | `issue`, `hook`, `login/logout/whoami/profile/user`, `chat/mcp/agent/translate`, `telemetry`, `launch/quit/restart/dashboard`, `_ local-state`, `debug diagnostics/fix-permissions/build/app/…` | SKIP | Out of scope (desktop app, auth, AI chat, telemetry) or need the socket tabsmith does not have. |
 | F43 | Integrations `ssh`, `input-method`, `vscode`, `intellij-plugin`, `autostart-entry`, `gnome-shell-extension` | SKIP | Desktop-app plumbing. Not present in the clap tree. |
 | F44 | Mouse click on a row | SKIP | Needs mouse reporting, conflicts with terminal selection. |
 | F45 | `version --changelog` | SKIP | No release feed yet; add with the first release. |
 | F46 | JetBrains login-shell / re-sourcing fixes, input-method prompts, login nags, inline announcement | SKIP | IDE/desktop niceties. |
+| F47 | Native installer + background auto-update | **MUST** | `install.sh` / `install.ps1` / `install.cmd` one-liners fetch a release binary into `~/.local/bin`; `tabsmith update` and a daily background check at `_ pty` start keep it current (§2.10, D50–D52). |
 
 ---
 
@@ -190,6 +194,7 @@ tabsmith init <bash|zsh|fish|pwsh> <pre|post> [--rcfile NAME]         "Generate 
 tabsmith doctor [-a|--all] [-s|--strict]                              "Fix and diagnose common issues"
 tabsmith setup [--no-confirm] [--force]          (alias: install)     "Setup cli components"
 tabsmith uninstall [-y|--no-confirm] [--purge]                        "Uninstall tabsmith"
+tabsmith update                                                       "Update tabsmith to the latest release"
 tabsmith version                                                      (hidden) "Show the version"
 tabsmith diagnostic [-f FMT]                     (alias: diagnostics) "Run diagnostic tests"          SHOULD
 tabsmith completion [bash|zsh|fish|powershell|elvish]  (hidden, default zsh)                         SHOULD
@@ -339,6 +344,15 @@ Windows), exit 0.
 ### 2.10 Other commands
 
 - `version` → `tabsmith <ver>\n`.
+- `update`: only the native install (`~/.local/bin/tabsmith[.exe]`) updates itself. Reads the latest release's
+  `VERSION`; a version that does not parse is an error and a version not newer than the running one prints
+  `tabsmith is up to date (<ver>)`. Otherwise it downloads that release's `SHA256SUMS` and `SHA256SUMS.sig` and
+  refuses checksums the release signing key did not sign (D52), then downloads `tabsmith-<os>-<arch>[.exe]`, checks
+  it against `SHA256SUMS`, and installs it as D50 says, printing `Updated tabsmith from <old> to <new>. Open a new
+  terminal to use it.` Run from anywhere else: `error: tabsmith runs from <path>, not ~/.local/bin; update it the
+  way you installed it (e.g. cargo install --path .)`. Every failure exits 1 and leaves the binary as it was.
+  `app.disableAutoupdates` does not apply. The same steps run in the background at `_ pty` start (D51), at most
+  once a day and silently skipping a non-native install.
 - `diagnostic [-f]` (SHOULD): Plain = hand-written TOML (`[tabsmith] version, os`, `[environment] cwd, cli-path,
   shell-path (= $SHELL), shell-version, terminal (TERM_PROGRAM/WT_SESSION/TERM), in-ssh, in-ci, in-wsl`, `[env-vars]` =
   all `TABSMITH_*` plus `SHELL, TERM, COLORTERM, ZDOTDIR, PATH`, with `/<username>` replaced by `/USER`; null values
@@ -378,6 +392,7 @@ variable exists. Optional `TABSMITH_SETTINGS_PATH` overrides only `settings.json
   settings.json            0600  user settings (flat dotted keys)
   state.json               0600  internal state (recency index, doctor flags)
   history.jsonl            0600  command history
+  update-check                   empty marker; its mtime is the last background update check (D51)
   shell/<rc>.<pre|post>.<shell>  integration script files sourced from dotfiles (§5.5)
   themes/<name>.json             custom themes
   specs/<ver>/…                  extracted embedded specs (read-only); `.last-used` touched at every engine start
@@ -450,6 +465,12 @@ Inline:
 | `inline.debounceMs` | number | 300 | Quiet time before an LLM request. |
 | `inline.historyCount` | number | 49 | Max history lines sent to the LLM (0 = none). |
 
+App:
+
+| key | type | default | semantics |
+|---|---|---|---|
+| `app.disableAutoupdates` | bool | false | Never update in the background (D51); `tabsmith update` still works. |
+
 ### 3.4 Environment variables
 
 | var | meaning |
@@ -489,8 +510,8 @@ ponytail: no lock, a line another session appends in between is lost).
 | path | responsibility |
 |---|---|
 | `main.rs` | Entry point: parses the CLI, initialises the logger, runs `bootstrap::cli::run`, exits with its code. |
-| `bootstrap/` | Composition root. `cli.rs`: clap tree, dispatch, `version` and `completion` (§2.10), the internal `_` commands (§2.11), `error:` printing. `engine_server.rs`: the engine thread (§4.3, §6), which serves each `EngineMessage` (`engine_message.rs`, `engine_inbox.rs`) with the completion, history and ghost_text use cases and sends the replies. An `Llm` message goes to `RequestLlmGhostTextUseCase`; a deferred answer runs on an `llm` worker thread (§8.4). `engine_inbox.rs` is the engine thread's single channel (its messages and the spec runtime's events) and implements specs' `RuntimeEventSource`. `channel_completion_engine.rs` implements terminal_session's `CompletionEngine` over that channel and starts the engine thread (`start_completion_engine`). `bridges.rs`, `diagnostics_bridges.rs`: ports that one module declares, implemented over another. |
-| `modules/` | The ten hexagonal modules below, each a vertical slice. Its `mod.rs` only declares them, as `main.rs` declares only `bootstrap` and `modules` (plus the test-only `architecture_tests`) besides `fn main`. |
+| `bootstrap/` | Composition root. `cli.rs`: clap tree, dispatch, `version` and `completion` (§2.10), the internal `_` commands (§2.11; `_ pty` starts the background update first, D51), `error:` printing. `engine_server.rs`: the engine thread (§4.3, §6), which serves each `EngineMessage` (`engine_message.rs`, `engine_inbox.rs`) with the completion, history and ghost_text use cases and sends the replies. An `Llm` message goes to `RequestLlmGhostTextUseCase`; a deferred answer runs on an `llm` worker thread (§8.4). `engine_inbox.rs` is the engine thread's single channel (its messages and the spec runtime's events) and implements specs' `RuntimeEventSource`. `channel_completion_engine.rs` implements terminal_session's `CompletionEngine` over that channel and starts the engine thread (`start_completion_engine`). `bridges.rs`, `diagnostics_bridges.rs`: ports that one module declares, implemented over another. |
+| `modules/` | The eleven hexagonal modules below, each a vertical slice. Its `mod.rs` only declares them, as `main.rs` declares only `bootstrap` and `modules` (plus the test-only `architecture_tests`) besides `fn main`. |
 | `modules/shared/` | Kernel every module may use; it imports no module. `Shell`, `DataDirectory` (paths, §3.1), shell quoting, the `Clock` port; in `infrastructure/` (shared keeps its implementations at the top of `infrastructure/`, with no `adapters/`): `SystemClock`, `data_directory_from_env.rs` (resolves the data directory from `TABSMITH_HOME`, `TABSMITH_SETTINGS_PATH`, `HOME` / `USERPROFILE`; §3.1, §3.4), `SharedDependencies` (what bootstrap hands every module's `build_<module>_module`), flat-JSON document store (settings/state, §3.2), atomic file writes, `logger.rs` (file logger, no crate), OS helpers, output format, terminal style. |
 | `modules/settings/` | Typed getters (`Settings`), catalog table (`settings_catalog.rs`, §3.3), wildcard matcher (`SettingKeyPattern`), the `settings` command (§2.3). |
 | `modules/history/` | History store (§3.5, §8): `history.jsonl` through `JsonlHistoryRepository`; `RecordCommandUseCase` records each executed command. |
@@ -501,6 +522,7 @@ ponytail: no lock, a line another session appends in between is lost).
 | `modules/dropdown/` | Pure UI state: visibility machine, actions, selection/scroll, common prefix (`Menu`, §7.1); keystroke grammar, keybinding table (`Keymap`, §7.2.2–7.2.3); themes, colour conversion, layout, row icons (§7.4, §7.7); the `theme` command (§2.4). |
 | `modules/terminal_session/` | Wrapper: spawn, raw mode / console modes, threads, main loop, interception, insertion/reconciliation, echo hold, resize, panic guard, fallback (`infrastructure/pty/`: spawn, raw mode, threads, run loop, panic guard, fallback and `SessionMessage`; key routing, echo hold, insertion reconciliation and resize debounce in `domain/`; §4.3–4.4). `SessionUseCases` wires the session's use cases over `SessionPortsParts`, in production and in tests. OSC 697 splitter, marker tracker + cell tagging, Windows deferral, edit-buffer extraction, output filter (§5.1, §5.6, §7.5.4). Stdin key decoding (`KeyDecoder`, §7.2.1). Frame bytes (menu, description, pop-out, ghost), restore spans, full repaint, icon pixels and the kitty graphics protocol (`overlay_renderer.rs`, `icon_assets.rs`, `kitty_graphics.rs`; §7.4.2, §7.5). The `_ pty`, `_ pre-cmd`, `debug shell` and `debug key-tester` commands. |
 | `modules/diagnostics/` | Checks and the run loop (`doctor`, §2.8), the `diagnostic` report and `debug logs` (§2.10). |
+| `modules/self_update/` | The native install's update (§2.10, D50–D52): `UpdateTabsmithUseCase` with a `Manual` (`update`) or `Scheduled` (background) trigger; release assets, `SHA256SUMS` parsing, the install location and the daily schedule in `domain/`; ports for the release channel (`GithubReleaseChannel`, ureq), SHA-256 and the ed25519 checksum signature (ring), and the executable (`FileInstalledExecutable`); the `update-check` marker repository; the `update` command and `start_background_update`. |
 | `shell/` (repo root) | `pre.sh`, `post.zsh`, `post.bash`, `pre.fish`, `post.fish`, `pre.ps1`, `post.ps1`. |
 | `assets/` (repo root) | `specs.tar.zst`, `SPECS_VERSION`, `SPECS_LICENSE` (MIT, Hercules Labs). THIRD_PARTY notices (semver ISC, yaml ISC, strip-json-comments MIT): not shipped yet. `icons/`: the row icons (PNGs and `template.rgba`, §7.4.2). |
 
@@ -514,7 +536,7 @@ src/modules/<module>/
   infrastructure/   adapters/ (implement the ports, with the two exceptions below), cli/ (clap handlers), <module>_module.rs (builds the use cases)
 ```
 
-Layers depend inward only: `domain` ← `application` ← `infrastructure`. `domain` and `application` import no `infrastructure`, no external crate (except `unicode_width`) and call no `print!`-style macro; ports (traits in `domain/repositories/` or `application/ports/`) are implemented by `infrastructure/adapters/`, with two exceptions: the kernel's `SystemClock` sits at the top of `shared/infrastructure/`, and history's memory-only `InMemoryHistoryRepository` stays in `domain/repositories/`. A module never uses another module's use cases or `infrastructure` (only `shared` is open to every module) and nothing depends on `bootstrap`: a port that one module declares and another serves is implemented in `bootstrap`, the only place that wires modules together. `src/architecture_tests.rs` is the test that enforces these rules on `shared` and the nine modules above; it does not check where a port is implemented.
+Layers depend inward only: `domain` ← `application` ← `infrastructure`. `domain` and `application` import no `infrastructure`, no external crate (except `unicode_width`) and call no `print!`-style macro; ports (traits in `domain/repositories/` or `application/ports/`) are implemented by `infrastructure/adapters/`, with two exceptions: the kernel's `SystemClock` sits at the top of `shared/infrastructure/`, and history's memory-only `InMemoryHistoryRepository` stays in `domain/repositories/`. A module never uses another module's use cases or `infrastructure` (only `shared` is open to every module) and nothing depends on `bootstrap`: a port that one module declares and another serves is implemented in `bootstrap`, the only place that wires modules together. `src/architecture_tests.rs` is the test that enforces these rules on `shared` and the ten modules above; it does not check where a port is implemented.
 
 ### 4.2 Crates (as pinned in `Cargo.toml`)
 
@@ -533,7 +555,8 @@ Layers depend inward only: `domain` ← `application` ← `infrastructure`. `dom
 | `rquickjs` | 0.14 | Spec host (`Runtime::{set_interrupt_handler, set_memory_limit}`, `Ctx::{eval_with_options, execute_pending_job}`); no `loader`/`futures` features, no `Persistent` (§9.2). |
 | `zstd` | 0.13 | Spec archive. |
 | `tar` | 0.4 | Spec archive. |
-| `ureq` | 3 (`json` feature) | LLM HTTPS (rustls). |
+| `ureq` | 3 (`json` feature) | LLM HTTPS (rustls); release downloads for `update`. |
+| `ring` | 0.17 | SHA-256 of release binaries and the ed25519 check of `SHA256SUMS.sig` (D52); already built in through ureq → rustls. |
 | `unicode-width` | 0.2 | Display width for layout, truncation, ghost clipping. |
 
 ### 4.3 Threads and data flow
@@ -549,6 +572,7 @@ Layers depend inward only: `domain` ← `application` ← `infrastructure`. `dom
  [child wait]  waitpid / child.wait() ──SessionMessage::ChildExit(code)────────────────────────────►┤
  [engine] ──SessionMessage::{Completion, Ghost}────────────────────────────────────────────────────►┤
  [llm worker] ──SessionMessage::Ghost──────────────────────────────────────────────────────────────►┤
+ [self-update] (started before the session, D51; sends nothing: it replaces the binary file and logs to pty.log)
                                                                                                     ▼
  main thread (SessionRunner): owns its inbox, the TerminalSession (Menu, Keymap, MarkerTracker, KeyDecoder, settings),
      the TerminalScreen (AlacrittyTerminalScreen: Term model, OutputFilter, OverlayRenderer) and the SessionUseCases
@@ -572,7 +596,9 @@ thread) in `terminal_session/infrastructure/pty/platform_unix.rs` and `platform_
 (`answer_llm_ghost_text_request`). The `EngineInbox` is `bootstrap/engine_inbox.rs`;
 `bootstrap/channel_completion_engine.rs` implements the `CompletionEngine` port by sending to it. The exec workers
 start in `specs/infrastructure/adapters/quickjs_spec_runtime.rs`, the recency saver in
-`completion/infrastructure/adapters/state_file_recency_repository.rs`.
+`completion/infrastructure/adapters/state_file_recency_repository.rs`. The `self-update` thread starts in
+`self_update/infrastructure/cli/background_update.rs` (`start_background_update`), called by `bootstrap/cli.rs` for
+`_ pty` before the session runs; until the session's panic hook is set, a panic on it is logged, not printed.
 
 PTY credits: the reader takes one of 4 credits before every read; the main loop returns one per chunk it handled. At
 most 4 × 16 KiB are queued, so a flooding child (`yes`) feels backpressure and Ctrl-C is never stuck behind its
@@ -647,6 +673,7 @@ intercepting (an Enter meant for an item is dropped rather than running the line
 
 ### 4.4 `_ pty` startup, exit, fallback
 
+0. `bootstrap` starts the background update check on the `self-update` thread (D51) and goes on without waiting.
 1. If stdin or stdout is not a tty → fallback.
 2. `shell = --shell | $TABSMITH_SHELL | $SHELL (unix) | "pwsh" (windows)`; error if none → fallback.
 3. Load settings (errors → defaults). Open `logs/pty.log`.
@@ -2778,6 +2805,7 @@ helpers and use-case harnesses that the tests below share).
 | the `application/` layer of every module, e.g. `settings/application/set_setting_use_case.rs`, `completion/application/complete_command_line_use_case.rs`, `diagnostics/application/run_doctor_use_case/tests.rs` | Use-case tests over in-memory fakes: a use case is built over in-memory repositories and recording, capturing or fixed doubles of its ports (`InMemorySettingsRepository`, `CapturingTerminalWriter`, `FixedClock`), which live under `#[cfg(test)]` next to the trait they stand in for (`settings/domain/repositories/settings_repository.rs`, `terminal_session/application/ports/terminal_writer.rs`, `shared/application/ports/clock.rs`); the test runs the use case and reads back what the doubles saw. |
 | `terminal_session/application/session_use_cases/tests.rs`; the `probe`, `passthrough` and `batching` scenarios in `terminal_session/infrastructure/pty/session_runner/tests.rs`; the `tracker_*` scenarios in `terminal_session/infrastructure/adapters/alacritty_terminal_screen/tests.rs` | Characterisation scenarios, each with a log that must equal its frozen file in `tests/fixtures/terminal_session/characterisation/`. The 11 scenarios of `session_use_cases/tests.rs` are whole sessions: `TerminalSessionHarness` (`terminal_session/application/test_fixtures.rs`) wires the use cases over the real screen and in-memory doubles, as production wires them; each scenario (typing, bell, held keys, lifecycle, cleanup, ghost text, lock, resize, LLM ghost text, settings reload, spinner) logs step by step what reached the terminal, the shell and the engine. The `probe`, `passthrough` and `batching` scenarios drive a `SessionRunner` over the ports of that harness and log the same three. The three `tracker_*` scenarios (a bash cycle, the Windows deferral, zsh colours and a nested shell) use no harness, shell or engine: they feed scripted chunks to the real screen, splitter, marker tracker and shell-output feeder and log, per chunk, the filtered bytes for the terminal, the events, the cycle state, the extracted edit buffer and the hyperlink runs of the model (the cell tags). `shared/infrastructure/testing/fixture_log.rs` compares each log with its file: a missing file is created only with `P9_WRITE_FIXTURES=1` (the test still fails, so the file is read before it is frozen); an existing file is never rewritten. |
 | `diagnostics/domain/services/doctor_check_catalog/tests.rs`; `diagnostics/application/`: `check_group_builder/tests.rs`, `check_evaluator/tests.rs`, `run_doctor_use_case/tests.rs`, `run_doctor_use_case/execute_tests.rs` | Doctor, check by check: a check is data and its outcome a pure function of facts, so each test hands the facts to `dotfile_outcome`, `data_directory_outcome`, `scripts_outcome`, `settings_outcome`, `specs_outcome`, `windows_console_outcome`, `terminal_outcome`, `session_outcome`, `inline_outcome`, `os_outcome`, `bash_outcome` or `fish_outcome` and reads the `CheckOutcome` (`Ok`, `Warn`, or `Err` with its reason, info lines and `CheckFix`); the same file tests which checks each group holds, in which order and with which `CheckSeverity` (`Normal`, `Soft`, `Skip`). The application layer is tested over in-memory probes: when a group is built and what it asks, what one check asks when it is evaluated, and the run (header before outcomes, fix and re-run, abort, summary, verdict). |
+| `self_update/domain/`: `value_objects/` (`release_asset.rs`, `checksum_list.rs`, `install_location.rs`), `services/update_schedule.rs`, `self_update_error.rs`; `self_update/application/update_tabsmith_use_case.rs`; `self_update/infrastructure/adapters/`: `ring_sha256_digest.rs`, `ring_ed25519_checksum_signature.rs`, `file_installed_executable.rs`, `marker_file_update_check_repository.rs`; `self_update/infrastructure/cli/update_command.rs` | The native install's update (§2.10, D50–D52). Asset names per platform and none for a platform without a build; `SHA256SUMS` in text and binary mode; `~/.local/bin/tabsmith[.exe]` native, `target/` and `~/.cargo/bin` not; a check due first, after a day and when the last one is in the future. The use case over in-memory fakes (a hex-encoding digest, a `sig:`-prefix signature): up to date or older downloads nothing, a newer signed and listed release replaces the executable, an unsigned `SHA256SUMS` is refused before the binary is downloaded, a missing or wrong checksum, an invalid version and a binary the executable refuses all leave it untouched, a manual update outside the native install is an error and a background one is skipped without recording a check, and the background check skips while disabled or not due and records a due check even when the channel fails. Adapters: SHA-256 of `abc`; RFC 8032 TEST 1 accepted, one flipped byte or a key that is not hex refused, the shipped key is 32 bytes; on Unix with a real temp dir, a binary printing the expected version renamed in (the old inode intact), a wrong version leaving the exe and no temp file, a symlinked home or `~/.local/bin` still native, a replacement through a symlink landing on the native file (the link kept), an abandoned staged binary removed and a fresh one of another tab kept; the Windows old-copy name carries the pid and the time; the marker's time read back. `GithubReleaseChannel` has no unit test: the release workflow's `verify` job runs the installers and `tabsmith update` against the real releases. |
 
 Smoke / end-to-end: **not automated** (there is no `tests/e2e.rs`). The review rounds ran these flows, and many more,
 with a pyte-based PTY driver (step files of keys/waits/snapshots, temp HOME and `TABSMITH_HOME`) against

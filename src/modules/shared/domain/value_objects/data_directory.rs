@@ -40,6 +40,11 @@ impl DataDirectory {
         self.under("history.jsonl")
     }
 
+    /// The marker whose modification time is the last background update check.
+    pub(crate) fn update_check_file(&self) -> Result<PathBuf, SharedError> {
+        self.under("update-check")
+    }
+
     /// Session context files (`<session id>.json`) and debug-shell rc dirs.
     pub(crate) fn run_dir(&self) -> Result<PathBuf, SharedError> {
         self.under("run")
@@ -142,6 +147,15 @@ mod tests {
     }
 
     #[test]
+    fn should_put_the_update_check_marker_under_the_root() {
+        let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
+
+        let path = data_directory.update_check_file();
+
+        assert_eq!(path, Ok(PathBuf::from("/data/update-check")));
+    }
+
+    #[test]
     fn should_put_the_run_directory_under_the_root() {
         let data_directory = DataDirectory::new(Some(PathBuf::from("/data")), None);
 
@@ -224,6 +238,7 @@ mod tests {
             data_directory.settings_file(),
             data_directory.state_file(),
             data_directory.history_file(),
+            data_directory.update_check_file(),
             data_directory.run_dir(),
             data_directory.logs_dir(),
             data_directory.themes_dir(),
@@ -235,7 +250,7 @@ mod tests {
 
         assert_eq!(
             paths,
-            [const { Err(SharedError::HomeDirectoryNotFound) }; 10]
+            [const { Err(SharedError::HomeDirectoryNotFound) }; 11]
         );
     }
 }
