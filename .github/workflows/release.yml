@@ -1,0 +1,79 @@
+name: release
+
+# Push a tag `vX.Y.Z` (matching Cargo.toml) to build and publish; run manually for a build-only dry run.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: darwin-arm64, target: aarch64-apple-darwin, runner: macos-latest }
+          - { platform: darwin-x64, target: x86_64-apple-darwin, runner: macos-latest }
+          - { platform: linux-x64, target: x86_64-unknown-linux-musl, runner: ubuntu-latest }
+          - { platform: linux-arm64, target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm }
+          - { platform: win32-x64, target: x86_64-pc-windows-msvc, runner: windows-latest, ext: .exe }
+          - { platform: win32-arm64, target: aarch64-pc-windows-msvc, runner: windows-11-arm, ext: .exe }
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      # Static CRT, so the .exe runs on a fresh Windows without vcruntime140.dll.
+      RUSTFLAGS: ${{ matrix.ext == '.exe' && '-C target-feature=+crt-static' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # ring, zstd and quickjs are C: build them with musl-gcc for the static Linux binaries.
+      - name: Install musl-gcc
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          echo TARGET_CC=musl-gcc >> "$GITHUB_ENV"
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      # darwin-x64 is cross-built on an arm64 runner, so it can't run here.
+      - name: Smoke test
+        if: matrix.platform != 'darwin-x64'
+        shell: bash
+        run: target/${{ matrix.target }}/release/tabsmith${{ matrix.ext }} --version
+      - shell: bash
+        run: mv target/${{ matrix.target }}/release/tabsmith${{ matrix.ext }} tabsmith-${{ matrix.platform }}${{ matrix.ext }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tabsmith-${{ matrix.platform }}
+          path: tabsmith-${{ matrix.platform }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match the Cargo.toml version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "::error::tag $GITHUB_REF_NAME != v$version (Cargo.toml)"; exit 1; }
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          echo "${GITHUB_REF_NAME#v}" > VERSION
+          sha256sum tabsmith-* > SHA256SUMS
+      # gh uploads every asset before the release goes live, so latest/download never sees a half-filled release.
+      - run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}

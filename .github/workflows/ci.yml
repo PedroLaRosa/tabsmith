@@ -1,8 +1,11 @@
 name: ci
 
 on:
+  # Branches only: a tag push runs this through release.yml instead of twice.
   push:
+    branches: ['**']
   pull_request:
+  workflow_call:
 
 jobs:
   test:
