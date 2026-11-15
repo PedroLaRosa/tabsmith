@@ -1,7 +1,7 @@
 name: ci
 
 on:
-  # Branches only: a pushed v* tag runs this through release.yml instead of twice.
+  # Branches only: the v* tags release.yml creates were already tested there.
   push:
     branches: ['**']
   pull_request:

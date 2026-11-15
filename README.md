@@ -189,7 +189,8 @@ Maintainers only; `main` is protected, so a release goes through a pull request.
 
 1. Open a PR that bumps `version` in `Cargo.toml` and commits the `Cargo.lock` that follows (any `cargo build`
    updates it; CI and the release build with `--locked`); merge it once CI is green.
-2. On the merged `main`: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+2. When it works on your machine, run the release workflow on `main`: Actions → release → Run workflow, or
+   `gh workflow run release.yml --ref main`. It tags the commit it built as `vX.Y.Z`.
 3. The release workflow tests and builds the six binaries, then waits: approve its `publish` job (the `release`
    environment). It writes `VERSION` and `SHA256SUMS`, signs `SHA256SUMS`, checks the signature against the key the
    binaries carry, and publishes the release. The `verify` jobs then run the one-liners and `tabsmith update` from the
@@ -208,9 +209,9 @@ One-time setup, before the first release (needs a repo admin):
    Never commit the `.pem`. Until this is done, `scripts/release-signing-key.pub` holds a placeholder whose private
    half was thrown away: nothing can be signed for it, so `publish` refuses to release.
 2. Create the `release` environment (Settings → Environments) with the maintainer as required reviewer and deployments
-   limited to `v*` tags, then `gh secret set RELEASE_SIGNING_KEY --env release < ~/tabsmith-release-key.pem`. Move the
-   `.pem` into a password manager and delete the file: a lost key means installed copies cannot update (users rerun
-   the installer).
+   limited to the `main` branch, then `gh secret set RELEASE_SIGNING_KEY --env release < ~/tabsmith-release-key.pem`.
+   Move the `.pem` into a password manager and delete the file: a lost key means installed copies cannot update (users
+   rerun the installer).
 3. Turn on immutable releases (Settings → General → Releases); it only applies to releases created afterwards.
 
 ## Licence

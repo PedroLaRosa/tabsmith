@@ -1,10 +1,10 @@
 name: release
 
-# A pushed v* tag builds, signs and publishes a release (README "Releasing"). A pull request that touches this
-# workflow or an installer gets a dry run of the test and build jobs; publish and verify only run on a tag.
+# Releases are manual (README "Releasing"): Actions → release → Run workflow on main tests, builds, signs and
+# publishes v<version in Cargo.toml>, tagging the commit it built. Run on another branch, or on a pull request that
+# touches this workflow or an installer, it only dry-runs the test and build jobs: publish and verify run on main alone.
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/release.yml'
@@ -81,7 +81,7 @@ jobs:
 
   publish:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Waits for the maintainer's approval, and is the only job that can read RELEASE_SIGNING_KEY.
     environment: release
@@ -89,16 +89,19 @@ jobs:
       contents: write
       attestations: read
     outputs:
+      version: ${{ steps.version.outputs.version }}
       previous: ${{ steps.previous.outputs.tag }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Check the tag is the version in Cargo.toml
+      - name: Check the Cargo.toml version is new
+        id: version
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME is not v$version, the version in Cargo.toml"
+          # gh would attach the release to an existing tag and its older commit, not to the commit built here.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            echo "::error::v$version is already tagged; bump version in Cargo.toml"
             exit 1
           fi
           # Every release goes out as latest, and every native install takes latest: no prerelease channel yet.
@@ -109,6 +112,8 @@ jobs:
               ;;
           esac
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=v$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Find the release this one follows
         id: previous
         env:
@@ -179,17 +184,18 @@ jobs:
             exit 1
           fi
       # The assets go up while the release is a draft, since an immutable release locks them once published. So
-      # releases/latest/download never points at a release with files missing.
+      # releases/latest/download never points at a release with files missing. Publishing creates the tag on the
+      # commit that was built.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes dist/*
-          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --generate-notes dist/*
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
       - name: Check the release is immutable and attested
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release verify "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+        run: gh release verify "$TAG" --repo "$GITHUB_REPOSITORY"
 
   # The real one-liners against the published release, then `tabsmith update` from the release before it: the end-to-end
   # test of the installers, GithubReleaseChannel and the signature check. If it fails, `gh release delete <tag>` puts
@@ -203,25 +209,27 @@ jobs:
         runner: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     env:
+      VERSION: ${{ needs.publish.outputs.version }}
       PREVIOUS: ${{ needs.publish.outputs.previous }}
       INSTALL_SH: https://github.com/${{ github.repository }}/releases/latest/download/install.sh
     steps:
       - name: Install with the one-liner
         run: |
-          curl -fsSL "$INSTALL_SH" | sh -s "${GITHUB_REF_NAME#v}"
-          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith ${GITHUB_REF_NAME#v}" ]
+          curl -fsSL "$INSTALL_SH" | sh -s "$VERSION"
+          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith $VERSION" ]
       - name: Update from the previous release
         if: env.PREVIOUS != ''
         run: |
           curl -fsSL "$INSTALL_SH" | sh -s "${PREVIOUS#v}"
           "$HOME/.local/bin/tabsmith" update
-          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith ${GITHUB_REF_NAME#v}" ]
+          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith $VERSION" ]
 
   verify-alpine:
     needs: publish
     runs-on: ubuntu-latest
     container: alpine:3.20
     env:
+      VERSION: ${{ needs.publish.outputs.version }}
       PREVIOUS: ${{ needs.publish.outputs.previous }}
       INSTALL_SH: https://github.com/${{ github.repository }}/releases/latest/download/install.sh
     steps:
@@ -229,15 +237,15 @@ jobs:
         shell: sh
         run: |
           apk add --no-cache curl
-          curl -fsSL "$INSTALL_SH" | sh -s "${GITHUB_REF_NAME#v}"
-          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith ${GITHUB_REF_NAME#v}" ]
+          curl -fsSL "$INSTALL_SH" | sh -s "$VERSION"
+          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith $VERSION" ]
       - name: Update from the previous release
         if: env.PREVIOUS != ''
         shell: sh
         run: |
           curl -fsSL "$INSTALL_SH" | sh -s "${PREVIOUS#v}"
           "$HOME/.local/bin/tabsmith" update
-          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith ${GITHUB_REF_NAME#v}" ]
+          [ "$("$HOME/.local/bin/tabsmith" --version)" = "tabsmith $VERSION" ]
 
   verify-windows:
     needs: publish
@@ -248,13 +256,14 @@ jobs:
         runner: [windows-latest, windows-11-arm]
     runs-on: ${{ matrix.runner }}
     env:
+      VERSION: ${{ needs.publish.outputs.version }}
       PREVIOUS: ${{ needs.publish.outputs.previous }}
       RELEASES: https://github.com/${{ github.repository }}/releases
     steps:
       - name: Install with the PowerShell one-liner
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $version = $env:VERSION
           & ([scriptblock]::Create((irm "$env:RELEASES/latest/download/install.ps1"))) $version
           $printed = & "$env:USERPROFILE\.local\bin\tabsmith.exe" --version
           if ($printed -ne "tabsmith $version") { throw "installed $printed, not tabsmith $version" }
@@ -263,18 +272,18 @@ jobs:
       - name: Install with the cmd one-liner
         shell: cmd
         run: |
-          curl -fsSL %RELEASES%/latest/download/install.cmd -o install.cmd && call install.cmd %GITHUB_REF_NAME:~1% && del install.cmd
+          curl -fsSL %RELEASES%/latest/download/install.cmd -o install.cmd && call install.cmd %VERSION% && del install.cmd
       - name: Check the cmd install
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $version = $env:VERSION
           $printed = & "$env:USERPROFILE\.local\bin\tabsmith.exe" --version
           if ($printed -ne "tabsmith $version") { throw "installed $printed, not tabsmith $version" }
       - name: Update from the previous release
         if: env.PREVIOUS != ''
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $version = $env:VERSION
           & ([scriptblock]::Create((irm "$env:RELEASES/latest/download/install.ps1"))) $env:PREVIOUS.TrimStart('v')
           & "$env:USERPROFILE\.local\bin\tabsmith.exe" update
           if ($LASTEXITCODE -ne 0) { throw "tabsmith update failed" }
