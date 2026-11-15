@@ -31,7 +31,9 @@ impl InMemoryReleaseChannel {
 
     /// Every request fails with `connection refused`.
     pub(crate) fn unreachable() -> Self {
-        Self::answering(Err(SelfUpdateError::ChannelUnavailable("connection refused".to_string())))
+        Self::answering(Err(SelfUpdateError::ChannelUnavailable(
+            "connection refused".to_string(),
+        )))
     }
 
     fn answering(latest_version: Result<String, SelfUpdateError>) -> Self {
@@ -63,14 +65,18 @@ impl InMemoryReleaseChannel {
 #[cfg(test)]
 impl ReleaseChannel for InMemoryReleaseChannel {
     fn latest_version(&self) -> Result<String, SelfUpdateError> {
-        self.latest_version_requests.set(self.latest_version_requests.get() + 1);
+        self.latest_version_requests
+            .set(self.latest_version_requests.get() + 1);
         self.latest_version.clone()
     }
 
     /// Only the latest release's files exist: asking another version's release for one is a 404 too.
     fn download(&self, version: &str, file: &str) -> Result<Vec<u8>, SelfUpdateError> {
         self.downloads.borrow_mut().push(file.to_string());
-        let is_latest = self.latest_version.as_ref().is_ok_and(|latest| latest == version);
+        let is_latest = self
+            .latest_version
+            .as_ref()
+            .is_ok_and(|latest| latest == version);
         self.files
             .get(file)
             .filter(|_| is_latest)

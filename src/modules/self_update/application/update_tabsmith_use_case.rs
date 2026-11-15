@@ -100,7 +100,12 @@ impl UpdateTabsmithUseCase {
     /// Why the background check should do nothing at `now_secs`: autoupdates are off, or the last check is under a day
     /// old.
     fn reason_to_skip(&self, now_secs: u64) -> Option<SkipReason> {
-        if self.settings.load().unwrap_or_default().bool(APP_DISABLE_AUTOUPDATES) {
+        if self
+            .settings
+            .load()
+            .unwrap_or_default()
+            .bool(APP_DISABLE_AUTOUPDATES)
+        {
             return Some(SkipReason::Disabled);
         }
         let is_due = update_schedule::is_due(self.update_checks.last_check_secs(), now_secs);
@@ -111,7 +116,9 @@ impl UpdateTabsmithUseCase {
     fn newer_release(&self) -> Result<Option<String>, SelfUpdateError> {
         let latest_version = self.channel.latest_version()?;
         let Some(latest) = SemanticVersion::parse(&latest_version) else {
-            return Err(SelfUpdateError::InvalidVersion { version: latest_version });
+            return Err(SelfUpdateError::InvalidVersion {
+                version: latest_version,
+            });
         };
         let current = SemanticVersion::parse(&self.current_version).unwrap_or_default();
         let is_newer = latest.compare(&current) == Ordering::Greater;
@@ -121,11 +128,12 @@ impl UpdateTabsmithUseCase {
     /// This platform's binary from the release of `version`, once it matches the release's trusted `SHA256SUMS`.
     fn verified_binary(&self, version: &str) -> Result<Vec<u8>, SelfUpdateError> {
         let checksums = self.trusted_checksums(version)?;
-        let listed_digest = checksums
-            .digest_for(&self.asset)
-            .ok_or_else(|| SelfUpdateError::MissingChecksum {
-                asset: self.asset.name().to_string(),
-            })?;
+        let listed_digest =
+            checksums
+                .digest_for(&self.asset)
+                .ok_or_else(|| SelfUpdateError::MissingChecksum {
+                    asset: self.asset.name().to_string(),
+                })?;
         let binary = self.channel.download(version, self.asset.name())?;
         if self.digest.hex_digest(&binary) != listed_digest {
             return Err(SelfUpdateError::ChecksumMismatch {
@@ -250,7 +258,10 @@ mod tests {
 
         assert_eq!(
             (outcome, fakes.channel.downloads()),
-            (Ok(UpdateOutcome::UpToDate(CURRENT.to_string())), Vec::<String>::new())
+            (
+                Ok(UpdateOutcome::UpToDate(CURRENT.to_string())),
+                Vec::<String>::new()
+            )
         );
     }
 
@@ -263,7 +274,10 @@ mod tests {
         assert_eq!(
             (outcome, fakes.executable.installed_bytes()),
             (
-                Ok(UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() }),
+                Ok(UpdateOutcome::Updated {
+                    from: CURRENT.to_string(),
+                    to: NEWER.to_string()
+                }),
                 Some(b"ok".to_vec())
             )
         );
@@ -287,7 +301,12 @@ mod tests {
 
         assert_eq!(
             (result, fakes.executable.installed_bytes()),
-            (Err(SelfUpdateError::ChecksumMismatch { asset: ASSET.to_string() }), None)
+            (
+                Err(SelfUpdateError::ChecksumMismatch {
+                    asset: ASSET.to_string()
+                }),
+                None
+            )
         );
     }
 
@@ -299,7 +318,12 @@ mod tests {
 
         assert_eq!(
             (result, fakes.executable.installed_bytes()),
-            (Err(SelfUpdateError::MissingChecksum { asset: ASSET.to_string() }), None)
+            (
+                Err(SelfUpdateError::MissingChecksum {
+                    asset: ASSET.to_string()
+                }),
+                None
+            )
         );
     }
 
@@ -315,7 +339,11 @@ mod tests {
         let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, fakes.channel.downloads(), fakes.executable.installed_bytes()),
+            (
+                result,
+                fakes.channel.downloads(),
+                fakes.executable.installed_bytes()
+            ),
             (
                 Err(SelfUpdateError::UntrustedChecksums),
                 vec!["SHA256SUMS".to_string(), "SHA256SUMS.sig".to_string()],
@@ -336,9 +364,15 @@ mod tests {
         let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, fakes.channel.downloads(), fakes.executable.installed_bytes()),
             (
-                Err(SelfUpdateError::ChannelUnavailable("SHA256SUMS.sig: 404 Not Found".to_string())),
+                result,
+                fakes.channel.downloads(),
+                fakes.executable.installed_bytes()
+            ),
+            (
+                Err(SelfUpdateError::ChannelUnavailable(
+                    "SHA256SUMS.sig: 404 Not Found".to_string()
+                )),
                 vec!["SHA256SUMS".to_string(), "SHA256SUMS.sig".to_string()],
                 None
             )
@@ -352,9 +386,15 @@ mod tests {
         let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, fakes.channel.downloads(), fakes.executable.installed_bytes()),
             (
-                Err(SelfUpdateError::InvalidVersion { version: "<!DOCTYPE html>".to_string() }),
+                result,
+                fakes.channel.downloads(),
+                fakes.executable.installed_bytes()
+            ),
+            (
+                Err(SelfUpdateError::InvalidVersion {
+                    version: "<!DOCTYPE html>".to_string()
+                }),
                 Vec::<String>::new(),
                 None
             )
@@ -370,7 +410,10 @@ mod tests {
 
         assert_eq!(
             (outcome, fakes.channel.downloads()),
-            (Ok(UpdateOutcome::UpToDate(CURRENT.to_string())), Vec::<String>::new())
+            (
+                Ok(UpdateOutcome::UpToDate(CURRENT.to_string())),
+                Vec::<String>::new()
+            )
         );
     }
 
@@ -380,14 +423,21 @@ mod tests {
             PathBuf::from("/home/ana/.cargo/bin/tabsmith"),
             InstallLocation::native_dir(Path::new("/home/ana")),
         );
-        let fakes = Fakes::new(good_release()).with_executable(InMemoryExecutable::at(cargo_install));
+        let fakes =
+            Fakes::new(good_release()).with_executable(InMemoryExecutable::at(cargo_install));
 
         let result = fakes.use_case().execute(UpdateTrigger::Manual);
 
         assert_eq!(
-            (result, fakes.channel.downloads(), fakes.executable.installed_bytes()),
             (
-                Err(SelfUpdateError::NotNativeInstall { path: PathBuf::from("/home/ana/.cargo/bin/tabsmith") }),
+                result,
+                fakes.channel.downloads(),
+                fakes.executable.installed_bytes()
+            ),
+            (
+                Err(SelfUpdateError::NotNativeInstall {
+                    path: PathBuf::from("/home/ana/.cargo/bin/tabsmith")
+                }),
                 Vec::<String>::new(),
                 None
             )
@@ -402,7 +452,11 @@ mod tests {
         let outcome = fakes.use_case().execute(UpdateTrigger::Scheduled);
 
         assert_eq!(
-            (outcome, fakes.channel.latest_version_requests(), fakes.executable.installed_bytes()),
+            (
+                outcome,
+                fakes.channel.latest_version_requests(),
+                fakes.executable.installed_bytes()
+            ),
             (Ok(UpdateOutcome::Skipped(SkipReason::NotDue)), 0, None)
         );
     }
@@ -416,7 +470,12 @@ mod tests {
 
         assert_eq!(
             (result, fakes.update_checks.last_check_secs()),
-            (Err(SelfUpdateError::ChannelUnavailable("connection refused".to_string())), Some(NOW_SECS))
+            (
+                Err(SelfUpdateError::ChannelUnavailable(
+                    "connection refused".to_string()
+                )),
+                Some(NOW_SECS)
+            )
         );
     }
 
@@ -429,7 +488,11 @@ mod tests {
         let outcome = fakes.use_case().execute(UpdateTrigger::Scheduled);
 
         assert_eq!(
-            (outcome, fakes.update_checks.last_check_secs(), fakes.channel.latest_version_requests()),
+            (
+                outcome,
+                fakes.update_checks.last_check_secs(),
+                fakes.channel.latest_version_requests()
+            ),
             (Ok(UpdateOutcome::Skipped(SkipReason::Disabled)), None, 0)
         );
     }
@@ -446,7 +509,10 @@ mod tests {
         assert_eq!(
             (outcome, fakes.executable.installed_bytes()),
             (
-                Ok(UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() }),
+                Ok(UpdateOutcome::Updated {
+                    from: CURRENT.to_string(),
+                    to: NEWER.to_string()
+                }),
                 Some(b"ok".to_vec())
             )
         );
@@ -455,13 +521,20 @@ mod tests {
     /// Unreadable settings count as none, as in the terminal session, so a broken settings.json never stops updates.
     #[test]
     fn should_update_on_schedule_when_the_settings_cannot_be_read() {
-        let fakes = Fakes::new(good_release()).with_settings(Rc::new(UnreadableSettingsRepository::default()));
+        let fakes = Fakes::new(good_release())
+            .with_settings(Rc::new(UnreadableSettingsRepository::default()));
 
         let outcome = fakes.use_case().execute(UpdateTrigger::Scheduled);
 
         assert_eq!(
             (outcome, fakes.update_checks.last_check_secs()),
-            (Ok(UpdateOutcome::Updated { from: CURRENT.to_string(), to: NEWER.to_string() }), Some(NOW_SECS))
+            (
+                Ok(UpdateOutcome::Updated {
+                    from: CURRENT.to_string(),
+                    to: NEWER.to_string()
+                }),
+                Some(NOW_SECS)
+            )
         );
     }
 
@@ -491,7 +564,12 @@ mod tests {
 
         assert_eq!(
             (result, fakes.executable.installed_bytes()),
-            (Err(SelfUpdateError::InstallFailed("tabsmith --version printed tabsmith 0.1.0".to_string())), None)
+            (
+                Err(SelfUpdateError::InstallFailed(
+                    "tabsmith --version printed tabsmith 0.1.0".to_string()
+                )),
+                None
+            )
         );
     }
 
@@ -502,7 +580,8 @@ mod tests {
             PathBuf::from("/home/ana/.cargo/bin/tabsmith"),
             InstallLocation::native_dir(Path::new("/home/ana")),
         );
-        let fakes = Fakes::new(good_release()).with_executable(InMemoryExecutable::at(cargo_install));
+        let fakes =
+            Fakes::new(good_release()).with_executable(InMemoryExecutable::at(cargo_install));
 
         fakes.use_case().execute(UpdateTrigger::Scheduled).unwrap();
 

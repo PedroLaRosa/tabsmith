@@ -36,7 +36,13 @@ impl GithubReleaseChannel {
         self.agent
             .get(url)
             .call()
-            .and_then(|mut response| response.body_mut().with_config().limit(MAX_DOWNLOAD_BYTES).read_to_vec())
+            .and_then(|mut response| {
+                response
+                    .body_mut()
+                    .with_config()
+                    .limit(MAX_DOWNLOAD_BYTES)
+                    .read_to_vec()
+            })
             .map_err(|error| SelfUpdateError::ChannelUnavailable(format!("{url}: {error}")))
     }
 }

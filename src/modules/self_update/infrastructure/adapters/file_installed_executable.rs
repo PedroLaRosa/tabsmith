@@ -22,9 +22,11 @@ pub(crate) struct FileInstalledExecutable {
 
 impl FileInstalledExecutable {
     pub(crate) fn new(executable: PathBuf, user_home: PathBuf) -> Self {
-        FileInstalledExecutable { executable, user_home }
+        FileInstalledExecutable {
+            executable,
+            user_home,
+        }
     }
-
 }
 
 const STAGED_PREFIX: &str = ".tabsmith-update-";
@@ -36,7 +38,11 @@ const ABANDONED_AFTER: Duration = Duration::from_secs(10 * 60);
 /// Next to the executable, so the final rename stays on one filesystem; named per process, so two tabs updating at
 /// once never write the same file.
 fn staged_path(executable: &Path) -> PathBuf {
-    let name = format!("{STAGED_PREFIX}{}{}", std::process::id(), std::env::consts::EXE_SUFFIX);
+    let name = format!(
+        "{STAGED_PREFIX}{}{}",
+        std::process::id(),
+        std::env::consts::EXE_SUFFIX
+    );
     executable.with_file_name(name)
 }
 
@@ -47,8 +53,15 @@ fn remove_abandoned_staged_files(executable: &Path) {
         return;
     };
     for entry in entries.flatten() {
-        let is_staged = entry.file_name().to_string_lossy().starts_with(STAGED_PREFIX);
-        let age = entry.metadata().and_then(|metadata| metadata.modified()).ok().and_then(|modified| modified.elapsed().ok());
+        let is_staged = entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(STAGED_PREFIX);
+        let age = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok());
         if is_staged && age.is_some_and(|age| age >= ABANDONED_AFTER) {
             let _ = fs::remove_file(entry.path());
         }
@@ -125,7 +138,11 @@ fn swap_into_place(staged: &Path, executable: &Path) -> Result<(), SelfUpdateErr
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_nanos())
         .unwrap_or_default();
-    swap_aside(staged, executable, &old_copy_path(executable, std::process::id(), nanos))
+    swap_aside(
+        staged,
+        executable,
+        &old_copy_path(executable, std::process::id(), nanos),
+    )
 }
 
 /// The executable steps aside as `old`, the staged binary takes its name, and the old one comes back if that fails.
@@ -186,7 +203,10 @@ mod tests {
         let executable = home.join(".local").join("bin").join("tabsmith");
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, b"old binary").unwrap();
-        (FileInstalledExecutable::new(executable.clone(), home.to_path_buf()), executable)
+        (
+            FileInstalledExecutable::new(executable.clone(), home.to_path_buf()),
+            executable,
+        )
     }
 
     #[test]
@@ -235,8 +255,16 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(
-            (matches!(result, Err(SelfUpdateError::InstallFailed(_))), fs::read(&executable).unwrap(), bin_dir),
-            (true, b"old binary".to_vec(), vec![std::ffi::OsString::from("tabsmith")])
+            (
+                matches!(result, Err(SelfUpdateError::InstallFailed(_))),
+                fs::read(&executable).unwrap(),
+                bin_dir
+            ),
+            (
+                true,
+                b"old binary".to_vec(),
+                vec![std::ffi::OsString::from("tabsmith")]
+            )
         );
     }
 
@@ -296,10 +324,18 @@ mod tests {
         let link = path_dir.join("tabsmith");
         std::os::unix::fs::symlink(&native, &link).unwrap();
 
-        FileInstalledExecutable::new(link.clone(), home).replace(RELEASE_9_9_9, "9.9.9").unwrap();
+        FileInstalledExecutable::new(link.clone(), home)
+            .replace(RELEASE_9_9_9, "9.9.9")
+            .unwrap();
 
-        let link_kept = fs::symlink_metadata(&link).unwrap().file_type().is_symlink();
-        assert_eq!((fs::read(&native).unwrap(), link_kept), (RELEASE_9_9_9.to_vec(), true));
+        let link_kept = fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink();
+        assert_eq!(
+            (fs::read(&native).unwrap(), link_kept),
+            (RELEASE_9_9_9.to_vec(), true)
+        );
     }
 
     /// A tab closed (or `tabsmith update` interrupted) between staging and the rename leaves its staged binary behind.
@@ -309,8 +345,14 @@ mod tests {
         let (installed, executable) = native_install(&temp_dir);
         let leftover = executable.with_file_name(".tabsmith-update-4242");
         fs::write(&leftover, b"half a binary").unwrap();
-        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
-        fs::File::options().write(true).open(&leftover).unwrap().set_modified(two_hours_ago).unwrap();
+        let two_hours_ago =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+        fs::File::options()
+            .write(true)
+            .open(&leftover)
+            .unwrap()
+            .set_modified(two_hours_ago)
+            .unwrap();
 
         installed.replace(RELEASE_9_9_9, "9.9.9").unwrap();
 
@@ -354,7 +396,10 @@ mod swap_aside_tests {
 
         let old_copy = old_copy_path(executable, 4242, 1_700_000_000_123_456_789);
 
-        assert_eq!(old_copy, Path::new("/home/ana/.local/bin/tabsmith.exe.4242.1700000000123456789.old"));
+        assert_eq!(
+            old_copy,
+            Path::new("/home/ana/.local/bin/tabsmith.exe.4242.1700000000123456789.old")
+        );
     }
 
     #[test]
@@ -366,7 +411,11 @@ mod swap_aside_tests {
         swap_aside(&staged, &executable, &old).unwrap();
 
         assert_eq!(
-            (fs::read(&executable).unwrap(), fs::read(&old).unwrap(), staged.exists()),
+            (
+                fs::read(&executable).unwrap(),
+                fs::read(&old).unwrap(),
+                staged.exists()
+            ),
             (b"new binary".to_vec(), b"old binary".to_vec(), false)
         );
     }
@@ -382,7 +431,11 @@ mod swap_aside_tests {
         let result = swap_aside(&staged, &executable, &old);
 
         assert_eq!(
-            (matches!(result, Err(SelfUpdateError::InstallFailed(_))), fs::read(&executable).unwrap(), old.exists()),
+            (
+                matches!(result, Err(SelfUpdateError::InstallFailed(_))),
+                fs::read(&executable).unwrap(),
+                old.exists()
+            ),
             (true, b"old binary".to_vec(), false)
         );
     }
@@ -391,7 +444,11 @@ mod swap_aside_tests {
     fn should_remove_only_the_old_copies_earlier_updates_left() {
         let temp_dir = TempDir::new("self-update-old-copies");
         let (executable, _) = executable_and_staged(&temp_dir);
-        for name in ["tabsmith.exe.4242.1.old", "tabsmith.exe.bak", "other.exe.4242.1.old"] {
+        for name in [
+            "tabsmith.exe.4242.1.old",
+            "tabsmith.exe.bak",
+            "other.exe.4242.1.old",
+        ] {
             fs::write(temp_dir.path().join(name), b"").unwrap();
         }
 
@@ -402,6 +459,14 @@ mod swap_aside_tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         left.sort();
-        assert_eq!(left, [".tabsmith-update-4242.exe", "other.exe.4242.1.old", "tabsmith.exe", "tabsmith.exe.bak"]);
+        assert_eq!(
+            left,
+            [
+                ".tabsmith-update-4242.exe",
+                "other.exe.4242.1.old",
+                "tabsmith.exe",
+                "tabsmith.exe.bak"
+            ]
+        );
     }
 }

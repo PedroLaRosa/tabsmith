@@ -3,7 +3,8 @@ use ring::signature::{UnparsedPublicKey, ED25519};
 
 /// The public half of the release signing key, compiled in: every installed binary carries it forward, so only
 /// releases signed with its private half (the `release` environment's `RELEASE_SIGNING_KEY`) update tabsmith.
-pub(crate) const RELEASE_SIGNING_KEY_HEX: &str = include_str!("../../../../../scripts/release-signing-key.pub");
+pub(crate) const RELEASE_SIGNING_KEY_HEX: &str =
+    include_str!("../../../../../scripts/release-signing-key.pub");
 
 /// Checks `SHA256SUMS.sig` as an ed25519 signature, with ring, against the release signing key.
 pub(crate) struct RingEd25519ChecksumSignature {
@@ -45,10 +46,12 @@ mod tests {
     use super::*;
 
     /// RFC 8032 §7.1, TEST 1: the key pair's public key and its signature of the empty message.
-    const TEST_1_PUBLIC_KEY: &str = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    const TEST_1_PUBLIC_KEY: &str =
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
     const TEST_1_SIGNATURE: &str = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
     /// RFC 8032 §7.1, TEST 2: the key pair's public key and its signature of the one-byte message `0x72`.
-    const TEST_2_PUBLIC_KEY: &str = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
+    const TEST_2_PUBLIC_KEY: &str =
+        "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
     const TEST_2_SIGNATURE: &str = "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00";
 
     fn bytes(hex: &str) -> Vec<u8> {
