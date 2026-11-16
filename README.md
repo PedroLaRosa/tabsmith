@@ -96,8 +96,22 @@ it (unless `app.disableAutoupdates` is set).
 
 ### Uninstall
 
-`tabsmith uninstall` (add `--purge` to also delete `~/.tabsmith`), then delete `~/.local/bin/tabsmith` (Windows:
-`%USERPROFILE%\.local\bin\tabsmith.exe*`).
+`tabsmith uninstall` only takes the shell integration out of your dotfiles; the binary stays until you delete it.
+Run it first, while `tabsmith` is still on your `PATH`:
+
+```sh
+tabsmith uninstall --purge     # --purge also deletes ~/.tabsmith (settings, specs, logs)
+```
+
+Then delete every copy you installed (`which -a tabsmith` lists them; a leftover copy keeps `tabsmith -V` working):
+
+```sh
+rm ~/.local/bin/tabsmith       # one-liner install (Windows: %USERPROFILE%\.local\bin\tabsmith.exe*)
+cargo uninstall tabsmith       # cargo install --path . / just install
+```
+
+Open a new terminal: `tabsmith -V` should now report `command not found`. An integration installed with
+`TABSMITH_HOME` set is only recognised with the same value: `TABSMITH_HOME=<dir> tabsmith uninstall`.
 
 ## Commands
 
