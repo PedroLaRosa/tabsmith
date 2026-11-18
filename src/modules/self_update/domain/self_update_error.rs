@@ -27,7 +27,8 @@ impl fmt::Display for SelfUpdateError {
             SelfUpdateError::ChannelUnavailable(reason) => write!(f, "could not download the latest release: {reason}"),
             SelfUpdateError::NotNativeInstall { path } => write!(
                 f,
-                "tabsmith runs from {}, not ~/.local/bin; update it the way you installed it (brew upgrade tabsmith, choco upgrade tabsmith or cargo install --path .)",
+                "tabsmith runs from {}, not ~/.local/bin; update it the way you installed it (brew upgrade tabsmith, \
+                 choco upgrade tabsmith or cargo install --path .)",
                 path.display()
             ),
             SelfUpdateError::InvalidVersion { version } => {
