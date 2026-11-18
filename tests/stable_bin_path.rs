@@ -14,7 +14,8 @@ impl HomebrewLikeHome {
         let home = std::env::temp_dir().join(format!("tabsmith-it-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join("bin")).unwrap();
-        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_tabsmith"), home.join("bin").join("tabsmith")).unwrap();
+        let link = home.join("bin").join("tabsmith");
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_tabsmith"), link).unwrap();
         HomebrewLikeHome(home)
     }
 

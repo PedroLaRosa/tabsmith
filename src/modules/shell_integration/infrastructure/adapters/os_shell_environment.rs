@@ -104,6 +104,8 @@ fn profile_from(output: std::io::Result<String>) -> Result<PathBuf, ShellIntegra
     }
 }
 
+/// The running binary by the path the shell finds it under, written into the init scripts and dotfiles (SPEC §5.5).
+/// Not `exe_path()`: self-update has to replace the real file.
 fn stable_executable() -> Result<String, ExecutablePathError> {
     let exe = std::env::current_exe()?;
     Ok(stable_exe_path(exe, std::env::var_os("PATH").as_deref())
@@ -111,6 +113,10 @@ fn stable_executable() -> Result<String, ExecutablePathError> {
         .into_owned())
 }
 
+/// The first file named like `exe` in an absolute directory of `path`, when it is `exe` itself (a symlink to it, say),
+/// else `exe`. Looks up `exe`'s own file name, not `which()`'s PATHEXT spellings (`tabsmith.EXE`).
+// ponytail: first PATH hit only; Homebrew's bin/ link outlives the Cellar path that Linux reports and brew upgrade
+// deletes. A copy reached only through a later PATH entry keeps its own path.
 fn stable_exe_path(exe: PathBuf, path: Option<&OsStr>) -> PathBuf {
     let name = exe.file_name().unwrap_or_default();
     path.and_then(|path| {
@@ -139,9 +145,11 @@ fn environment_error(error: impl Error + 'static) -> ShellIntegrationError {
 mod tests {
     use super::*;
     use crate::modules::shared::domain::shared_error::SharedError;
-    use crate::modules::shared::infrastructure::os::executable_path_error::ExecutablePathError;
     use crate::modules::shared::infrastructure::testing::temp_dir::TempDir;
     use std::io;
+
+    /// Where Homebrew on Linux keeps tabsmith 1.0.0, the path `current_exe()` reports there.
+    const CELLAR_BINARY: &str = "Cellar/tabsmith/1.0.0/bin/tabsmith";
 
     /// A file standing in for a tabsmith binary at `path`, its directory created.
     fn binary_at(path: PathBuf, contents: &str) -> PathBuf {
@@ -153,7 +161,7 @@ mod tests {
     #[test]
     fn should_keep_the_executable_when_no_path_directory_holds_a_tabsmith() {
         let temp_dir = TempDir::new("stable-exe-none-on-path");
-        let exe = binary_at(temp_dir.path().join("Cellar/tabsmith/1.0.0/bin/tabsmith"), "tabsmith");
+        let exe = binary_at(temp_dir.path().join(CELLAR_BINARY), "tabsmith");
         let path = std::env::join_paths([temp_dir.path().join("bin")]).unwrap();
 
         let stable = stable_exe_path(exe.clone(), Some(&path));
@@ -177,7 +185,7 @@ mod tests {
     #[test]
     fn should_name_the_executable_by_the_symlink_a_path_directory_holds_to_it() {
         let temp_dir = TempDir::new("stable-exe-symlink-on-path");
-        let exe = binary_at(temp_dir.path().join("Cellar/tabsmith/1.0.0/bin/tabsmith"), "tabsmith");
+        let exe = binary_at(temp_dir.path().join(CELLAR_BINARY), "tabsmith");
         let link = temp_dir.path().join("bin").join("tabsmith");
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&exe, &link).unwrap();
@@ -192,8 +200,11 @@ mod tests {
     #[test]
     fn should_keep_the_executable_when_the_first_tabsmith_on_path_is_another_file() {
         let temp_dir = TempDir::new("stable-exe-other-on-path");
-        let exe = binary_at(temp_dir.path().join("Cellar/tabsmith/1.0.0/bin/tabsmith"), "tabsmith 1.0.0");
-        let other = binary_at(temp_dir.path().join(".local/bin/tabsmith"), "tabsmith 0.9.0");
+        let exe = binary_at(temp_dir.path().join(CELLAR_BINARY), "tabsmith 1.0.0");
+        let other = binary_at(
+            temp_dir.path().join(".local/bin/tabsmith"),
+            "tabsmith 0.9.0",
+        );
         let path = std::env::join_paths([other.parent().unwrap()]).unwrap();
 
         let stable = stable_exe_path(exe.clone(), Some(&path));
