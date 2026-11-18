@@ -53,6 +53,14 @@ binaries); Windows 10+ on x64 or arm64.
 
 To check a downloaded binary by hand: `gh release verify-asset -R PedroLaRosa/tabsmith vX.Y.Z ./tabsmith-<platform>`.
 
+With Homebrew on macOS or Linux (from the [tap](https://github.com/PedroLaRosa/homebrew-tabsmith); Homebrew updates
+this copy, it does not update itself):
+
+```sh
+brew install pedrolarosa/tabsmith/tabsmith
+tabsmith setup                # adds the shell integration to your dotfiles (asks first)
+```
+
 From source (`~/.cargo/bin/tabsmith`; this install does not update itself):
 
 ```sh
@@ -90,8 +98,8 @@ tabsmith update                                    # update now
 tabsmith settings app.disableAutoupdates true      # no background updates (tabsmith update still works)
 ```
 
-A copy anywhere but `~/.local/bin` (cargo's `~/.cargo/bin`, a `target/` build) is never touched: update it the way
-you installed it. A binary you put at `~/.local/bin/tabsmith` yourself is the native install, so release builds replace
+A copy anywhere but `~/.local/bin` (Homebrew's, cargo's `~/.cargo/bin`, a `target/` build) is never touched: update
+it the way you installed it, `brew upgrade tabsmith` for Homebrew. A binary you put at `~/.local/bin/tabsmith` yourself is the native install, so release builds replace
 it (unless `app.disableAutoupdates` is set).
 
 ### Uninstall
@@ -107,6 +115,7 @@ Then delete every copy you installed (`which -a tabsmith` lists them; a leftover
 
 ```sh
 rm ~/.local/bin/tabsmith       # one-liner install (Windows: %USERPROFILE%\.local\bin\tabsmith.exe*)
+brew uninstall tabsmith        # Homebrew
 cargo uninstall tabsmith       # cargo install --path . / just install
 ```
 
@@ -209,6 +218,9 @@ Maintainers only; `main` is protected, so a release goes through a pull request.
    environment). It writes `VERSION` and `SHA256SUMS`, signs `SHA256SUMS`, checks the signature against the key the
    binaries carry, and publishes the release. The `verify` jobs then run the one-liners and `tabsmith update` from the
    previous release on macOS, Linux x64/arm64, Alpine and Windows x64/arm64.
+   Once they pass, `homebrew` commits the new version and checksums to the tap's `Formula/tabsmith.rb` (from
+   `packaging/homebrew/tabsmith.rb`), and `verify-brew` installs it from the tap on macOS and Linux x64/arm64 and runs
+   `brew test` and `brew audit --strict --online`.
 4. If `verify` fails, `gh release delete vX.Y.Z` puts `latest` back on the previous release; fix forward with the next
    patch version (an immutable release's tag cannot be used again).
 
@@ -227,6 +239,10 @@ One-time setup, before the first release (needs a repo admin):
    Move the `.pem` into a password manager and delete the file: a lost key means installed copies cannot update (users
    rerun the installer).
 3. Turn on immutable releases (Settings → General → Releases); it only applies to releases created afterwards.
+4. Create the `packages` environment, deployments limited to `main` and no required reviewer (the release was already
+   approved), for the jobs that update the package managers. Add a read-write deploy key to the tap
+   (`PedroLaRosa/homebrew-tabsmith`, Settings → Deploy keys) and store its private half there:
+   `gh secret set HOMEBREW_TAP_DEPLOY_KEY --env packages < <key file>`.
 
 ## Licence
 
