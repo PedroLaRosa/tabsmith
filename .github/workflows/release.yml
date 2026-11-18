@@ -358,3 +358,29 @@ jobs:
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
             commit -qam "feat(formula): update tabsmith to $VERSION"
           git push origin HEAD:main
+
+  # What a user gets from the tap now: a fully qualified install (which trusts that formula alone), the binary it puts
+  # on PATH, and the formula's own test and strictest audit. Homebrew is on every image but not on Linux's PATH;
+  # setup-homebrew adds it, updates it to the latest stable brew and hands audit a token for its GitHub checks.
+  verify-brew:
+    needs: [publish, homebrew]
+    name: verify-brew (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.publish.outputs.version }}
+    steps:
+      - uses: Homebrew/actions/setup-homebrew@ceec4e8419bb3c97ce96e9dda7738499ed5f869d # 2026.11.14.1
+      - name: Install from the tap
+        run: |
+          brew install pedrolarosa/tabsmith/tabsmith
+          printed=$("$(brew --prefix)/bin/tabsmith" --version)
+          echo "$printed"
+          [ "$printed" = "tabsmith $VERSION" ]
+      - name: Test and audit the formula
+        run: |
+          brew test pedrolarosa/tabsmith/tabsmith
+          brew audit --strict --online pedrolarosa/tabsmith/tabsmith
