@@ -53,11 +53,11 @@ binaries); Windows 10+ on x64 or arm64.
 
 To check a downloaded binary by hand: `gh release verify-asset -R PedroLaRosa/tabsmith vX.Y.Z ./tabsmith-<platform>`.
 
-With Homebrew on macOS or Linux (from the [tap](https://github.com/PedroLaRosa/homebrew-tabsmith); Homebrew updates
+With Homebrew on macOS or Linux (from the [tap](https://github.com/PedroLaRosa/homebrew-tap); Homebrew updates
 this copy, it does not update itself):
 
 ```sh
-brew install pedrolarosa/tabsmith/tabsmith
+brew install pedrolarosa/tap/tabsmith
 tabsmith setup                # adds the shell integration to your dotfiles (asks first)
 ```
 
@@ -243,7 +243,7 @@ One-time setup, before the first release (needs a repo admin):
 3. Turn on immutable releases (Settings → General → Releases); it only applies to releases created afterwards.
 4. Create the `packages` environment, deployments limited to `main` and no required reviewer (the release was already
    approved), for the jobs that update the package managers. Add a read-write deploy key to the tap
-   (`PedroLaRosa/homebrew-tabsmith`, Settings → Deploy keys) and store its private half there:
+   (`PedroLaRosa/homebrew-tap`, Settings → Deploy keys) and store its private half there:
    `gh secret set HOMEBREW_TAP_DEPLOY_KEY --env packages < <key file>`.
 
 ## Licence
