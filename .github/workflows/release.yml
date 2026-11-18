@@ -451,11 +451,12 @@ jobs:
             if (Test-Path -LiteralPath $left) { throw "$left outlived the uninstall" }
           }
 
-  # Chocolatey's community repository gets the release's Windows binaries once the Windows one-liners passed against
-  # it and chocolatey-pack passed on both architectures. Every version then waits for Chocolatey's moderation before
-  # `choco install` sees it, and a version cannot be pushed twice. Only this job can read CHOCO_API_KEY.
+  # Chocolatey's community repository gets the release's Windows binaries once every one-liner passed against it (a
+  # failed verify job means the release gets deleted) and chocolatey-pack passed on both architectures. Every version
+  # then waits for Chocolatey's moderation before `choco install` sees it: one that moderation flags is fixed by pushing
+  # the same version again, and only an approved version is final. CHOCO_API_KEY lives in the packages environment.
   chocolatey:
-    needs: [publish, verify-windows, chocolatey-pack]
+    needs: [publish, verify, verify-alpine, verify-windows, chocolatey-pack]
     runs-on: windows-latest
     environment: packages
     env:
