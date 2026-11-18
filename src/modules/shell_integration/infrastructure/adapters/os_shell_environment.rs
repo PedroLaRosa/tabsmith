@@ -1,6 +1,7 @@
 use crate::modules::shared::domain::value_objects::data_directory::DataDirectory;
 use crate::modules::shared::infrastructure::data_directory_from_env::user_home_from_env;
 use crate::modules::shared::infrastructure::error_chain::display_chain;
+use crate::modules::shared::infrastructure::os::executable_path_error::ExecutablePathError;
 #[cfg(windows)]
 use crate::modules::shared::infrastructure::os::process_info::is_console;
 use crate::modules::shared::infrastructure::os::process_info::{exe_path, parent_exe};
@@ -28,7 +29,7 @@ pub(crate) struct OsShellEnvironment;
 
 impl ShellEnvironment for OsShellEnvironment {
     fn current_executable(&self) -> Result<String, ShellIntegrationError> {
-        exe_path().map_err(environment_error)
+        stable_executable().map_err(environment_error)
     }
 
     fn parent_shell(&self) -> Option<String> {
@@ -101,6 +102,13 @@ fn profile_from(output: std::io::Result<String>) -> Result<PathBuf, ShellIntegra
         )),
         p => Ok(PathBuf::from(p)),
     }
+}
+
+fn stable_executable() -> Result<String, ExecutablePathError> {
+    let exe = std::env::current_exe()?;
+    Ok(stable_exe_path(exe, std::env::var_os("PATH").as_deref())
+        .to_string_lossy()
+        .into_owned())
 }
 
 fn stable_exe_path(exe: PathBuf, path: Option<&OsStr>) -> PathBuf {
