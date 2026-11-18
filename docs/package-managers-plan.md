@@ -229,6 +229,22 @@ and Uninstall.
 - **WinGet / Scoop:** if users ask; Chocolatey was the request.
 - **Authenticode signing and notarization:** would clear Chocolatey antivirus hits and allow a cask.
 
+## Changed while implementing (2026-11-18)
+
+- **`<BIN>` skips relative `PATH` entries:** `.` would have written `./tabsmith`, which only works from one directory.
+- **Both package jobs wait for every verify job** (`verify`, `verify-alpine`, `verify-windows`), not only their own
+  platform's. A failed verify job means deleting the release, and the tap or package would then name missing files.
+- **`chocolatey-pack`** (dry runs too) installs, upgrades and uninstalls the package on `windows-latest` and
+  `windows-11-arm`. Its first run confirmed that `Win32_Processor` reports ARM64 inside choco's host.
+- **`chocolateybeforemodify.ps1` copies an idle `tabsmith.exe` back** after moving the running one aside. With the
+  rename alone, choco 2.7.5 (which unshims only the exes it still finds, after this script) left the `tabsmith` shim
+  behind on uninstall, and the first dry run failed on exactly that. A failed upgrade also rolled back to a package
+  without the exe.
+- **`packaging/chocolatey/pack.ps1`** builds the package in a temp copy: it fills in the version and both checksums
+  (`VERIFICATION.txt` lists them) and writes `legal/LICENSE.txt` from the two licence files. It is also how v1.0.0 is
+  pushed by hand (README → Releasing).
+- **The formula's 1.0.0 caveat** stays while upgrades from 1.0.0 are likely, not for one release: a user can skip it.
+
 ## Sources
 
 - Homebrew 6.0.0: https://brew.sh/2026/06/11/homebrew-6.0.0/

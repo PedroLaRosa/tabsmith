@@ -129,6 +129,9 @@ choco uninstall tabsmith       # Chocolatey (elevated)
 cargo uninstall tabsmith       # cargo install --path . / just install
 ```
 
+On Windows, close the terminals that run tabsmith before `choco uninstall`: a running exe cannot be deleted, so
+Chocolatey would leave a renamed copy in `C:\ProgramData\chocolatey\lib\tabsmith` for you to delete afterwards.
+
 Open a new terminal: `tabsmith -V` should now report `command not found`. An integration installed with
 `TABSMITH_HOME` set is only recognised with the same value: `TABSMITH_HOME=<dir> tabsmith uninstall`.
 
