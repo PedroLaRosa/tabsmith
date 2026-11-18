@@ -18,7 +18,7 @@ try {
         "https://github.com/PedroLaRosa/tabsmith/blob/main/LICENSE-MIT",
         "https://github.com/PedroLaRosa/tabsmith/blob/main/LICENSE-APACHE", '')
     foreach ($file in 'LICENSE-MIT', 'LICENSE-APACHE') {
-        $licence += Get-Content -Raw -LiteralPath (Join-Path $root $file)
+        $licence += Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root $file)
     }
     Set-Content -LiteralPath (Join-Path $package 'legal\LICENSE.txt') -Value ($licence -join "`n") -NoNewline -Encoding utf8
 
@@ -30,7 +30,7 @@ try {
     }
     foreach ($file in 'tabsmith.nuspec', 'legal\VERIFICATION.txt') {
         $path = Join-Path $package $file
-        $text = Get-Content -Raw -LiteralPath $path
+        $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $path
         foreach ($placeholder in $fills.Keys) {
             $text = $text.Replace($placeholder, $fills[$placeholder])
         }
