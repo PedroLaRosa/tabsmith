@@ -1,14 +1,16 @@
 name: release
 
 # Releases are manual (README "Releasing"): Actions → release → Run workflow on main tests, builds, signs and
-# publishes v<version in Cargo.toml>, tagging the commit it built. Run on another branch, or on a pull request that
-# touches this workflow or an installer, it only dry-runs the test and build jobs: publish and verify run on main alone.
+# publishes v<version in Cargo.toml>, tagging the commit it built, then updates the Homebrew tap. Run on another branch,
+# or on a pull request that touches this workflow, an installer or a package, it only dry-runs the test and build jobs:
+# publish and everything after it run on main alone.
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/release.yml'
       - 'scripts/install.*'
+      - 'packaging/**'
 
 # Read-only by default: ci.yml runs with this token too. Only publish can write.
 permissions:
@@ -296,3 +298,90 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "tabsmith update failed" }
           $printed = & "$env:USERPROFILE\.local\bin\tabsmith.exe" --version
           if ($printed -ne "tabsmith $version") { throw "updated to $printed, not tabsmith $version" }
+
+  # The tap (PedroLaRosa/homebrew-tabsmith) gets the release only once every one-liner passed against it: a failed
+  # verify job means the release gets deleted (README "Releasing"), and the tap would then name missing files.
+  # HOMEBREW_TAP_DEPLOY_KEY, a deploy key that can push to the tap and nowhere else, lives in the packages environment.
+  homebrew:
+    needs: [publish, verify, verify-alpine, verify-windows]
+    runs-on: ubuntu-latest
+    environment: packages
+    env:
+      VERSION: ${{ needs.publish.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # The published SHA256SUMS, not this run's build artifacts: the formula has to match what users download.
+      - name: Download SHA256SUMS from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+      - name: Fill in the formula
+        run: |
+          sum() { awk -v a="tabsmith-$1" '$2 == a { print $1 }' "$RUNNER_TEMP/SHA256SUMS"; }
+          for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            if [ -z "$(sum "$platform")" ]; then
+              echo "::error::SHA256SUMS lists no tabsmith-$platform; the tap was not updated"
+              exit 1
+            fi
+          done
+          sed -e "s/@VERSION@/$VERSION/g" \
+            -e "s/@DARWIN_ARM64@/$(sum darwin-arm64)/" \
+            -e "s/@DARWIN_X64@/$(sum darwin-x64)/" \
+            -e "s/@LINUX_ARM64@/$(sum linux-arm64)/" \
+            -e "s/@LINUX_X64@/$(sum linux-x64)/" \
+            packaging/homebrew/tabsmith.rb > "$RUNNER_TEMP/tabsmith.rb"
+          if grep -n '@[A-Z0-9_]*@' "$RUNNER_TEMP/tabsmith.rb"; then
+            echo "::error::the formula template has a placeholder this job does not fill; the tap was not updated"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/tabsmith.rb"
+      # The key goes from the secret to ssh-agent through a pipe and never touches the disk. GitHub's published ed25519
+      # host key (`gh api meta`) is pinned rather than trusting whatever ssh-keyscan returns.
+      - name: Push the formula to the tap
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          eval "$(ssh-agent -s)" > /dev/null
+          trap 'ssh-agent -k > /dev/null' EXIT
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" | ssh-add -
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            > "$RUNNER_TEMP/known_hosts"
+          export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          git clone --depth 1 git@github.com:PedroLaRosa/homebrew-tabsmith.git "$RUNNER_TEMP/tap"
+          cp "$RUNNER_TEMP/tabsmith.rb" "$RUNNER_TEMP/tap/Formula/tabsmith.rb"
+          cd "$RUNNER_TEMP/tap"
+          if git diff --quiet; then
+            echo "The tap already has tabsmith $VERSION"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -qam "feat(formula): update tabsmith to $VERSION"
+          git push origin HEAD:main
+
+  # What a user gets from the tap now: a fully qualified install (which trusts that formula alone), the binary it puts
+  # on PATH, and the formula's own test and strictest audit. Homebrew is on every image but not on Linux's PATH;
+  # setup-homebrew adds it, updates it to the latest stable brew and hands audit a token for its GitHub checks.
+  verify-brew:
+    needs: [publish, homebrew]
+    name: verify-brew (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.publish.outputs.version }}
+    steps:
+      - uses: Homebrew/actions/setup-homebrew@ceec4e8419bb3c97ce96e9dda7738499ed5f869d # 2026.11.14.1
+      - name: Install from the tap
+        run: |
+          brew install pedrolarosa/tabsmith/tabsmith
+          printed=$("$(brew --prefix)/bin/tabsmith" --version)
+          echo "$printed"
+          [ "$printed" = "tabsmith $VERSION" ]
+      - name: Test and audit the formula
+        run: |
+          brew test pedrolarosa/tabsmith/tabsmith
+          brew audit --strict --online pedrolarosa/tabsmith/tabsmith
