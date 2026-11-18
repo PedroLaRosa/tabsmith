@@ -14,7 +14,7 @@ use std::error::Error;
 use std::ffi::OsStr;
 #[cfg(not(windows))]
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -110,7 +110,15 @@ fn stable_exe_path(exe: PathBuf, path: Option<&OsStr>) -> PathBuf {
             .map(|dir| dir.join(name))
             .find(|candidate| candidate.is_file())
     })
+    .filter(|first| is_same_file(first, &exe))
     .unwrap_or(exe)
+}
+
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// A fact of the environment that could not be found out, with its causes rendered once (P3).
@@ -158,6 +166,19 @@ mod tests {
         let stable = stable_exe_path(exe, Some(&path));
 
         assert_eq!(stable, link);
+    }
+
+    /// A dev build run by its path, or a Homebrew copy shadowed by the one-liner's.
+    #[test]
+    fn should_keep_the_executable_when_the_first_tabsmith_on_path_is_another_file() {
+        let temp_dir = TempDir::new("stable-exe-other-on-path");
+        let exe = binary_at(temp_dir.path().join("Cellar/tabsmith/1.0.0/bin/tabsmith"), "tabsmith 1.0.0");
+        let other = binary_at(temp_dir.path().join(".local/bin/tabsmith"), "tabsmith 0.9.0");
+        let path = std::env::join_paths([other.parent().unwrap()]).unwrap();
+
+        let stable = stable_exe_path(exe.clone(), Some(&path));
+
+        assert_eq!(stable, exe);
     }
 
     #[cfg(unix)]
