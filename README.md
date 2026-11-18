@@ -221,8 +221,10 @@ Maintainers only; `main` is protected, so a release goes through a pull request.
    Once they pass, `homebrew` commits the new version and checksums to the tap's `Formula/tabsmith.rb` (from
    `packaging/homebrew/tabsmith.rb`), and `verify-brew` installs it from the tap on macOS and Linux x64/arm64 and runs
    `brew test` and `brew audit --strict --online`.
-4. If `verify` fails, `gh release delete vX.Y.Z` puts `latest` back on the previous release; fix forward with the next
-   patch version (an immutable release's tag cannot be used again).
+4. If a `verify` job fails, `gh release delete vX.Y.Z` puts `latest` back on the previous release; fix forward with the
+   next patch version (an immutable release's tag cannot be used again). The package jobs only run once every `verify`
+   job passed. If `verify-brew` fails, the release is fine but the tap serves a bad formula: fix it in the tap, or
+   `git revert` its `feat(formula): update tabsmith to X.Y.Z` commit there.
 
 One-time setup, before the first release (needs a repo admin):
 

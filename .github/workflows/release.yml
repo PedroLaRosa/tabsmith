@@ -299,10 +299,11 @@ jobs:
           $printed = & "$env:USERPROFILE\.local\bin\tabsmith.exe" --version
           if ($printed -ne "tabsmith $version") { throw "updated to $printed, not tabsmith $version" }
 
-  # The tap (PedroLaRosa/homebrew-tabsmith) gets the release only once the one-liners passed against it. Only this job
-  # can read HOMEBREW_TAP_DEPLOY_KEY, a deploy key that can push to the tap and nowhere else.
+  # The tap (PedroLaRosa/homebrew-tabsmith) gets the release only once every one-liner passed against it: a failed
+  # verify job means the release gets deleted (README "Releasing"), and the tap would then name missing files.
+  # HOMEBREW_TAP_DEPLOY_KEY, a deploy key that can push to the tap and nowhere else, lives in the packages environment.
   homebrew:
-    needs: [publish, verify]
+    needs: [publish, verify, verify-alpine, verify-windows]
     runs-on: ubuntu-latest
     environment: packages
     env:
