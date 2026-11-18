@@ -27,7 +27,7 @@ impl fmt::Display for SelfUpdateError {
             SelfUpdateError::ChannelUnavailable(reason) => write!(f, "could not download the latest release: {reason}"),
             SelfUpdateError::NotNativeInstall { path } => write!(
                 f,
-                "tabsmith runs from {}, not ~/.local/bin; update it the way you installed it (e.g. cargo install --path .)",
+                "tabsmith runs from {}, not ~/.local/bin; update it the way you installed it (brew upgrade tabsmith, choco upgrade tabsmith or cargo install --path .)",
                 path.display()
             ),
             SelfUpdateError::InvalidVersion { version } => {
@@ -70,7 +70,7 @@ mod tests {
             described,
             [
                 "tabsmith runs from /home/ana/.cargo/bin/tabsmith, not ~/.local/bin; update it the way you installed it \
-                 (e.g. cargo install --path .)",
+                 (brew upgrade tabsmith, choco upgrade tabsmith or cargo install --path .)",
                 "could not download the latest release: connection refused",
                 "the latest release has no valid version: \"<!DOCTYPE html>\"",
                 "the release's SHA256SUMS is not signed by the tabsmith release signing key",

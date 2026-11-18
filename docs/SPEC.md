@@ -351,7 +351,8 @@ Windows), exit 0.
   refuses checksums the release signing key did not sign (D52), then downloads `tabsmith-<os>-<arch>[.exe]`, checks
   it against `SHA256SUMS`, and installs it as D50 says, printing `Updated tabsmith from <old> to <new>. Open a new
   terminal to use it.` Run from anywhere else: `error: tabsmith runs from <path>, not ~/.local/bin; update it the
-  way you installed it (e.g. cargo install --path .)`. Every failure exits 1 and leaves the binary as it was.
+  way you installed it (brew upgrade tabsmith, choco upgrade tabsmith or cargo install --path .)`. Every failure exits 1
+  and leaves the binary as it was.
   `app.disableAutoupdates` does not apply. The same steps run in the background at `_ pty` start (D51), at most
   once a day and silently skipping a non-native install.
 - `diagnostic [-f]` (SHOULD): Plain = hand-written TOML (`[tabsmith] version, os`, `[environment] cwd, cli-path,
