@@ -9,7 +9,7 @@ protected, so each PR below is its own branch and pull request.
 tabsmith ships through the one-liners (`scripts/install.{sh,ps1,cmd}`), which put the release binary at
 `~/.local/bin/tabsmith` where it updates itself. The goal is two more channels:
 
-- `brew install pedrolarosa/tabsmith/tabsmith` on macOS and Linux
+- `brew install pedrolarosa/tap/tabsmith` on macOS and Linux
 - `choco install tabsmith` on Windows (x64 and ARM64)
 
 Facts the plan rests on (checked 2026-11-17/18):
@@ -44,9 +44,10 @@ Facts the plan rests on (checked 2026-11-17/18):
 
 ## Done already (2026-11-18)
 
-- **Tap repo** `PedroLaRosa/homebrew-tabsmith` (public), `Formula/tabsmith.rb` for v1.0.0 plus a short README.
+- **Tap repo** `PedroLaRosa/homebrew-tap` (public; first named `homebrew-tabsmith`, renamed so the install command
+  does not repeat tabsmith), `Formula/tabsmith.rb` for v1.0.0 plus a short README.
   The four sha256 values match the attested v1.0.0 `SHA256SUMS`. Checked on macOS arm64:
-  `brew install pedrolarosa/tabsmith/tabsmith` installs and prints `tabsmith 1.0.0`, `brew test` passes,
+  `brew install pedrolarosa/tap/tabsmith` installs and prints `tabsmith 1.0.0`, `brew test` passes,
   `brew audit --strict --online` is clean, `brew style` is clean. No `version` line: audit flags it as redundant
   with the `/v1.0.0/` URL. The test install and tap were removed afterwards.
 - **Deploy key** "tabsmith release workflow (packages environment)" on the tap, read-write. Its private half exists only
@@ -157,11 +158,11 @@ Add `LICENSE-MIT` and `LICENSE-APACHE` at the root (standard texts; copyright ho
 3. **Job `verify-brew`**:
    - `needs: homebrew`; matrix `macos-latest`, `ubuntu-latest`, `ubuntu-24.04-arm`.
    - Set up Homebrew where it isn't preinstalled (pinned `Homebrew/actions/setup-homebrew`).
-   - Run `brew install pedrolarosa/tabsmith/tabsmith` and check that `"$(brew --prefix)/bin/tabsmith" --version`
+   - Run `brew install pedrolarosa/tap/tabsmith` and check that `"$(brew --prefix)/bin/tabsmith" --version`
      prints `tabsmith $VERSION`.
    - Run `brew test` and `brew audit --strict --online`.
 4. **README.**
-   - Install: `brew install pedrolarosa/tabsmith/tabsmith` then `tabsmith setup`.
+   - Install: `brew install pedrolarosa/tap/tabsmith` then `tabsmith setup`.
    - Updating: Homebrew copies update with `brew upgrade tabsmith`.
    - Uninstall: `tabsmith uninstall`, then `brew uninstall tabsmith`.
    - Releasing: the `packages` environment and its secrets.

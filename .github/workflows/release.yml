@@ -299,7 +299,7 @@ jobs:
           $printed = & "$env:USERPROFILE\.local\bin\tabsmith.exe" --version
           if ($printed -ne "tabsmith $version") { throw "updated to $printed, not tabsmith $version" }
 
-  # The tap (PedroLaRosa/homebrew-tabsmith) gets the release only once every one-liner passed against it: a failed
+  # The tap (PedroLaRosa/homebrew-tap) gets the release only once every one-liner passed against it: a failed
   # verify job means the release gets deleted (README "Releasing"), and the tap would then name missing files.
   # HOMEBREW_TAP_DEPLOY_KEY, a deploy key that can push to the tap and nowhere else, lives in the packages environment.
   homebrew:
@@ -349,7 +349,7 @@ jobs:
           echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
             > "$RUNNER_TEMP/known_hosts"
           export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
-          git clone --depth 1 git@github.com:PedroLaRosa/homebrew-tabsmith.git "$RUNNER_TEMP/tap"
+          git clone --depth 1 git@github.com:PedroLaRosa/homebrew-tap.git "$RUNNER_TEMP/tap"
           cp "$RUNNER_TEMP/tabsmith.rb" "$RUNNER_TEMP/tap/Formula/tabsmith.rb"
           cd "$RUNNER_TEMP/tap"
           if git diff --quiet; then
@@ -377,14 +377,14 @@ jobs:
       - uses: Homebrew/actions/setup-homebrew@ceec4e8419bb3c97ce96e9dda7738499ed5f869d # 2026.11.14.1
       - name: Install from the tap
         run: |
-          brew install pedrolarosa/tabsmith/tabsmith
+          brew install pedrolarosa/tap/tabsmith
           printed=$("$(brew --prefix)/bin/tabsmith" --version)
           echo "$printed"
           [ "$printed" = "tabsmith $VERSION" ]
       - name: Test and audit the formula
         run: |
-          brew test pedrolarosa/tabsmith/tabsmith
-          brew audit --strict --online pedrolarosa/tabsmith/tabsmith
+          brew test pedrolarosa/tap/tabsmith
+          brew audit --strict --online pedrolarosa/tap/tabsmith
 
   # The Chocolatey package built from this run's binaries, installed, upgraded and uninstalled on both Windows
   # architectures, dry runs included: the chocolatey job pushes nothing until this passed. Win32_Processor has to pick
