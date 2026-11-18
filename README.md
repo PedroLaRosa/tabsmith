@@ -3,6 +3,8 @@
 IDE-style autocomplete for your terminal: a dropdown menu of subcommands, options and arguments as you type, plus
 inline gray "ghost text" suggestions. Written in Rust, it works on **macOS, Linux and Windows**.
 
+![tabsmith demo: dropdown completions and ghost text for git switch, claude and brew install](assets/demo.gif)
+
 ```
 ~/project % git ch█
               > changelog
