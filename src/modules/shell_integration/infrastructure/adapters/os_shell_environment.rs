@@ -11,6 +11,7 @@ use crate::modules::shell_integration::domain::value_objects::integration_paths:
 use crate::modules::shell_integration::domain::value_objects::launch_facts::LaunchFacts;
 use std::collections::HashMap;
 use std::error::Error;
+use std::ffi::OsStr;
 #[cfg(not(windows))]
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -102,6 +103,10 @@ fn profile_from(output: std::io::Result<String>) -> Result<PathBuf, ShellIntegra
     }
 }
 
+fn stable_exe_path(exe: PathBuf, _path: Option<&OsStr>) -> PathBuf {
+    exe
+}
+
 /// A fact of the environment that could not be found out, with its causes rendered once (P3).
 fn environment_error(error: impl Error + 'static) -> ShellIntegrationError {
     ShellIntegrationError::Environment(display_chain(&error))
@@ -112,7 +117,26 @@ mod tests {
     use super::*;
     use crate::modules::shared::domain::shared_error::SharedError;
     use crate::modules::shared::infrastructure::os::executable_path_error::ExecutablePathError;
+    use crate::modules::shared::infrastructure::testing::temp_dir::TempDir;
     use std::io;
+
+    /// A file standing in for a tabsmith binary at `path`, its directory created.
+    fn binary_at(path: PathBuf, contents: &str) -> PathBuf {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn should_keep_the_executable_when_no_path_directory_holds_a_tabsmith() {
+        let temp_dir = TempDir::new("stable-exe-none-on-path");
+        let exe = binary_at(temp_dir.path().join("Cellar/tabsmith/1.0.0/bin/tabsmith"), "tabsmith");
+        let path = std::env::join_paths([temp_dir.path().join("bin")]).unwrap();
+
+        let stable = stable_exe_path(exe.clone(), Some(&path));
+
+        assert_eq!(stable, exe);
+    }
 
     #[cfg(unix)]
     #[test]
