@@ -230,5 +230,6 @@ One-time setup, before the first release (needs a repo admin):
 
 ## Licence
 
-MIT OR Apache-2.0. The bundled completion specs are © Hercules Labs (Fig), MIT — see `assets/SPECS_LICENSE`;
-update them with `scripts/update-specs.sh [version]`.
+MIT OR Apache-2.0, at your option: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE). The bundled
+completion specs are © Hercules Labs (Fig), MIT — see `assets/SPECS_LICENSE`; update them with
+`scripts/update-specs.sh [version]`.

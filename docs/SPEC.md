@@ -102,6 +102,7 @@ critical path. **SKIP** = deliberately not built (reason given). **(inferred)** 
 | D50 | Native install location | One fixed file, `~/.local/bin/tabsmith` (`%USERPROFILE%\.local\bin\tabsmith.exe`), replaced by renaming a checked copy over it (Windows: the running exe steps aside as `tabsmith.exe.<pid>.<nanos>.old` first); no `versions/` folder. The copy is checked against `SHA256SUMS` and must print `tabsmith <version>` before the rename. The running binary and `~/.local/bin` are compared, and the binary replaced, with symlinks resolved; staged copies an interrupted update left behind are removed once ten minutes old. | The rc scripts embed the running binary's absolute path (§5.5) and Linux resolves symlinks, so a symlink into `versions/` would pin every rc to one version. A rename keeps the old inode for running sessions (macOS SIGKILLs a signed binary overwritten in place), and a truncated download never becomes the file every new terminal execs. |
 | D51 | Background update | Started by `bootstrap` just before the `_ pty` session, on its own `self-update` thread, which builds its own module (modules hold `Rc`). At most once a day (`update-check` marker, recorded before the release channel is asked), only for the native install, never with `app.disableAutoupdates`. Results go to `pty.log`, never the terminal; the new version runs from the next tab. | A module may not call another module's use case, so `terminal_session` cannot start it. cargo installs, `target/` builds and package managers update the way they were installed. |
 | D52 | Signed checksums | Every release carries `SHA256SUMS.sig`, an ed25519 signature over `SHA256SUMS` by the release signing key; its public half (`scripts/release-signing-key.pub`) is compiled in. The updater refuses a release whose signature does not verify, before downloading the binary. The installers do not check it. | `SHA256SUMS` sits in the same release as the binaries: whoever can publish a release can publish matching checksums. The private key lives in the gated `release` environment. A first install trusts the release over HTTPS, as Claude Code's first install trusts its own domain. |
+| D53 | `<BIN>` path | The first `tabsmith` in an absolute PATH directory when it is the running binary itself (the same file once both are resolved), else `current_exe()` (§5.5). Self-update keeps `current_exe()`, the file it replaces. | Linux reports `current_exe()` resolved, so a Homebrew install wrote its versioned Cellar path (`…/Cellar/tabsmith/1.0.0/bin/tabsmith`) into the dotfiles; `brew upgrade` deletes it and the `[ -x '<BIN>' ]` guard then skipped tabsmith in every new shell. Homebrew's `bin/` link outlives upgrades. A relative PATH entry (`.`) would only resolve from the directory setup ran in. Where the spelling changes (Linux, a `~/.local` that is a link), `doctor` repoints the scripts once. |
 
 ---
 
@@ -301,7 +302,7 @@ Flow:
 |---|---|---|---|---|
 | `Let's check your dotfiles...` | `<shell> <~/path> integration check` (one per integration of bash, zsh, fish, pwsh) | Normal if it is the current shell (parent process name; Windows: Toolhelp snapshot + `QueryFullProcessImageNameW`), Soft if that shell is on PATH, else NoCheck (and no `pwsh` spawn) | `is_installed()` error text; info `Run tabsmith integrations install dotfiles <shell> to reinstall shell integrations for <shell>` | `install()`; none for `Permission denied` |
 | `Let's make sure tabsmith is set up correctly...` | `tabsmith data dir exists` | Normal | `~/.tabsmith` missing → `No directory at path <p>` | create it |
-| | `Integration scripts point at this binary` | Normal | the script files (and fish `conf.d` files) of the **current** integrations of every shell on PATH reference (text between their first two `'`) a path ≠ `current_exe()` → `Integration scripts reference <old>`. Orphaned files in `shell/` are ignored (nothing sources them, install never rewrites them). | `install dotfiles` for those shells |
+| | `Integration scripts point at this binary` | Normal | the script files (and fish `conf.d` files) of the **current** integrations of every shell on PATH reference (text between their first two `'`) a path ≠ `<BIN>` (§5.5) → `Integration scripts reference <old>`. Orphaned files in `shell/` are ignored (nothing sources them, install never rewrites them). | `install dotfiles` for those shells |
 | | `tabsmith settings corruption` | Normal | settings.json parse error → `tabsmith settings file is corrupted` | copy to `settings.json.bak-<unix>` then write `{}` |
 | | `Completion specs installed` | Normal | `~/.tabsmith/specs/<ver>/index.json` missing → `Completion specs are not extracted` | extract |
 | | `Windows Console Check` (Windows) | Normal | `GetConsoleMode` fails on stdin/stdout → `Windows Console APIs are not supported in this terminal` + MinTTY/winpty info lines | – |
@@ -338,7 +339,7 @@ errors and printing them to stderr; an integration whose dotfile cannot be writt
 then removes `~/.tabsmith` (missing is fine; a running session no longer recreates it, §3.1). Any error →
 `Uninstalled tabsmith with errors (see above).`, exit 1. Else print `Uninstalled tabsmith.`, with `--purge`
 `Restart open terminals to stop tabsmith in them.`, then
-`Remove the binary with your package manager, or delete <current_exe>.` (a running exe cannot delete itself on
+`Remove the binary with your package manager, or delete <BIN>.` (§5.5) (a running exe cannot delete itself on
 Windows), exit 0.
 
 ### 2.10 Other commands
@@ -350,7 +351,8 @@ Windows), exit 0.
   refuses checksums the release signing key did not sign (D52), then downloads `tabsmith-<os>-<arch>[.exe]`, checks
   it against `SHA256SUMS`, and installs it as D50 says, printing `Updated tabsmith from <old> to <new>. Open a new
   terminal to use it.` Run from anywhere else: `error: tabsmith runs from <path>, not ~/.local/bin; update it the
-  way you installed it (e.g. cargo install --path .)`. Every failure exits 1 and leaves the binary as it was.
+  way you installed it (brew upgrade tabsmith, choco upgrade tabsmith or cargo install --path .)`. Every failure exits 1
+  and leaves the binary as it was.
   `app.disableAutoupdates` does not apply. The same steps run in the background at `_ pty` start (D51), at most
   once a day and silently skipping a non-native install.
 - `diagnostic [-f]` (SHOULD): Plain = hand-written TOML (`[tabsmith] version, os`, `[environment] cwd, cli-path,
@@ -850,7 +852,7 @@ First match wins; prints the reason line.
 ### 5.3 `init` output
 
 Lines joined by `\n`, then the script body (trailing newlines trimmed) with `{{BIN}}` replaced by the shell-quoted
-absolute path of `current_exe()`. `quote(shell, s)` (also used for insertions, D26): single quotes; POSIX `'` →
+`<BIN>` path of §5.5. `quote(shell, s)` (also used for insertions, D26): single quotes; POSIX `'` →
 `'\''`; fish `\` → `\\` and `'` → `\'`; pwsh doubles `'` and the smart single quotes U+2018–U+201B (D29).
 
 | shell, when | header lines | body |
@@ -1408,8 +1410,10 @@ fish conf.d file:  test -x '<BIN>'; and eval ('<BIN>' init fish <when> --rcfile 
                    (stems: 00_tabsmith_pre, 99_tabsmith_post)
 ```
 
-`<BIN>` is the absolute exe path at install time, so the rc works before the user's PATH is set up (rustup/brew
-PATH lines usually come later in the rc). `doctor` detects a moved binary (script bytes differ) and reinstalls.
+`<BIN>` is the running binary's absolute path at install time, as the shell finds it: the first `tabsmith`
+(`tabsmith.exe`) in an absolute PATH directory when that is the same file as `current_exe()` once both are resolved
+(Homebrew's `bin/tabsmith` link), else `current_exe()` (D53). It is absolute so the rc works before the user's PATH
+is set up (rustup/brew PATH lines usually come later in the rc). `doctor` detects a moved binary (script bytes differ) and reinstalls.
 pwsh decodes native output with `[Console]::OutputEncoding` (the OEM code page on Windows): the init output is read
 as UTF-8 and the user's encoding put back before it runs (a `José` in the exe path broke `& '<BIN>' _ pty`); without
 a console both setters throw, which is ignored, and an empty init output runs nothing. fish: `eval (… | string
