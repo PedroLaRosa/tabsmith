@@ -1,9 +1,9 @@
 name: release
 
 # Releases are manual (README "Releasing"): Actions → release → Run workflow on main tests, builds, signs and
-# publishes v<version in Cargo.toml>, tagging the commit it built, then updates the Homebrew tap. Run on another branch,
-# or on a pull request that touches this workflow, an installer or a package, it only dry-runs the test and build jobs:
-# publish and everything after it run on main alone.
+# publishes v<version in Cargo.toml>, tagging the commit it built, then updates the Homebrew tap and pushes the
+# Chocolatey package. Run on another branch, or on a pull request that touches this workflow, an installer or a package,
+# it only dry-runs the test, build and chocolatey-pack jobs: publish and everything after it run on main alone.
 on:
   workflow_dispatch:
   pull_request:
@@ -385,3 +385,120 @@ jobs:
         run: |
           brew test pedrolarosa/tap/tabsmith
           brew audit --strict --online pedrolarosa/tap/tabsmith
+
+  # The Chocolatey package built from this run's binaries, installed, upgraded and uninstalled on both Windows
+  # architectures, dry runs included: the chocolatey job pushes nothing until this passed. Win32_Processor has to pick
+  # the arm64 binary on windows-11-arm, where Chocolatey itself sees a 32-bit host. The upgrade (to a fourth version
+  # part) runs chocolateybeforemodify.ps1; nothing runs tabsmith here, so no renamed copy may stay behind.
+  chocolatey-pack:
+    needs: build
+    name: chocolatey-pack (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tabsmith-win32-x64
+          path: bin
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tabsmith-win32-arm64
+          path: bin
+      - name: Pack this version and a later one
+        shell: pwsh
+        run: |
+          $version = (Select-String -LiteralPath Cargo.toml -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches[0].Groups[1].Value
+          "VERSION=$version" >> $env:GITHUB_ENV
+          ./packaging/chocolatey/pack.ps1 -Version $version -BinDir bin
+          ./packaging/chocolatey/pack.ps1 -Version "$version.1" -BinDir bin
+      - name: Install the package
+        shell: pwsh
+        run: |
+          choco install tabsmith --version $env:VERSION --source . -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco install failed (exit code $LASTEXITCODE)" }
+          $tools = "$env:ChocolateyInstall\lib\tabsmith\tools"
+          $exes = @(Get-ChildItem -LiteralPath $tools -Filter *.exe).Name -join ' '
+          if ($exes -ne 'tabsmith.exe') { throw "tools holds '$exes', not tabsmith.exe alone" }
+          $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
+          if ((Get-FileHash "$tools\tabsmith.exe").Hash -ne (Get-FileHash "bin\tabsmith-win32-$arch.exe").Hash) {
+            throw "installed some binary other than tabsmith-win32-$arch.exe"
+          }
+          $printed = & "$env:ChocolateyInstall\bin\tabsmith.exe" --version
+          if ($printed -ne "tabsmith $env:VERSION") { throw "the tabsmith shim ran $printed, not tabsmith $env:VERSION" }
+      - name: Upgrade the package
+        shell: pwsh
+        run: |
+          choco upgrade tabsmith --source . -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco upgrade failed (exit code $LASTEXITCODE)" }
+          $installed = choco list tabsmith --exact --limit-output
+          if ($installed -ne "tabsmith|$env:VERSION.1") { throw "choco lists '$installed' after the upgrade" }
+          $files = @(Get-ChildItem -LiteralPath "$env:ChocolateyInstall\lib\tabsmith\tools" -Filter 'tabsmith*').Name -join ' '
+          if ($files -ne 'tabsmith.exe') { throw "tools holds '$files' after the upgrade, not tabsmith.exe alone" }
+          $printed = & "$env:ChocolateyInstall\bin\tabsmith.exe" --version
+          if ($printed -ne "tabsmith $env:VERSION") { throw "the tabsmith shim ran $printed after the upgrade" }
+      - name: Uninstall the package
+        shell: pwsh
+        run: |
+          choco uninstall tabsmith -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco uninstall failed (exit code $LASTEXITCODE)" }
+          foreach ($left in "$env:ChocolateyInstall\bin\tabsmith.exe", "$env:ChocolateyInstall\lib\tabsmith") {
+            if (Test-Path -LiteralPath $left) { throw "$left outlived the uninstall" }
+          }
+
+  # Chocolatey's community repository gets the release's Windows binaries once every one-liner passed against it (a
+  # failed verify job means the release gets deleted) and chocolatey-pack passed on both architectures. Every version
+  # then waits for Chocolatey's moderation before `choco install` sees it: one that moderation flags is fixed by pushing
+  # the same version again, and only an approved version is final. CHOCO_API_KEY lives in the packages environment.
+  chocolatey:
+    needs: [publish, verify, verify-alpine, verify-windows, chocolatey-pack]
+    runs-on: windows-latest
+    environment: packages
+    env:
+      VERSION: ${{ needs.publish.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      # The published binaries and SHA256SUMS, not this run's build artifacts: VERIFICATION.txt sends moderators to the
+      # release.
+      - name: Download the Windows binaries and SHA256SUMS from the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "v$env:VERSION" --repo $env:GITHUB_REPOSITORY --dir release `
+            --pattern tabsmith-win32-x64.exe --pattern tabsmith-win32-arm64.exe --pattern SHA256SUMS
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed (exit code $LASTEXITCODE)" }
+      - name: Check the binaries against SHA256SUMS
+        shell: pwsh
+        run: |
+          $sums = Get-Content -LiteralPath release\SHA256SUMS
+          foreach ($asset in 'tabsmith-win32-x64.exe', 'tabsmith-win32-arm64.exe') {
+            $listed = foreach ($line in $sums) {
+              $digest, $name = $line.Trim() -split '\s+', 2
+              if ($name -and $name.TrimStart('*') -eq $asset) { $digest }
+            }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath "release\$asset").Hash
+            if (@($listed).Count -ne 1 -or $listed -ne $actual) { throw "$asset does not match SHA256SUMS; nothing was pushed" }
+          }
+      - name: Pack, then install the package and run it
+        shell: pwsh
+        run: |
+          ./packaging/chocolatey/pack.ps1 -Version $env:VERSION -BinDir release
+          choco install tabsmith --source . -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco install failed (exit code $LASTEXITCODE)" }
+          $printed = & "$env:ChocolateyInstall\bin\tabsmith.exe" --version
+          if ($printed -ne "tabsmith $env:VERSION") { throw "the tabsmith shim ran $printed, not tabsmith $env:VERSION" }
+      - name: Push to the Chocolatey community repository
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: |
+          choco push "tabsmith.$env:VERSION.nupkg" --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+          if ($LASTEXITCODE -ne 0) { throw "choco push failed (exit code $LASTEXITCODE)" }

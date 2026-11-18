@@ -3,6 +3,8 @@
 IDE-style autocomplete for your terminal: a dropdown menu of subcommands, options and arguments as you type, plus
 inline gray "ghost text" suggestions. Written in Rust, it works on **macOS, Linux and Windows**.
 
+![tabsmith demo: dropdown completions and ghost text for git switch, claude and brew install](assets/demo.gif)
+
 ```
 ~/project % git ch█
               > changelog
@@ -61,6 +63,14 @@ brew install pedrolarosa/tap/tabsmith
 tabsmith setup                # adds the shell integration to your dotfiles (asks first)
 ```
 
+With [Chocolatey](https://community.chocolatey.org/packages/tabsmith) on Windows x64 or arm64 (Chocolatey updates this
+copy, it does not update itself), install from an elevated terminal, then run `setup` from your own, not elevated, one:
+
+```powershell
+choco install tabsmith        # elevated
+tabsmith setup                # your own terminal: adds the shell integration to your $PROFILE (asks first)
+```
+
 From source (`~/.cargo/bin/tabsmith`; this install does not update itself):
 
 ```sh
@@ -99,7 +109,8 @@ tabsmith settings app.disableAutoupdates true      # no background updates (tabs
 ```
 
 A copy anywhere but `~/.local/bin` (Homebrew's, cargo's `~/.cargo/bin`, a `target/` build) is never touched: update
-it the way you installed it, `brew upgrade tabsmith` for Homebrew. A binary you put at `~/.local/bin/tabsmith` yourself is the native install, so release builds replace
+it the way you installed it: `brew upgrade tabsmith` for Homebrew, `choco upgrade tabsmith` (elevated) for
+Chocolatey. A binary you put at `~/.local/bin/tabsmith` yourself is the native install, so release builds replace
 it (unless `app.disableAutoupdates` is set).
 
 ### Uninstall
@@ -116,8 +127,12 @@ Then delete every copy you installed (`which -a tabsmith` lists them; a leftover
 ```sh
 rm ~/.local/bin/tabsmith       # one-liner install (Windows: %USERPROFILE%\.local\bin\tabsmith.exe*)
 brew uninstall tabsmith        # Homebrew
+choco uninstall tabsmith       # Chocolatey (elevated)
 cargo uninstall tabsmith       # cargo install --path . / just install
 ```
+
+On Windows, close the terminals that run tabsmith before `choco uninstall`: a running exe cannot be deleted, so
+Chocolatey would leave a renamed copy in `C:\ProgramData\chocolatey\lib\tabsmith` for you to delete afterwards.
 
 Open a new terminal: `tabsmith -V` should now report `command not found`. An integration installed with
 `TABSMITH_HOME` set is only recognised with the same value: `TABSMITH_HOME=<dir> tabsmith uninstall`.
@@ -220,7 +235,9 @@ Maintainers only; `main` is protected, so a release goes through a pull request.
    previous release on macOS, Linux x64/arm64, Alpine and Windows x64/arm64.
    Once they pass, `homebrew` commits the new version and checksums to the tap's `Formula/tabsmith.rb` (from
    `packaging/homebrew/tabsmith.rb`), and `verify-brew` installs it from the tap on macOS and Linux x64/arm64 and runs
-   `brew test` and `brew audit --strict --online`.
+   `brew test` and `brew audit --strict --online`. `chocolatey` packs the release's Windows binaries and pushes them to
+   the Chocolatey community repository, where each version waits for moderation; `chocolatey-pack` has already
+   installed, upgraded and uninstalled the same package on Windows x64 and arm64 (dry runs run it too).
 4. If a `verify` job fails, `gh release delete vX.Y.Z` puts `latest` back on the previous release; fix forward with the
    next patch version (an immutable release's tag cannot be used again). The package jobs only run once every `verify`
    job passed. If `verify-brew` fails, the release is fine but the tap serves a bad formula: fix it in the tap, or
@@ -245,6 +262,14 @@ One-time setup, before the first release (needs a repo admin):
    approved), for the jobs that update the package managers. Add a read-write deploy key to the tap
    (`PedroLaRosa/homebrew-tap`, Settings → Deploy keys) and store its private half there:
    `gh secret set HOMEBREW_TAP_DEPLOY_KEY --env packages < <key file>`.
+5. Create a [Chocolatey community](https://community.chocolatey.org/) account and API key and store the key in the same
+   environment: `gh secret set CHOCO_API_KEY --env packages`. A person reviews every version until the package is
+   trusted, so push the first one by hand from Windows and get it approved before releasing with the job:
+   ```powershell
+   gh release download v1.0.0 -R PedroLaRosa/tabsmith --pattern 'tabsmith-win32-*.exe' --dir bin
+   .\packaging\chocolatey\pack.ps1 -Version 1.0.0 -BinDir bin
+   choco push tabsmith.1.0.0.nupkg --source https://push.chocolatey.org/ --api-key <key>
+   ```
 
 ## Licence
 
