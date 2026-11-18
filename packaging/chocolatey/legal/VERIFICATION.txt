@@ -1,0 +1,34 @@
+VERIFICATION
+
+Verification is intended to assist the Chocolatey moderators and community in verifying that this package's contents
+are trustworthy.
+
+This package is maintained by tabsmith's author.
+
+tools\tabsmith-win32-x64.exe and tools\tabsmith-win32-arm64.exe are the Windows binaries of the tabsmith v@VERSION@
+release on GitHub, unchanged. The install script keeps the one for this machine's architecture as tools\tabsmith.exe
+and deletes the other.
+
+  https://github.com/PedroLaRosa/tabsmith/releases/download/v@VERSION@/tabsmith-win32-x64.exe
+  https://github.com/PedroLaRosa/tabsmith/releases/download/v@VERSION@/tabsmith-win32-arm64.exe
+
+Their SHA256 checksums:
+
+  tabsmith-win32-x64.exe    @WIN32_X64_SHA256@
+  tabsmith-win32-arm64.exe  @WIN32_ARM64_SHA256@
+
+To check them:
+
+1. Download the release's SHA256SUMS:
+   https://github.com/PedroLaRosa/tabsmith/releases/download/v@VERSION@/SHA256SUMS
+2. Run Get-FileHash -Algorithm SHA256 on the two files in this package's tools folder (or on the downloads above).
+   Each hash must equal the one SHA256SUMS lists for that file name, and the one above.
+
+SHA256SUMS is vouched for twice:
+
+- SHA256SUMS.sig, in the same release, is an ed25519 signature over SHA256SUMS by the tabsmith release signing key,
+  whose public half is in the source:
+  https://github.com/PedroLaRosa/tabsmith/blob/v@VERSION@/scripts/release-signing-key.pub
+- The release is immutable and carries GitHub's release attestation:
+  gh release verify v@VERSION@ -R PedroLaRosa/tabsmith
+  gh release verify-asset -R PedroLaRosa/tabsmith v@VERSION@ .\tabsmith-win32-x64.exe

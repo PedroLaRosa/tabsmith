@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- pack.ps1 fills in @VERSION@ and adds the two Windows release binaries and legal\LICENSE.txt. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>tabsmith</id>
+    <version>@VERSION@</version>
+    <title>tabsmith</title>
+    <authors>Pedro La Rosa D.</authors>
+    <owners>PedroLaRosa</owners>
+    <projectUrl>https://github.com/PedroLaRosa/tabsmith</projectUrl>
+    <projectSourceUrl>https://github.com/PedroLaRosa/tabsmith/tree/main</projectSourceUrl>
+    <packageSourceUrl>https://github.com/PedroLaRosa/tabsmith/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://github.com/PedroLaRosa/tabsmith#readme</docsUrl>
+    <bugTrackerUrl>https://github.com/PedroLaRosa/tabsmith/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/PedroLaRosa/tabsmith#licence</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <tags>autocomplete terminal shell cli</tags>
+    <summary>IDE-style autocomplete for your terminal: dropdown menu and inline ghost text</summary>
+    <description><![CDATA[tabsmith adds IDE-style autocomplete to your terminal: a dropdown menu of subcommands, options and arguments as you type, plus inline gray "ghost text" suggestions from your history.
+
+- **Hundreds of CLIs** out of the box (git, docker, npm, kubectl, aws, terraform, cargo, …), including dynamic suggestions such as git branches, npm scripts and files.
+- On Windows it works in **PowerShell 7** (`pwsh`).
+
+After installing, run `tabsmith setup` in your own terminal, not an elevated one: it adds the shell integration to your PowerShell profile (it asks first). Open a new terminal and start typing; `tabsmith doctor` checks everything.
+
+Chocolatey updates this copy with `choco upgrade tabsmith`; it does not update itself. Before `choco uninstall tabsmith`, run `tabsmith uninstall`.
+]]></description>
+    <releaseNotes>https://github.com/PedroLaRosa/tabsmith/releases/tag/v@VERSION@</releaseNotes>
+  </metadata>
+  <files>
+    <file src="legal\**" target="legal" />
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
