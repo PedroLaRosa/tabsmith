@@ -107,6 +107,7 @@ fn stable_exe_path(exe: PathBuf, path: Option<&OsStr>) -> PathBuf {
     let name = exe.file_name().unwrap_or_default();
     path.and_then(|path| {
         std::env::split_paths(path)
+            .filter(|dir| dir.is_absolute())
             .map(|dir| dir.join(name))
             .find(|candidate| candidate.is_file())
     })
@@ -148,6 +149,17 @@ mod tests {
         let path = std::env::join_paths([temp_dir.path().join("bin")]).unwrap();
 
         let stable = stable_exe_path(exe.clone(), Some(&path));
+
+        assert_eq!(stable, exe);
+    }
+
+    /// `.` on PATH would name a file that is only there from the directory setup ran in. Cargo runs the tests from
+    /// the crate root, so `./Cargo.toml` is the same file as the one given.
+    #[test]
+    fn should_skip_a_relative_path_directory() {
+        let exe = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+
+        let stable = stable_exe_path(exe.clone(), Some(OsStr::new(".")));
 
         assert_eq!(stable, exe);
     }
