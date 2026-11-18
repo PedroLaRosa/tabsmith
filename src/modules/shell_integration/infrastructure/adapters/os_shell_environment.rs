@@ -103,8 +103,14 @@ fn profile_from(output: std::io::Result<String>) -> Result<PathBuf, ShellIntegra
     }
 }
 
-fn stable_exe_path(exe: PathBuf, _path: Option<&OsStr>) -> PathBuf {
-    exe
+fn stable_exe_path(exe: PathBuf, path: Option<&OsStr>) -> PathBuf {
+    let name = exe.file_name().unwrap_or_default();
+    path.and_then(|path| {
+        std::env::split_paths(path)
+            .map(|dir| dir.join(name))
+            .find(|candidate| candidate.is_file())
+    })
+    .unwrap_or(exe)
 }
 
 /// A fact of the environment that could not be found out, with its causes rendered once (P3).
@@ -136,6 +142,22 @@ mod tests {
         let stable = stable_exe_path(exe.clone(), Some(&path));
 
         assert_eq!(stable, exe);
+    }
+
+    /// Homebrew's `bin/` link outlives the versioned Cellar path that Linux reports and `brew upgrade` deletes.
+    #[cfg(unix)]
+    #[test]
+    fn should_name_the_executable_by_the_symlink_a_path_directory_holds_to_it() {
+        let temp_dir = TempDir::new("stable-exe-symlink-on-path");
+        let exe = binary_at(temp_dir.path().join("Cellar/tabsmith/1.0.0/bin/tabsmith"), "tabsmith");
+        let link = temp_dir.path().join("bin").join("tabsmith");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&exe, &link).unwrap();
+        let path = std::env::join_paths([temp_dir.path().join("bin")]).unwrap();
+
+        let stable = stable_exe_path(exe, Some(&path));
+
+        assert_eq!(stable, link);
     }
 
     #[cfg(unix)]
