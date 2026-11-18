@@ -4,7 +4,7 @@ use crate::modules::shared::infrastructure::error_chain::display_chain;
 use crate::modules::shared::infrastructure::os::executable_path_error::ExecutablePathError;
 #[cfg(windows)]
 use crate::modules::shared::infrastructure::os::process_info::is_console;
-use crate::modules::shared::infrastructure::os::process_info::{exe_path, parent_exe};
+use crate::modules::shared::infrastructure::os::process_info::parent_exe;
 use crate::modules::shared::infrastructure::os::process_runner::output_with_timeout;
 use crate::modules::shell_integration::application::ports::shell_environment::ShellEnvironment;
 use crate::modules::shell_integration::domain::shell_integration_error::ShellIntegrationError;
@@ -73,7 +73,7 @@ pub(crate) fn integration_paths_from(
             .map(PathBuf::from)
     };
     let data_root = data_directory.root().map_err(environment_error)?;
-    let binary = exe_path().map_err(environment_error)?;
+    let binary = stable_executable().map_err(environment_error)?;
     let zdotdir = var("ZDOTDIR");
     let fish_config_dir = var("XDG_CONFIG_HOME")
         .unwrap_or_else(|| home.join(".config"))
