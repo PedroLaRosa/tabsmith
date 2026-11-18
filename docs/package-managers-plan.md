@@ -122,7 +122,9 @@ Tests (Unix, real temp dir):
 - A `PATH` whose first `tabsmith` is a different file gives `current_exe()`.
 - No `tabsmith` on `PATH` gives `current_exe()`.
 
-Copies in `~/.local/bin` resolve to the same path as before, so `doctor` sees no change for them. Update SPEC §5.5
+Copies in `~/.local/bin` resolve to the same path as before, so `doctor` sees no change for them (except on Linux
+when `~/.local` or `~/.local/bin` is a link: `current_exe()` was the resolved path, so `doctor` repoints the scripts
+once). Update SPEC §5.5
 (the `<BIN>` paragraph) and, if the decision table covers it, add a D-row.
 
 ### 1b. Update message
@@ -138,8 +140,9 @@ Add `LICENSE-MIT` and `LICENSE-APACHE` at the root (standard texts; copyright ho
 ## PR 2: Homebrew automation
 
 1. **Template.** `packaging/homebrew/tabsmith.rb` = the tap's formula with `@VERSION@`, `@DARWIN_ARM64@`,
-   `@DARWIN_X64@`, `@LINUX_ARM64@` and `@LINUX_X64@` placeholders. Keep the Linux `tabsmith doctor` caveat for the
-   first release after PR 1 (1.0.0 users need one `doctor` after that upgrade), then delete it.
+   `@DARWIN_X64@`, `@LINUX_ARM64@` and `@LINUX_X64@` placeholders. Keep the Linux `tabsmith doctor` caveat while
+   upgrades from 1.0.0 are likely (1.0.0 users need one `doctor` after that upgrade, whichever later version they
+   land on), then delete it.
 2. **Job `homebrew`** in `release.yml`:
    - `needs: [publish, verify]`, so only a verified release reaches Homebrew users.
    - `environment: packages`, default read-only token.

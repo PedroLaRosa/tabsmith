@@ -36,8 +36,8 @@ class Tabsmith < Formula
       Homebrew updates this copy (brew upgrade tabsmith); it does not update itself.
       Before brew uninstall tabsmith, run: tabsmith uninstall
     EOS
-    # ponytail: tabsmith 1.0.0 wrote the versioned Cellar path into the dotfiles on Linux, so an upgrade from it needs
-    # one doctor run. Delete this after the first release that follows 1.0.0.
+    # ponytail: tabsmith 1.0.0 wrote the versioned Cellar path into the dotfiles on Linux, so an upgrade from it, to
+    # whichever later version, needs one doctor run. Delete this once upgrades from 1.0.0 are unlikely.
     if OS.linux?
       text += <<~EOS
         On Linux, after upgrading from tabsmith 1.0.0, run tabsmith doctor once to repoint the shell integration.

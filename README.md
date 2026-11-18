@@ -233,8 +233,10 @@ Maintainers only; `main` is protected, so a release goes through a pull request.
    `brew test` and `brew audit --strict --online`. `chocolatey` packs the release's Windows binaries and pushes them to
    the Chocolatey community repository, where each version waits for moderation; `chocolatey-pack` has already
    installed, upgraded and uninstalled the same package on Windows x64 and arm64 (dry runs run it too).
-4. If `verify` fails, `gh release delete vX.Y.Z` puts `latest` back on the previous release; fix forward with the next
-   patch version (an immutable release's tag cannot be used again).
+4. If a `verify` job fails, `gh release delete vX.Y.Z` puts `latest` back on the previous release; fix forward with the
+   next patch version (an immutable release's tag cannot be used again). The package jobs only run once every `verify`
+   job passed. If `verify-brew` fails, the release is fine but the tap serves a bad formula: fix it in the tap, or
+   `git revert` its `feat(formula): update tabsmith to X.Y.Z` commit there.
 
 One-time setup, before the first release (needs a repo admin):
 
