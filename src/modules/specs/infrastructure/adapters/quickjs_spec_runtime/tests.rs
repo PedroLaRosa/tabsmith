@@ -191,7 +191,7 @@ fn loads_bundled_specs() {
     for (v, want) in [
         (json!("8.6.0"), "heroku/8.6.0"),
         (json!("8.1.0"), "heroku/8.0.0"),
-        (Value::Null, "heroku/8.6.0"),
+        (Value::Null, "heroku/11.14.0"),
     ] {
         let r = call_default(&js, &heroku, vec![JsArg::Json(v.clone())], None).unwrap();
         assert_eq!(r["versionedSpecPath"], want, "version {v}");
