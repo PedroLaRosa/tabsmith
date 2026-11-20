@@ -456,6 +456,8 @@ jobs:
   # then waits for Chocolatey's moderation before `choco install` sees it: one that moderation flags is fixed by pushing
   # the same version again, and only an approved version is final. CHOCO_API_KEY lives in the packages environment.
   chocolatey:
+    # ponytail: off until CHOCO_API_KEY is in the packages environment; delete this line to push to Chocolatey again.
+    if: false
     needs: [publish, verify, verify-alpine, verify-windows, chocolatey-pack]
     runs-on: windows-latest
     environment: packages
