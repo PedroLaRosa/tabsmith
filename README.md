@@ -3,15 +3,9 @@
 IDE-style autocomplete for your terminal: a dropdown menu of subcommands, options and arguments as you type, plus
 inline gray "ghost text" suggestions. Written in Rust, it works on **macOS, Linux and Windows**.
 
-![tabsmith demo: dropdown completions and ghost text for git switch, claude and brew install](assets/demo.gif)
+**Amazon killed [Fig](https://github.com/withfig/fig), Tabsmith brought it from the ashes to make it shines again.**
 
-```
-~/project % git ch█
-              > changelog
-              > checkout
-              > cherry-pick <commit...>
-              Run git-changelog
-```
+![tabsmith demo: dropdown completions and ghost text for git switch, claude and brew install](assets/demo.gif)
 
 - **Dropdown menu** drawn inside the terminal, right under the cursor (or above it at the bottom of the screen).
   Arrow keys / `Ctrl-N` / `Ctrl-P` to move, `Enter` to insert, `Tab` to insert the common prefix, `Esc` to hide,
@@ -26,19 +20,19 @@ inline gray "ghost text" suggestions. Written in Rust, it works on **macOS, Linu
 
 ## Install
 
-macOS, Linux, WSL:
+###  macOS, Linux, WSL
 
 ```sh
 curl -fsSL https://github.com/PedroLaRosa/tabsmith/releases/latest/download/install.sh | sh
 ```
 
-Windows PowerShell:
+### Windows PowerShell
 
 ```powershell
 irm https://github.com/PedroLaRosa/tabsmith/releases/latest/download/install.ps1 | iex
 ```
 
-Windows cmd:
+### Windows cmd
 
 ```bat
 curl -fsSL https://github.com/PedroLaRosa/tabsmith/releases/latest/download/install.cmd -o install.cmd && install.cmd && del install.cmd
@@ -53,9 +47,8 @@ or `install.cmd 0.2.0`.
 Platforms: macOS 11+ (Apple Silicon and Intel); any Linux or WSL on x64 or arm64, Alpine included (static musl
 binaries); Windows 10+ on x64 or arm64.
 
-To check a downloaded binary by hand: `gh release verify-asset -R PedroLaRosa/tabsmith vX.Y.Z ./tabsmith-<platform>`.
+### With Homebrew on macOS or Linux (from the [tap](https://github.com/PedroLaRosa/homebrew-tap); Homebrew updates
 
-With Homebrew on macOS or Linux (from the [tap](https://github.com/PedroLaRosa/homebrew-tap); Homebrew updates
 this copy, it does not update itself):
 
 ```sh
@@ -63,27 +56,18 @@ brew install pedrolarosa/tap/tabsmith
 tabsmith setup                # adds the shell integration to your dotfiles (asks first)
 ```
 
-With [Chocolatey](https://community.chocolatey.org/packages/tabsmith) on Windows x64 or arm64 (Chocolatey updates this
-copy, it does not update itself), install from an elevated terminal, then run `setup` from your own, not elevated, one:
-
-```powershell
-choco install tabsmith        # elevated
-tabsmith setup                # your own terminal: adds the shell integration to your $PROFILE (asks first)
-```
-
-From source (`~/.cargo/bin/tabsmith`; this install does not update itself):
+### From source (`~/.cargo/bin/tabsmith`; this install does not update itself)
 
 ```sh
 cargo install --path .
 tabsmith setup                # adds the shell integration to your dotfiles (asks first)
 ```
 
-With [just](https://just.systems) the same is `just install` then `just setup`; `just --list` shows the other recipes
-(`update-specs`, `refresh-specs`, `test`, …).
+## Check if everything is correct
 
 Open a new terminal tab and start typing. `tabsmith doctor` checks everything if suggestions don't show up.
 
-To edit your rc file yourself, answer `n` to `setup`: it prints the exact *pre* line for the very top and *post* line
+To edit your rc file yourself, answer `n` to `setup`: it prints the exact _pre_ line for the very top and _post_ line
 for the very bottom of `~/.zshrc`, `~/.bashrc` (or `$PROFILE` for pwsh) and writes the script files they source;
 `doctor` and `uninstall` recognise those lines. Sourcing the integration directly also works:
 
@@ -139,19 +123,19 @@ Open a new terminal: `tabsmith -V` should now report `command not found`. An int
 
 ## Commands
 
-| Command | |
-|---|---|
-| `tabsmith settings [KEY] [VALUE]` | Get/set a setting (`-d` deletes, wildcards allowed; `list`, `list --all`, `open`) |
-| `tabsmith theme [dark\|light\|system\|NAME]` | Dropdown theme (`--list`, `--folder` for custom JSON themes) |
-| `tabsmith inline enable\|disable\|status` | Inline ghost text on/off |
-| `tabsmith inline set-customization [NAME]` | Ghost text source: `history+specs` (default), `history`, `specs`, or an LLM profile |
-| `tabsmith inline show-customizations` | List the sources |
-| `tabsmith integrations install\|uninstall\|reinstall\|status dotfiles [SHELL]` | Manage the shell integration |
-| `tabsmith init <shell> <pre\|post>` | Print the integration code |
-| `tabsmith doctor [--all] [--strict]` | Diagnose and fix common problems |
-| `tabsmith setup` / `tabsmith uninstall [--purge]` | Install / remove the integration |
-| `tabsmith update` | Update a native install to the latest release |
-| `tabsmith diagnostic`, `tabsmith debug key-tester\|shell\|logs` | Troubleshooting |
+| Command                                                                        |                                                                                     |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `tabsmith settings [KEY] [VALUE]`                                              | Get/set a setting (`-d` deletes, wildcards allowed; `list`, `list --all`, `open`)   |
+| `tabsmith theme [dark\|light\|system\|NAME]`                                   | Dropdown theme (`--list`, `--folder` for custom JSON themes)                        |
+| `tabsmith inline enable\|disable\|status`                                      | Inline ghost text on/off                                                            |
+| `tabsmith inline set-customization [NAME]`                                     | Ghost text source: `history+specs` (default), `history`, `specs`, or an LLM profile |
+| `tabsmith inline show-customizations`                                          | List the sources                                                                    |
+| `tabsmith integrations install\|uninstall\|reinstall\|status dotfiles [SHELL]` | Manage the shell integration                                                        |
+| `tabsmith init <shell> <pre\|post>`                                            | Print the integration code                                                          |
+| `tabsmith doctor [--all] [--strict]`                                           | Diagnose and fix common problems                                                    |
+| `tabsmith setup` / `tabsmith uninstall [--purge]`                              | Install / remove the integration                                                    |
+| `tabsmith update`                                                              | Update a native install to the latest release                                       |
+| `tabsmith diagnostic`, `tabsmith debug key-tester\|shell\|logs`                | Troubleshooting                                                                     |
 
 ## Settings
 
@@ -183,93 +167,6 @@ The LLM is asked only when your history has no match. It receives the OS, shell,
 `inline.historyCount` (49) commands; lines that look like they contain secrets (`password`, `token`, `api_key`, …)
 are filtered out first, and commands your shell keeps out of its own history (a leading space with
 `ignorespace`/`histignorespace`, fish private mode, PSReadLine's sensitive lines) are never recorded by tabsmith.
-
-## How it works
-
-The shell integration's *pre* block replaces the interactive shell with `tabsmith _ pty` (pwsh runs it as a child
-and exits with its code), which runs your shell inside a pseudo-terminal and passes everything through. The *post*
-block marks prompts and commands with `OSC 697` escape sequences. tabsmith reads the command line from its own copy
-of the screen (alacritty_terminal), parses it against the completion spec, and draws the menu and ghost text over the
-screen cells, restoring them exactly afterwards. Design details: [`docs/SPEC.md`](docs/SPEC.md).
-
-## Known limitations
-
-- `cmd.exe`, nushell and macOS's built-in `/bin/bash` 3.2 are not supported.
-- Windows: the build and unit tests run in CI, but the console/ConPTY paths were only reviewed, not exercised on a real
-  Windows console. Specs whose generators shell out to `bash` only work when Git Bash is on `PATH`.
-- Ghost text is not drawn while the shell shows its own suggestion (zsh-autosuggestions, fish, PSReadLine). With
-  PSReadLine's ListView predictions the dropdown stays hidden while the line is not empty.
-- No dropdown on a line without a prompt in front of it: an empty `PS1`, a prompt ending in a newline that a theme
-  prints without tabsmith's markers, zsh `Alt-Enter` and fish continuation lines, or a newline-ended `PS1` while zsh
-  lists completions below it. Inline TUIs (fzf `Ctrl-T`, fish's pager) are left alone on purpose.
-- `Esc` with the dropdown open hides it and is not passed to the shell (vi mode: `tabsmith settings
-  autocomplete.keybindings.esc ignore`).
-- Your startup files run twice: the outer shell reads them up to the pre block, the wrapped shell reads them all
-  (zsh `.zshenv` and `/etc/zprofile`, a login bash's `/etc/profile`, pwsh's AllHosts `profile.ps1`).
-- fish: only `--private` reaches the wrapped fish (`-C`, `--features` and `-d` are dropped).
-- pwsh: the session's environment and aliases are not reported, so generators see the environment tabsmith started
-  with; a custom PSReadLine `AddToHistoryHandler` runs twice per line.
-- bash: under `HISTCONTROL=ignoreboth` an immediate repeat of the previous command is not recorded in tabsmith's
-  history, and `set +o history` is ignored; on bash 4.4/5.0 your `PROMPT_COMMAND`s see tabsmith's `PIPESTATUS`.
-- Emoji and ambiguous-width characters can misplace the overlay when the terminal measures them differently from
-  `unicode-width`; text printed before tabsmith started cannot be restored if the dropdown covers it.
-- The Fig `history` template returns nothing; the description pop-out (`Ctrl-K`) hides the loading spinner.
-- In VS Code's terminal every shell start runs `code --locate-shell-integration-path` (the VS Code CLI's start-up time).
-- Logs in `~/.tabsmith/logs` are not rotated; two `integrations install` runs at the same moment can duplicate the
-  dotfile blocks.
-- Updates trust tabsmith's built-in root certificates, not the system's: behind a TLS-inspecting proxy `tabsmith update`
-  fails (the installers use the system's, so rerunning the one-liner works). Release binaries are not notarized or
-  Authenticode-signed; downloads through `curl` and PowerShell are not quarantined, but one saved from a browser is.
-
-## Releasing
-
-Maintainers only; `main` is protected, so a release goes through a pull request.
-
-1. Open a PR that bumps `version` in `Cargo.toml` and commits the `Cargo.lock` that follows (any `cargo build`
-   updates it; CI and the release build with `--locked`); merge it once CI is green.
-2. When it works on your machine, run the release workflow on `main`: Actions → release → Run workflow, or
-   `gh workflow run release.yml --ref main`. It tags the commit it built as `vX.Y.Z`.
-3. The release workflow tests and builds the six binaries, then waits: approve its `publish` job (the `release`
-   environment). It writes `VERSION` and `SHA256SUMS`, signs `SHA256SUMS`, checks the signature against the key the
-   binaries carry, and publishes the release. The `verify` jobs then run the one-liners and `tabsmith update` from the
-   previous release on macOS, Linux x64/arm64, Alpine and Windows x64/arm64.
-   Once they pass, `homebrew` commits the new version and checksums to the tap's `Formula/tabsmith.rb` (from
-   `packaging/homebrew/tabsmith.rb`), and `verify-brew` installs it from the tap on macOS and Linux x64/arm64 and runs
-   `brew test` and `brew audit --strict --online`. `chocolatey` packs the release's Windows binaries and pushes them to
-   the Chocolatey community repository, where each version waits for moderation; `chocolatey-pack` has already
-   installed, upgraded and uninstalled the same package on Windows x64 and arm64 (dry runs run it too).
-4. If a `verify` job fails, `gh release delete vX.Y.Z` puts `latest` back on the previous release; fix forward with the
-   next patch version (an immutable release's tag cannot be used again). The package jobs only run once every `verify`
-   job passed. If `verify-brew` fails, the release is fine but the tap serves a bad formula: fix it in the tap, or
-   `git revert` its `feat(formula): update tabsmith to X.Y.Z` commit there.
-
-One-time setup, before the first release (needs a repo admin):
-
-1. Generate the release signing key outside the repo with OpenSSL 3 (on macOS `/usr/bin/openssl` is LibreSSL: `brew
-   install openssl@3` and use `$(brew --prefix openssl@3)/bin/openssl`), and commit the public half:
-   ```sh
-   openssl genpkey -algorithm ed25519 -out ~/tabsmith-release-key.pem
-   openssl pkey -in ~/tabsmith-release-key.pem -pubout -outform DER | tail -c 32 | xxd -p -c 32 > scripts/release-signing-key.pub
-   ```
-   Never commit the `.pem`. Until this is done, `scripts/release-signing-key.pub` holds a placeholder whose private
-   half was thrown away: nothing can be signed for it, so `publish` refuses to release.
-2. Create the `release` environment (Settings → Environments) with the maintainer as required reviewer and deployments
-   limited to the `main` branch, then `gh secret set RELEASE_SIGNING_KEY --env release < ~/tabsmith-release-key.pem`.
-   Move the `.pem` into a password manager and delete the file: a lost key means installed copies cannot update (users
-   rerun the installer).
-3. Turn on immutable releases (Settings → General → Releases); it only applies to releases created afterwards.
-4. Create the `packages` environment, deployments limited to `main` and no required reviewer (the release was already
-   approved), for the jobs that update the package managers. Add a read-write deploy key to the tap
-   (`PedroLaRosa/homebrew-tap`, Settings → Deploy keys) and store its private half there:
-   `gh secret set HOMEBREW_TAP_DEPLOY_KEY --env packages < <key file>`.
-5. Create a [Chocolatey community](https://community.chocolatey.org/) account and API key and store the key in the same
-   environment: `gh secret set CHOCO_API_KEY --env packages`. A person reviews every version until the package is
-   trusted, so push the first one by hand from Windows and get it approved before releasing with the job:
-   ```powershell
-   gh release download v1.0.0 -R PedroLaRosa/tabsmith --pattern 'tabsmith-win32-*.exe' --dir bin
-   .\packaging\chocolatey\pack.ps1 -Version 1.0.0 -BinDir bin
-   choco push tabsmith.1.0.0.nupkg --source https://push.chocolatey.org/ --api-key <key>
-   ```
 
 ## Licence
 
