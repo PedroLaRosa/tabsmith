@@ -4,6 +4,10 @@
 
 When committing or pushing changes with git read `docs/git-convention.md`
 
+## Planning protocol
+
+When you question me, ask me one question at a time.
+
 ## Implementing Protocol
 
 **Skill loading is part of the protocol, not optional.** At step 1 of every task, before touching code, the model MUST invoke the `Skill` tool for each of:
