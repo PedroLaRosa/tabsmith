@@ -20,7 +20,9 @@
   <a href="#commands">Commands</a> ·
   <a href="#settings">Settings</a> ·
   <a href="#update">Update</a> ·
-  <a href="#uninstall">Uninstall</a>
+  <a href="#uninstall">Uninstall</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="SECURITY.md">Security</a>
 </p>
 
 <p align="center">
@@ -256,18 +258,17 @@ Open a new terminal: `tabsmith -V` should now report `command not found`.
 > An integration installed with `TABSMITH_HOME` set is only recognised with the same value:
 > `TABSMITH_HOME=<dir> tabsmith uninstall`.
 
-## Development
+## Contributing
 
-The [`justfile`](justfile) wraps the common tasks (`just` lists them all):
+Bug reports, fixes and new features are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the development setup
+(`just build`, `just test`, `just update-specs`), what CI checks, how the code is organised and the commit
+conventions. Maintainers: see [docs/releasing.md](docs/releasing.md) for the release process.
 
-```sh
-just build          # debug build
-just test           # unit and integration tests
-just specs-test     # load every bundled spec module, as CI does
-just update-specs   # re-bundle @tabsmith/autocomplete-specs (scripts/update-specs.sh [version])
-```
+## Security
 
-Maintainers: see [docs/releasing.md](docs/releasing.md) for the release process.
+Please don't report vulnerabilities in public issues. Use
+[private vulnerability reporting](https://github.com/PedroLaRosa/tabsmith/security/advisories/new) instead;
+[SECURITY.md](SECURITY.md) has the details and the supported versions.
 
 ## Licence
 
