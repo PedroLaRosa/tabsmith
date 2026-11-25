@@ -221,12 +221,7 @@ tabsmith settings app.disableAutoupdates true      # no background updates (tabs
 ```
 
 A copy anywhere but `~/.local/bin` (Homebrew's, cargo's `~/.cargo/bin`, a `target/` build) is never touched. Update
-it the way you installed it:
-
-| Installed with | Update with                         |
-| -------------- | ----------------------------------- |
-| Homebrew       | `brew upgrade tabsmith`             |
-| Chocolatey     | `choco upgrade tabsmith` (elevated) |
+it the way you installed it: `brew upgrade tabsmith` for Homebrew.
 
 A binary you put at `~/.local/bin/tabsmith` yourself is the native install, so release builds replace it (unless
 `app.disableAutoupdates` is set).
@@ -245,16 +240,12 @@ Then delete every copy you installed (`which -a tabsmith` lists them; a leftover
 ```sh
 rm ~/.local/bin/tabsmith       # one-liner install (Windows: %USERPROFILE%\.local\bin\tabsmith.exe*)
 brew uninstall tabsmith        # Homebrew
-choco uninstall tabsmith       # Chocolatey (elevated)
 cargo uninstall tabsmith       # cargo install --path . / just install
 ```
 
 Open a new terminal: `tabsmith -V` should now report `command not found`.
 
 > [!TIP]
-> On Windows, close the terminals that run tabsmith before `choco uninstall`: a running exe cannot be deleted, so
-> Chocolatey would leave a renamed copy in `C:\ProgramData\chocolatey\lib\tabsmith` for you to delete afterwards.
->
 > An integration installed with `TABSMITH_HOME` set is only recognised with the same value:
 > `TABSMITH_HOME=<dir> tabsmith uninstall`.
 

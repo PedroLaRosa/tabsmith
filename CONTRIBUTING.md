@@ -106,7 +106,7 @@ alike (see [`AGENTS.md`](AGENTS.md)):
   and `style`. For example:
 
   ```text
-  fix(chocolatey): read the package files as UTF-8 under Windows PowerShell 5.1 too
+  fix(self_update): time out stalled downloads, not slow ones
   build(specs): bundle @tabsmith/autocomplete-specs@1.0.21
   ```
 
