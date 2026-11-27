@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/demo.gif" alt="tabsmith demo: dropdown completions and ghost text for git switch, claude and brew install">
+  <img src="assets/demo.gif" alt="tabsmith demo: dropdown completions and ghost text for git switch and claude flags">
 </p>
 
 > **Amazon killed [Fig](https://github.com/withfig/fig). tabsmith brought it back from the ashes to make it shine again.**
