@@ -377,6 +377,17 @@ fn should_draw_the_brand_tile_in_bold_ink_without_images() {
 }
 
 #[test]
+fn should_draw_black_ink_on_a_light_tile_without_images() {
+    let r = OverlayRenderer::new(Theme::dark(), true);
+    let warning = item("warn", SuggestionKind::Subcommand, "").with_icon(Some("fig://icon?type=alert".into()));
+
+    let (row, _, _) = r.list_row(&warning, None, false, 20);
+
+    let black_on_alert_yellow = r.pen((0, 0, 0), (0xff, 0xc5, 0x28), ";1");
+    assert!(row.contains(&format!("{black_on_alert_yellow} >")), "{row:?}");
+}
+
+#[test]
 fn should_keep_the_tile_colours_on_the_selected_row_without_images() {
     let r = OverlayRenderer::new(Theme::dark(), true);
     let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
