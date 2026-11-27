@@ -626,3 +626,13 @@ fn should_not_insert_an_auto_execute_row_in_full_on_a_shared_prefix() {
         [MenuEffect::Insert { full: true, .. }]
     ));
 }
+
+#[test]
+fn should_name_the_spec_in_use_as_the_command_of_every_row() {
+    let mut m = Menu::new();
+    m.on_completion(comp("git c", 2, subs("c")).with_spec_name("git"), &Settings::default(), Instant::now());
+
+    let commands: Vec<_> = m.items().iter().map(|row| m.command_of(row)).collect();
+
+    assert_eq!(commands, [Some("git"); 4]);
+}

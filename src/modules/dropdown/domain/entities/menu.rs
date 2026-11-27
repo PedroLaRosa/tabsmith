@@ -277,6 +277,11 @@ impl Menu {
         self.last.as_ref()
     }
 
+    /// The command whose brand `row` shows.
+    pub(crate) fn command_of(&self, _row: &Suggestion) -> Option<&str> {
+        self.last.as_ref().map(|c| c.spec_name())
+    }
+
     pub(crate) fn items(&self) -> &[Suggestion] {
         &self.items
     }

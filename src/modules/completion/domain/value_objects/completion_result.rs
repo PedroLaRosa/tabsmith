@@ -212,6 +212,12 @@ impl CompletionResult {
     }
 
     #[cfg(test)]
+    pub(crate) fn with_spec_name(mut self, spec_name: &str) -> Self {
+        self.spec_name = spec_name.to_string();
+        self
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_arg_key(mut self, arg_key: u64) -> Self {
         self.arg_key = arg_key;
         self
