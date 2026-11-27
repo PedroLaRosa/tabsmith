@@ -1,7 +1,9 @@
 use crate::colour::Rgb;
-use resvg::tiny_skia::Transform;
-use resvg::usvg::Rect;
+use resvg::tiny_skia::{Pixmap, Transform};
+use resvg::usvg::{self, Rect};
 
+/// Width and height of every row icon, as the Amazon Q PNGs.
+const SIZE: u32 = 32;
 /// The glyph's longer side, in pixels of the 32×32 icon.
 const GLYPH_SIDE: f32 = 22.0;
 /// Where the middle of the glyph box lands.
@@ -13,6 +15,14 @@ fn placement(glyph: Rect) -> Transform {
     let x = GLYPH_CENTRE.0 - scale * (glyph.x() + glyph.width() / 2.0);
     let y = GLYPH_CENTRE.1 - scale * (glyph.y() + glyph.height() / 2.0);
     Transform::from_row(scale, 0.0, 0.0, scale, x, y)
+}
+
+/// How much of each of the 32×32 pixels the placed glyph covers, 0-255, antialiased by resvg.
+fn glyph_coverage(svg: &str) -> Result<Vec<u8>, String> {
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).map_err(|e| e.to_string())?;
+    let mut pixmap = Pixmap::new(SIZE, SIZE).expect("non-zero size");
+    resvg::render(&tree, placement(tree.root().abs_bounding_box()), &mut pixmap.as_mut());
+    Ok(pixmap.pixels().iter().map(|pixel| pixel.alpha()).collect())
 }
 
 /// The template's RGBA pixels with the brand colour multiplied in, exactly as tabsmith's `icon_assets::tinted` does it
@@ -115,5 +125,15 @@ mod tests {
         let expected = [(x - half, y - half / 2.0), (x + half, y + half / 2.0)];
         let rounded = |p: &Point| ((p.x * 1000.0).round() / 1000.0, (p.y * 1000.0).round() / 1000.0);
         assert_eq!(corners.each_ref().map(rounded), expected);
+    }
+
+    #[test]
+    fn should_cover_the_middle_of_the_square_and_leave_its_corner_bare() {
+        let square_glyph = r#"<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M2 2h20v20H2z"/></svg>"#;
+
+        let coverage = glyph_coverage(square_glyph).unwrap();
+
+        let at = |x: usize, y: usize| coverage[y * 32 + x];
+        assert_eq!((coverage.len(), at(16, 16), at(1, 1)), (32 * 32, 255, 0));
     }
 }
