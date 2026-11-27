@@ -21,7 +21,7 @@ Facts the plan rests on (checked 2026-11-27):
   and Windows, so the mechanism cannot be copied, only the result.
 - **tabsmith already draws figxit's style.** The 42 PNGs in `assets/icons` are white glyphs on tinted rounded squares
   (`git.png` red, `command.png` purple, `option.png` green), 32×32, from Amazon Q's autocomplete (Apache-2.0).
-- **The gap is coverage, mapping and reach.** 22 of the 42 are brands. `icon_resolver::slot` picks an icon from the
+- **The gap is coverage, mapping and reach.** 21 of the 42 are brands (`node.png` is a graph-node glyph like `commit.png`, not the Node.js logo). `icon_resolver::slot` picks an icon from the
   spec's `icon` or the row kind, and receives only the row, so `git ch` rows show the generic `command` icon. Images go
   out through the kitty graphics protocol, which `kitty_graphics::detect` turns on for kitty and Ghostty only (and
   for tmux with `allow-passthrough` and one of those two as client). Every other terminal gets ASCII (` >`, ` -`).
@@ -218,8 +218,8 @@ Each PR updates SPEC §7.4.2 and `docs/ubiquitous-language.md` for what it chang
 
 ### PR 1 · The brand rule, with the icons already in the repo
 
-Scenarios B1.1 to B1.10. No new assets: the table starts with the 22 brands that have a PNG today (for example
-`git`, `docker` and `docker-compose`, `npm` and `npx`, `yarn`, `node`, `kubectl`, `gcloud`, `aws`, `az`, `gh`, `glab`,
+Scenarios B1.1 to B1.10. No new assets: the table starts with the 21 brands that have a PNG today (for example
+`git`, `docker` and `docker-compose`, `npm` and `npx`, `yarn`, `kubectl`, `gcloud`, `aws`, `az`, `gh`, `glab`,
 `gradle`, `firebase`, `heroku`, `netlify`, `vercel`, `adb`).
 
 - The rule belongs next to `icon_resolver.rs` (dropdown domain). The table is a constant, like `ICON_NAMES`.
