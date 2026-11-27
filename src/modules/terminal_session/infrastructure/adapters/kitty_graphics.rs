@@ -60,11 +60,16 @@ fn direct_graphics(var: impl Fn(&str) -> Option<String>) -> GraphicsSupport {
 /// iTerm2 takes the kitty protocol from 3.6. Its version is compared as numbers on major and minor, since patches reach
 /// two digits (`3.6.11`).
 fn iterm2_has_kitty_graphics(version: &str) -> bool {
-    let mut parts = version.split('.').map(|part| part.parse::<u32>().ok());
+    let mut parts = version.split('.').map(leading_number);
     match (parts.next().flatten(), parts.next().flatten()) {
         (Some(major), Some(minor)) => (major, minor) >= (3, 6),
         _ => false,
     }
+}
+
+/// The number `part` starts with: `6beta1` → 6, `beta` → none.
+fn leading_number(part: &str) -> Option<u32> {
+    part.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
 }
 
 /// `allow-passthrough client_termname client_termtype` → Tmux when passthrough is on and the client is kitty or
@@ -296,6 +301,15 @@ mod tests {
         let support = versions.map(iterm2_graphics);
 
         assert_eq!(support, [GraphicsSupport::Off; 5]);
+    }
+
+    #[test]
+    fn should_read_an_iterm2_minor_by_its_leading_digits() {
+        let version = Some("3.6beta1");
+
+        let support = iterm2_graphics(version);
+
+        assert_eq!(support, GraphicsSupport::Direct);
     }
 
     fn iterm2_graphics(version: Option<&str>) -> GraphicsSupport {
