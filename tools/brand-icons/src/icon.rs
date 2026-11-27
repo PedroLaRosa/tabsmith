@@ -5,12 +5,13 @@ use resvg::usvg::{self, Rect};
 /// Width and height of every row icon, as the Amazon Q PNGs.
 const SIZE: u32 = 32;
 /// The side of a square glyph, in pixels of the 32×32 icon. Other shapes get the same area, so a wide mark is not drawn
-/// smaller than a round one.
-const GLYPH_SIDE: f32 = 22.0;
+/// smaller than a round one. 21 is the median of √(width × height) over the 17 Q brand icons whose glyph is white.
+const GLYPH_SIDE: f32 = 21.0;
 /// No glyph side is longer: a long mark stays inside the rounded square (Q's docker is 28 wide, aws 26).
 const GLYPH_MAX_SIDE: f32 = 26.0;
-/// Where the middle of the glyph box lands.
-const GLYPH_CENTRE: (f32, f32) = (16.0, 16.0);
+/// Where the middle of the glyph box lands: the median middle of the Q brand glyphs, half a pixel above the square's
+/// centre because the template's bottom two rows are its shadow.
+const GLYPH_CENTRE: (f32, f32) = (16.0, 15.5);
 
 /// A brand icon as PNG bytes (B3.5): the template (32×32 RGBA8) tinted with the brand colour, the glyph centred on it in
 /// the colour's ink.
