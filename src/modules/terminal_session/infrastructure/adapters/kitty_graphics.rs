@@ -26,10 +26,7 @@ pub(crate) enum KittyPixels {
 pub(crate) fn detect() -> GraphicsSupport {
     let var = |k: &str| std::env::var(k).ok();
     if var("TMUX").is_none() {
-        let on = var("KITTY_WINDOW_ID").is_some()
-            || var("TERM_PROGRAM").as_deref() == Some("ghostty")
-            || var("TERM").as_deref() == Some("xterm-kitty");
-        return if on { GraphicsSupport::Direct } else { GraphicsSupport::Off };
+        return direct_graphics(var);
     }
     let mut cmd = std::process::Command::new("tmux");
     cmd.args(["display", "-p"]);
@@ -42,6 +39,14 @@ pub(crate) fn detect() -> GraphicsSupport {
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
     tmux_graphics(&out)
+}
+
+/// Outside tmux, from the terminal's variables (`var` looks one up): Direct for kitty and Ghostty.
+fn direct_graphics(var: impl Fn(&str) -> Option<String>) -> GraphicsSupport {
+    let on = var("KITTY_WINDOW_ID").is_some()
+        || var("TERM_PROGRAM").as_deref() == Some("ghostty")
+        || var("TERM").as_deref() == Some("xterm-kitty");
+    if on { GraphicsSupport::Direct } else { GraphicsSupport::Off }
 }
 
 /// `allow-passthrough client_termname client_termtype` → Tmux when passthrough is on and the client is kitty or
@@ -189,5 +194,46 @@ mod tests {
         );
         assert_eq!(tmux_graphics(" xterm-256color iTerm2 3.5\n"), GraphicsSupport::Off);
         assert_eq!(tmux_graphics(""), GraphicsSupport::Off);
+    }
+
+    fn env_with<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
+    }
+
+    #[test]
+    fn should_send_images_directly_to_kitty_by_its_window_id() {
+        let var = env_with(&[("KITTY_WINDOW_ID", "1"), ("TERM", "xterm-256color")]);
+
+        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_images_directly_to_kitty_by_its_term() {
+        let var = env_with(&[("TERM", "xterm-kitty")]);
+
+        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_images_directly_to_ghostty() {
+        let var = env_with(&[("TERM_PROGRAM", "ghostty"), ("TERM", "xterm-ghostty")]);
+
+        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_no_images_to_a_terminal_it_does_not_know() {
+        let var = env_with(&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM", "xterm-256color")]);
+
+        assert_eq!(direct_graphics(var), GraphicsSupport::Off);
+    }
+
+    #[test]
+    fn should_send_images_through_tmux_to_a_kitty_or_ghostty_client_named_only_by_its_term() {
+        let outs = ["on xterm-kitty \n", "on xterm-ghostty \n"];
+
+        let support = outs.map(tmux_graphics);
+
+        assert_eq!(support, [GraphicsSupport::Tmux; 2]);
     }
 }
