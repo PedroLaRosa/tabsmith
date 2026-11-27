@@ -16,6 +16,10 @@ const GLYPH_CENTRE: (f32, f32) = (16.0, 15.5);
 /// A brand icon as PNG bytes (B3.5): the template (32×32 RGBA8) tinted with the brand colour, the glyph centred on it in
 /// the colour's ink.
 pub fn drawn(svg: &str, colour: Rgb, template: &[u8]) -> Result<Vec<u8>, String> {
+    let expected = (SIZE * SIZE * 4) as usize;
+    if template.len() != expected {
+        return Err(format!("the template is {} bytes, not 32×32 RGBA8 ({expected})", template.len()));
+    }
     let square = tinted(template, colour);
     let icon = painted(&square, &glyph_coverage(svg)?, colour.ink());
     Ok(encoded(&icon, SIZE))
@@ -180,6 +184,16 @@ mod tests {
         let pixels = decoded(&png);
         let at = |x: usize, y: usize| &pixels[(y * 32 + x) * 4..][..4];
         assert_eq!((at(16, 16), at(1, 1)), (&[0, 0, 0, 255][..], &[245, 145, 31, 255][..]));
+    }
+
+    #[test]
+    fn should_refuse_a_template_that_is_not_32_by_32_rgba() {
+        let square_glyph = r#"<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M2 2h20v20H2z"/></svg>"#;
+        let short_template = [255; 16 * 16 * 4];
+
+        let png = drawn(square_glyph, Rgb(0xF6, 0x92, 0x20), &short_template);
+
+        assert_eq!(png, Err("the template is 1024 bytes, not 32×32 RGBA8 (4096)".to_string()));
     }
 
     fn decoded(png: &[u8]) -> Vec<u8> {
