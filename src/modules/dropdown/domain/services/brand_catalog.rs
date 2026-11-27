@@ -21,6 +21,8 @@ const BRANDS: &[(&str, &str)] = &[
     ("npm", "npm"),
     ("npx", "npm"),
     ("okteto", "okteto"),
+    ("pnpm", "pnpm"),
+    ("python3", "python"),
     ("vercel", "vercel"),
     ("xcodebuild", "apple"),
     ("xcrun", "apple"),
@@ -93,6 +95,15 @@ mod tests {
         let brand = brand_icon("node");
 
         assert_eq!(brand, None);
+    }
+
+    #[test]
+    fn should_give_python3_and_pnpm_their_brands() {
+        let commands = ["python3", "pnpm"];
+
+        let brands = commands.map(brand_icon);
+
+        assert_eq!(brands, [Some("python"), Some("pnpm")]);
     }
 
     #[test]
