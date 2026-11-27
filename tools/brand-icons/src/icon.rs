@@ -13,6 +13,20 @@ fn tinted(template: &[u8], colour: Rgb) -> Vec<u8> {
         .collect()
 }
 
+/// The glyph laid onto the square in straight alpha ("source-atop"): each pixel moves towards the ink by the glyph's
+/// coverage (0-255) and keeps the square's alpha, so the glyph never leaves the square's silhouette.
+fn painted(square: &[u8], coverage: &[u8], ink: Rgb) -> Vec<u8> {
+    let Rgb(r, g, b) = ink;
+    let mix = |under: u8, over: u8, c: u8| {
+        ((u32::from(over) * u32::from(c) + u32::from(under) * (255 - u32::from(c)) + 127) / 255) as u8
+    };
+    square
+        .chunks_exact(4)
+        .zip(coverage)
+        .flat_map(|(p, &c)| [mix(p[0], r, c), mix(p[1], g, c), mix(p[2], b, c), p[3]])
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -25,5 +39,15 @@ mod tests {
         let tinted = tinted(&template_pixel, Rgb(0xF0, 0x50, 0x32));
 
         assert_eq!(tinted, [239, 40, 0, 200]);
+    }
+
+    #[test]
+    fn should_paint_the_glyph_onto_the_square_by_its_coverage() {
+        let square = [200, 100, 50, 255, 200, 100, 50, 255, 200, 100, 50, 128];
+        let coverage = [0, 255, 128];
+
+        let icon = painted(&square, &coverage, Rgb(0, 0, 0));
+
+        assert_eq!(icon, [200, 100, 50, 255, 0, 0, 0, 255, 100, 50, 25, 128]);
     }
 }
