@@ -1,0 +1,40 @@
+name: update-specs
+
+# Daily, and on demand: when npm has a newer @tabsmith/autocomplete-specs than assets/SPECS_VERSION, bundle it with
+# scripts/update-specs.sh and open a pull request. Needs "Allow GitHub Actions to create and approve pull requests"
+# (Settings → Actions → General).
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  # A pull request opened with GITHUB_TOKEN does not trigger ci.yml, so this run dispatches it on the new branch.
+  actions: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Bundle the latest specs and open a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=$(npm view @tabsmith/autocomplete-specs version)
+          branch="build/specs-$ver"
+          title="build(specs): bundle @tabsmith/autocomplete-specs@$ver"
+          if [ "$ver" = "$(cat assets/SPECS_VERSION)" ]; then echo "already bundling $ver"; exit 0; fi
+          # One pull request per version: a later run leaves an open (or closed) one alone.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then echo "$branch already exists"; exit 0; fi
+          scripts/update-specs.sh "$ver"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git commit -am "$title"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "$title" \
+            --body "Bundles [\`@tabsmith/autocomplete-specs@$ver\`](https://www.npmjs.com/package/@tabsmith/autocomplete-specs/v/$ver) into \`assets/specs.tar.zst\`. Opened by the update-specs workflow."
+          gh workflow run ci.yml --ref "$branch"
