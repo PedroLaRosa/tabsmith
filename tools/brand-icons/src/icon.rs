@@ -1,4 +1,19 @@
 use crate::colour::Rgb;
+use resvg::tiny_skia::Transform;
+use resvg::usvg::Rect;
+
+/// The glyph's longer side, in pixels of the 32×32 icon.
+const GLYPH_SIDE: f32 = 22.0;
+/// Where the middle of the glyph box lands.
+const GLYPH_CENTRE: (f32, f32) = (16.0, 16.0);
+
+/// The transform that scales the glyph's box to `GLYPH_SIDE` on its longer side and centres it on `GLYPH_CENTRE`.
+fn placement(glyph: Rect) -> Transform {
+    let scale = GLYPH_SIDE / glyph.width().max(glyph.height());
+    let x = GLYPH_CENTRE.0 - scale * (glyph.x() + glyph.width() / 2.0);
+    let y = GLYPH_CENTRE.1 - scale * (glyph.y() + glyph.height() / 2.0);
+    Transform::from_row(scale, 0.0, 0.0, scale, x, y)
+}
 
 /// The template's RGBA pixels with the brand colour multiplied in, exactly as tabsmith's `icon_assets::tinted` does it
 /// at runtime, so a drawn icon and a tinted badge of the same colour have the same square.
@@ -45,7 +60,7 @@ fn encoded(rgba: &[u8], width: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::colour::Rgb;
+    use resvg::tiny_skia::Point;
 
     #[test]
     fn should_tint_the_template_as_tabsmith_tints_it_at_runtime() {
@@ -86,5 +101,19 @@ mod tests {
         let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
         let frame = reader.next_frame(&mut decoded).unwrap();
         assert_eq!((frame.width, frame.height, &decoded[..]), (2, 2, &pixels[..]));
+    }
+
+    #[test]
+    fn should_scale_the_glyph_box_to_the_glyph_side_and_centre_it_on_the_square() {
+        let wide_glyph = Rect::from_xywh(2.0, 6.0, 20.0, 10.0).unwrap();
+
+        let mut corners = [Point::from_xy(2.0, 6.0), Point::from_xy(22.0, 16.0)];
+        placement(wide_glyph).map_points(&mut corners);
+
+        let half = GLYPH_SIDE / 2.0;
+        let (x, y) = GLYPH_CENTRE;
+        let expected = [(x - half, y - half / 2.0), (x + half, y + half / 2.0)];
+        let rounded = |p: &Point| ((p.x * 1000.0).round() / 1000.0, (p.y * 1000.0).round() / 1000.0);
+        assert_eq!(corners.each_ref().map(rounded), expected);
     }
 }
