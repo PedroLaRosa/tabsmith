@@ -4,7 +4,8 @@ use resvg::usvg::{self, Rect};
 
 /// Width and height of every row icon, as the Amazon Q PNGs.
 const SIZE: u32 = 32;
-/// The glyph's longer side, in pixels of the 32×32 icon.
+/// The side of a square glyph, in pixels of the 32×32 icon. Other shapes get the same area, so a wide mark is not drawn
+/// smaller than a round one.
 const GLYPH_SIDE: f32 = 22.0;
 /// Where the middle of the glyph box lands.
 const GLYPH_CENTRE: (f32, f32) = (16.0, 16.0);
@@ -17,9 +18,9 @@ pub fn drawn(svg: &str, colour: Rgb, template: &[u8]) -> Result<Vec<u8>, String>
     Ok(encoded(&icon, SIZE))
 }
 
-/// The transform that scales the glyph's box to `GLYPH_SIDE` on its longer side and centres it on `GLYPH_CENTRE`.
+/// The transform that scales the glyph's box to the area of a `GLYPH_SIDE` square and centres it on `GLYPH_CENTRE`.
 fn placement(glyph: Rect) -> Transform {
-    let scale = GLYPH_SIDE / glyph.width().max(glyph.height());
+    let scale = GLYPH_SIDE / (glyph.width() * glyph.height()).sqrt();
     let x = GLYPH_CENTRE.0 - scale * (glyph.x() + glyph.width() / 2.0);
     let y = GLYPH_CENTRE.1 - scale * (glyph.y() + glyph.height() / 2.0);
     Transform::from_row(scale, 0.0, 0.0, scale, x, y)
@@ -118,18 +119,27 @@ mod tests {
         assert_eq!(decoded(&png), pixels);
     }
 
+    /// The placed box of a glyph box, as (centre x, centre y, width, height) rounded to 1/100 px.
+    fn placed(glyph: Rect) -> (f32, f32, f32, f32) {
+        let mut corners = [Point::from_xy(glyph.left(), glyph.top()), Point::from_xy(glyph.right(), glyph.bottom())];
+        placement(glyph).map_points(&mut corners);
+        let [a, b] = corners;
+        let r = |v: f32| (v * 100.0).round() / 100.0;
+        (r((a.x + b.x) / 2.0), r((a.y + b.y) / 2.0), r(b.x - a.x), r(b.y - a.y))
+    }
+
     #[test]
-    fn should_scale_the_glyph_box_to_the_glyph_side_and_centre_it_on_the_square() {
-        let wide_glyph = Rect::from_xywh(2.0, 6.0, 20.0, 10.0).unwrap();
+    fn should_give_every_glyph_the_area_of_a_square_glyph_centred_on_the_square() {
+        let glyphs = [Rect::from_xywh(0.0, 0.0, 24.0, 24.0).unwrap(), Rect::from_xywh(0.0, 4.0, 24.0, 16.0).unwrap()];
 
-        let mut corners = [Point::from_xy(2.0, 6.0), Point::from_xy(22.0, 16.0)];
-        placement(wide_glyph).map_points(&mut corners);
+        let areas = glyphs.map(|glyph| {
+            let (x, y, width, height) = placed(glyph);
+            (x, y, (width * height).round())
+        });
 
-        let half = GLYPH_SIDE / 2.0;
         let (x, y) = GLYPH_CENTRE;
-        let expected = [(x - half, y - half / 2.0), (x + half, y + half / 2.0)];
-        let rounded = |p: &Point| ((p.x * 1000.0).round() / 1000.0, (p.y * 1000.0).round() / 1000.0);
-        assert_eq!(corners.each_ref().map(rounded), expected);
+        let square = (GLYPH_SIDE * GLYPH_SIDE).round();
+        assert_eq!(areas, [(x, y, square), (x, y, square)]);
     }
 
     #[test]
