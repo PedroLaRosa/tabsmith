@@ -18,6 +18,7 @@ const BRANDS: &[(&str, &str)] = &[
     ("kubectx", "kubernetes"),
     ("kubens", "kubernetes"),
     ("netlify", "netlify"),
+    ("node", "nodedotjs"),
     ("npm", "npm"),
     ("npx", "npm"),
     ("okteto", "okteto"),
@@ -91,10 +92,10 @@ mod tests {
     }
 
     #[test]
-    fn should_give_node_no_brand_because_the_icon_named_node_is_a_graph_node() {
+    fn should_give_node_the_nodejs_logo_not_the_graph_node_icon_named_node() {
         let brand = brand_icon("node");
 
-        assert_eq!(brand, None);
+        assert_eq!(brand, Some("nodedotjs"));
     }
 
     #[test]
