@@ -2353,6 +2353,12 @@ List row for item `s` (selected row uses selected colours):
   tinted by `scale_u8` (`a·b/256` per channel, alpha kept) with the badge in white. Otherwise the row type's
   image: subcommand `command`, option `option`, arg `box`, auto-execute `carrot`, file `file`, folder `folder`,
   shortcut `💡` and mixin `➡` on tinted templates, history `📚`.
+  PNGs live in `assets/icons` (see its README). Each image is transmitted once (`a=t`), placed every frame over the
+  slot (`a=p`, `z=-1`, under the text) and removed by the clear (`a=d,d=a`).
+  Inside tmux each image goes through the passthrough (`ESC P tmux; … ESC \`, ESC doubled) with a 2×1 virtual
+  placement (`a=T,U=1`), and the slot is two Unicode placeholders (`U+10EEEE` + row/column diacritics, the id in the
+  foreground: 256-colour index, or 24-bit plus a top-byte diacritic). tmux keeps, redraws and clears them as text, so
+  no placement or delete goes out. A badge cannot sit on a placeholder, so it is drawn as text alone.
 - Brand: subcommand and argument rows without a drawable spec icon show the brand of their command instead of
   `command` or `box`, when the brand table has one (`dropdown/domain/services/brand_catalog.rs`, curated by hand:
   `kubectl`, `kubectx` and `kubens` → `kubernetes`; `less`, `man`, `make` and `nano` have none). The command is
@@ -2360,12 +2366,6 @@ List row for item `s` (selected row uses selected colours):
   `sudo git ch`, `kubectl` for `k get ` with `alias k=kubectl`, `aws` for `aws s3 ls` (whose `s3` loads `aws/s3`). In
   a first-token list (§6.9) each row is its own command, so `npm` shows the npm icon. Every other row kind keeps
   its type's icon, so options stay apart from subcommands.
-  PNGs live in `assets/icons` (see its README). Each image is transmitted once (`a=t`), placed every frame over the
-  slot (`a=p`, `z=-1`, under the text) and removed by the clear (`a=d,d=a`).
-  Inside tmux each image goes through the passthrough (`ESC P tmux; … ESC \`, ESC doubled) with a 2×1 virtual
-  placement (`a=T,U=1`), and the slot is two Unicode placeholders (`U+10EEEE` + row/column diacritics, the id in the
-  foreground: 256-colour index, or 24-bit plus a top-byte diacritic). tmux keeps, redraws and clears them as text, so
-  no placement or delete goes out. A badge cannot sit on a placeholder, so it is drawn as text alone.
 - Without images, ASCII right-aligned in the slot: subcommand ` >`, option ` -`, arg/special ` *`, file ` f`, folder
   ` d`, history ` h`, shortcut ` @`, auto-execute ` ↪`.
 - Narrow emoji (`⚙️`) and remote image URLs count as no spec icon (the row gets its brand or its type's icon):

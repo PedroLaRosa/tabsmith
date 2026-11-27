@@ -223,7 +223,8 @@ Scenarios B1.1 to B1.10. No new assets: the table starts with the 21 brands that
 `gradle`, `firebase`, `heroku`, `netlify`, `vercel`, `adb`).
 
 - The rule belongs next to `icon_resolver.rs` (dropdown domain). The table is a constant, like `ICON_NAMES`.
-- The command name has to reach the resolver. It exists as `CompletionResult.tokens[command_index]`. Trace how items
+- The command name has to reach the resolver. It exists as `CompletionResult.tokens[command_index]` (built instead
+  from the innermost spec's name, see Q10). Trace how items
   travel from `CompletionResult` to `Menu` and pick the smallest route that respects the layering: either the engine
   stamps each row, or the menu carries the command name and `slot()` takes it as input.
 - First-token lists (B1.9) need to be told apart: the typed word is not a command there, each row is.
