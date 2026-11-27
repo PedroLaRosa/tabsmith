@@ -18,7 +18,6 @@ const BRANDS: &[(&str, &str)] = &[
     ("kubectx", "kubernetes"),
     ("kubens", "kubernetes"),
     ("netlify", "netlify"),
-    ("node", "node"),
     ("npm", "npm"),
     ("npx", "npm"),
     ("okteto", "okteto"),
@@ -65,7 +64,6 @@ mod tests {
             ("npm", "npm"),
             ("npx", "npm"),
             ("yarn", "yarn"),
-            ("node", "node"),
             ("gcloud", "gcloud"),
             ("aws", "aws"),
             ("az", "azure"),
@@ -88,6 +86,13 @@ mod tests {
             .collect();
 
         assert_eq!(missing, Vec::<&(&str, &str)>::new());
+    }
+
+    #[test]
+    fn should_give_node_no_brand_because_the_icon_named_node_is_a_graph_node() {
+        let brand = brand_icon("node");
+
+        assert_eq!(brand, None);
     }
 
     #[test]
