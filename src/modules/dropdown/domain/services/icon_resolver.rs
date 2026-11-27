@@ -2,6 +2,7 @@
 //! in its README). The pixels and the kitty protocol live in `terminal_session`.
 
 use crate::modules::completion::domain::value_objects::suggestion::Suggestion;
+use crate::modules::dropdown::domain::services::brand_catalog::brand_icon;
 use crate::modules::dropdown::domain::services::text_fitting::width;
 use crate::modules::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::modules::dropdown::domain::value_objects::icon_id::{placeholders, IconId, ICON_NAMES};
@@ -9,7 +10,7 @@ use crate::modules::dropdown::domain::value_objects::icon_slot::IconSlot;
 use crate::modules::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
 /// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
-pub(crate) fn slot(it: &Suggestion, _command: Option<&str>, g: GraphicsSupport) -> IconSlot {
+pub(crate) fn slot(it: &Suggestion, command: Option<&str>, g: GraphicsSupport) -> IconSlot {
     let spec = it.icon();
     if let Some(emoji) = spec.and_then(wide_emoji) {
         return text(&emoji);
@@ -19,7 +20,7 @@ pub(crate) fn slot(it: &Suggestion, _command: Option<&str>, g: GraphicsSupport) 
     }
     let s = spec
         .and_then(spec_image)
-        .unwrap_or_else(|| type_image(it.kind()));
+        .unwrap_or_else(|| type_image(it.kind(), command.and_then(brand_icon)));
     if g != GraphicsSupport::Tmux {
         return s;
     }
@@ -50,9 +51,9 @@ fn spec_image(s: &str) -> Option<IconSlot> {
 }
 
 /// Default icon per row type. History rows keep their 📚 from the history source.
-fn type_image(kind: SuggestionKind) -> IconSlot {
+fn type_image(kind: SuggestionKind, brand: Option<&str>) -> IconSlot {
     match kind {
-        SuggestionKind::Subcommand => png_slot("command"),
+        SuggestionKind::Subcommand => png_slot(brand.unwrap_or("command")),
         SuggestionKind::Option => png_slot("option"),
         SuggestionKind::Arg => png_slot("box"),
         SuggestionKind::Special => badge_slot(Some((0x62, 0x8d, 0xad)), "➡️"),
@@ -142,6 +143,19 @@ mod tests {
     use super::*;
     use crate::modules::completion::domain::test_fixtures::item;
     use crate::modules::dropdown::domain::value_objects::icon_id::color;
+
+    fn png(name: &str) -> Option<IconId> {
+        ICON_NAMES.iter().position(|n| *n == name).map(IconId::Png)
+    }
+
+    #[test]
+    fn should_show_the_command_brand_on_a_subcommand_row() {
+        let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+        let icon = slot(&checkout, Some("git"), GraphicsSupport::Direct).image();
+
+        assert_eq!(icon, png("git"));
+    }
 
     #[test]
     fn resolves_like_q() {
