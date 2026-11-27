@@ -11,13 +11,18 @@ pub struct Entry {
 
 pub fn parse(text: &str) -> Result<Vec<Entry>, String> {
     text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| {
-            let (slug, hex) = line.split_once(' ').unwrap();
-            Ok(Entry { slug: slug.to_string(), colour: Rgb::from_hex(hex)? })
-        })
+        .enumerate()
+        .map(|(index, line)| (index + 1, line.trim()))
+        .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'))
+        .map(|(number, line)| entry(line).map_err(|e| format!("line {number}: {e}")))
         .collect()
+}
+
+fn entry(line: &str) -> Result<Entry, String> {
+    match line.split_whitespace().collect::<Vec<_>>()[..] {
+        [slug, hex] => Ok(Entry { slug: slug.to_string(), colour: Rgb::from_hex(hex)? }),
+        _ => Err(format!("expected \"<slug> <HEX>\", got {line:?}")),
+    }
 }
 
 #[cfg(test)]
@@ -38,5 +43,17 @@ mod tests {
                 Entry { slug: "turborepo".into(), colour: Rgb(0xFF, 0x1E, 0x56) },
             ])
         );
+    }
+
+    #[test]
+    fn should_name_the_line_that_is_not_a_slug_and_a_colour() {
+        let lines = ["# header\npnpm\n", "# header\npnpm F69220 extra\n", "# header\npnpm orange\n"];
+
+        let errors: Vec<bool> = lines
+            .iter()
+            .map(|text| parse(text).is_err_and(|e| e.starts_with("line 2: ")))
+            .collect();
+
+        assert_eq!(errors, [true, true, true]);
     }
 }
