@@ -1,4 +1,4 @@
-//! simple-icons' `data/simple-icons.json`: the colour and licence of every brand, by slug.
+//! simple-icons' `data/simple-icons.json`: the colour, licence and brand guidelines of every brand, by slug.
 
 use crate::colour::Rgb;
 use crate::manifest::Entry;
@@ -24,6 +24,12 @@ impl Catalogue {
         if Rgb::from_hex(hex) != Ok(entry.colour) {
             return Err(format!("{} is {} in the manifest but {hex} in simple-icons", entry.slug, entry.colour));
         }
+        if let (Some(guidelines), false) = (brand["guidelines"].as_str(), entry.guidelines_ok) {
+            return Err(format!(
+                "{} has brand guidelines ({guidelines}): read them, and mark the line guidelines-ok if they allow a row icon",
+                entry.slug
+            ));
+        }
         let licence = brand["license"]["type"].as_str();
         if !is_allowed(licence) {
             let licence = licence.unwrap_or_default();
@@ -48,6 +54,8 @@ mod tests {
 
     const DATA: &str = r#"[
         {"title": "pnpm", "slug": "pnpm", "hex": "F69220", "source": "https://pnpm.io"},
+        {"title": "Python", "slug": "python", "hex": "3776AB", "source": "https://python.org",
+         "guidelines": "https://www.python.org/community/logos/"},
         {"title": ".NET", "slug": "dotnet", "hex": "512BD4", "source": "https://dot.net", "license": {"type": "CC0-1.0"}},
         {"title": "Rust", "slug": "rust", "hex": "000000", "source": "https://rust-lang.org",
          "license": {"type": "CC-BY-SA-4.0"}}
@@ -73,6 +81,30 @@ mod tests {
         let checked = catalogue.check(&entry("pnpm", Rgb(0xF6, 0x92, 0x21)));
 
         assert_eq!(checked, Err("pnpm is F69221 in the manifest but F69220 in simple-icons".to_string()));
+    }
+
+    #[test]
+    fn should_refuse_an_icon_whose_brand_guidelines_were_not_reviewed() {
+        let catalogue = Catalogue::from_json(DATA).unwrap();
+
+        let checked = catalogue.check(&entry("python", Rgb(0x37, 0x76, 0xAB)));
+
+        assert_eq!(
+            checked,
+            Err("python has brand guidelines (https://www.python.org/community/logos/): read them, and mark the line \
+                 guidelines-ok if they allow a row icon"
+                .to_string())
+        );
+    }
+
+    #[test]
+    fn should_accept_an_icon_whose_brand_guidelines_were_reviewed() {
+        let catalogue = Catalogue::from_json(DATA).unwrap();
+        let reviewed = Entry { guidelines_ok: true, ..entry("python", Rgb(0x37, 0x76, 0xAB)) };
+
+        let checked = catalogue.check(&reviewed);
+
+        assert_eq!(checked, Ok(()));
     }
 
     #[test]
