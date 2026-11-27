@@ -365,6 +365,17 @@ fn row_contents() {
     assert_eq!(width(&strip(&row)), 20);
 }
 
+#[test]
+fn should_draw_the_brand_tile_in_bold_ink_without_images() {
+    let r = OverlayRenderer::new(Theme::dark(), true);
+    let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+    let (row, _, _) = r.list_row(&checkout, Some("git"), false, 20);
+
+    let white_on_git_red = r.pen((0xff, 0xff, 0xff), (0xff, 0x40, 0x1e), ";1");
+    assert!(row.contains(&format!("{white_on_git_red} >")), "{row:?}");
+}
+
 /// The kitty image id of the PNG named `name`.
 fn png_id(name: &str) -> u32 {
     let index = icon_id::ICON_NAMES.iter().position(|n| *n == name).unwrap();
@@ -469,17 +480,18 @@ fn overlay_hashes(r: &mut OverlayRenderer, a: &Model, m: &Menu, frames: &[FrameI
 fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
     // (scenario, hash of every frame, hash of every clear), generated once at the phase8-start tag. A refactor
     // may change how a scenario is built, never a value. No scenario depends on time (nothing is loading).
+    // The frames without images were re-recorded when coloured tiles replaced the ASCII icons.
     const EXPECTED: &[(&str, u64, u64)] = &[
-        ("below", 0xef119818acef5714, 0x3fd0e0c7d118ca9c),
-        ("light_256", 0xbe62837ba0bae9f2, 0x3fd0e0c7d118ca9c),
-        ("scrolled", 0x5b2dbcd97d614206, 0xb5974c8ab0e1a615),
-        ("above_ghost_popout", 0xf2039310de2aeed9, 0x79cfb3d71e636be6),
+        ("below", 0x1cf9c7521024cbfe, 0x3fd0e0c7d118ca9c),
+        ("light_256", 0x23d0c022c96478d5, 0x3fd0e0c7d118ca9c),
+        ("scrolled", 0xcd594e4d6b28381c, 0xb5974c8ab0e1a615),
+        ("above_ghost_popout", 0xd922812eefb996cb, 0x79cfb3d71e636be6),
         ("arg_hint_wide_ghost", 0x19087c0c1de42343, 0xc4bf1afcc5ae6c08),
-        ("custom_base16", 0x3c68886e2010eab3, 0x3fd0e0c7d118ca9c),
+        ("custom_base16", 0xbabfd0c27aea36a2, 0x3fd0e0c7d118ca9c),
         ("icons_direct", 0x63e8d0517291ef1c, 0x49c6d5dfc1ea8156),
         ("icons_tmux", 0x66355913b17a2222, 0x22e0c44f71632e9e),
-        ("long_description_bar", 0x09e5bda8de7ac765, 0xe0ae15a704c54ab1),
-        ("long_description_popout", 0xe79fca34ee4c38df, 0x55f9d31a52e19d65),
+        ("long_description_bar", 0xb17c49568c5fd73c, 0xe0ae15a704c54ab1),
+        ("long_description_popout", 0x9dd3ff5cd11ef9c4, 0x55f9d31a52e19d65),
     ];
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let below = screen("\x1b[3;9H\x1b[32m");
