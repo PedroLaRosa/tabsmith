@@ -2366,8 +2366,15 @@ List row for item `s` (selected row uses selected colours):
   `sudo git ch`, `kubectl` for `k get ` with `alias k=kubectl`, `aws` for `aws s3 ls` (whose `s3` loads `aws/s3`). In
   a first-token list (§6.9) each row is its own command, so `npm` shows the npm icon. Every other row kind keeps
   its type's icon, so options stay apart from subcommands.
-- Without images, ASCII right-aligned in the slot: subcommand ` >`, option ` -`, arg/special ` *`, file ` f`, folder
-  ` d`, history ` h`, shortcut ` @`, auto-execute ` ↪`.
+- Without images (Terminal.app, Alacritty, Windows Terminal, VS Code, tmux without a kitty or Ghostty client), the
+  slot is a tile: the row type's character right-aligned and bold (subcommand ` >`, option ` -`, arg/special ` *`,
+  file ` f`, folder ` d`, history ` h`, shortcut ` @`, auto-execute ` ↪`) on the colour of the icon the row would
+  have shown with images, brand included (`git ch` subcommands: ` >` on git's red). Each icon's colour is the fill
+  of its PNG's square (`dropdown/domain/services/icon_palette.rs`); `file`, `folder` and history have no square:
+  slate `64748B`, blue `3B82F6`, grey `8E8E93`. A `fig://template?color=` tile takes that colour and drops the
+  badge. The character is black when the tile's brightness `(299·r + 587·g + 114·b) / 1000` is above 160, else
+  white. The tile keeps its colours on the selected row, and its colours go through `pen` like the theme's (256
+  colours without `COLORTERM=truecolor`). A wide emoji stays text, with no tile.
 - Narrow emoji (`⚙️`) and remote image URLs count as no spec icon (the row gets its brand or its type's icon):
   their width differs between terminals, which would tear the frame.
 - Title = `display_name` or names joined `", "`. Highlight: prefix mode → for each name whose lowercase starts with

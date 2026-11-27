@@ -188,7 +188,8 @@ Not in the table: the `*Parts` structs (`ThemeParts`, `MenuLayoutParts`, `FigPal
 | `ColorParser` / `TextFitting` | Domain service | `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()` and the xterm-256 downgrade / terminal-width `clean`, `fit`, `wrap`. | `parse_color`, `xterm256` / `clean`, `cw`, `width`, `fit`, `wrap` |
 | `MenuLayout` / `MenuSide` | VO | Geometry: above or below, rows, x0, width. | `render::{Layout, Side}` |
 | `MenuLayoutCalculator` / `MenuDescriber` | Domain service | Above or below, rows, x0 and width of the menu / the bold label and description the description bar and pop-out show. | `render::layout` / `render::describe` |
-| `IconSlot` / `IconId` / `GraphicsSupport` | VO | Icon cell (two columns for every row kind; a spec badge is stored as given); which icon; kitty / tmux / off. | `icons::{Slot, Image, Graphics}` |
+| `IconSlot` / `IconId` / `GraphicsSupport` | VO | Icon cell (two columns for every row kind; a spec badge is stored as given; without images, a tile colour); which icon; kitty / tmux / off. | `icons::{Slot, Image, Graphics}` |
+| `IconPalette` | Domain service | The colour of each icon (the fill of its PNG's square), the tile colour of an `IconId`, the grey of history tiles, and the ink written on a tile (`ink_on`: black on light, white on dark). | – |
 | `IconResolver` | Domain service | The icon cell and icon id for a suggestion of a command under a graphics mode (emoji, `fig://` icons, the command's brand on subcommand and argument rows, type defaults). | `icons::{slot, spec_image, type_image, ascii_slot, wide_emoji}` |
 | `BrandCatalog` | Domain service | The curated table of which icon stands for a command (`brand_icon`): several commands can share one brand, and a name that only looks like a brand has none. | – |
 | `DropdownError` | Domain error | Settings (printed as itself), data directory, invalid theme file, theme not found. | the `bail!`s of `cli::theme` |
@@ -329,7 +330,7 @@ so nothing is replaced.
 | screen | the real terminal · the model (the headless alacritty `Term`) · `TerminalScreen` (the port over the model, the filter and the renderer) |
 | suggestion | `SpecSuggestion` (declared) · `SuggestionCandidate` (pipeline) · `Suggestion` (shown) |
 | completion | the module/feature · `CompletionResult` (one reply) |
-| icon | spec icon (a suggestion's `icon`: emoji or `fig://`) · brand (the icon of a row's command, `BrandCatalog`) · kind icon (the row type's default) |
+| icon | spec icon (a suggestion's `icon`: emoji or `fig://`) · brand (the icon of a row's command, `BrandCatalog`) · kind icon (the row type's default) · tile (the slot without images: the kind character on the icon's colour) |
 | command | the command line under the cursor (`CommandLine`) · a row's command (`Menu::command_of`: the root of the innermost spec, or the row itself in a first-token list) |
 | host / pump | gone. `QuickJsSpecRuntime` replaces the js Host, which becomes its task registry; `SpecRepository` + `SpecRuntime` replace the parser `Host` trait. `EngineInbox` (`bootstrap/engine_inbox.rs`) implements `RuntimeEventSource`; the `EngineServer` reads `EngineMessage`s from it, which `ChannelCompletionEngine` sends for the pty. The pumps become `pty_reader`, `ProgressGeneratorsUseCase` + `GeneratorRunner`, and runtime internals. |
 | cache | `GeneratorCache`, `GhostTextCache`, `ParsePrefixCache` (in `CompletionSession`), first-token cache (in `CompletionSession`), spec cache and module cache (inside adapters), detected CLI version memo and in-flight version probes (inside `QuickJsSpecRepository`) |

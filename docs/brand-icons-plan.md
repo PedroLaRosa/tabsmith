@@ -303,7 +303,7 @@ Not decided in the interview. Defaults are suggestions; ask the user before buil
 |---|---|---|---|
 | P2 | Brand colours close to the menu background: bun, rust and apple are black in simple-icons. | Draw them as they are. The chosen preview showed a black `bun` tile on a dark menu. | Looking at PR 3's icons on a dark and a light theme. |
 | P3 | A setting to turn row images off. None exists today. | Not added. | A terminal version that passes the manual check and still misdraws for someone. |
-| P4 | Tile colours for file, folder and history, which have no square PNG. | file `64748B`, folder `3B82F6`, history `8E8E93`. | Looking at PR 2 in Alacritty or Terminal.app. |
+| P4 | Tile colours for file, folder and history, which have no square PNG. | file `64748B`, folder `3B82F6`, history `8E8E93` (built so in PR 2). | Looking at PR 2 in Alacritty or Terminal.app. |
 | P5 | What rasterises the SVGs in PR 3's script. | The implementer's choice, within "no runtime dependency, no build-time step". | Nothing: an implementation detail. |
 | P6 | Whether `autocomplete.firstTokenCompletion` should default to on, so that command-name rows (B1.9) are seen. | Stays off. | A separate decision about that feature. |
 
