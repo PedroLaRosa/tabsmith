@@ -419,6 +419,27 @@ mod tests {
     }
 
     #[test]
+    fn should_give_no_brand_to_commands_named_like_another_product() {
+        let namesakes = ["less", "man", "make", "nano", "hermes", "task"];
+
+        let branded: Vec<_> = namesakes.into_iter().filter(|command| brand_icon(command).is_some()).collect();
+
+        assert_eq!(branded, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn should_give_no_brand_to_commands_whose_logo_licence_does_not_allow_it() {
+        let restricted = [
+            "cargo", "rustc", "rustup", "nvim", "fish", "kitty", "rubocop", "webpack", "quasar", "php", "zig", "r",
+            "pandoc", "sidekiq", "ruby", "pod",
+        ];
+
+        let branded: Vec<_> = restricted.into_iter().filter(|command| brand_icon(command).is_some()).collect();
+
+        assert_eq!(branded, Vec::<&str>::new());
+    }
+
+    #[test]
     fn should_name_only_icons_that_exist() {
         let unknown: Vec<_> = BRANDS
             .iter()
