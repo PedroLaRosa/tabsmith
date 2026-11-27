@@ -39,6 +39,7 @@ pub(crate) fn brand_icon(command: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::dropdown::domain::value_objects::icon_id::ICON_NAMES;
 
     #[test]
     fn should_name_the_git_icon_as_the_brand_of_git() {
@@ -87,5 +88,15 @@ mod tests {
             .collect();
 
         assert_eq!(missing, Vec::<&(&str, &str)>::new());
+    }
+
+    #[test]
+    fn should_name_only_icons_that_exist() {
+        let unknown: Vec<_> = BRANDS
+            .iter()
+            .filter(|(_, icon)| !ICON_NAMES.contains(icon))
+            .collect();
+
+        assert_eq!(unknown, Vec::<&(&str, &str)>::new());
     }
 }
