@@ -346,7 +346,7 @@ fn row_contents() {
     let r = OverlayRenderer::new(Theme::dark(), true);
     let mut it = item("checkout-a-very-long-name", SuggestionKind::Subcommand, "ch");
     it = it.with_args_hint("<branch>".into());
-    let (row, _, _) = r.list_row(&it, false, 20);
+    let (row, _, _) = r.list_row(&it, None, false, 20);
     let text: String = strip(&row);
     assert_eq!(
         text, "  > checkout-a-ver… ",
@@ -356,13 +356,32 @@ fn row_contents() {
         row.contains(&format!("{}ch", r.pen((180, 180, 180), (95, 89, 56), ""))),
         "highlighted query"
     );
-    let (row, _, _) = r.list_row(&item("co", SuggestionKind::Option, "c"), true, 20);
+    let (row, _, _) = r.list_row(&item("co", SuggestionKind::Option, "c"), None, true, 20);
     assert_eq!(strip(&row), "  - co              ");
     assert_eq!(width(&strip(&row)), 20);
     let m = menu(subs(), &s);
     let (row, _) = r.desc_row(&m, 20, Some('⠋'));
     assert_eq!(strip(&row), " about checkout   ⠋ ");
     assert_eq!(width(&strip(&row)), 20);
+}
+
+/// The kitty image id of the PNG named `name`.
+fn png_id(name: &str) -> u32 {
+    let index = icon_id::ICON_NAMES.iter().position(|n| *n == name).unwrap();
+    IconId::Png(index).value()
+}
+
+#[test]
+fn should_place_the_command_brand_on_its_subcommand_rows() {
+    let s = settings(r#"{"autocomplete.width": 20}"#);
+    let mut m = Menu::new();
+    m.on_completion(comp("c", 1, subs()).with_spec_name("git"), &s, Instant::now());
+    let a = model(40, 12, &[b"$ git c"]);
+    let mut r = OverlayRenderer::new(Theme::dark(), true).with_images(GraphicsSupport::Direct);
+
+    let frame = String::from_utf8_lossy(&r.frame(&a, &m, &input(&s, None))).into_owned();
+
+    assert_eq!(frame.matches(&format!("\x1b_Ga=p,i={},", png_id("git"))).count(), 4, "{frame:?}");
 }
 
 #[test]
