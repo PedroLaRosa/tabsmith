@@ -9,6 +9,14 @@ const GLYPH_SIDE: f32 = 22.0;
 /// Where the middle of the glyph box lands.
 const GLYPH_CENTRE: (f32, f32) = (16.0, 16.0);
 
+/// A brand icon as PNG bytes (B3.5): the template (32×32 RGBA8) tinted with the brand colour, the glyph centred on it in
+/// the colour's ink.
+pub fn drawn(svg: &str, colour: Rgb, template: &[u8]) -> Result<Vec<u8>, String> {
+    let square = tinted(template, colour);
+    let icon = painted(&square, &glyph_coverage(svg)?, colour.ink());
+    Ok(encoded(&icon, SIZE))
+}
+
 /// The transform that scales the glyph's box to `GLYPH_SIDE` on its longer side and centres it on `GLYPH_CENTRE`.
 fn placement(glyph: Rect) -> Transform {
     let scale = GLYPH_SIDE / glyph.width().max(glyph.height());
@@ -135,5 +143,24 @@ mod tests {
 
         let at = |x: usize, y: usize| coverage[y * 32 + x];
         assert_eq!((coverage.len(), at(16, 16), at(1, 1)), (32 * 32, 255, 0));
+    }
+
+    #[test]
+    fn should_draw_the_glyph_in_its_ink_on_the_square_tinted_with_the_brand_colour() {
+        let square_glyph = r#"<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M2 2h20v20H2z"/></svg>"#;
+        let white_template = [255; 32 * 32 * 4];
+
+        let png = drawn(square_glyph, Rgb(0xF6, 0x92, 0x20), &white_template).unwrap();
+
+        let pixels = decoded(&png);
+        let at = |x: usize, y: usize| &pixels[(y * 32 + x) * 4..][..4];
+        assert_eq!((at(16, 16), at(1, 1)), (&[0, 0, 0, 255][..], &[245, 145, 31, 255][..]));
+    }
+
+    fn decoded(png: &[u8]) -> Vec<u8> {
+        let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut pixels).unwrap();
+        pixels
     }
 }
