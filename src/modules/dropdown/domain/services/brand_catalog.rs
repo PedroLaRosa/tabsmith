@@ -2,10 +2,30 @@
 
 /// Command → icon name. Curated by hand: a command and a logo sharing a name is no proof they are the same product.
 const BRANDS: &[(&str, &str)] = &[
+    ("adb", "android"),
+    ("aws", "aws"),
+    ("az", "azure"),
+    ("docker", "docker"),
+    ("docker-compose", "docker"),
+    ("firebase", "firebase"),
+    ("gcloud", "gcloud"),
+    ("gh", "github"),
     ("git", "git"),
+    ("glab", "gitlab"),
+    ("gradle", "gradle"),
+    ("heroku", "heroku"),
     ("kubectl", "kubernetes"),
     ("kubectx", "kubernetes"),
     ("kubens", "kubernetes"),
+    ("netlify", "netlify"),
+    ("node", "node"),
+    ("npm", "npm"),
+    ("npx", "npm"),
+    ("okteto", "okteto"),
+    ("vercel", "vercel"),
+    ("xcodebuild", "apple"),
+    ("xcrun", "apple"),
+    ("yarn", "yarn"),
 ];
 
 /// The icon of `command`'s brand, if the table has one.
@@ -34,5 +54,38 @@ mod tests {
         let brands = commands.map(brand_icon);
 
         assert_eq!(brands, [Some("kubernetes"); 3]);
+    }
+
+    #[test]
+    fn should_map_the_commands_of_the_brands_that_already_have_an_icon() {
+        let expected = [
+            ("docker", "docker"),
+            ("docker-compose", "docker"),
+            ("npm", "npm"),
+            ("npx", "npm"),
+            ("yarn", "yarn"),
+            ("node", "node"),
+            ("gcloud", "gcloud"),
+            ("aws", "aws"),
+            ("az", "azure"),
+            ("gh", "github"),
+            ("glab", "gitlab"),
+            ("gradle", "gradle"),
+            ("firebase", "firebase"),
+            ("heroku", "heroku"),
+            ("netlify", "netlify"),
+            ("vercel", "vercel"),
+            ("adb", "android"),
+            ("okteto", "okteto"),
+            ("xcrun", "apple"),
+            ("xcodebuild", "apple"),
+        ];
+
+        let missing: Vec<_> = expected
+            .iter()
+            .filter(|(command, icon)| brand_icon(command) != Some(icon))
+            .collect();
+
+        assert_eq!(missing, Vec::<&(&str, &str)>::new());
     }
 }
