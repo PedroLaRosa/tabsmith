@@ -12,7 +12,6 @@ const BRANDS: &[(&str, &str)] = &[
     ("aws", "aws"),
     ("az", "azure"),
     ("babel", "babel"),
-    ("bash", "gnubash"),
     ("bat", "bat"),
     ("bazel", "bazel"),
     ("bit", "bit"),
@@ -27,15 +26,12 @@ const BRANDS: &[(&str, &str)] = &[
     ("clojure", "clojure"),
     ("cmake", "cmake"),
     ("coda", "coda"),
-    ("composer", "composer"),
     ("createdb", "postgresql"),
     ("curl", "curl"),
     ("dapr", "dapr"),
     ("dart", "dart"),
-    ("deno", "deno"),
     ("docker", "docker"),
     ("docker-compose", "docker"),
-    ("dotenv", "dotenv"),
     ("dotnet", "dotnet"),
     ("electron", "electron"),
     ("eleventy", "eleventy"),
@@ -43,7 +39,6 @@ const BRANDS: &[(&str, &str)] = &[
     ("elm", "elm"),
     ("esbuild", "esbuild"),
     ("eslint", "eslint"),
-    ("exercism", "exercism"),
     ("expo", "expo"),
     ("fastlane", "fastlane"),
     ("fastly", "fastly"),
@@ -73,8 +68,6 @@ const BRANDS: &[(&str, &str)] = &[
     ("iex", "elixir"),
     ("infracost", "infracost"),
     ("ionic", "ionic"),
-    ("java", "openjdk"),
-    ("javac", "openjdk"),
     ("jest", "jest"),
     ("julia", "julia"),
     ("jupyter", "jupyter"),
@@ -89,7 +82,6 @@ const BRANDS: &[(&str, &str)] = &[
     ("locust", "locust"),
     ("meteor", "meteor"),
     ("mix", "elixir"),
-    ("mvn", "apachemaven"),
     ("mysql", "mysql"),
     ("nativescript", "nativescript"),
     ("netlify", "netlify"),
@@ -135,7 +127,6 @@ const BRANDS: &[(&str, &str)] = &[
     ("rich", "rich"),
     ("rubymine", "rubymine"),
     ("ruff", "ruff"),
-    ("sanity", "sanity"),
     ("sequelize", "sequelize"),
     ("serverless", "serverless"),
     ("shopify", "shopify"),
@@ -158,10 +149,8 @@ const BRANDS: &[(&str, &str)] = &[
     ("trivy", "trivy"),
     ("tsc", "typescript"),
     ("turbo", "turborepo"),
-    ("typeorm", "typeorm"),
     ("typst", "typst"),
     ("uv", "uv"),
-    ("v", "v"),
     ("vapor", "vapor"),
     ("vault", "vault"),
     ("vercel", "vercel"),
@@ -278,12 +267,9 @@ mod tests {
             ("clojure", "clojure"),
             ("cmake", "cmake"),
             ("coda", "coda"),
-            ("composer", "composer"),
             ("curl", "curl"),
             ("dapr", "dapr"),
             ("dart", "dart"),
-            ("deno", "deno"),
-            ("dotenv", "dotenv"),
             ("dotnet", "dotnet"),
             ("electron", "electron"),
             ("eleventy", "eleventy"),
@@ -291,7 +277,6 @@ mod tests {
             ("elm", "elm"),
             ("esbuild", "esbuild"),
             ("eslint", "eslint"),
-            ("exercism", "exercism"),
             ("expo", "expo"),
             ("fastlane", "fastlane"),
             ("fastly", "fastly"),
@@ -351,7 +336,6 @@ mod tests {
             ("rich", "rich"),
             ("rubymine", "rubymine"),
             ("ruff", "ruff"),
-            ("sanity", "sanity"),
             ("sequelize", "sequelize"),
             ("serverless", "serverless"),
             ("shopify", "shopify"),
@@ -370,10 +354,8 @@ mod tests {
             ("terraform", "terraform"),
             ("tmux", "tmux"),
             ("trivy", "trivy"),
-            ("typeorm", "typeorm"),
             ("typst", "typst"),
             ("uv", "uv"),
-            ("v", "v"),
             ("vapor", "vapor"),
             ("vault", "vault"),
             ("vim", "vim"),
@@ -391,15 +373,11 @@ mod tests {
             ("psql", "postgresql"),
             ("pg_dump", "postgresql"),
             ("createdb", "postgresql"),
-            ("mvn", "apachemaven"),
-            ("java", "openjdk"),
-            ("javac", "openjdk"),
             ("tofu", "opentofu"),
             ("wrangler", "cloudflare"),
             ("fly", "flydotio"),
             ("flyctl", "flydotio"),
             ("tsc", "typescript"),
-            ("bash", "gnubash"),
             ("turbo", "turborepo"),
             ("mix", "elixir"),
             ("iex", "elixir"),
@@ -420,7 +398,7 @@ mod tests {
 
     #[test]
     fn should_give_no_brand_to_commands_named_like_another_product() {
-        let namesakes = ["less", "man", "make", "nano", "hermes", "task"];
+        let namesakes = ["less", "man", "make", "nano", "hermes", "task", "dotenv"];
 
         let branded: Vec<_> = namesakes.into_iter().filter(|command| brand_icon(command).is_some()).collect();
 
@@ -431,12 +409,20 @@ mod tests {
     fn should_give_no_brand_to_commands_whose_logo_licence_does_not_allow_it() {
         let restricted = [
             "cargo", "rustc", "rustup", "nvim", "fish", "kitty", "rubocop", "webpack", "quasar", "php", "zig", "r",
-            "pandoc", "sidekiq", "ruby", "pod",
+            "pandoc", "sidekiq", "ruby", "pod", "mvn", "deno", "exercism", "bash", "java", "javac", "sanity", "typeorm",
+            "v",
         ];
 
         let branded: Vec<_> = restricted.into_iter().filter(|command| brand_icon(command).is_some()).collect();
 
         assert_eq!(branded, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn should_give_no_brand_to_a_tool_whose_logo_is_unreadable_at_32_pixels() {
+        let brand = brand_icon("composer");
+
+        assert_eq!(brand, None);
     }
 
     #[test]

@@ -4,7 +4,6 @@
 # Amazon Q icons (git, docker, aws...) are never listed: those PNGs are kept as they are.
 
 ansible EE0000
-apachemaven C71A36
 appwrite FD366E
 argo EF7B4D
 asciinema D40000
@@ -24,12 +23,9 @@ clojure 5881D8
 cloudflare F38020
 cmake 064F8C
 coda F46A54
-composer 885630
 curl 073551
 dapr 0D2192
 dart 0175C2
-deno 000000
-dotenv ECD53F
 dotnet 512BD4
 electron 47848F
 eleventy 222222
@@ -37,7 +33,6 @@ elixir 8847B9
 elm 1293D8
 esbuild FFCF00
 eslint 4B32C3
-exercism 009CAB
 expo 1C2024
 fastlane 00F200
 fastly FF282D
@@ -47,7 +42,6 @@ firefox FF7139
 flutter 02569B
 flydotio 24175B
 gatsby 663399
-gnubash 4EAA25
 go 00ADD8
 goland 000000
 hasura 1EB4D4
@@ -81,7 +75,6 @@ nx 143055
 okta 007DC1
 ollama 000000
 opencode 000000
-openjdk 000000
 opentofu FFDA18
 phpstorm 000000
 pi 000000
@@ -105,7 +98,6 @@ remix 000000
 rich FAE742
 rubymine 000000
 ruff D7FF64
-sanity 0D0E12
 sequelize 52B0E7
 serverless FD5750
 shopify 7AB55C
@@ -125,11 +117,9 @@ terraform 844FBA
 tmux 1BB91F
 trivy 1904DA
 turborepo FF1E56
-typeorm FE0803
 typescript 3178C6
 typst 239DAD
 uv DE5FE9
-v 5D87BF
 vapor 0D0D0D
 vault FFEC6E
 vim 019733
