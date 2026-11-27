@@ -115,10 +115,7 @@ mod tests {
 
         let png = encoded(&pixels, 2);
 
-        let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
-        let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
-        let frame = reader.next_frame(&mut decoded).unwrap();
-        assert_eq!((frame.width, frame.height, &decoded[..]), (2, 2, &pixels[..]));
+        assert_eq!(decoded(&png), pixels);
     }
 
     #[test]
