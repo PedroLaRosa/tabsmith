@@ -17,7 +17,7 @@ const PALETTE: &[(&str, Rgb)] = &[
     ("command", (0x88, 0x39, 0xd1)),
     ("commandkey", (0xd1, 0x39, 0xaf)),
     ("commit", (0xff, 0x40, 0x1e)),
-    ("cpu", (0x2e, 0x32, 0x2d)),
+    ("cpu", (0x62, 0xa1, 0x3a)),
     ("database", (0xd1, 0x6b, 0x39)),
     ("discord", (0x72, 0x89, 0xda)),
     ("docker", (0x00, 0x93, 0xd7)),
@@ -115,6 +115,13 @@ mod tests {
         let inks = greys.map(ink_on);
 
         assert_eq!(inks, [(0xff, 0xff, 0xff), (0, 0, 0)]);
+    }
+
+    #[test]
+    fn should_give_the_cpu_icon_the_green_of_its_square_not_its_dark_bezel() {
+        let colour = icon_color("cpu");
+
+        assert_eq!(colour, Some((0x62, 0xa1, 0x3a)));
     }
 
     #[test]
