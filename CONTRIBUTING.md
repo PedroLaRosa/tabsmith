@@ -45,6 +45,7 @@ just test           # cargo test --locked
 | `just install`                 | Install your build into `~/.cargo/bin`                                     |
 | `just update-specs [version]`  | Re-bundle `@tabsmith/autocomplete-specs` (default: `assets/SPECS_VERSION`) |
 | `just refresh-specs [version]` | Re-bundle the specs, check they load, then install the rebuilt binary      |
+| `just brand-icons`             | Draw the brand icons in `assets/icons/simple-icons.txt` from simple-icons  |
 
 Builds use `--locked`: if you change a dependency, commit the updated `Cargo.lock`.
 

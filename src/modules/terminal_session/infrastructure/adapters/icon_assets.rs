@@ -1,4 +1,5 @@
-//! The embedded icon pixels (origin and licence in `assets/icons/README.md`): the 42 PNGs, in the order of `ICON_NAMES`,
+//! The embedded icon pixels (origin and licence in `assets/icons/README.md`): the 42 Amazon Q PNGs and the brand icons
+//! drawn from simple-icons, in the order of `ICON_NAMES`,
 //! and the template the badge colours tint.
 
 use crate::modules::dropdown::domain::value_objects::icon_id::IconId;
@@ -10,7 +11,8 @@ macro_rules! pngs {
     };
 }
 
-/// Row icon names plus the local-only `database`, `file`, `folder` and `symlink`. Order = image ids (1-based).
+/// Row icon names plus the local-only `database`, `file`, `folder` and `symlink`, then the simple-icons brand icons.
+/// Order = image ids (1-based).
 const PNGS: &[(&str, &[u8])] = pngs![
     "alert",
     "android",
@@ -54,6 +56,104 @@ const PNGS: &[(&str, &[u8])] = pngs![
     "twitter",
     "vercel",
     "yarn",
+    "ansible",
+    "argo",
+    "asciinema",
+    "astro",
+    "autocannon",
+    "babel",
+    "bat",
+    "bazel",
+    "bit",
+    "black",
+    "bun",
+    "capacitor",
+    "circleci",
+    "claude",
+    "clojure",
+    "cmake",
+    "coda",
+    "curl",
+    "dapr",
+    "dart",
+    "dotnet",
+    "electron",
+    "eleventy",
+    "elm",
+    "esbuild",
+    "eslint",
+    "expo",
+    "fastlane",
+    "fastly",
+    "ffmpeg",
+    "fig",
+    "gatsby",
+    "hasura",
+    "helm",
+    "hexo",
+    "homebrew",
+    "htop",
+    "hugo",
+    "hyper",
+    "infracost",
+    "ionic",
+    "jest",
+    "julia",
+    "jupyter",
+    "just",
+    "k6",
+    "laravel",
+    "lerna",
+    "locust",
+    "meteor",
+    "nativescript",
+    "nextflow",
+    "ngrok",
+    "nhost",
+    "nodedotjs",
+    "nuxt",
+    "nvm",
+    "nx",
+    "ollama",
+    "opencode",
+    "opentofu",
+    "pi",
+    "pipx",
+    "pm2",
+    "pnpm",
+    "pocketbase",
+    "podman",
+    "poetry",
+    "prettier",
+    "prisma",
+    "pytest",
+    "railway",
+    "rancher",
+    "rclone",
+    "remix",
+    "rich",
+    "ruff",
+    "sequelize",
+    "serverless",
+    "speedtest",
+    "spring",
+    "stencil",
+    "streamlit",
+    "stripe",
+    "supabase",
+    "swc",
+    "tailscale",
+    "tailwindcss",
+    "tmux",
+    "typescript",
+    "typst",
+    "uv",
+    "vapor",
+    "vim",
+    "vite",
+    "vtex",
+    "wezterm",
+    "zsh",
 ];
 
 /// `template.png` as RGBA8 (32×32), tinted per badge colour.
@@ -87,6 +187,7 @@ mod tests {
     use super::*;
     use crate::modules::completion::domain::test_fixtures::item;
     use crate::modules::completion::domain::value_objects::suggestion::Suggestion;
+    use crate::modules::dropdown::domain::services::icon_palette::icon_color;
     use crate::modules::dropdown::domain::services::icon_resolver::slot;
     use crate::modules::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
     use crate::modules::dropdown::domain::value_objects::icon_id::ICON_NAMES;
@@ -165,6 +266,43 @@ mod tests {
         }
     }
 
+    /// (slug, colour) of each icon `assets/icons/simple-icons.txt` lists, in order.
+    fn simple_icons_manifest() -> Vec<(String, String)> {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let text = std::fs::read_to_string(format!("{manifest}/assets/icons/simple-icons.txt")).unwrap();
+        text.lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                let mut words = line.split_whitespace();
+                let (slug, colour) = (words.next().unwrap(), words.next().unwrap());
+                (slug.to_string(), colour.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn should_embed_every_icon_the_simple_icons_manifest_lists() {
+        let missing: Vec<String> = simple_icons_manifest()
+            .into_iter()
+            .map(|(slug, _)| slug)
+            .filter(|slug| !ICON_NAMES.contains(&slug.as_str()))
+            .collect();
+
+        assert_eq!(missing, Vec::<String>::new());
+    }
+
+    #[test]
+    fn should_colour_each_simple_icons_tile_with_its_manifest_colour() {
+        let hex = |(r, g, b): (u8, u8, u8)| format!("{r:02X}{g:02X}{b:02X}");
+
+        let differing: Vec<_> = simple_icons_manifest()
+            .into_iter()
+            .filter(|(slug, colour)| icon_color(slug).map(hex).as_ref() != Some(colour))
+            .collect();
+
+        assert_eq!(differing, Vec::<(String, String)>::new());
+    }
+
     #[test]
     fn assets_are_pngs() {
         for (n, bytes) in PNGS {
@@ -191,11 +329,14 @@ mod tests {
         format!("{:?}|{}|{:?}|{}", s.text(), s.is_badge(), id, sent)
     }
 
-    /// (label, row) of every icon input: the 42 PNG names, then four templates (two tinted type defaults with a
-    /// badge, a tinted one without, an untinted one with a badge).
+    /// The PNGs there were at the phase 8 start, the first ones in `ICON_NAMES`.
+    const PHASE_8_PNGS: usize = 42;
+
+    /// (label, row) of every icon input: the 42 PNG names of the phase 8 start, then four templates (two tinted type
+    /// defaults with a badge, a tinted one without, an untinted one with a badge).
     fn icon_inputs() -> Vec<(String, Suggestion)> {
         let row = |kind, icon: Option<&str>| item("x", kind, "").with_icon(icon.map(String::from));
-        let mut inputs: Vec<(String, Suggestion)> = PNGS
+        let mut inputs: Vec<(String, Suggestion)> = PNGS[..PHASE_8_PNGS]
             .iter()
             .map(|(name, _)| {
                 let icon = format!("fig://icon?type={name}");

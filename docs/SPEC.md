@@ -491,7 +491,7 @@ App:
 | `TABSMITH_INIT_SNAPSHOT_TEST` | Deterministic `init` output. |
 | `TABSMITH_BLESS` | Tests: rewrite the `init` snapshots. |
 | `TABSMITH_DEBUG_SHELL` | Set by `debug shell`. |
-| read: `TMUX`, `TMUX_PANE`, `INSIDE_EMACS`, `TERM_PROGRAM`, `__CFBundleIdentifier`, `__PWSH_LOGIN_CHECKED`, `CI`, `VSCODE_RESOLVING_ENVIRONMENT`, `TERM`, `COLORTERM`, `WT_SESSION`, `EDITOR`, `ZDOTDIR`, `XDG_CONFIG_HOME`, `SHELL`, `HOME`, `USERPROFILE`, `PATH`, `PATHEXT`, `ComSpec`; scripts: `HISTCONTROL`, `GHOSTTY_RESOURCES_DIR`, `KITTY_SHELL_INTEGRATION`, `KITTY_INSTALLATION_DIR`, `VSCODE_INJECTION`, `VSCODE_SHELL_INTEGRATION` | see §5.2, §5.4, §5.5, §7.7, §9.3 |
+| read: `TMUX`, `TMUX_PANE`, `INSIDE_EMACS`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `KITTY_WINDOW_ID`, `__CFBundleIdentifier`, `__PWSH_LOGIN_CHECKED`, `CI`, `VSCODE_RESOLVING_ENVIRONMENT`, `TERM`, `COLORTERM`, `WT_SESSION`, `EDITOR`, `ZDOTDIR`, `XDG_CONFIG_HOME`, `SHELL`, `HOME`, `USERPROFILE`, `PATH`, `PATHEXT`, `ComSpec`; scripts: `HISTCONTROL`, `GHOSTTY_RESOURCES_DIR`, `KITTY_SHELL_INTEGRATION`, `KITTY_INSTALLATION_DIR`, `VSCODE_INJECTION`, `VSCODE_SHELL_INTEGRATION` | see §5.2, §5.4, §5.5, §7.7, §9.3 |
 
 ### 3.5 History file
 
@@ -526,7 +526,7 @@ ponytail: no lock, a line another session appends in between is lost).
 | `modules/diagnostics/` | Checks and the run loop (`doctor`, §2.8), the `diagnostic` report and `debug logs` (§2.10). |
 | `modules/self_update/` | The native install's update (§2.10, D50–D52): `UpdateTabsmithUseCase` with a `Manual` (`update`) or `Scheduled` (background) trigger; release assets, `SHA256SUMS` parsing, the install location and the daily schedule in `domain/`; ports for the release channel (`GithubReleaseChannel`, ureq), SHA-256 and the ed25519 checksum signature (ring), and the executable (`FileInstalledExecutable`); the `update-check` marker repository; the `update` command and `start_background_update`. |
 | `shell/` (repo root) | `pre.sh`, `post.zsh`, `post.bash`, `pre.fish`, `post.fish`, `pre.ps1`, `post.ps1`. |
-| `assets/` (repo root) | `specs.tar.zst`, `SPECS_VERSION`, `SPECS_LICENSE` (MIT, Hercules Labs). THIRD_PARTY notices (semver ISC, yaml ISC, strip-json-comments MIT): not shipped yet. `icons/`: the row icons (PNGs and `template.rgba`, §7.4.2). |
+| `assets/` (repo root) | `specs.tar.zst`, `SPECS_VERSION`, `SPECS_LICENSE` (MIT, Hercules Labs). THIRD_PARTY notices (semver ISC, yaml ISC, strip-json-comments MIT): not shipped yet. `icons/`: the row icons (§7.4.2): 42 Amazon Q PNGs (Apache-2.0), `template.rgba`, and the brand icons drawn from simple-icons (CC0-1.0, pinned in `scripts/brand-icons.sh`) by `just brand-icons`, listed with their colours in `simple-icons.txt`. The drawing tool is its own crate, `tools/brand-icons`, so building tabsmith never needs it; the PNGs are committed. |
 
 Each module is a vertical slice; a folder exists only when it has content:
 
@@ -2348,12 +2348,16 @@ block order is always list rows then the description row:
 List row for item `s` (selected row uses selected colours):
 `' '` + icon (2 cols) + `' '` + title + (`' '` + args hint in dim when room) + pad to `w`.
 - Icon slot: always two columns. A spec `icon` that is a single wide emoji
-  is text (`⭐` for the current git branch). With the kitty graphics protocol (Ghostty, kitty; inside tmux when
-  `tmux display` reports `allow-passthrough` on and a kitty or Ghostty client), `fig://icon?type=<t>` is that PNG and `fig://template?color=&badge=` the template
+  is text (`⭐` for the current git branch). With the kitty graphics protocol (kitty, Ghostty, WezTerm by
+  `TERM_PROGRAM=WezTerm` except on Windows, where ConPTY sits in between and is unchecked, and iTerm2 whose
+  `TERM_PROGRAM_VERSION` is 3.6 or later by major and minor; inside tmux only when `tmux display` reports
+  `allow-passthrough` on and a kitty or Ghostty client, since tmux overwrites `TERM_PROGRAM`),
+  `fig://icon?type=<t>` is that PNG and `fig://template?color=&badge=` the template
   tinted by `scale_u8` (`a·b/256` per channel, alpha kept) with the badge in white. Otherwise the row type's
   image: subcommand `command`, option `option`, arg `box`, auto-execute `carrot`, file `file`, folder `folder`,
   shortcut `💡` and mixin `➡` on tinted templates, history `📚`.
-  PNGs live in `assets/icons` (see its README). Each image is transmitted once (`a=t`), placed every frame over the
+  PNGs live in `assets/icons` (see its README): 42 from Amazon Q, then the brand icons drawn from simple-icons, whose
+  image ids follow (no earlier id moves; all stay below 256). Each image is transmitted once (`a=t`), placed every frame over the
   slot (`a=p`, `z=-1`, under the text) and removed by the clear (`a=d,d=a`).
   Inside tmux each image goes through the passthrough (`ESC P tmux; … ESC \`, ESC doubled) with a 2×1 virtual
   placement (`a=T,U=1`), and the slot is two Unicode placeholders (`U+10EEEE` + row/column diacritics, the id in the
@@ -2361,7 +2365,10 @@ List row for item `s` (selected row uses selected colours):
   no placement or delete goes out. A badge cannot sit on a placeholder, so it is drawn as text alone.
 - Brand: subcommand and argument rows without a drawable spec icon show the brand of their command instead of
   `command` or `box`, when the brand table has one (`dropdown/domain/services/brand_catalog.rs`, curated by hand:
-  `kubectl`, `kubectx` and `kubens` → `kubernetes`; `less`, `man`, `make` and `nano` have none). The command is
+  `kubectl`, `kubectx` and `kubens` → `kubernetes`, `pnpx` → `pnpm`, `brew` → `homebrew`; `less`, `man`, `make`
+  and `nano` have none, being other products in simple-icons, and neither do tools whose logo is not plain CC0 or
+  whose brand guidelines do not allow a row icon, such as `cargo`, `python` or `go`; `assets/icons/README.md`). The
+  command is
   the root of the innermost spec in use (`Menu::command_of`, from `CompletionResult.spec_name`): `git` for
   `sudo git ch`, `kubectl` for `k get ` with `alias k=kubectl`, `aws` for `aws s3 ls` (whose `s3` loads `aws/s3`). In
   a first-token list (§6.9) each row is its own command, so `npm` shows the npm icon. Every other row kind keeps
@@ -2842,7 +2849,8 @@ with a pyte-based PTY driver (step files of keys/waits/snapshots, temp HOME and 
 9. `exit` → harness sees the child exit code propagated.
 Manual checklist per OS/terminal: macOS Terminal.app + iTerm2 (zsh, bash 5), Linux GNOME Terminal + kitty (bash, zsh,
 fish), tmux pane, SSH into a host with tabsmith installed, Windows Terminal + pwsh 7 (with and without side-loaded
-`conpty.dll`), VS Code integrated terminal (no hang during env resolution).
+`conpty.dll`), VS Code integrated terminal (no hang during env resolution). Row images in iTerm2 and WezTerm: the
+nine steps of `docs/brand-icons-plan.md` (PR 4); a terminal that fails one goes back to tiles.
 
 ---
 
