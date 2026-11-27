@@ -60,8 +60,9 @@ fn direct_graphics(var: impl Fn(&str) -> Option<String>, on_windows: bool) -> Gr
     if on { GraphicsSupport::Direct } else { GraphicsSupport::Off }
 }
 
-/// iTerm2 takes the kitty protocol from 3.6. Its version is compared as numbers on major and minor, since patches reach
-/// two digits (`3.6.11`); the patch and any suffix are ignored (`3.6.0beta1`, `3.7.20261127-nightly`).
+/// iTerm2 takes the kitty protocol from 3.6. Its version is compared as numbers on major and minor, since a part can
+/// reach two digits (`3.10` would sort before `3.6` as text); the patch and any suffix are ignored (`3.6.0beta1`,
+/// `3.7.20261127-nightly`).
 fn iterm2_has_kitty_graphics(version: &str) -> bool {
     let mut parts = version.split('.').map(leading_number);
     match (parts.next().flatten(), parts.next().flatten()) {
@@ -292,11 +293,12 @@ mod tests {
             "3.6.0beta1",
             "3.7.10beta1",
             "3.7.20261127-nightly",
+            "3.10.0",
         ];
 
         let support = versions.map(|v| iterm2_graphics(Some(v)));
 
-        assert_eq!(support, [GraphicsSupport::Direct; 5]);
+        assert_eq!(support, [GraphicsSupport::Direct; 6]);
     }
 
     #[test]
