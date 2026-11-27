@@ -24,6 +24,11 @@ impl Catalogue {
         if Rgb::from_hex(hex) != Ok(entry.colour) {
             return Err(format!("{} is {} in the manifest but {hex} in simple-icons", entry.slug, entry.colour));
         }
+        let licence = brand["license"]["type"].as_str();
+        if !is_allowed(licence) {
+            let licence = licence.unwrap_or_default();
+            return Err(format!("{} is licensed {licence}, which this project does not use", entry.slug));
+        }
         Ok(())
     }
 }
@@ -69,6 +74,15 @@ mod tests {
         let checked = catalogue.check(&entry("pnpm", Rgb(0xF6, 0x92, 0x21)));
 
         assert_eq!(checked, Err("pnpm is F69221 in the manifest but F69220 in simple-icons".to_string()));
+    }
+
+    #[test]
+    fn should_refuse_an_icon_whose_licence_does_not_allow_this_use() {
+        let catalogue = Catalogue::from_json(DATA).unwrap();
+
+        let checked = catalogue.check(&entry("rust", Rgb(0, 0, 0)));
+
+        assert_eq!(checked, Err("rust is licensed CC-BY-SA-4.0, which this project does not use".to_string()));
     }
 
     #[test]
