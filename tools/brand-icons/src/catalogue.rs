@@ -33,10 +33,9 @@ impl Catalogue {
     }
 }
 
-/// Licences whose terms allow a logo as a row icon: CC0 and the attribution-only permissive ones. Each attribution-licensed
-/// icon is credited in `assets/icons/README.md`. Anything else (share-alike, copyleft, non-commercial, no-derivatives,
-/// custom) is refused.
-const ALLOWED_LICENCES: &[&str] = &["CC0-1.0", "MIT", "Apache-2.0", "BSD-3-Clause", "CC-BY-3.0", "CC-BY-4.0"];
+/// Plain CC0 only. Attribution licences (MIT, Apache-2.0, BSD, CC-BY) ask for notices tabsmith's binary does not ship;
+/// share-alike, copyleft, non-commercial, no-derivatives and custom terms are refused too.
+const ALLOWED_LICENCES: &[&str] = &["CC0-1.0"];
 
 /// No licence field means the entry falls under simple-icons' own CC0-1.0.
 fn is_allowed(licence: Option<&str>) -> bool {
@@ -49,7 +48,7 @@ mod tests {
 
     const DATA: &str = r#"[
         {"title": "pnpm", "slug": "pnpm", "hex": "F69220", "source": "https://pnpm.io"},
-        {"title": "Deno", "slug": "deno", "hex": "000000", "source": "https://deno.com", "license": {"type": "MIT"}},
+        {"title": ".NET", "slug": "dotnet", "hex": "512BD4", "source": "https://dot.net", "license": {"type": "CC0-1.0"}},
         {"title": "Rust", "slug": "rust", "hex": "000000", "source": "https://rust-lang.org",
          "license": {"type": "CC-BY-SA-4.0"}}
     ]"#;
@@ -89,7 +88,7 @@ mod tests {
     fn should_accept_icons_whose_colour_matches_and_whose_licence_allows_this_use() {
         let catalogue = Catalogue::from_json(DATA).unwrap();
 
-        let checked = [entry("pnpm", Rgb(0xF6, 0x92, 0x20)), entry("deno", Rgb(0, 0, 0))].map(|e| catalogue.check(&e));
+        let checked = [entry("pnpm", Rgb(0xF6, 0x92, 0x20)), entry("dotnet", Rgb(0x51, 0x2B, 0xD4))].map(|e| catalogue.check(&e));
 
         assert_eq!(checked, [Ok(()), Ok(())]);
     }
@@ -116,11 +115,18 @@ mod tests {
     }
 
     #[test]
-    fn should_allow_cc0_and_attribution_only_permissive_licences() {
-        let licences = ["CC0-1.0", "MIT", "Apache-2.0", "BSD-3-Clause", "CC-BY-3.0", "CC-BY-4.0"];
+    fn should_allow_cc0() {
+        let allowed = is_allowed(Some("CC0-1.0"));
+
+        assert!(allowed);
+    }
+
+    #[test]
+    fn should_reject_attribution_licences_whose_notices_tabsmith_does_not_ship() {
+        let licences = ["MIT", "Apache-2.0", "BSD-3-Clause", "CC-BY-3.0", "CC-BY-4.0"];
 
         let allowed = licences.map(|licence| is_allowed(Some(licence)));
 
-        assert_eq!(allowed, [true; 6]);
+        assert_eq!(allowed, [false; 5]);
     }
 }
