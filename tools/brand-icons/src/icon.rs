@@ -27,6 +27,21 @@ fn painted(square: &[u8], coverage: &[u8], ink: Rgb) -> Vec<u8> {
         .collect()
 }
 
+/// RGBA8 pixels as a PNG. The encoder writes no timestamp or other per-run data, so the same pixels always give the
+/// same bytes (B3.6).
+fn encoded(rgba: &[u8], width: u32) -> Vec<u8> {
+    let height = rgba.len() as u32 / 4 / width;
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::High);
+    let mut writer = encoder.write_header().expect("in-memory PNG header");
+    writer.write_image_data(rgba).expect("in-memory PNG data");
+    writer.finish().expect("in-memory PNG end");
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,5 +64,15 @@ mod tests {
         let icon = painted(&square, &coverage, Rgb(0, 0, 0));
 
         assert_eq!(icon, [200, 100, 50, 255, 0, 0, 0, 255, 100, 50, 25, 128]);
+    }
+
+    #[test]
+    fn should_encode_the_same_pixels_to_the_same_bytes() {
+        let pixels = [240, 80, 50, 255, 0, 0, 0, 0, 255, 255, 255, 128, 1, 2, 3, 4];
+
+        let first = encoded(&pixels, 2);
+        let second = encoded(&pixels, 2);
+
+        assert!(!first.is_empty() && first == second);
     }
 }

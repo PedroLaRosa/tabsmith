@@ -9,3 +9,4 @@ publish = false
 [workspace]
 
 [dependencies]
+png = "=0.18.1"
