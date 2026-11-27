@@ -647,3 +647,14 @@ fn should_name_the_root_command_of_a_spec_a_subcommand_loaded() {
 
     assert_eq!(command, Some("aws"));
 }
+
+#[test]
+fn should_name_each_row_its_own_command_while_the_first_word_is_typed() {
+    let mut m = Menu::new();
+    let names = ["node", "npm", "nproc"].map(|name| item(name, SuggestionKind::Subcommand, "n"));
+    m.on_completion(comp("n", 1, names.to_vec()).with_spec_name(""), &Settings::default(), Instant::now());
+
+    let commands: Vec<_> = m.items().iter().map(|row| m.command_of(row)).collect();
+
+    assert_eq!(commands, [Some("node"), Some("npm"), Some("nproc")]);
+}
