@@ -21,8 +21,9 @@ pub(crate) enum KittyPixels {
     Rgba(Vec<u8>),
 }
 
-/// Kitty graphics protocol is used for Ghostty and kitty only. Inside tmux, tmux tells the outer terminal and whether
-/// it passes sequences through (`allow-passthrough`, off by default).
+/// Kitty graphics protocol is used for kitty, Ghostty, iTerm2 3.6 or later and WezTerm. Inside tmux only tmux is
+/// trusted (it overwrites `TERM_PROGRAM` and keeps a stale `KITTY_WINDOW_ID` from the server's start): it tells the
+/// outer terminal and whether it passes sequences through (`allow-passthrough`, off by default).
 pub(crate) fn detect() -> GraphicsSupport {
     let var = |k: &str| std::env::var(k).ok();
     if var("TMUX").is_none() {
@@ -41,18 +42,23 @@ pub(crate) fn detect() -> GraphicsSupport {
     tmux_graphics(&out)
 }
 
-/// Outside tmux, from the terminal's variables (`var` looks one up): Direct for kitty and Ghostty.
+/// Outside tmux, from the terminal's variables (`var` looks one up): Direct for kitty (`KITTY_WINDOW_ID` or
+/// `TERM=xterm-kitty`), Ghostty and WezTerm (`TERM_PROGRAM`), and iTerm2 whose `TERM_PROGRAM_VERSION` is 3.6 or later.
 fn direct_graphics(var: impl Fn(&str) -> Option<String>) -> GraphicsSupport {
     let on = var("KITTY_WINDOW_ID").is_some()
         || var("TERM").as_deref() == Some("xterm-kitty")
         || match var("TERM_PROGRAM").as_deref() {
             Some("ghostty" | "WezTerm") => true,
-            Some("iTerm.app") => var("TERM_PROGRAM_VERSION").is_some_and(|v| iterm2_has_kitty_graphics(&v)),
+            Some("iTerm.app") => {
+                var("TERM_PROGRAM_VERSION").is_some_and(|v| iterm2_has_kitty_graphics(&v))
+            }
             _ => false,
         };
     if on { GraphicsSupport::Direct } else { GraphicsSupport::Off }
 }
 
+/// iTerm2 takes the kitty protocol from 3.6. Its version is compared as numbers on major and minor, since patches reach
+/// two digits (`3.6.11`).
 fn iterm2_has_kitty_graphics(version: &str) -> bool {
     let mut parts = version.split('.').map(|part| part.parse::<u32>().ok());
     match (parts.next().flatten(), parts.next().flatten()) {
