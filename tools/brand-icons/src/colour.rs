@@ -10,6 +10,10 @@ impl Rgb {
         let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).expect("checked hex digits");
         Ok(Rgb(channel(0), channel(2), channel(4)))
     }
+
+    pub fn ink(self) -> Rgb {
+        Rgb(0, 0, 0)
+    }
 }
 
 #[cfg(test)]
@@ -32,5 +36,14 @@ mod tests {
         let parsed: Vec<bool> = not_colours.iter().map(|hex| Rgb::from_hex(hex).is_err()).collect();
 
         assert_eq!(parsed, [true, true, true, true]);
+    }
+
+    #[test]
+    fn should_ink_the_glyph_black_on_a_light_brand_colour() {
+        let pnpm_orange = Rgb(0xF6, 0x92, 0x20);
+
+        let ink = pnpm_orange.ink();
+
+        assert_eq!(ink, Rgb(0, 0, 0));
     }
 }
