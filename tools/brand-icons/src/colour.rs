@@ -11,8 +11,15 @@ impl Rgb {
         Ok(Rgb(channel(0), channel(2), channel(4)))
     }
 
+    /// The glyph colour on this brand colour (B2.2): black when the colour is light, white otherwise.
     pub fn ink(self) -> Rgb {
-        Rgb(0, 0, 0)
+        let Rgb(r, g, b) = self;
+        let luma = (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000;
+        if luma > 160 {
+            Rgb(0, 0, 0)
+        } else {
+            Rgb(255, 255, 255)
+        }
     }
 }
 
@@ -45,5 +52,14 @@ mod tests {
         let ink = pnpm_orange.ink();
 
         assert_eq!(ink, Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn should_ink_the_glyph_white_on_a_dark_brand_colour() {
+        let git_red = Rgb(0xF0, 0x50, 0x32);
+
+        let ink = git_red.ink();
+
+        assert_eq!(ink, Rgb(255, 255, 255));
     }
 }
