@@ -56,9 +56,15 @@ pub(crate) fn icon_color(name: &str) -> Option<Rgb> {
         .map(|(_, colour)| *colour)
 }
 
-/// The colour of a character written on a `tile`.
-pub(crate) fn ink_on(_tile: Rgb) -> Rgb {
-    (0, 0, 0)
+/// The colour of a character written on a `tile`: black on a light tile, white on a dark one, by the tile's perceived
+/// brightness (ITU-R BT.601 weights, 0–255).
+pub(crate) fn ink_on((r, g, b): Rgb) -> Rgb {
+    let brightness = (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000;
+    if brightness > 160 {
+        (0, 0, 0)
+    } else {
+        (0xff, 0xff, 0xff)
+    }
 }
 
 #[cfg(test)]
@@ -80,6 +86,15 @@ mod tests {
         let ink = ink_on(pnpm_orange);
 
         assert_eq!(ink, (0, 0, 0));
+    }
+
+    #[test]
+    fn should_write_white_on_a_dark_tile() {
+        let git_red = (0xff, 0x40, 0x1e);
+
+        let ink = ink_on(git_red);
+
+        assert_eq!(ink, (0xff, 0xff, 0xff));
     }
 
     #[test]
