@@ -376,6 +376,30 @@ fn should_draw_the_brand_tile_in_bold_ink_without_images() {
     assert!(row.contains(&format!("{white_on_git_red} >")), "{row:?}");
 }
 
+#[test]
+fn should_keep_the_tile_colours_on_the_selected_row_without_images() {
+    let r = OverlayRenderer::new(Theme::dark(), true);
+    let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+    let (row, _, _) = r.list_row(&checkout, Some("git"), true, 20);
+
+    let theme = Theme::dark();
+    let selected = r.pen(theme.selected_text(), theme.selected_bg(), "");
+    let tile = r.pen((0xff, 0xff, 0xff), (0xff, 0x40, 0x1e), ";1");
+    assert!(row.starts_with(&format!("{selected} {tile} >{selected} ")), "{row:?}");
+}
+
+#[test]
+fn should_convert_the_tile_colour_like_the_theme_without_24_bit_colour() {
+    let r = OverlayRenderer::new(Theme::dark(), false);
+    let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+    let (row, _, _) = r.list_row(&checkout, Some("git"), false, 20);
+
+    let git_red_256 = format!("48;5;{};1m >", xterm256((0xff, 0x40, 0x1e)));
+    assert!(row.contains(&git_red_256) && !row.contains("48;2;"), "{row:?}");
+}
+
 /// The kitty image id of the PNG named `name`.
 fn png_id(name: &str) -> u32 {
     let index = icon_id::ICON_NAMES.iter().position(|n| *n == name).unwrap();
