@@ -55,7 +55,7 @@ fn type_image(kind: SuggestionKind, brand: Option<&str>) -> IconSlot {
     match kind {
         SuggestionKind::Subcommand => png_slot(brand.unwrap_or("command")),
         SuggestionKind::Option => png_slot("option"),
-        SuggestionKind::Arg => png_slot("box"),
+        SuggestionKind::Arg => png_slot(brand.unwrap_or("box")),
         SuggestionKind::Special => badge_slot(Some((0x62, 0x8d, 0xad)), "➡️"),
         SuggestionKind::Shortcut => badge_slot(Some((0x34, 0x98, 0xdb)), "💡"),
         SuggestionKind::AutoExecute => png_slot("carrot"),
@@ -155,6 +155,15 @@ mod tests {
         let icon = slot(&checkout, Some("git"), GraphicsSupport::Direct).image();
 
         assert_eq!(icon, png("git"));
+    }
+
+    #[test]
+    fn should_show_the_command_brand_on_an_argument_row() {
+        let pods = item("pods", SuggestionKind::Arg, "");
+
+        let icon = slot(&pods, Some("kubectl"), GraphicsSupport::Direct).image();
+
+        assert_eq!(icon, png("kubernetes"));
     }
 
     #[test]
