@@ -491,7 +491,7 @@ App:
 | `TABSMITH_INIT_SNAPSHOT_TEST` | Deterministic `init` output. |
 | `TABSMITH_BLESS` | Tests: rewrite the `init` snapshots. |
 | `TABSMITH_DEBUG_SHELL` | Set by `debug shell`. |
-| read: `TMUX`, `TMUX_PANE`, `INSIDE_EMACS`, `TERM_PROGRAM`, `__CFBundleIdentifier`, `__PWSH_LOGIN_CHECKED`, `CI`, `VSCODE_RESOLVING_ENVIRONMENT`, `TERM`, `COLORTERM`, `WT_SESSION`, `EDITOR`, `ZDOTDIR`, `XDG_CONFIG_HOME`, `SHELL`, `HOME`, `USERPROFILE`, `PATH`, `PATHEXT`, `ComSpec`; scripts: `HISTCONTROL`, `GHOSTTY_RESOURCES_DIR`, `KITTY_SHELL_INTEGRATION`, `KITTY_INSTALLATION_DIR`, `VSCODE_INJECTION`, `VSCODE_SHELL_INTEGRATION` | see §5.2, §5.4, §5.5, §7.7, §9.3 |
+| read: `TMUX`, `TMUX_PANE`, `INSIDE_EMACS`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `KITTY_WINDOW_ID`, `__CFBundleIdentifier`, `__PWSH_LOGIN_CHECKED`, `CI`, `VSCODE_RESOLVING_ENVIRONMENT`, `TERM`, `COLORTERM`, `WT_SESSION`, `EDITOR`, `ZDOTDIR`, `XDG_CONFIG_HOME`, `SHELL`, `HOME`, `USERPROFILE`, `PATH`, `PATHEXT`, `ComSpec`; scripts: `HISTCONTROL`, `GHOSTTY_RESOURCES_DIR`, `KITTY_SHELL_INTEGRATION`, `KITTY_INSTALLATION_DIR`, `VSCODE_INJECTION`, `VSCODE_SHELL_INTEGRATION` | see §5.2, §5.4, §5.5, §7.7, §9.3 |
 
 ### 3.5 History file
 
@@ -2348,8 +2348,11 @@ block order is always list rows then the description row:
 List row for item `s` (selected row uses selected colours):
 `' '` + icon (2 cols) + `' '` + title + (`' '` + args hint in dim when room) + pad to `w`.
 - Icon slot: always two columns. A spec `icon` that is a single wide emoji
-  is text (`⭐` for the current git branch). With the kitty graphics protocol (Ghostty, kitty; inside tmux when
-  `tmux display` reports `allow-passthrough` on and a kitty or Ghostty client), `fig://icon?type=<t>` is that PNG and `fig://template?color=&badge=` the template
+  is text (`⭐` for the current git branch). With the kitty graphics protocol (kitty, Ghostty, WezTerm by
+  `TERM_PROGRAM=WezTerm` except on Windows, where ConPTY sits in between and is unchecked, and iTerm2 whose
+  `TERM_PROGRAM_VERSION` is 3.6 or later by major and minor; inside tmux only when `tmux display` reports
+  `allow-passthrough` on and a kitty or Ghostty client, since tmux overwrites `TERM_PROGRAM`),
+  `fig://icon?type=<t>` is that PNG and `fig://template?color=&badge=` the template
   tinted by `scale_u8` (`a·b/256` per channel, alpha kept) with the badge in white. Otherwise the row type's
   image: subcommand `command`, option `option`, arg `box`, auto-execute `carrot`, file `file`, folder `folder`,
   shortcut `💡` and mixin `➡` on tinted templates, history `📚`.
@@ -2846,7 +2849,8 @@ with a pyte-based PTY driver (step files of keys/waits/snapshots, temp HOME and 
 9. `exit` → harness sees the child exit code propagated.
 Manual checklist per OS/terminal: macOS Terminal.app + iTerm2 (zsh, bash 5), Linux GNOME Terminal + kitty (bash, zsh,
 fish), tmux pane, SSH into a host with tabsmith installed, Windows Terminal + pwsh 7 (with and without side-loaded
-`conpty.dll`), VS Code integrated terminal (no hang during env resolution).
+`conpty.dll`), VS Code integrated terminal (no hang during env resolution). Row images in iTerm2 and WezTerm: the
+nine steps of `docs/brand-icons-plan.md` (PR 4); a terminal that fails one goes back to tiles.
 
 ---
 

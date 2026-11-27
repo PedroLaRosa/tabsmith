@@ -198,13 +198,15 @@ are for naming tests.
   - **When** graphics support is detected
   - **Then** it is `Off`, and rows show tiles
 - **B4.3 WezTerm**
-  - **Given** WezTerm, outside tmux
+  - **Given** WezTerm, outside tmux, on macOS or Linux (on Windows ConPTY sits in between, and nobody can check it
+    here, so WezTerm keeps the tiles there)
   - **When** graphics support is detected
   - **Then** it is `Direct`
 - **B4.4 iTerm2 or WezTerm behind tmux**
   - **Given** tmux whose client is iTerm2 or WezTerm, with `allow-passthrough` on
   - **When** graphics support is detected
-  - **Then** it is `Off`: the tmux path needs kitty Unicode placeholders, which neither is known to support
+  - **Then** it is `Off`: the tmux path needs kitty Unicode placeholders, which WezTerm does not parse and which
+    nobody has checked in iTerm2 (its source has implemented them since 3.5.6)
 - **B4.5 kitty and Ghostty are unchanged**
   - **Given** kitty or Ghostty, outside tmux or behind tmux with passthrough
   - **When** graphics support is detected

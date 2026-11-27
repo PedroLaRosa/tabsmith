@@ -21,15 +21,13 @@ pub(crate) enum KittyPixels {
     Rgba(Vec<u8>),
 }
 
-/// Kitty graphics protocol is used for Ghostty and kitty only. Inside tmux, tmux tells the outer terminal and whether
-/// it passes sequences through (`allow-passthrough`, off by default).
+/// Kitty graphics protocol is used for kitty, Ghostty, iTerm2 3.6 or later and WezTerm. Inside tmux only tmux is
+/// trusted (it overwrites `TERM_PROGRAM` and keeps a stale `KITTY_WINDOW_ID` from the server's start): it tells the
+/// outer terminal and whether it passes sequences through (`allow-passthrough`, off by default).
 pub(crate) fn detect() -> GraphicsSupport {
     let var = |k: &str| std::env::var(k).ok();
     if var("TMUX").is_none() {
-        let on = var("KITTY_WINDOW_ID").is_some()
-            || var("TERM_PROGRAM").as_deref() == Some("ghostty")
-            || var("TERM").as_deref() == Some("xterm-kitty");
-        return if on { GraphicsSupport::Direct } else { GraphicsSupport::Off };
+        return direct_graphics(var, cfg!(windows));
     }
     let mut cmd = std::process::Command::new("tmux");
     cmd.args(["display", "-p"]);
@@ -44,8 +42,43 @@ pub(crate) fn detect() -> GraphicsSupport {
     tmux_graphics(&out)
 }
 
+/// Outside tmux, from the terminal's variables (`var` looks one up): Direct for kitty (`KITTY_WINDOW_ID` or
+/// `TERM=xterm-kitty`), Ghostty and WezTerm (`TERM_PROGRAM`), and iTerm2 whose `TERM_PROGRAM_VERSION` is 3.6 or later.
+/// WezTerm on Windows stays Off: ConPTY sits between tabsmith and WezTerm there, and nobody has checked that it passes
+/// the kitty sequences through.
+fn direct_graphics(var: impl Fn(&str) -> Option<String>, on_windows: bool) -> GraphicsSupport {
+    let on = var("KITTY_WINDOW_ID").is_some()
+        || var("TERM").as_deref() == Some("xterm-kitty")
+        || match var("TERM_PROGRAM").as_deref() {
+            Some("ghostty") => true,
+            Some("WezTerm") => !on_windows,
+            Some("iTerm.app") => {
+                var("TERM_PROGRAM_VERSION").is_some_and(|v| iterm2_has_kitty_graphics(&v))
+            }
+            _ => false,
+        };
+    if on { GraphicsSupport::Direct } else { GraphicsSupport::Off }
+}
+
+/// iTerm2 takes the kitty protocol from 3.6. Its version is compared as numbers on major and minor, since a part can
+/// reach two digits (`3.10` would sort before `3.6` as text); the patch and any suffix are ignored (`3.6.0beta1`,
+/// `3.7.20261127-nightly`).
+fn iterm2_has_kitty_graphics(version: &str) -> bool {
+    let mut parts = version.split('.').map(leading_number);
+    match (parts.next().flatten(), parts.next().flatten()) {
+        (Some(major), Some(minor)) => (major, minor) >= (3, 6),
+        _ => false,
+    }
+}
+
+/// The number `part` starts with: `6beta1` → 6, `beta` → none.
+fn leading_number(part: &str) -> Option<u32> {
+    part.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
 /// `allow-passthrough client_termname client_termtype` → Tmux when passthrough is on and the client is kitty or
-/// Ghostty (by `TERM` or by its XTVERSION reply, e.g. `kitty(0.47.1)`).
+/// Ghostty (by `TERM` or by its XTVERSION reply, e.g. `kitty(0.47.1)`). iTerm2 and WezTerm clients stay Off: this path
+/// needs kitty Unicode placeholders, which WezTerm does not parse and which nobody has checked in iTerm2.
 fn tmux_graphics(out: &str) -> GraphicsSupport {
     match out.trim().split_once(' ') {
         Some((pass, client))
@@ -189,5 +222,142 @@ mod tests {
         );
         assert_eq!(tmux_graphics(" xterm-256color iTerm2 3.5\n"), GraphicsSupport::Off);
         assert_eq!(tmux_graphics(""), GraphicsSupport::Off);
+    }
+
+    fn env_with<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
+    }
+
+    #[test]
+    fn should_send_images_directly_to_kitty_by_its_window_id() {
+        let var = env_with(&[("KITTY_WINDOW_ID", "1"), ("TERM", "xterm-256color")]);
+
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_images_directly_to_kitty_by_its_term() {
+        let var = env_with(&[("TERM", "xterm-kitty")]);
+
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_images_directly_to_ghostty() {
+        let var = env_with(&[("TERM_PROGRAM", "ghostty"), ("TERM", "xterm-ghostty")]);
+
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_images_directly_to_wezterm() {
+        let var = env_with(&[
+            ("TERM_PROGRAM", "WezTerm"),
+            ("TERM_PROGRAM_VERSION", "20240203-110809-5046fc22"),
+            ("TERM", "xterm-256color"),
+        ]);
+
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_no_images_to_wezterm_on_windows_where_conpty_sits_in_between() {
+        let var = env_with(&[("TERM_PROGRAM", "WezTerm"), ("TERM_PROGRAM_VERSION", "20240203-110809-5046fc22")]);
+
+        assert_eq!(direct_graphics(var, true), GraphicsSupport::Off);
+    }
+
+    #[test]
+    fn should_send_images_directly_to_iterm2_3_6_or_later() {
+        let var = env_with(&[
+            ("TERM_PROGRAM", "iTerm.app"),
+            ("TERM_PROGRAM_VERSION", "3.7.9"),
+            ("TERM", "xterm-256color"),
+        ]);
+
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_no_images_to_iterm2_older_than_3_6() {
+        let var = env_with(&[("TERM_PROGRAM", "iTerm.app"), ("TERM_PROGRAM_VERSION", "3.5.14")]);
+
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Off);
+    }
+
+    #[test]
+    fn should_send_images_directly_to_iterm2_3_6_or_later_whatever_its_patch_or_suffix() {
+        let versions = [
+            "3.6.6",
+            "3.6.11",
+            "3.6.0beta1",
+            "3.7.10beta1",
+            "3.7.20261127-nightly",
+            "3.10.0",
+        ];
+
+        let support = versions.map(|v| iterm2_graphics(Some(v)));
+
+        assert_eq!(support, [GraphicsSupport::Direct; 6]);
+    }
+
+    #[test]
+    fn should_send_no_images_to_iterm2_whose_version_is_older_missing_or_unreadable() {
+        let versions = [
+            Some("3.5.0beta3"),
+            Some("2.9.20160313-nightly"),
+            None,
+            Some(""),
+            Some("3"),
+        ];
+
+        let support = versions.map(iterm2_graphics);
+
+        assert_eq!(support, [GraphicsSupport::Off; 5]);
+    }
+
+    #[test]
+    fn should_read_an_iterm2_minor_by_its_leading_digits() {
+        let version = Some("3.6beta1");
+
+        let support = iterm2_graphics(version);
+
+        assert_eq!(support, GraphicsSupport::Direct);
+    }
+
+    fn iterm2_graphics(version: Option<&str>) -> GraphicsSupport {
+        let iterm2 = ("TERM_PROGRAM", "iTerm.app");
+        match version {
+            Some(v) => direct_graphics(env_with(&[iterm2, ("TERM_PROGRAM_VERSION", v)]), false),
+            None => direct_graphics(env_with(&[iterm2]), false),
+        }
+    }
+
+    #[test]
+    fn should_send_no_images_to_a_terminal_it_does_not_know() {
+        let var = env_with(&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM", "xterm-256color")]);
+
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Off);
+    }
+
+    #[test]
+    fn should_send_images_through_tmux_to_a_kitty_or_ghostty_client_named_only_by_its_term() {
+        let outs = ["on xterm-kitty \n", "on xterm-ghostty \n"];
+
+        let support = outs.map(tmux_graphics);
+
+        assert_eq!(support, [GraphicsSupport::Tmux; 2]);
+    }
+
+    #[test]
+    fn should_send_no_images_through_tmux_to_an_iterm2_or_wezterm_client_even_with_passthrough_on() {
+        let outs = [
+            "on xterm-256color iTerm2 3.7.9\n",
+            "all xterm-256color WezTerm 20240203-110809-5046fc22\n",
+        ];
+
+        let support = outs.map(tmux_graphics);
+
+        assert_eq!(support, [GraphicsSupport::Off; 2]);
     }
 }
