@@ -9,7 +9,7 @@ use crate::modules::dropdown::domain::value_objects::icon_slot::IconSlot;
 use crate::modules::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
 /// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
-pub(crate) fn slot(it: &Suggestion, g: GraphicsSupport) -> IconSlot {
+pub(crate) fn slot(it: &Suggestion, _command: Option<&str>, g: GraphicsSupport) -> IconSlot {
     let spec = it.icon();
     if let Some(emoji) = spec.and_then(wide_emoji) {
         return text(&emoji);
@@ -150,6 +150,7 @@ mod tests {
         assert_eq!(
             slot(
                 &it(Some("\u{2b50}\u{fe0f}"), SuggestionKind::Subcommand),
+                None,
                 GraphicsSupport::Direct
             )
             .text(),
@@ -158,6 +159,7 @@ mod tests {
         // A named icon is its PNG; an unknown name is the plain template.
         let s = slot(
             &it(Some("fig://icon?type=git"), SuggestionKind::Subcommand),
+            None,
             GraphicsSupport::Direct,
         );
         assert_eq!(
@@ -168,6 +170,7 @@ mod tests {
         );
         let s = slot(
             &it(Some("fig://icon?type=txt"), SuggestionKind::Subcommand),
+            None,
             GraphicsSupport::Direct,
         );
         assert_eq!(
@@ -182,6 +185,7 @@ mod tests {
                 Some("fig://template?color=2ecc71&badge=\u{1f525}"),
                 SuggestionKind::Arg,
             ),
+            None,
             GraphicsSupport::Direct,
         );
         assert!(
@@ -190,21 +194,22 @@ mod tests {
                 && matches!(s.image(), Some(IconId::Tinted(..)))
         );
         // Type defaults with images; ASCII without.
-        assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Direct)
+        assert!(slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Direct)
             .image()
             .is_some());
-        assert_eq!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off).text(), " -");
-        assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off)
+        assert_eq!(slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Off).text(), " -");
+        assert!(slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Off)
             .image()
             .is_none());
         assert_eq!(
-            slot(&it(None, SuggestionKind::History), GraphicsSupport::Direct).text(),
+            slot(&it(None, SuggestionKind::History), None, GraphicsSupport::Direct).text(),
             "📚"
         );
         // Narrow emoji and remote URLs fall back to the type.
         assert_eq!(
             slot(
                 &it(Some("\u{2699}\u{fe0f}"), SuggestionKind::Arg),
+                None,
                 GraphicsSupport::Direct
             )
             .text(),
@@ -213,6 +218,7 @@ mod tests {
         assert_eq!(
             slot(
                 &it(Some("https://fig.io/x.png"), SuggestionKind::Arg),
+                None,
                 GraphicsSupport::Off
             )
             .text(),
@@ -230,12 +236,12 @@ mod tests {
             SuggestionKind::AutoExecute,
         ] {
             assert_eq!(
-                width(slot(&it(None, k), GraphicsSupport::Direct).text()),
+                width(slot(&it(None, k), None, GraphicsSupport::Direct).text()),
                 2,
                 "{k:?}"
             );
-            assert_eq!(width(slot(&it(None, k), GraphicsSupport::Off).text()), 2, "{k:?}");
-            assert_eq!(width(slot(&it(None, k), GraphicsSupport::Tmux).text()), 2, "{k:?}");
+            assert_eq!(width(slot(&it(None, k), None, GraphicsSupport::Off).text()), 2, "{k:?}");
+            assert_eq!(width(slot(&it(None, k), None, GraphicsSupport::Tmux).text()), 2, "{k:?}");
         }
     }
 
@@ -243,7 +249,7 @@ mod tests {
     fn tmux_uses_placeholders() {
         let it = |icon: Option<&str>, kind| item("x", kind, "").with_icon(icon.map(String::from));
         // A PNG: two placeholder cells, its id in a 256-colour foreground.
-        let s = slot(&it(None, SuggestionKind::Option), GraphicsSupport::Tmux);
+        let s = slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Tmux);
         let id = s.image().map(IconId::value).unwrap();
         assert!(id < 256);
         assert_eq!(s.text().matches('\u{10eeee}').count(), 2);
@@ -252,6 +258,7 @@ mod tests {
         // A tinted template: 24-bit colour plus the top-byte diacritic.
         let s = slot(
             &it(Some("fig://template?color=2ecc71"), SuggestionKind::Arg),
+            None,
             GraphicsSupport::Tmux,
         );
         assert_eq!(
@@ -260,7 +267,7 @@ mod tests {
         );
         assert_eq!(color(0x0100_0000 | 0x2ecc71), ";38;2;46;204;113");
         // A badge cannot sit on a placeholder: text alone.
-        let s = slot(&it(None, SuggestionKind::Shortcut), GraphicsSupport::Tmux);
+        let s = slot(&it(None, SuggestionKind::Shortcut), None, GraphicsSupport::Tmux);
         assert!(s.image().is_none() && s.text() == "💡");
     }
 }

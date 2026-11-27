@@ -328,7 +328,7 @@ impl OverlayRenderer {
         };
         let (base, hl) = (self.pen(fg, bg, ""), self.pen(fg, mbg, ""));
         let mut r = Run::default();
-        let slot = icon_resolver::slot(it, self.images);
+        let slot = icon_resolver::slot(it, None, self.images);
         r.put(&base, " ");
         if slot.is_badge() {
             r.put(&self.pen((255, 255, 255), bg, ""), slot.text());

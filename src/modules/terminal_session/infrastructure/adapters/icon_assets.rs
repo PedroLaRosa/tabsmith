@@ -182,7 +182,7 @@ mod tests {
     /// Everything one row icon puts on the wire in `g`: the slot (text, badge flag, image id) and the transmission of
     /// its image. This is the one function that says HOW the values are produced.
     fn icon_fingerprint(it: &Suggestion, g: GraphicsSupport) -> String {
-        let s = slot(it, g);
+        let s = slot(it, None, g);
         let id = s.image().map(IconId::value);
         let sent = s
             .image()
