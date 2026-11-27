@@ -27,7 +27,7 @@ pub(crate) enum KittyPixels {
 pub(crate) fn detect() -> GraphicsSupport {
     let var = |k: &str| std::env::var(k).ok();
     if var("TMUX").is_none() {
-        return direct_graphics(var);
+        return direct_graphics(var, cfg!(windows));
     }
     let mut cmd = std::process::Command::new("tmux");
     cmd.args(["display", "-p"]);
@@ -44,11 +44,14 @@ pub(crate) fn detect() -> GraphicsSupport {
 
 /// Outside tmux, from the terminal's variables (`var` looks one up): Direct for kitty (`KITTY_WINDOW_ID` or
 /// `TERM=xterm-kitty`), Ghostty and WezTerm (`TERM_PROGRAM`), and iTerm2 whose `TERM_PROGRAM_VERSION` is 3.6 or later.
-fn direct_graphics(var: impl Fn(&str) -> Option<String>) -> GraphicsSupport {
+/// WezTerm on Windows stays Off: ConPTY sits between tabsmith and WezTerm there, and nobody has checked that it passes
+/// the kitty sequences through.
+fn direct_graphics(var: impl Fn(&str) -> Option<String>, on_windows: bool) -> GraphicsSupport {
     let on = var("KITTY_WINDOW_ID").is_some()
         || var("TERM").as_deref() == Some("xterm-kitty")
         || match var("TERM_PROGRAM").as_deref() {
-            Some("ghostty" | "WezTerm") => true,
+            Some("ghostty") => true,
+            Some("WezTerm") => !on_windows,
             Some("iTerm.app") => {
                 var("TERM_PROGRAM_VERSION").is_some_and(|v| iterm2_has_kitty_graphics(&v))
             }
@@ -228,21 +231,21 @@ mod tests {
     fn should_send_images_directly_to_kitty_by_its_window_id() {
         let var = env_with(&[("KITTY_WINDOW_ID", "1"), ("TERM", "xterm-256color")]);
 
-        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
     }
 
     #[test]
     fn should_send_images_directly_to_kitty_by_its_term() {
         let var = env_with(&[("TERM", "xterm-kitty")]);
 
-        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
     }
 
     #[test]
     fn should_send_images_directly_to_ghostty() {
         let var = env_with(&[("TERM_PROGRAM", "ghostty"), ("TERM", "xterm-ghostty")]);
 
-        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
     }
 
     #[test]
@@ -253,7 +256,14 @@ mod tests {
             ("TERM", "xterm-256color"),
         ]);
 
-        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_no_images_to_wezterm_on_windows_where_conpty_sits_in_between() {
+        let var = env_with(&[("TERM_PROGRAM", "WezTerm"), ("TERM_PROGRAM_VERSION", "20240203-110809-5046fc22")]);
+
+        assert_eq!(direct_graphics(var, true), GraphicsSupport::Off);
     }
 
     #[test]
@@ -264,14 +274,14 @@ mod tests {
             ("TERM", "xterm-256color"),
         ]);
 
-        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Direct);
     }
 
     #[test]
     fn should_send_no_images_to_iterm2_older_than_3_6() {
         let var = env_with(&[("TERM_PROGRAM", "iTerm.app"), ("TERM_PROGRAM_VERSION", "3.5.14")]);
 
-        assert_eq!(direct_graphics(var), GraphicsSupport::Off);
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Off);
     }
 
     #[test]
@@ -316,8 +326,8 @@ mod tests {
     fn iterm2_graphics(version: Option<&str>) -> GraphicsSupport {
         let iterm2 = ("TERM_PROGRAM", "iTerm.app");
         match version {
-            Some(v) => direct_graphics(env_with(&[iterm2, ("TERM_PROGRAM_VERSION", v)])),
-            None => direct_graphics(env_with(&[iterm2])),
+            Some(v) => direct_graphics(env_with(&[iterm2, ("TERM_PROGRAM_VERSION", v)]), false),
+            None => direct_graphics(env_with(&[iterm2]), false),
         }
     }
 
@@ -325,7 +335,7 @@ mod tests {
     fn should_send_no_images_to_a_terminal_it_does_not_know() {
         let var = env_with(&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM", "xterm-256color")]);
 
-        assert_eq!(direct_graphics(var), GraphicsSupport::Off);
+        assert_eq!(direct_graphics(var, false), GraphicsSupport::Off);
     }
 
     #[test]
