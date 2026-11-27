@@ -86,6 +86,15 @@ mod tests {
     }
 
     #[test]
+    fn should_accept_icons_whose_colour_matches_and_whose_licence_allows_this_use() {
+        let catalogue = Catalogue::from_json(DATA).unwrap();
+
+        let checked = [entry("pnpm", Rgb(0xF6, 0x92, 0x20)), entry("deno", Rgb(0, 0, 0))].map(|e| catalogue.check(&e));
+
+        assert_eq!(checked, [Ok(()), Ok(())]);
+    }
+
+    #[test]
     fn should_allow_an_entry_without_a_licence_of_its_own() {
         let licence = None;
 
