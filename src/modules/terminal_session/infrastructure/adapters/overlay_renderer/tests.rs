@@ -418,6 +418,31 @@ fn png_id(name: &str) -> u32 {
 }
 
 #[test]
+fn should_place_each_command_name_its_own_brand_while_the_first_word_is_typed() {
+    let s = settings(r#"{"autocomplete.width": 20}"#);
+    let rows = vec![
+        item("python3", SuggestionKind::Subcommand, "p"),
+        item("pnpm", SuggestionKind::Subcommand, "p"),
+        item("pwd", SuggestionKind::Subcommand, "p"),
+        item("pd", SuggestionKind::Shortcut, "p"),
+    ];
+    let mut m = Menu::new();
+    m.on_completion(comp("p", 1, rows).with_spec_name(""), &s, Instant::now());
+    let a = model(40, 12, &[b"$ p"]);
+    let mut r = OverlayRenderer::new(Theme::dark(), true).with_images(GraphicsSupport::Direct);
+
+    let frame = String::from_utf8_lossy(&r.frame(&a, &m, &input(&s, None))).into_owned();
+
+    let placed: Vec<u32> = frame
+        .split("\x1b_Ga=p,i=")
+        .skip(1)
+        .map(|rest| rest[..rest.find(',').unwrap()].parse().unwrap())
+        .collect();
+    let shortcut_badge = IconId::Tinted(0x34, 0x98, 0xdb).value();
+    assert_eq!(placed, [png_id("python"), png_id("pnpm"), png_id("command"), shortcut_badge]);
+}
+
+#[test]
 fn should_place_the_command_brand_on_its_subcommand_rows() {
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let mut m = Menu::new();
