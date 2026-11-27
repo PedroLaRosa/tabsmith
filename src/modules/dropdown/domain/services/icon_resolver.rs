@@ -9,7 +9,8 @@ use crate::modules::dropdown::domain::value_objects::icon_id::{placeholders, Ico
 use crate::modules::dropdown::domain::value_objects::icon_slot::IconSlot;
 use crate::modules::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
-/// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
+/// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type's icon. Subcommand and
+/// argument rows of a `command` with a brand show that brand instead (SPEC §7.4.2).
 pub(crate) fn slot(it: &Suggestion, command: Option<&str>, g: GraphicsSupport) -> IconSlot {
     let spec = it.icon();
     if let Some(emoji) = spec.and_then(wide_emoji) {
@@ -50,7 +51,8 @@ fn spec_image(s: &str) -> Option<IconSlot> {
     Some(badge_slot(color, param(q, "badge").unwrap_or("")))
 }
 
-/// Default icon per row type. History rows keep their 📚 from the history source.
+/// Default icon per row type, the `brand` for subcommands and arguments. History rows keep their 📚 from the history
+/// source.
 fn type_image(kind: SuggestionKind, brand: Option<&str>) -> IconSlot {
     match kind {
         SuggestionKind::Subcommand => png_slot(brand.unwrap_or("command")),
