@@ -57,6 +57,9 @@ pub(crate) fn icon_color(name: &str) -> Option<Rgb> {
         .map(|(_, colour)| *colour)
 }
 
+/// The tile of history rows, which have no icon of their own: grey.
+pub(crate) const HISTORY_TILE: Rgb = (0x8e, 0x8e, 0x93);
+
 /// The colour of the tile that stands for `icon` without images: a PNG's colour, or the tint of a tinted template.
 pub(crate) fn tile_color(icon: IconId) -> Rgb {
     match icon {

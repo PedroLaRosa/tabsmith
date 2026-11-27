@@ -3,7 +3,7 @@
 
 use crate::modules::completion::domain::value_objects::suggestion::Suggestion;
 use crate::modules::dropdown::domain::services::brand_catalog::brand_icon;
-use crate::modules::dropdown::domain::services::icon_palette::tile_color;
+use crate::modules::dropdown::domain::services::icon_palette::{tile_color, HISTORY_TILE};
 use crate::modules::dropdown::domain::services::text_fitting::width;
 use crate::modules::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::modules::dropdown::domain::value_objects::icon_id::{placeholders, IconId, ICON_NAMES};
@@ -74,7 +74,8 @@ fn tile_slot(shown: &IconSlot, kind: SuggestionKind) -> IconSlot {
     let mark = format!(" {}", kind_mark(kind));
     match shown.image() {
         Some(icon) => IconSlot::tile(mark, tile_color(icon)),
-        None => text(&mark),
+        // Only history rows draw no image (their 📚 is text).
+        None => IconSlot::tile(mark, HISTORY_TILE),
     }
 }
 
@@ -254,6 +255,15 @@ mod tests {
         let shown = slot(&checkout, Some("git"), GraphicsSupport::Off);
 
         assert_eq!((shown.text(), shown.tile_color()), (" >", Some((0xff, 0x40, 0x1e))));
+    }
+
+    #[test]
+    fn should_fill_a_history_row_with_grey_without_images() {
+        let earlier = item("git status", SuggestionKind::History, "");
+
+        let shown = slot(&earlier, None, GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" h", Some((0x8e, 0x8e, 0x93))));
     }
 
     #[test]
