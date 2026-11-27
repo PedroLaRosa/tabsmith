@@ -204,7 +204,8 @@ are for naming tests.
 - **B4.4 iTerm2 or WezTerm behind tmux**
   - **Given** tmux whose client is iTerm2 or WezTerm, with `allow-passthrough` on
   - **When** graphics support is detected
-  - **Then** it is `Off`: the tmux path needs kitty Unicode placeholders, which neither is known to support
+  - **Then** it is `Off`: the tmux path needs kitty Unicode placeholders, which WezTerm does not parse and which
+    nobody has checked in iTerm2 (its source has implemented them since 3.5.6)
 - **B4.5 kitty and Ghostty are unchanged**
   - **Given** kitty or Ghostty, outside tmux or behind tmux with passthrough
   - **When** graphics support is detected
