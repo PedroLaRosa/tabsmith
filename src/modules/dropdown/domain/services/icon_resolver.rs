@@ -167,6 +167,76 @@ mod tests {
     }
 
     #[test]
+    fn should_keep_a_spec_emoji_over_the_brand() {
+        let branch = item("main", SuggestionKind::Arg, "").with_icon(Some("\u{2b50}\u{fe0f}".into()));
+
+        let shown = slot(&branch, Some("git"), GraphicsSupport::Direct);
+
+        assert_eq!((shown.text(), shown.image()), ("⭐", None));
+    }
+
+    #[test]
+    fn should_keep_a_named_spec_icon_over_the_brand() {
+        let warning = item("x", SuggestionKind::Subcommand, "").with_icon(Some("fig://icon?type=alert".into()));
+
+        let icon = slot(&warning, Some("git"), GraphicsSupport::Direct).image();
+
+        assert_eq!(icon, png("alert"));
+    }
+
+    #[test]
+    fn should_show_the_brand_when_the_spec_icon_cannot_be_drawn() {
+        let row = |icon: &str| item("x", SuggestionKind::Subcommand, "").with_icon(Some(icon.into()));
+        let narrow_emoji_and_remote_url = [row("\u{2699}\u{fe0f}"), row("https://fig.io/x.png")];
+
+        let icons = narrow_emoji_and_remote_url.map(|it| slot(&it, Some("git"), GraphicsSupport::Direct).image());
+
+        assert_eq!(icons, [png("git"); 2]);
+    }
+
+    #[test]
+    fn should_keep_the_kind_icon_on_rows_that_are_neither_subcommands_nor_arguments() {
+        let kinds = [
+            SuggestionKind::Option,
+            SuggestionKind::File,
+            SuggestionKind::Folder,
+            SuggestionKind::History,
+            SuggestionKind::Shortcut,
+            SuggestionKind::Special,
+            SuggestionKind::AutoExecute,
+        ];
+
+        let branded: Vec<_> = kinds
+            .into_iter()
+            .filter(|&kind| {
+                let row = item("x", kind, "");
+                slot(&row, Some("git"), GraphicsSupport::Direct) != slot(&row, None, GraphicsSupport::Direct)
+            })
+            .collect();
+
+        assert_eq!(branded, Vec::new());
+    }
+
+    #[test]
+    fn should_show_the_command_icon_for_a_command_without_a_brand() {
+        let sub = item("sub", SuggestionKind::Subcommand, "su");
+
+        let icon = slot(&sub, Some("mytool"), GraphicsSupport::Direct).image();
+
+        assert_eq!(icon, png("command"));
+    }
+
+    #[test]
+    fn should_draw_the_brand_as_placeholders_behind_tmux() {
+        let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+        let git = png("git").unwrap();
+
+        let shown = slot(&checkout, Some("git"), GraphicsSupport::Tmux);
+
+        assert_eq!((shown.text(), shown.image()), (placeholders(git.value()).as_str(), Some(git)));
+    }
+
+    #[test]
     fn resolves_like_q() {
         let it = |icon: Option<&str>, kind| item("x", kind, "").with_icon(icon.map(String::from));
         // The current-branch star is an emoji: text in both modes.
