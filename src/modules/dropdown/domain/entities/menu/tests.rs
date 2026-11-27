@@ -658,3 +658,13 @@ fn should_name_each_row_its_own_command_while_the_first_word_is_typed() {
 
     assert_eq!(commands, [Some("node"), Some("npm"), Some("nproc")]);
 }
+
+#[test]
+fn should_name_no_command_before_any_reply() {
+    let m = Menu::new();
+    let checkout = item("checkout", SuggestionKind::Subcommand, "");
+
+    let command = m.command_of(&checkout);
+
+    assert_eq!(command, None);
+}
