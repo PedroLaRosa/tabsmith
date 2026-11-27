@@ -494,8 +494,8 @@ mod tests {
     fn embedded_index_shape() {
         let b = testing::bundle_subset(&["index.json"]);
         let idx = load_from(b.path(), &b.path().join("user")).unwrap();
-        assert_eq!(idx.completions().len(), 1885);
-        assert_eq!(idx.diff_versioned().len(), 6);
+        // Names, not counts: upstream adds and removes specs in every bundle bump.
+        assert!(idx.completions().iter().any(|name| name == "git"));
         assert!(idx.diff_versioned().contains("heroku"));
     }
 
