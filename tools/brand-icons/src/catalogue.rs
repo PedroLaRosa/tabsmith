@@ -1,3 +1,28 @@
+//! simple-icons' `data/simple-icons.json`: the colour and licence of every brand, by slug.
+
+use crate::manifest::Entry;
+use serde_json::Value;
+use std::collections::HashMap;
+
+pub struct Catalogue {
+    brands: HashMap<String, Value>,
+}
+
+impl Catalogue {
+    pub fn from_json(text: &str) -> Result<Catalogue, String> {
+        let list: Vec<Value> = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let brands = list.into_iter().map(|brand| (brand["slug"].as_str().unwrap_or("").to_string(), brand)).collect();
+        Ok(Catalogue { brands })
+    }
+
+    pub fn check(&self, entry: &Entry) -> Result<(), String> {
+        if !self.brands.contains_key(&entry.slug) {
+            return Err(format!("{} is not in the simple-icons data file", entry.slug));
+        }
+        Ok(())
+    }
+}
+
 /// Licences whose terms allow a logo as a row icon: CC0 and the attribution-only permissive ones. Each attribution-licensed
 /// icon is credited in `assets/icons/README.md`. Anything else (share-alike, copyleft, non-commercial, no-derivatives,
 /// custom) is refused.
@@ -11,6 +36,28 @@ fn is_allowed(licence: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::colour::Rgb;
+    use crate::manifest::Entry;
+
+    const DATA: &str = r#"[
+        {"title": "pnpm", "slug": "pnpm", "hex": "F69220", "source": "https://pnpm.io"},
+        {"title": "Deno", "slug": "deno", "hex": "000000", "source": "https://deno.com", "license": {"type": "MIT"}},
+        {"title": "Rust", "slug": "rust", "hex": "000000", "source": "https://rust-lang.org",
+         "license": {"type": "CC-BY-SA-4.0"}}
+    ]"#;
+
+    fn entry(slug: &str, colour: Rgb) -> Entry {
+        Entry { slug: slug.into(), colour }
+    }
+
+    #[test]
+    fn should_refuse_an_icon_missing_from_the_data_file() {
+        let catalogue = Catalogue::from_json(DATA).unwrap();
+
+        let checked = catalogue.check(&entry("turborepo", Rgb(0xFF, 0x1E, 0x56)));
+
+        assert_eq!(checked, Err("turborepo is not in the simple-icons data file".to_string()));
+    }
 
     #[test]
     fn should_allow_an_entry_without_a_licence_of_its_own() {

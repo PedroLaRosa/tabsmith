@@ -10,3 +10,4 @@ publish = false
 
 [dependencies]
 png = "=0.18.1"
+serde_json = "=1.0.154"
