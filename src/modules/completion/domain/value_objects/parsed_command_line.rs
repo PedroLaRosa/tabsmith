@@ -34,8 +34,7 @@ pub(crate) struct ParsedCommandLine {
     option_chain: Option<String>,
     /// Single-token command: suggest first tokens (SPEC §6.9) instead of spec items.
     first_token: bool,
-    /// Name of the root spec (`git`). No production code reads it; the parser tests assert it.
-    #[cfg_attr(not(test), allow(dead_code, reason = "the parser tests assert which spec a parse resolved to"))]
+    /// Name of the innermost spec in use (`git`, `aws/s3`), empty for a first-token parse.
     spec_name: String,
 }
 
@@ -166,7 +165,6 @@ impl ParsedCommandLine {
         self.first_token
     }
 
-    #[cfg(test)]
     pub(crate) fn spec_name(&self) -> &str {
         &self.spec_name
     }

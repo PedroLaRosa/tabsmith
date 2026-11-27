@@ -284,6 +284,23 @@ mod tests {
     }
 
     #[test]
+    fn should_name_the_innermost_spec_in_the_reply() {
+        let sudo = Rc::new(command(&["sudo"]).with_args(vec![Rc::new(Arg::default().with_is_command(true))]));
+        let doubles = CompletionDoubles::new(
+            InMemorySpecRepository::with(&[("sudo", &sudo), ("git", &git())]),
+            InMemorySpecRuntime::default(),
+        );
+        let mut session = doubles.session(Settings::default());
+
+        let result = doubles
+            .complete_command_line(SpecIndex::default())
+            .execute(&mut session, &request(1, "sudo git co"), &mut |_| {})
+            .unwrap();
+
+        assert_eq!((rows(&result), result.spec_name()), (owned(&["commit"]), "git"));
+    }
+
+    #[test]
     fn should_reply_an_error_for_a_cursor_inside_a_word() {
         let doubles = CompletionDoubles::new(InMemorySpecRepository::with(&[("git", &git())]), InMemorySpecRuntime::default());
         let use_case = doubles.complete_command_line(SpecIndex::default());

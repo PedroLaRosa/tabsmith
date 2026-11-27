@@ -137,6 +137,7 @@ pub(crate) fn comp(buffer: &str, arg_key: u64, items: Vec<Suggestion>) -> Comple
         tokens,
         command_text: buffer.to_string(),
         command_index: 0,
+        spec_name: String::new(),
         arg_key,
         current_arg: Some(ArgumentHint::new("path".into(), "A path".into())),
         triggered_generators: Vec::new(),
