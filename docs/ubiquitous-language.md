@@ -121,7 +121,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `Suggestion` | VO | A final, ranked row shown in the dropdown. | `types::Item` |
 | `ArgumentHint` | VO | Name + description of the current arg. | `ArgInfo` |
 | `CompletionPhase` | VO | Parse (first reply) or Generators (follow-up). | `Phase` |
-| `CompletionResult` | VO | The reply for one request: suggestions, tokens, search term, loading, ghost, … | `types::Completion` |
+| `CompletionResult` | VO | The reply for one request: suggestions, tokens, the innermost spec's name, search term, loading, ghost, … | `types::Completion` |
 | `CompletionRequest` | DTO | Request id, buffer, cursor, cwd (a path), shell (a `Shell`, not a name), history mode. | `types::Request` |
 | `ServedRequest` | VO | The request the session is serving: its id, buffer, shell, clamped cursor, parsed command line, argument key, fuzzy flag, queries, triggered generators, first-token candidates and history prefix. | `engine::Current` |
 | `CompletionRequestPolicy` | Domain service | Request-level rules: the mid-word guard, whether fuzzy search applies, the history prefix, the env lookup (case-insensitive on Windows). | parts of `Engine::compute` |
@@ -189,7 +189,8 @@ Not in the table: the `*Parts` structs (`ThemeParts`, `MenuLayoutParts`, `FigPal
 | `MenuLayout` / `MenuSide` | VO | Geometry: above or below, rows, x0, width. | `render::{Layout, Side}` |
 | `MenuLayoutCalculator` / `MenuDescriber` | Domain service | Above or below, rows, x0 and width of the menu / the bold label and description the description bar and pop-out show. | `render::layout` / `render::describe` |
 | `IconSlot` / `IconId` / `GraphicsSupport` | VO | Icon cell (two columns for every row kind; a spec badge is stored as given); which icon; kitty / tmux / off. | `icons::{Slot, Image, Graphics}` |
-| `IconResolver` | Domain service | The icon cell and icon id for a suggestion under a graphics mode (emoji, `fig://` icons, type defaults). | `icons::{slot, spec_image, type_image, ascii_slot, wide_emoji}` |
+| `IconResolver` | Domain service | The icon cell and icon id for a suggestion of a command under a graphics mode (emoji, `fig://` icons, the command's brand on subcommand and argument rows, type defaults). | `icons::{slot, spec_image, type_image, ascii_slot, wide_emoji}` |
+| `BrandCatalog` | Domain service | The curated table of which icon stands for a command (`brand_icon`): several commands can share one brand, and a name that only looks like a brand has none. | – |
 | `DropdownError` | Domain error | Settings (printed as itself), data directory, invalid theme file, theme not found. | the `bail!`s of `cli::theme` |
 
 ## terminal_session
@@ -328,6 +329,8 @@ so nothing is replaced.
 | screen | the real terminal · the model (the headless alacritty `Term`) · `TerminalScreen` (the port over the model, the filter and the renderer) |
 | suggestion | `SpecSuggestion` (declared) · `SuggestionCandidate` (pipeline) · `Suggestion` (shown) |
 | completion | the module/feature · `CompletionResult` (one reply) |
+| icon | spec icon (a suggestion's `icon`: emoji or `fig://`) · brand (the icon of a row's command, `BrandCatalog`) · kind icon (the row type's default) |
+| command | the command line under the cursor (`CommandLine`) · a row's command (`Menu::command_of`: the root of the innermost spec, or the row itself in a first-token list) |
 | host / pump | gone. `QuickJsSpecRuntime` replaces the js Host, which becomes its task registry; `SpecRepository` + `SpecRuntime` replace the parser `Host` trait. `EngineInbox` (`bootstrap/engine_inbox.rs`) implements `RuntimeEventSource`; the `EngineServer` reads `EngineMessage`s from it, which `ChannelCompletionEngine` sends for the pty. The pumps become `pty_reader`, `ProgressGeneratorsUseCase` + `GeneratorRunner`, and runtime internals. |
 | cache | `GeneratorCache`, `GhostTextCache`, `ParsePrefixCache` (in `CompletionSession`), first-token cache (in `CompletionSession`), spec cache and module cache (inside adapters), detected CLI version memo and in-flight version probes (inside `QuickJsSpecRepository`) |
 | profile | pwsh `$PROFILE` (the pwsh dotfile, carried by `IntegrationPaths`) · `LlmProfile` |

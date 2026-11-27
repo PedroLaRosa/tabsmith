@@ -52,6 +52,7 @@ Facts the plan rests on (checked 2026-11-27):
 | Q3/Q9 | Where no images exist, the icon slot is a filled tile in the brand colour with the row-kind character on it. | Chosen from a five-variant preview, over two-letter monograms and over unfilled coloured text. |
 | Q4 | A spec `icon` wins. Otherwise subcommand and argument rows show the brand of the command. Options, files, folders, history and shortcuts keep their kind icon. Command-name rows show the brand of their own name. | Brand on every row would hide the difference between subcommands and options. |
 | Q7 | The brand set is a curated table in the repo. The 42 current PNGs stay; new ones are drawn once by a script from simple-icons, in the same style. | Automatic name matching shows wrong logos. |
+| Q10 | The command is the innermost one, after alias expansion and spec hand-over (P1, answered when PR 1 started). | Built as the root of the innermost spec's name: `tokens[command_index]` names `s3` in `aws s3 ls`, because aws and gcloud subcommands load their own spec files. |
 
 ## Behaviour (Given / When / Then)
 
@@ -102,7 +103,7 @@ are for naming tests.
   - **Then** `python3` shows the python icon and `pnpm` the pnpm icon
   - **And** `pwd`, which has no brand, shows the `command` icon
   - **And** an alias row (kind shortcut) keeps the shortcut icon
-- **B1.10 The command is the innermost one** (assumes parked item P1)
+- **B1.10 The command is the innermost one** (Q10)
   - **Given** the command line `sudo git ch`
   - **When** the menu draws the subcommand row `checkout` with images
   - **Then** the icon slot shows the git icon
@@ -299,7 +300,6 @@ Not decided in the interview. Defaults are suggestions; ask the user before buil
 
 | # | Open item | Default used by this plan | What would settle it |
 |---|---|---|---|
-| P1 | Which word is "the command": the innermost one after alias expansion and spec hand-over, or the first word as typed. Asked as Q10, not answered. | Innermost (`tokens[command_index]`): B1.10. | The user's answer. |
 | P2 | Brand colours close to the menu background: bun, rust and apple are black in simple-icons. | Draw them as they are. The chosen preview showed a black `bun` tile on a dark menu. | Looking at PR 3's icons on a dark and a light theme. |
 | P3 | A setting to turn row images off. None exists today. | Not added. | A terminal version that passes the manual check and still misdraws for someone. |
 | P4 | Tile colours for file, folder and history, which have no square PNG. | file `64748B`, folder `3B82F6`, history `8E8E93`. | Looking at PR 2 in Alacritty or Terminal.app. |

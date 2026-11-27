@@ -631,6 +631,7 @@ struct CompletionResult {
   req: u64, phase: CompletionPhase /* Parse | Generators */, error: bool,
   buffer: String, cursor: usize,    // what the reply was computed from (reconciliation, §7.3)
   tokens: Vec<String>, command_text: String /* before alias expansion */, command_index: usize,
+  spec_name: String,                // innermost spec in use (`git`, `aws/s3`); empty for a first-token list (§6.9)
   arg_key: u64,                     // hash of the current arg's and subcommand's Rc addresses
   current_arg: Option<ArgumentHint{name, description}>,
   search_term: String, triggered_generators: Vec<GeneratorKey>,
@@ -2352,6 +2353,13 @@ List row for item `s` (selected row uses selected colours):
   tinted by `scale_u8` (`a·b/256` per channel, alpha kept) with the badge in white. Otherwise the row type's
   image: subcommand `command`, option `option`, arg `box`, auto-execute `carrot`, file `file`, folder `folder`,
   shortcut `💡` and mixin `➡` on tinted templates, history `📚`.
+- Brand: subcommand and argument rows without a drawable spec icon show the brand of their command instead of
+  `command` or `box`, when the brand table has one (`dropdown/domain/services/brand_catalog.rs`, curated by hand:
+  `kubectl`, `kubectx` and `kubens` → `kubernetes`; `less`, `man`, `make` and `nano` have none). The command is
+  the root of the innermost spec in use (`Menu::command_of`, from `CompletionResult.spec_name`): `git` for
+  `sudo git ch`, `kubectl` for `k get ` with `alias k=kubectl`, `aws` for `aws s3 ls` (whose `s3` loads `aws/s3`). In
+  a first-token list (§6.9) each row is its own command, so `npm` shows the npm icon. Every other row kind keeps
+  its type's icon, so options stay apart from subcommands.
   PNGs live in `assets/icons` (see its README). Each image is transmitted once (`a=t`), placed every frame over the
   slot (`a=p`, `z=-1`, under the text) and removed by the clear (`a=d,d=a`).
   Inside tmux each image goes through the passthrough (`ESC P tmux; … ESC \`, ESC doubled) with a 2×1 virtual
@@ -2360,8 +2368,8 @@ List row for item `s` (selected row uses selected colours):
   no placement or delete goes out. A badge cannot sit on a placeholder, so it is drawn as text alone.
 - Without images, ASCII right-aligned in the slot: subcommand ` >`, option ` -`, arg/special ` *`, file ` f`, folder
   ` d`, history ` h`, shortcut ` @`, auto-execute ` ↪`.
-- Narrow emoji (`⚙️`) and remote image URLs use the row type's icon: their width differs between terminals, which
-  would tear the frame.
+- Narrow emoji (`⚙️`) and remote image URLs count as no spec icon (the row gets its brand or its type's icon):
+  their width differs between terminals, which would tear the frame.
 - Title = `display_name` or names joined `", "`. Highlight: prefix mode → for each name whose lowercase starts with
   the lowercase query, the first `q.chars().count()` chars get `matching-bg`; fuzzy mode → fuzzysort indexes of the best
   name. (No regex.)
