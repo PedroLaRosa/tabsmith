@@ -2373,8 +2373,8 @@ List row for item `s` (selected row uses selected colours):
   of its PNG's square (`dropdown/domain/services/icon_palette.rs`); `file`, `folder` and history have no square:
   slate `64748B`, blue `3B82F6`, grey `8E8E93`. A `fig://template?color=` tile takes that colour and drops the
   badge. The character is black when the tile's brightness `(299·r + 587·g + 114·b) / 1000` is above 160, else
-  white. The tile keeps its colours on the selected row, and its colours go through `pen` like the theme's (256
-  colours without `COLORTERM=truecolor`). A wide emoji stays text, with no tile.
+  white. The tile keeps its colours on the selected row, and its colours go through `pen` like the theme's (24-bit
+  or the nearest xterm-256 index, §7.7 Output). A wide emoji stays text, with no tile.
 - Narrow emoji (`⚙️`) and remote image URLs count as no spec icon (the row gets its brand or its type's icon):
   their width differs between terminals, which would tear the frame.
 - Title = `display_name` or names joined `", "`. Highlight: prefix mode → for each name whose lowercase starts with
