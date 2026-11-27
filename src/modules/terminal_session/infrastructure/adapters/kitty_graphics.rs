@@ -44,7 +44,7 @@ pub(crate) fn detect() -> GraphicsSupport {
 /// Outside tmux, from the terminal's variables (`var` looks one up): Direct for kitty and Ghostty.
 fn direct_graphics(var: impl Fn(&str) -> Option<String>) -> GraphicsSupport {
     let on = var("KITTY_WINDOW_ID").is_some()
-        || var("TERM_PROGRAM").as_deref() == Some("ghostty")
+        || matches!(var("TERM_PROGRAM").as_deref(), Some("ghostty" | "WezTerm"))
         || var("TERM").as_deref() == Some("xterm-kitty");
     if on { GraphicsSupport::Direct } else { GraphicsSupport::Off }
 }
@@ -217,6 +217,17 @@ mod tests {
     #[test]
     fn should_send_images_directly_to_ghostty() {
         let var = env_with(&[("TERM_PROGRAM", "ghostty"), ("TERM", "xterm-ghostty")]);
+
+        assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_images_directly_to_wezterm() {
+        let var = env_with(&[
+            ("TERM_PROGRAM", "WezTerm"),
+            ("TERM_PROGRAM_VERSION", "20240203-110809-5046fc22"),
+            ("TERM", "xterm-256color"),
+        ]);
 
         assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
     }
