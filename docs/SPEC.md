@@ -2362,9 +2362,10 @@ List row for item `s` (selected row uses selected colours):
   no placement or delete goes out. A badge cannot sit on a placeholder, so it is drawn as text alone.
 - Brand: subcommand and argument rows without a drawable spec icon show the brand of their command instead of
   `command` or `box`, when the brand table has one (`dropdown/domain/services/brand_catalog.rs`, curated by hand:
-  `kubectl`, `kubectx` and `kubens` → `kubernetes`, `pip` → `python`, `turbo` → `turborepo`; `less`, `man`, `make`
-  and `nano` have none, being other products in simple-icons, and neither do tools whose logo carries share-alike,
-  copyleft, non-commercial or custom terms, such as `cargo` or `nvim`). The command is
+  `kubectl`, `kubectx` and `kubens` → `kubernetes`, `pnpx` → `pnpm`, `brew` → `homebrew`; `less`, `man`, `make`
+  and `nano` have none, being other products in simple-icons, and neither do tools whose logo is not plain CC0 or
+  whose brand guidelines do not allow a row icon, such as `cargo`, `python` or `go`; `assets/icons/README.md`). The
+  command is
   the root of the innermost spec in use (`Menu::command_of`, from `CompletionResult.spec_name`): `git` for
   `sudo git ch`, `kubectl` for `k get ` with `alias k=kubectl`, `aws` for `aws s3 ls` (whose `s3` loads `aws/s3`). In
   a first-token list (§6.9) each row is its own command, so `npm` shows the npm icon. Every other row kind keeps

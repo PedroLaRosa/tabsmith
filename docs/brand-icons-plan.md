@@ -99,8 +99,9 @@ are for naming tests.
   - **Then** all three show the kubernetes icon
 - **B1.9 Command-name rows show their own brand**
   - **Given** `autocomplete.firstTokenCompletion` is on and the command line `p`
-  - **When** the menu draws the rows `python3`, `pnpm` and `pwd` with images
-  - **Then** `python3` shows the python icon and `pnpm` the pnpm icon
+  - **When** the menu draws the rows `pnpm`, `podman` and `pwd` with images
+  - **Then** `pnpm` shows the pnpm icon and `podman` the podman icon (this example said `python3` until PR 3 found
+    that the PSF's policy needs permission for a recoloured Python logo)
   - **And** `pwd`, which has no brand, shows the `command` icon
   - **And** an alias row (kind shortcut) keeps the shortcut icon
 - **B1.10 The command is the innermost one** (Q10)
@@ -272,9 +273,12 @@ Scenarios B3.1 to B3.6.
   runtime dependency and no build-time step: `cargo build` must not need the rasteriser.
 - **Licences.** Extend `assets/icons/README.md`: simple-icons is CC0-1.0, and the logos remain trademarks of their
   owners. Some simple-icons entries carry their own licence or brand guidelines in the project's data file: skip any
-  entry that is not plain CC0 unless its terms allow this use.
-- **Size.** A current PNG is 3–4 KB. About 150 more adds roughly 0.5 MB to a 12.8 MB release binary. (Built: 136
-  PNGs, 157 KB in all.)
+  entry that is not plain CC0 unless its terms allow this use. (Built: the tool draws plain CC0 entries only, since
+  tabsmith ships no notices for attribution licences, and refuses an entry with brand guidelines until its line is
+  marked `guidelines-ok`. Of the 39 guideline pages read, 11 allow a row icon; the other 28, python and go among them,
+  ask for permission or forbid the recoloured mark on a tile.)
+- **Size.** A current PNG is 3–4 KB. About 150 more adds roughly 0.5 MB to a 12.8 MB release binary. (Built: 98
+  PNGs, 114 KB in all.)
 - Image ids are positions in `ICON_NAMES`. Above 255 icons an id no longer fits a 256-colour index; `icon_id::color`
   already switches to 24-bit there, so check the tmux placeholder test still covers both cases.
 

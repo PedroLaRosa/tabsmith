@@ -16,20 +16,39 @@ from [simple-icons](https://simple-icons.org) 16.38.1, whose icons are CC0-1.0
 (<https://creativecommons.org/publicdomain/zero/1.0/>). Each one is `template.png` tinted with the brand's colour, as
 tabsmith tints badges, with the simple-icons glyph centred on it in white, or in black on a light colour.
 
-To add a brand, add its simple-icons slug and colour to `simple-icons.txt` and run `just brand-icons`. To drop one,
-delete its line and its PNG. The tool refuses entries whose licence does not allow this use (share-alike, copyleft,
-non-commercial, no-derivatives or custom terms). These entries carry an attribution licence of their own:
+Only plain CC0 entries are drawn. The tool refuses an entry with a licence of its own: attribution licences (MIT,
+Apache-2.0, BSD, CC-BY) ask for notices that tabsmith's binary does not ship, and share-alike, copyleft,
+non-commercial, no-derivatives and custom terms do not allow this use. It also refuses an entry whose brand has
+guidelines of its own until they have been read and the manifest line ends in `guidelines-ok`. These were read and
+allow a row icon:
 
-- `apachemaven`, Apache-2.0: <https://apache.org/logos>
-- `deno`, MIT: <https://github.com/denoland/docs/blob/5dee713844c7447f80acd4093caa9d350d80bf36/static/img/logo.svg>
-- `exercism`, CC-BY-3.0: <https://github.com/exercism/website-icons/blob/2ad12baa465acfaa74efc5da27a6a12f8b05e3d0/exercism/logo-icon.svg>
-- `gnubash`, MIT: <https://github.com/odb/official-bash-logo/tree/61eff022f2dad3c7468f5deb4f06652d15f2c143>
-- `openjdk`, BSD-3-Clause: <https://hg.openjdk.java.net/duke/duke/file/ca00f100dafc/vector/Agent.svg>
-- `sanity`, MIT: <https://github.com/sanity-io/logos/blob/e298a1ac2757c83910fe08b496a115bc9aef06bd/src/sanityMonogram.tsx>
-- `typeorm`, MIT: <https://github.com/typeorm/typeorm/blob/e7649d2746f907ff36b1efb600402dedd5f5a499/resources/logo_big.png>
-- `v`, MIT: <https://github.com/vlang/v-logo/blob/eec050c901ed3afefce8cbe56092d55ed6770706/dist/v-logo.svg>
+- `dotnet`: <https://github.com/dotnet/brand/blob/c7d0f51b8ec59531332d05fb27a5b758a7a3d689/dotnet-styleGuide-2024.pdf>
+- `expo`: <https://expo.dev/brand/>
+- `gatsby`: <https://www.gatsbyjs.com/guidelines/logo>
+- `jupyter`: <https://github.com/jupyter/design>
+- `nodedotjs`: <https://nodejs.org/en/about/branding>
+- `nuxt`: <https://nuxt.com/design-kit>
+- `rancher`: <https://rancher.com/brand-guidelines/>
+- `streamlit`: <https://www.streamlit.io/brand>
+- `tailwindcss`: <https://tailwindcss.com/brand>
+- `typescript`: <https://www.typescriptlang.org/branding>
+- `typst`: <https://typst.app/legal/brand>
+
+Brands whose guidelines ask for written permission, allow the name only in words, or forbid recolouring the mark or
+placing it on a tile are left out (python, go, terraform, the JetBrains IDEs and others): their commands keep their
+kind icons.
+
+To add a brand: add `<slug> <colour>` (plus `guidelines-ok` once its guidelines are read) to `simple-icons.txt` and run
+`just brand-icons`; then append the slug at the end of `ICON_NAMES` (`src/modules/dropdown/domain/value_objects/icon_id.rs`)
+and of `PNGS` (`src/modules/terminal_session/infrastructure/adapters/icon_assets.rs`), add its colour to `PALETTE`
+(`icon_palette.rs`), and map its commands in `BRANDS` (`brand_catalog.rs`). To drop one, delete its line and its PNG
+and remove it from those four tables.
 
 ## Trademarks
 
-The brand logos (`git`, `docker`, `aws`, `python`, `pnpm`, …) are trademarks of their owners. They are included only
-to identify each tool on its row, not to suggest any endorsement.
+The brand logos (`git`, `docker`, `aws`, `pnpm`, `typescript`, …) are trademarks of their owners. They are included
+only to identify each tool on its row, not to suggest any endorsement. In particular: Node.js® is a registered
+trademark and the Node.js logo is a trademark of the OpenJS Foundation; "Jupyter" and the Jupyter logos are trademarks
+or registered trademarks of LF Charities; Rancher and the cow logo are registered trademarks or trademarks of Rancher
+Labs, Inc. (now SUSE) in the United States and other countries; Tailwind CSS and the Tailwind logo are trademarks of
+Tailwind Labs Inc.
