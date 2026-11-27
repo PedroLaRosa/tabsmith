@@ -1,5 +1,6 @@
 //! The colour of each row icon, so a terminal without images can still show it as a coloured tile.
 
+use crate::modules::dropdown::domain::value_objects::icon_id::{IconId, ICON_NAMES};
 use crate::modules::dropdown::domain::value_objects::rgb::Rgb;
 
 /// Icon name → its colour: the fill of the PNG's square. `file` and `folder` have no square: slate and blue.
@@ -56,6 +57,14 @@ pub(crate) fn icon_color(name: &str) -> Option<Rgb> {
         .map(|(_, colour)| *colour)
 }
 
+/// The colour of the tile that stands for `icon` without images: a PNG's colour, or the tint of a tinted template.
+pub(crate) fn tile_color(icon: IconId) -> Rgb {
+    match icon {
+        IconId::Png(index) => icon_color(ICON_NAMES[index]).expect("every icon has a colour"),
+        IconId::Tinted(r, g, b) => (r, g, b),
+    }
+}
+
 /// The colour of a character written on a `tile`: black on a light tile, white on a dark one, by the tile's perceived
 /// brightness (ITU-R BT.601 weights, 0–255).
 pub(crate) fn ink_on((r, g, b): Rgb) -> Rgb {
@@ -70,7 +79,6 @@ pub(crate) fn ink_on((r, g, b): Rgb) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modules::dropdown::domain::value_objects::icon_id::ICON_NAMES;
 
     #[test]
     fn should_give_the_git_icon_the_red_of_its_square() {

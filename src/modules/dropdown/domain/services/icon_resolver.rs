@@ -3,6 +3,7 @@
 
 use crate::modules::completion::domain::value_objects::suggestion::Suggestion;
 use crate::modules::dropdown::domain::services::brand_catalog::brand_icon;
+use crate::modules::dropdown::domain::services::icon_palette::tile_color;
 use crate::modules::dropdown::domain::services::text_fitting::width;
 use crate::modules::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::modules::dropdown::domain::value_objects::icon_id::{placeholders, IconId, ICON_NAMES};
@@ -16,12 +17,12 @@ pub(crate) fn slot(it: &Suggestion, command: Option<&str>, g: GraphicsSupport) -
     if let Some(emoji) = spec.and_then(wide_emoji) {
         return text(&emoji);
     }
-    if g == GraphicsSupport::Off {
-        return ascii_slot(it.kind());
-    }
     let s = spec
         .and_then(spec_image)
         .unwrap_or_else(|| type_image(it.kind(), command.and_then(brand_icon)));
+    if g == GraphicsSupport::Off {
+        return tile_slot(&s, it.kind());
+    }
     if g != GraphicsSupport::Tmux {
         return s;
     }
@@ -67,9 +68,18 @@ fn type_image(kind: SuggestionKind, brand: Option<&str>) -> IconSlot {
     }
 }
 
-/// Single-character fallback, right-aligned in the two-column slot (SPEC §7.4.2).
-fn ascii_slot(kind: SuggestionKind) -> IconSlot {
-    let c = match kind {
+/// Without images: the row type's character, right-aligned in the two-column slot, on a tile of the colour of the icon
+/// `shown` would draw (SPEC §7.4.2).
+fn tile_slot(shown: &IconSlot, kind: SuggestionKind) -> IconSlot {
+    let mark = format!(" {}", kind_mark(kind));
+    match shown.image() {
+        Some(icon) => IconSlot::tile(mark, tile_color(icon)),
+        None => text(&mark),
+    }
+}
+
+fn kind_mark(kind: SuggestionKind) -> char {
+    match kind {
         SuggestionKind::Subcommand => '>',
         SuggestionKind::Option => '-',
         SuggestionKind::Arg | SuggestionKind::Special => '*',
@@ -78,8 +88,7 @@ fn ascii_slot(kind: SuggestionKind) -> IconSlot {
         SuggestionKind::History => 'h',
         SuggestionKind::Shortcut => '@',
         SuggestionKind::AutoExecute => '↪',
-    };
-    text(&format!(" {c}"))
+    }
 }
 
 fn text(s: &str) -> IconSlot {
@@ -236,6 +245,15 @@ mod tests {
         let shown = slot(&checkout, Some("git"), GraphicsSupport::Tmux);
 
         assert_eq!((shown.text(), shown.image()), (placeholders(git.value()).as_str(), Some(git)));
+    }
+
+    #[test]
+    fn should_fill_the_slot_with_the_brand_colour_without_images() {
+        let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+        let shown = slot(&checkout, Some("git"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" >", Some((0xff, 0x40, 0x1e))));
     }
 
     #[test]
