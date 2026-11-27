@@ -2,9 +2,9 @@
 # One icon per line: <simple-icons slug> <brand colour>. The icon is assets/icons/<slug>.png. The colour must equal the
 # one in the simple-icons version pinned in scripts/brand-icons.sh, so a recoloured brand shows up here for review.
 # Amazon Q icons (git, docker, aws...) are never listed: those PNGs are kept as they are.
+# `guidelines-ok` marks a brand whose own guidelines (linked from the simple-icons data) were read and allow a row icon.
 
 ansible EE0000
-appwrite FD366E
 argo EF7B4D
 asciinema D40000
 astro BC52EE
@@ -18,32 +18,24 @@ bun 000000
 capacitor 119EFF
 circleci 343434
 claude D97757
-clion 000000
 clojure 5881D8
-cloudflare F38020
 cmake 064F8C
 coda F46A54
 curl 073551
 dapr 0D2192
 dart 0175C2
-dotnet 512BD4
+dotnet 512BD4 guidelines-ok
 electron 47848F
 eleventy 222222
-elixir 8847B9
 elm 1293D8
 esbuild FFCF00
 eslint 4B32C3
-expo 1C2024
+expo 1C2024 guidelines-ok
 fastlane 00F200
 fastly FF282D
 ffmpeg 007808
 fig 000000
-firefox FF7139
-flutter 02569B
-flydotio 24175B
-gatsby 663399
-go 00ADD8
-goland 000000
+gatsby 663399 guidelines-ok
 hasura 1EB4D4
 helm 0F1689
 hexo 0E83CD
@@ -55,28 +47,24 @@ infracost DB44B8
 ionic 3880FF
 jest C21325
 julia 9558B2
-jupyter F37626
+jupyter F37626 guidelines-ok
 just 000000
 k6 7D64FF
 laravel FF2D20
 lerna C084FC
 locust B8EE4B
 meteor DE4F4F
-mysql 4479A1
 nativescript 65ADF1
 nextflow 0DC09D
-nginx 009639
 ngrok 1F1E37
 nhost 0052CD
-nodedotjs 5FA04E
-nuxt 00DC82
+nodedotjs 5FA04E guidelines-ok
+nuxt 00DC82 guidelines-ok
 nvm F4DD4B
 nx 143055
-okta 007DC1
 ollama 000000
 opencode 000000
 opentofu FFDA18
-phpstorm 000000
 pi 000000
 pipx 2CFFAA
 pm2 2B037A
@@ -84,48 +72,33 @@ pnpm F69220
 pocketbase B8DBE4
 podman 892CA0
 poetry 60A5FA
-postgresql 4169E1
 prettier F7B93E
 prisma 2D3748
-pulumi 8A3391
-pycharm 000000
 pytest 0A9EDC
-python 3776AB
 railway 0B0D0E
-rancher 0075A8
+rancher 0075A8 guidelines-ok
 rclone 3F79AD
 remix 000000
 rich FAE742
-rubymine 000000
 ruff D7FF64
 sequelize 52B0E7
 serverless FD5750
-shopify 7AB55C
 speedtest 141526
-spotify 1ED760
 spring 6DB33F
 stencil 5530FF
-streamlit FF4B4B
+streamlit FF4B4B guidelines-ok
 stripe 635BFF
 supabase 3FCF8E
 swc F8C457
-swift F05138
-symfony 000000
 tailscale 242424
-tailwindcss 06B6D4
-terraform 844FBA
+tailwindcss 06B6D4 guidelines-ok
 tmux 1BB91F
-trivy 1904DA
-turborepo FF1E56
-typescript 3178C6
-typst 239DAD
+typescript 3178C6 guidelines-ok
+typst 239DAD guidelines-ok
 uv DE5FE9
 vapor 0D0D0D
-vault FFEC6E
 vim 019733
 vite 9135FF
 vtex ED125F
-webstorm 000000
 wezterm 4E49EE
-zapier FF4F00
 zsh F15A24

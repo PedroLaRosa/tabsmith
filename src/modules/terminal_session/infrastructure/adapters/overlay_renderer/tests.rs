@@ -421,8 +421,8 @@ fn png_id(name: &str) -> u32 {
 fn should_place_each_command_name_its_own_brand_while_the_first_word_is_typed() {
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let rows = vec![
-        item("python3", SuggestionKind::Subcommand, "p"),
         item("pnpm", SuggestionKind::Subcommand, "p"),
+        item("podman", SuggestionKind::Subcommand, "p"),
         item("pwd", SuggestionKind::Subcommand, "p"),
         item("pd", SuggestionKind::Shortcut, "p"),
     ];
@@ -439,7 +439,7 @@ fn should_place_each_command_name_its_own_brand_while_the_first_word_is_typed() 
         .map(|rest| rest[..rest.find(',').unwrap()].parse().unwrap())
         .collect();
     let shortcut_badge = IconId::Tinted(0x34, 0x98, 0xdb).value();
-    assert_eq!(placed, [png_id("python"), png_id("pnpm"), png_id("command"), shortcut_badge]);
+    assert_eq!(placed, [png_id("pnpm"), png_id("podman"), png_id("command"), shortcut_badge]);
 }
 
 #[test]
