@@ -1,4 +1,5 @@
-//! The embedded icon pixels (origin and licence in `assets/icons/README.md`): the 42 Amazon Q PNGs and the brand icons drawn from simple-icons, in the order of `ICON_NAMES`,
+//! The embedded icon pixels (origin and licence in `assets/icons/README.md`): the 42 Amazon Q PNGs and the brand icons
+//! drawn from simple-icons, in the order of `ICON_NAMES`,
 //! and the template the badge colours tint.
 
 use crate::modules::dropdown::domain::value_objects::icon_id::IconId;
@@ -224,6 +225,7 @@ mod tests {
     use super::*;
     use crate::modules::completion::domain::test_fixtures::item;
     use crate::modules::completion::domain::value_objects::suggestion::Suggestion;
+    use crate::modules::dropdown::domain::services::icon_palette::icon_color;
     use crate::modules::dropdown::domain::services::icon_resolver::slot;
     use crate::modules::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
     use crate::modules::dropdown::domain::value_objects::icon_id::ICON_NAMES;
@@ -324,6 +326,18 @@ mod tests {
             .collect();
 
         assert_eq!(missing, Vec::<String>::new());
+    }
+
+    #[test]
+    fn should_colour_each_simple_icons_tile_with_its_manifest_colour() {
+        let hex = |(r, g, b): (u8, u8, u8)| format!("{r:02X}{g:02X}{b:02X}");
+
+        let differing: Vec<_> = simple_icons_manifest()
+            .into_iter()
+            .filter(|(slug, colour)| icon_color(slug).map(hex).as_ref() != Some(colour))
+            .collect();
+
+        assert_eq!(differing, Vec::<(String, String)>::new());
     }
 
     #[test]
