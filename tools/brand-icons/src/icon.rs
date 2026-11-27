@@ -75,4 +75,16 @@ mod tests {
 
         assert!(!first.is_empty() && first == second);
     }
+
+    #[test]
+    fn should_encode_a_png_that_decodes_to_the_same_straight_alpha_pixels() {
+        let pixels = [240, 80, 50, 255, 0, 0, 0, 0, 255, 255, 255, 128, 1, 2, 3, 4];
+
+        let png = encoded(&pixels, 2);
+
+        let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+        let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut decoded).unwrap();
+        assert_eq!((frame.width, frame.height, &decoded[..]), (2, 2, &pixels[..]));
+    }
 }
