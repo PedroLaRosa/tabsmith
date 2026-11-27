@@ -400,7 +400,7 @@ mod tests {
                 && s.text() == "🔥"
                 && matches!(s.image(), Some(IconId::Tinted(..)))
         );
-        // Type defaults with images; ASCII without.
+        // Type defaults with images; the type's character on a tile without.
         assert!(slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Direct)
             .image()
             .is_some());

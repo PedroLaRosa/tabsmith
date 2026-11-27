@@ -1,7 +1,7 @@
 /// How row icons reach the terminal.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GraphicsSupport {
-    /// ASCII icons.
+    /// No images: the row type's character on a tile of the icon's colour.
     Off,
     /// Kitty graphics placements under the text (kitty, Ghostty).
     Direct,
