@@ -98,6 +98,15 @@ mod tests {
     }
 
     #[test]
+    fn should_switch_to_black_ink_only_above_a_brightness_of_160() {
+        let greys = [(160, 160, 160), (161, 161, 161)];
+
+        let inks = greys.map(ink_on);
+
+        assert_eq!(inks, [(0xff, 0xff, 0xff), (0, 0, 0)]);
+    }
+
+    #[test]
     fn should_give_every_icon_a_colour() {
         let uncoloured: Vec<_> = ICON_NAMES.iter().filter(|name| icon_color(name).is_none()).collect();
 
