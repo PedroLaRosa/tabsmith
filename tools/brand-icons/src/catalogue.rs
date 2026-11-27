@@ -1,5 +1,6 @@
 //! simple-icons' `data/simple-icons.json`: the colour and licence of every brand, by slug.
 
+use crate::colour::Rgb;
 use crate::manifest::Entry;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -16,8 +17,12 @@ impl Catalogue {
     }
 
     pub fn check(&self, entry: &Entry) -> Result<(), String> {
-        if !self.brands.contains_key(&entry.slug) {
+        let Some(brand) = self.brands.get(&entry.slug) else {
             return Err(format!("{} is not in the simple-icons data file", entry.slug));
+        };
+        let hex = brand["hex"].as_str().unwrap_or("");
+        if Rgb::from_hex(hex) != Ok(entry.colour) {
+            return Err(format!("{} is {} in the manifest but {hex} in simple-icons", entry.slug, entry.colour));
         }
         Ok(())
     }
@@ -36,8 +41,6 @@ fn is_allowed(licence: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::colour::Rgb;
-    use crate::manifest::Entry;
 
     const DATA: &str = r#"[
         {"title": "pnpm", "slug": "pnpm", "hex": "F69220", "source": "https://pnpm.io"},
@@ -57,6 +60,15 @@ mod tests {
         let checked = catalogue.check(&entry("turborepo", Rgb(0xFF, 0x1E, 0x56)));
 
         assert_eq!(checked, Err("turborepo is not in the simple-icons data file".to_string()));
+    }
+
+    #[test]
+    fn should_refuse_a_colour_that_differs_from_the_data_file() {
+        let catalogue = Catalogue::from_json(DATA).unwrap();
+
+        let checked = catalogue.check(&entry("pnpm", Rgb(0xF6, 0x92, 0x21)));
+
+        assert_eq!(checked, Err("pnpm is F69221 in the manifest but F69220 in simple-icons".to_string()));
     }
 
     #[test]
