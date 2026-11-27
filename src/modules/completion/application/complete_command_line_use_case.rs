@@ -301,6 +301,34 @@ mod tests {
     }
 
     #[test]
+    fn should_name_the_spec_an_alias_expands_to() {
+        let kubectl = Rc::new(command(&["kubectl"]).with_subcommands(vec![Rc::new(command(&["get"]))]));
+        let doubles = CompletionDoubles::new(InMemorySpecRepository::with(&[("kubectl", &kubectl)]), InMemorySpecRuntime::default());
+        let mut session = doubles.session(Settings::default());
+        session.apply_session_context(HashMap::new(), Some("alias k='kubectl'".into()));
+
+        let result = doubles
+            .complete_command_line(SpecIndex::default())
+            .execute(&mut session, &request(1, "k ge"), &mut |_| {})
+            .unwrap();
+
+        assert_eq!((rows(&result), result.spec_name()), (owned(&["get"]), "kubectl"));
+    }
+
+    #[test]
+    fn should_name_no_spec_while_the_first_word_is_typed() {
+        let doubles = CompletionDoubles::new(InMemorySpecRepository::default(), InMemorySpecRuntime::default());
+        let mut session = doubles.session(first_token_completion());
+
+        let result = doubles
+            .complete_command_line(SpecIndex::new(vec!["git".into()], HashSet::new()))
+            .execute(&mut session, &request(1, "gi"), &mut |_| {})
+            .unwrap();
+
+        assert_eq!((rows(&result), result.spec_name()), (owned(&["git"]), ""));
+    }
+
+    #[test]
     fn should_reply_an_error_for_a_cursor_inside_a_word() {
         let doubles = CompletionDoubles::new(InMemorySpecRepository::with(&[("git", &git())]), InMemorySpecRuntime::default());
         let use_case = doubles.complete_command_line(SpecIndex::default());
