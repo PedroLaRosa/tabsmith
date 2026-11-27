@@ -1,4 +1,4 @@
-//! The embedded icon pixels (origin and licence in `assets/icons/README.md`): the 42 PNGs, in the order of `ICON_NAMES`,
+//! The embedded icon pixels (origin and licence in `assets/icons/README.md`): the 42 Amazon Q PNGs and the brand icons drawn from simple-icons, in the order of `ICON_NAMES`,
 //! and the template the badge colours tint.
 
 use crate::modules::dropdown::domain::value_objects::icon_id::IconId;
@@ -10,7 +10,8 @@ macro_rules! pngs {
     };
 }
 
-/// Row icon names plus the local-only `database`, `file`, `folder` and `symlink`. Order = image ids (1-based).
+/// Row icon names plus the local-only `database`, `file`, `folder` and `symlink`, then the simple-icons brand icons.
+/// Order = image ids (1-based).
 const PNGS: &[(&str, &[u8])] = pngs![
     "alert",
     "android",
@@ -54,6 +55,142 @@ const PNGS: &[(&str, &[u8])] = pngs![
     "twitter",
     "vercel",
     "yarn",
+    "ansible",
+    "apachemaven",
+    "appwrite",
+    "argo",
+    "asciinema",
+    "astro",
+    "autocannon",
+    "babel",
+    "bat",
+    "bazel",
+    "bit",
+    "black",
+    "bun",
+    "capacitor",
+    "circleci",
+    "claude",
+    "clion",
+    "clojure",
+    "cloudflare",
+    "cmake",
+    "coda",
+    "composer",
+    "curl",
+    "dapr",
+    "dart",
+    "deno",
+    "dotenv",
+    "dotnet",
+    "electron",
+    "eleventy",
+    "elixir",
+    "elm",
+    "esbuild",
+    "eslint",
+    "exercism",
+    "expo",
+    "fastlane",
+    "fastly",
+    "ffmpeg",
+    "fig",
+    "firefox",
+    "flutter",
+    "flydotio",
+    "gatsby",
+    "gnubash",
+    "go",
+    "goland",
+    "hasura",
+    "helm",
+    "hexo",
+    "homebrew",
+    "htop",
+    "hugo",
+    "hyper",
+    "infracost",
+    "ionic",
+    "jest",
+    "julia",
+    "jupyter",
+    "just",
+    "k6",
+    "laravel",
+    "lerna",
+    "locust",
+    "meteor",
+    "mysql",
+    "nativescript",
+    "nextflow",
+    "nginx",
+    "ngrok",
+    "nhost",
+    "nodedotjs",
+    "nuxt",
+    "nvm",
+    "nx",
+    "okta",
+    "ollama",
+    "opencode",
+    "openjdk",
+    "opentofu",
+    "phpstorm",
+    "pi",
+    "pipx",
+    "pm2",
+    "pnpm",
+    "pocketbase",
+    "podman",
+    "poetry",
+    "postgresql",
+    "prettier",
+    "prisma",
+    "pulumi",
+    "pycharm",
+    "pytest",
+    "python",
+    "railway",
+    "rancher",
+    "rclone",
+    "remix",
+    "rich",
+    "rubymine",
+    "ruff",
+    "sanity",
+    "sequelize",
+    "serverless",
+    "shopify",
+    "speedtest",
+    "spotify",
+    "spring",
+    "stencil",
+    "streamlit",
+    "stripe",
+    "supabase",
+    "swc",
+    "swift",
+    "symfony",
+    "tailscale",
+    "tailwindcss",
+    "terraform",
+    "tmux",
+    "trivy",
+    "turborepo",
+    "typeorm",
+    "typescript",
+    "typst",
+    "uv",
+    "v",
+    "vapor",
+    "vault",
+    "vim",
+    "vite",
+    "vtex",
+    "webstorm",
+    "wezterm",
+    "zapier",
+    "zsh",
 ];
 
 /// `template.png` as RGBA8 (32×32), tinted per badge colour.
@@ -163,6 +300,30 @@ mod tests {
         fn scale(a: u8, b: u8) -> u8 {
             ((a as u16 * b as u16) / 256) as u8
         }
+    }
+
+    /// (slug, colour) of each icon `assets/icons/simple-icons.txt` lists, in order.
+    fn simple_icons_manifest() -> Vec<(String, String)> {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let text = std::fs::read_to_string(format!("{manifest}/assets/icons/simple-icons.txt")).unwrap();
+        text.lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                let (slug, colour) = line.split_once(' ').unwrap();
+                (slug.to_string(), colour.trim().to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn should_embed_every_icon_the_simple_icons_manifest_lists() {
+        let missing: Vec<String> = simple_icons_manifest()
+            .into_iter()
+            .map(|(slug, _)| slug)
+            .filter(|slug| !ICON_NAMES.contains(&slug.as_str()))
+            .collect();
+
+        assert_eq!(missing, Vec::<String>::new());
     }
 
     #[test]
