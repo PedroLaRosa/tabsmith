@@ -44,9 +44,21 @@ pub(crate) fn detect() -> GraphicsSupport {
 /// Outside tmux, from the terminal's variables (`var` looks one up): Direct for kitty and Ghostty.
 fn direct_graphics(var: impl Fn(&str) -> Option<String>) -> GraphicsSupport {
     let on = var("KITTY_WINDOW_ID").is_some()
-        || matches!(var("TERM_PROGRAM").as_deref(), Some("ghostty" | "WezTerm" | "iTerm.app"))
-        || var("TERM").as_deref() == Some("xterm-kitty");
+        || var("TERM").as_deref() == Some("xterm-kitty")
+        || match var("TERM_PROGRAM").as_deref() {
+            Some("ghostty" | "WezTerm") => true,
+            Some("iTerm.app") => var("TERM_PROGRAM_VERSION").is_some_and(|v| iterm2_has_kitty_graphics(&v)),
+            _ => false,
+        };
     if on { GraphicsSupport::Direct } else { GraphicsSupport::Off }
+}
+
+fn iterm2_has_kitty_graphics(version: &str) -> bool {
+    let mut parts = version.split('.').map(|part| part.parse::<u32>().ok());
+    match (parts.next().flatten(), parts.next().flatten()) {
+        (Some(major), Some(minor)) => (major, minor) >= (3, 6),
+        _ => false,
+    }
 }
 
 /// `allow-passthrough client_termname client_termtype` → Tmux when passthrough is on and the client is kitty or
@@ -241,6 +253,13 @@ mod tests {
         ]);
 
         assert_eq!(direct_graphics(var), GraphicsSupport::Direct);
+    }
+
+    #[test]
+    fn should_send_no_images_to_iterm2_older_than_3_6() {
+        let var = env_with(&[("TERM_PROGRAM", "iTerm.app"), ("TERM_PROGRAM_VERSION", "3.5.14")]);
+
+        assert_eq!(direct_graphics(var), GraphicsSupport::Off);
     }
 
     #[test]
