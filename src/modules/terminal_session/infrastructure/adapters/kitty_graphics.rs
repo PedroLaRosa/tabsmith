@@ -269,6 +269,44 @@ mod tests {
     }
 
     #[test]
+    fn should_send_images_directly_to_iterm2_3_6_or_later_whatever_its_patch_or_suffix() {
+        let versions = [
+            "3.6.6",
+            "3.6.11",
+            "3.6.0beta1",
+            "3.7.10beta1",
+            "3.7.20261127-nightly",
+        ];
+
+        let support = versions.map(|v| iterm2_graphics(Some(v)));
+
+        assert_eq!(support, [GraphicsSupport::Direct; 5]);
+    }
+
+    #[test]
+    fn should_send_no_images_to_iterm2_whose_version_is_older_missing_or_unreadable() {
+        let versions = [
+            Some("3.5.0beta3"),
+            Some("2.9.20160313-nightly"),
+            None,
+            Some(""),
+            Some("3"),
+        ];
+
+        let support = versions.map(iterm2_graphics);
+
+        assert_eq!(support, [GraphicsSupport::Off; 5]);
+    }
+
+    fn iterm2_graphics(version: Option<&str>) -> GraphicsSupport {
+        let iterm2 = ("TERM_PROGRAM", "iTerm.app");
+        match version {
+            Some(v) => direct_graphics(env_with(&[iterm2, ("TERM_PROGRAM_VERSION", v)])),
+            None => direct_graphics(env_with(&[iterm2])),
+        }
+    }
+
+    #[test]
     fn should_send_no_images_to_a_terminal_it_does_not_know() {
         let var = env_with(&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM", "xterm-256color")]);
 
