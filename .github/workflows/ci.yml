@@ -7,6 +7,8 @@ on:
   pull_request:
   # release.yml runs this as the gate before it builds the release binaries.
   workflow_call:
+  # update-specs.yml dispatches it on the branches it opens: their pull requests trigger nothing.
+  workflow_dispatch:
 
 jobs:
   test:
