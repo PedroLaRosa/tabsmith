@@ -7,6 +7,8 @@ const SIZE: u32 = 32;
 /// The side of a square glyph, in pixels of the 32×32 icon. Other shapes get the same area, so a wide mark is not drawn
 /// smaller than a round one.
 const GLYPH_SIDE: f32 = 22.0;
+/// No glyph side is longer: a long mark stays inside the rounded square (Q's docker is 28 wide, aws 26).
+const GLYPH_MAX_SIDE: f32 = 26.0;
 /// Where the middle of the glyph box lands.
 const GLYPH_CENTRE: (f32, f32) = (16.0, 16.0);
 
@@ -18,9 +20,12 @@ pub fn drawn(svg: &str, colour: Rgb, template: &[u8]) -> Result<Vec<u8>, String>
     Ok(encoded(&icon, SIZE))
 }
 
-/// The transform that scales the glyph's box to the area of a `GLYPH_SIDE` square and centres it on `GLYPH_CENTRE`.
+/// The transform that scales the glyph's box to the area of a `GLYPH_SIDE` square, no side beyond `GLYPH_MAX_SIDE`, and
+/// centres it on `GLYPH_CENTRE`.
 fn placement(glyph: Rect) -> Transform {
-    let scale = GLYPH_SIDE / (glyph.width() * glyph.height()).sqrt();
+    let by_area = GLYPH_SIDE / (glyph.width() * glyph.height()).sqrt();
+    let by_side = GLYPH_MAX_SIDE / glyph.width().max(glyph.height());
+    let scale = by_area.min(by_side);
     let x = GLYPH_CENTRE.0 - scale * (glyph.x() + glyph.width() / 2.0);
     let y = GLYPH_CENTRE.1 - scale * (glyph.y() + glyph.height() / 2.0);
     Transform::from_row(scale, 0.0, 0.0, scale, x, y)
@@ -130,7 +135,7 @@ mod tests {
 
     #[test]
     fn should_give_every_glyph_the_area_of_a_square_glyph_centred_on_the_square() {
-        let glyphs = [Rect::from_xywh(0.0, 0.0, 24.0, 24.0).unwrap(), Rect::from_xywh(0.0, 4.0, 24.0, 16.0).unwrap()];
+        let glyphs = [Rect::from_xywh(0.0, 0.0, 24.0, 24.0).unwrap(), Rect::from_xywh(0.0, 2.0, 24.0, 20.0).unwrap()];
 
         let areas = glyphs.map(|glyph| {
             let (x, y, width, height) = placed(glyph);
@@ -140,6 +145,18 @@ mod tests {
         let (x, y) = GLYPH_CENTRE;
         let square = (GLYPH_SIDE * GLYPH_SIDE).round();
         assert_eq!(areas, [(x, y, square), (x, y, square)]);
+    }
+
+    #[test]
+    fn should_keep_a_long_glyph_within_the_longest_side() {
+        let glyphs = [Rect::from_xywh(0.0, 9.0, 24.0, 6.0).unwrap(), Rect::from_xywh(9.0, 0.0, 6.0, 24.0).unwrap()];
+
+        let sides = glyphs.map(|glyph| {
+            let (_, _, width, height) = placed(glyph);
+            width.max(height)
+        });
+
+        assert_eq!(sides, [GLYPH_MAX_SIDE, GLYPH_MAX_SIDE]);
     }
 
     #[test]
