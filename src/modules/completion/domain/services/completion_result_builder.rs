@@ -71,6 +71,7 @@ pub(crate) fn build_completion_result(
         tokens: pr.tokens().clone(),
         command_text: served.command_text().to_string(),
         command_index: pr.command_index(),
+        spec_name: pr.spec_name().to_string(),
         arg_key: served.argument_key(),
         current_arg: pr.current_arg().as_ref().map(|a| {
             ArgumentHint::new(

@@ -1,6 +1,7 @@
 //! Frame bytes for the in-terminal overlay: menu, description bar, pop-out, ghost text, and
 //! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2).
 use crate::modules::dropdown::domain::services::color_parser::xterm256;
+use crate::modules::dropdown::domain::services::icon_palette::ink_on;
 use crate::modules::dropdown::domain::services::icon_resolver;
 use crate::modules::dropdown::domain::services::menu_describer::describe;
 use crate::modules::dropdown::domain::services::menu_layout_calculator::layout;
@@ -90,7 +91,8 @@ impl OverlayRenderer {
         }
     }
 
-    /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); ASCII when `Off`.
+    /// Row icons drawn as kitty graphics images (kitty, Ghostty, WezTerm, iTerm2 3.6 or later; behind tmux, kitty and
+    /// Ghostty only); coloured tiles when `Off`.
     pub(crate) fn with_images(mut self, g: GraphicsSupport) -> OverlayRenderer {
         self.images = g;
         self
@@ -255,7 +257,8 @@ impl OverlayRenderer {
         }
         top = top.min(items.len() - l.rows());
         for (i, idx) in (top..top + l.rows()).enumerate() {
-            let (s, pad, img) = self.list_row(&items[idx], idx == sel, l.width());
+            let it = &items[idx];
+            let (s, pad, img) = self.list_row(it, menu.command_of(it), idx == sel, l.width());
             out.push(Patch {
                 row: l.list_top() + i,
                 x: l.x0(),
@@ -318,8 +321,14 @@ impl OverlayRenderer {
     }
 
     /// `' '` + icon slot (two columns) + `' '` + title (match highlight) + (`' '` + dim args hint when room) + pad
-    /// (SPEC §7.4.2). The image, if any, goes over the slot.
-    fn list_row(&self, it: &Suggestion, selected: bool, w: usize) -> (String, String, Option<IconId>) {
+    /// (SPEC §7.4.2). The image, if any, goes over the slot; `command` is the command the row belongs to (its brand).
+    fn list_row(
+        &self,
+        it: &Suggestion,
+        command: Option<&str>,
+        selected: bool,
+        w: usize,
+    ) -> (String, String, Option<IconId>) {
         let t = &self.theme;
         let (fg, bg, mbg) = if selected {
             (t.selected_text(), t.selected_bg(), t.selected_matching_bg())
@@ -328,9 +337,11 @@ impl OverlayRenderer {
         };
         let (base, hl) = (self.pen(fg, bg, ""), self.pen(fg, mbg, ""));
         let mut r = Run::default();
-        let slot = icon_resolver::slot(it, self.images);
+        let slot = icon_resolver::slot(it, command, self.images);
         r.put(&base, " ");
-        if slot.is_badge() {
+        if let Some(tile) = slot.tile_color() {
+            r.put(&self.pen(ink_on(tile), tile, ";1"), slot.text());
+        } else if slot.is_badge() {
             r.put(&self.pen((255, 255, 255), bg, ""), slot.text());
         } else if let (GraphicsSupport::Tmux, Some(img)) = (self.images, slot.image()) {
             r.put(&self.pen(fg, bg, &icon_id::color(img.value())), slot.text());

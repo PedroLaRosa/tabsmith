@@ -2,24 +2,27 @@
 //! in its README). The pixels and the kitty protocol live in `terminal_session`.
 
 use crate::modules::completion::domain::value_objects::suggestion::Suggestion;
+use crate::modules::dropdown::domain::services::brand_catalog::brand_icon;
+use crate::modules::dropdown::domain::services::icon_palette::{tile_color, HISTORY_TILE};
 use crate::modules::dropdown::domain::services::text_fitting::width;
 use crate::modules::dropdown::domain::value_objects::graphics_support::GraphicsSupport;
 use crate::modules::dropdown::domain::value_objects::icon_id::{placeholders, IconId, ICON_NAMES};
 use crate::modules::dropdown::domain::value_objects::icon_slot::IconSlot;
 use crate::modules::specs::domain::value_objects::suggestion_kind::SuggestionKind;
 
-/// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type.
-pub(crate) fn slot(it: &Suggestion, g: GraphicsSupport) -> IconSlot {
+/// Slot of a row: the spec's `icon` first (emoji text, then `fig://` images), else the row type's icon. Subcommand and
+/// argument rows of a `command` with a brand show that brand instead (SPEC §7.4.2).
+pub(crate) fn slot(it: &Suggestion, command: Option<&str>, g: GraphicsSupport) -> IconSlot {
     let spec = it.icon();
     if let Some(emoji) = spec.and_then(wide_emoji) {
         return text(&emoji);
     }
-    if g == GraphicsSupport::Off {
-        return ascii_slot(it.kind());
-    }
     let s = spec
         .and_then(spec_image)
-        .unwrap_or_else(|| type_image(it.kind()));
+        .unwrap_or_else(|| type_image(it.kind(), command.and_then(brand_icon)));
+    if g == GraphicsSupport::Off {
+        return tile_slot(&s, it.kind());
+    }
     if g != GraphicsSupport::Tmux {
         return s;
     }
@@ -49,12 +52,13 @@ fn spec_image(s: &str) -> Option<IconSlot> {
     Some(badge_slot(color, param(q, "badge").unwrap_or("")))
 }
 
-/// Default icon per row type. History rows keep their 📚 from the history source.
-fn type_image(kind: SuggestionKind) -> IconSlot {
+/// Default icon per row type, the `brand` for subcommands and arguments. History rows keep their 📚 from the history
+/// source.
+fn type_image(kind: SuggestionKind, brand: Option<&str>) -> IconSlot {
     match kind {
-        SuggestionKind::Subcommand => png_slot("command"),
+        SuggestionKind::Subcommand => png_slot(brand.unwrap_or("command")),
         SuggestionKind::Option => png_slot("option"),
-        SuggestionKind::Arg => png_slot("box"),
+        SuggestionKind::Arg => png_slot(brand.unwrap_or("box")),
         SuggestionKind::Special => badge_slot(Some((0x62, 0x8d, 0xad)), "➡️"),
         SuggestionKind::Shortcut => badge_slot(Some((0x34, 0x98, 0xdb)), "💡"),
         SuggestionKind::AutoExecute => png_slot("carrot"),
@@ -64,9 +68,19 @@ fn type_image(kind: SuggestionKind) -> IconSlot {
     }
 }
 
-/// Single-character fallback, right-aligned in the two-column slot (SPEC §7.4.2).
-fn ascii_slot(kind: SuggestionKind) -> IconSlot {
-    let c = match kind {
+/// Without images: the row type's character, right-aligned in the two-column slot, on a tile of the colour of the icon
+/// `shown` would draw (SPEC §7.4.2).
+fn tile_slot(shown: &IconSlot, kind: SuggestionKind) -> IconSlot {
+    let mark = format!(" {}", kind_mark(kind));
+    match shown.image() {
+        Some(icon) => IconSlot::tile(mark, tile_color(icon)),
+        // Only history rows draw no image (their 📚 is text).
+        None => IconSlot::tile(mark, HISTORY_TILE),
+    }
+}
+
+fn kind_mark(kind: SuggestionKind) -> char {
+    match kind {
         SuggestionKind::Subcommand => '>',
         SuggestionKind::Option => '-',
         SuggestionKind::Arg | SuggestionKind::Special => '*',
@@ -75,8 +89,7 @@ fn ascii_slot(kind: SuggestionKind) -> IconSlot {
         SuggestionKind::History => 'h',
         SuggestionKind::Shortcut => '@',
         SuggestionKind::AutoExecute => '↪',
-    };
-    text(&format!(" {c}"))
+    }
 }
 
 fn text(s: &str) -> IconSlot {
@@ -143,6 +156,200 @@ mod tests {
     use crate::modules::completion::domain::test_fixtures::item;
     use crate::modules::dropdown::domain::value_objects::icon_id::color;
 
+    fn png(name: &str) -> Option<IconId> {
+        ICON_NAMES.iter().position(|n| *n == name).map(IconId::Png)
+    }
+
+    #[test]
+    fn should_show_the_command_brand_on_a_subcommand_row() {
+        let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+        let icon = slot(&checkout, Some("git"), GraphicsSupport::Direct).image();
+
+        assert_eq!(icon, png("git"));
+    }
+
+    #[test]
+    fn should_show_the_command_brand_on_an_argument_row() {
+        let pods = item("pods", SuggestionKind::Arg, "");
+
+        let icon = slot(&pods, Some("kubectl"), GraphicsSupport::Direct).image();
+
+        assert_eq!(icon, png("kubernetes"));
+    }
+
+    #[test]
+    fn should_keep_a_spec_emoji_over_the_brand() {
+        let branch = item("main", SuggestionKind::Arg, "").with_icon(Some("\u{2b50}\u{fe0f}".into()));
+
+        let shown = slot(&branch, Some("git"), GraphicsSupport::Direct);
+
+        assert_eq!((shown.text(), shown.image()), ("⭐", None));
+    }
+
+    #[test]
+    fn should_keep_a_named_spec_icon_over_the_brand() {
+        let warning = item("x", SuggestionKind::Subcommand, "").with_icon(Some("fig://icon?type=alert".into()));
+
+        let icon = slot(&warning, Some("git"), GraphicsSupport::Direct).image();
+
+        assert_eq!(icon, png("alert"));
+    }
+
+    #[test]
+    fn should_show_the_brand_when_the_spec_icon_cannot_be_drawn() {
+        let row = |icon: &str| item("x", SuggestionKind::Subcommand, "").with_icon(Some(icon.into()));
+        let narrow_emoji_and_remote_url = [row("\u{2699}\u{fe0f}"), row("https://fig.io/x.png")];
+
+        let icons = narrow_emoji_and_remote_url.map(|it| slot(&it, Some("git"), GraphicsSupport::Direct).image());
+
+        assert_eq!(icons, [png("git"); 2]);
+    }
+
+    #[test]
+    fn should_keep_the_kind_icon_on_rows_that_are_neither_subcommands_nor_arguments() {
+        let kinds = [
+            SuggestionKind::Option,
+            SuggestionKind::File,
+            SuggestionKind::Folder,
+            SuggestionKind::History,
+            SuggestionKind::Shortcut,
+            SuggestionKind::Special,
+            SuggestionKind::AutoExecute,
+        ];
+
+        let branded: Vec<_> = kinds
+            .into_iter()
+            .filter(|&kind| {
+                let row = item("x", kind, "");
+                slot(&row, Some("git"), GraphicsSupport::Direct) != slot(&row, None, GraphicsSupport::Direct)
+            })
+            .collect();
+
+        assert_eq!(branded, Vec::new());
+    }
+
+    #[test]
+    fn should_show_the_command_icon_for_a_command_without_a_brand() {
+        let sub = item("sub", SuggestionKind::Subcommand, "su");
+
+        let icon = slot(&sub, Some("mytool"), GraphicsSupport::Direct).image();
+
+        assert_eq!(icon, png("command"));
+    }
+
+    #[test]
+    fn should_draw_the_brand_as_placeholders_behind_tmux() {
+        let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+        let git = png("git").unwrap();
+
+        let shown = slot(&checkout, Some("git"), GraphicsSupport::Tmux);
+
+        assert_eq!((shown.text(), shown.image()), (placeholders(git.value()).as_str(), Some(git)));
+    }
+
+    #[test]
+    fn should_fill_the_slot_with_the_brand_colour_without_images() {
+        let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+        let shown = slot(&checkout, Some("git"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" >", Some((0xff, 0x40, 0x1e))));
+    }
+
+    #[test]
+    fn should_fill_a_history_row_with_grey_without_images() {
+        let earlier = item("git status", SuggestionKind::History, "");
+
+        let shown = slot(&earlier, None, GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" h", Some((0x8e, 0x8e, 0x93))));
+    }
+
+    #[test]
+    fn should_give_each_kind_its_character_on_its_own_tile_without_images() {
+        let kinds = [
+            SuggestionKind::Subcommand,
+            SuggestionKind::Option,
+            SuggestionKind::Arg,
+            SuggestionKind::Special,
+            SuggestionKind::File,
+            SuggestionKind::Folder,
+            SuggestionKind::History,
+            SuggestionKind::Shortcut,
+            SuggestionKind::AutoExecute,
+        ];
+
+        let tiles = kinds.map(|kind| {
+            let shown = slot(&item("x", kind, ""), None, GraphicsSupport::Off);
+            (shown.text().to_string(), shown.tile_color())
+        });
+
+        let tile = |mark: &str, colour| (mark.to_string(), Some(colour));
+        assert_eq!(
+            tiles,
+            [
+                tile(" >", (0x88, 0x39, 0xd1)),
+                tile(" -", (0x5a, 0xcc, 0x5b)),
+                tile(" *", (0x64, 0x9b, 0xc9)),
+                tile(" *", (0x62, 0x8d, 0xad)),
+                tile(" f", (0x64, 0x74, 0x8b)),
+                tile(" d", (0x3b, 0x82, 0xf6)),
+                tile(" h", (0x8e, 0x8e, 0x93)),
+                tile(" @", (0x34, 0x98, 0xdb)),
+                tile(" ↪", (0xd1, 0x39, 0x56)),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_keep_the_command_tile_for_a_command_without_a_brand_without_images() {
+        let sub = item("sub", SuggestionKind::Subcommand, "su");
+
+        let shown = slot(&sub, Some("mytool"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" >", Some((0x88, 0x39, 0xd1))));
+    }
+
+    #[test]
+    fn should_fill_the_slot_with_the_colour_of_a_named_spec_icon_without_images() {
+        let deploy = item("deploy", SuggestionKind::Arg, "").with_icon(Some("fig://icon?type=aws".into()));
+
+        let shown = slot(&deploy, Some("git"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" *", Some((0xff, 0x9c, 0x07))));
+    }
+
+    #[test]
+    fn should_fill_the_slot_with_the_template_colour_and_drop_the_badge_without_images() {
+        let hot = item("hot", SuggestionKind::Arg, "").with_icon(Some("fig://template?color=2ecc71&badge=\u{1f525}".into()));
+
+        let shown = slot(&hot, None, GraphicsSupport::Off);
+
+        assert_eq!(
+            (shown.text(), shown.tile_color(), shown.is_badge()),
+            (" *", Some((0x2e, 0xcc, 0x71)), false)
+        );
+    }
+
+    #[test]
+    fn should_keep_a_wide_spec_emoji_as_text_without_a_tile_without_images() {
+        let branch = item("main", SuggestionKind::Arg, "").with_icon(Some("\u{2b50}\u{fe0f}".into()));
+
+        let shown = slot(&branch, Some("git"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), ("⭐", None));
+    }
+
+    #[test]
+    fn should_show_the_brand_tile_when_the_spec_icon_cannot_be_drawn_without_images() {
+        let gear = item("x", SuggestionKind::Subcommand, "").with_icon(Some("\u{2699}\u{fe0f}".into()));
+
+        let shown = slot(&gear, Some("git"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" >", Some((0xff, 0x40, 0x1e))));
+    }
+
     #[test]
     fn resolves_like_q() {
         let it = |icon: Option<&str>, kind| item("x", kind, "").with_icon(icon.map(String::from));
@@ -150,6 +357,7 @@ mod tests {
         assert_eq!(
             slot(
                 &it(Some("\u{2b50}\u{fe0f}"), SuggestionKind::Subcommand),
+                None,
                 GraphicsSupport::Direct
             )
             .text(),
@@ -158,6 +366,7 @@ mod tests {
         // A named icon is its PNG; an unknown name is the plain template.
         let s = slot(
             &it(Some("fig://icon?type=git"), SuggestionKind::Subcommand),
+            None,
             GraphicsSupport::Direct,
         );
         assert_eq!(
@@ -168,6 +377,7 @@ mod tests {
         );
         let s = slot(
             &it(Some("fig://icon?type=txt"), SuggestionKind::Subcommand),
+            None,
             GraphicsSupport::Direct,
         );
         assert_eq!(
@@ -182,6 +392,7 @@ mod tests {
                 Some("fig://template?color=2ecc71&badge=\u{1f525}"),
                 SuggestionKind::Arg,
             ),
+            None,
             GraphicsSupport::Direct,
         );
         assert!(
@@ -189,22 +400,23 @@ mod tests {
                 && s.text() == "🔥"
                 && matches!(s.image(), Some(IconId::Tinted(..)))
         );
-        // Type defaults with images; ASCII without.
-        assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Direct)
+        // Type defaults with images; the type's character on a tile without.
+        assert!(slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Direct)
             .image()
             .is_some());
-        assert_eq!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off).text(), " -");
-        assert!(slot(&it(None, SuggestionKind::Option), GraphicsSupport::Off)
+        assert_eq!(slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Off).text(), " -");
+        assert!(slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Off)
             .image()
             .is_none());
         assert_eq!(
-            slot(&it(None, SuggestionKind::History), GraphicsSupport::Direct).text(),
+            slot(&it(None, SuggestionKind::History), None, GraphicsSupport::Direct).text(),
             "📚"
         );
         // Narrow emoji and remote URLs fall back to the type.
         assert_eq!(
             slot(
                 &it(Some("\u{2699}\u{fe0f}"), SuggestionKind::Arg),
+                None,
                 GraphicsSupport::Direct
             )
             .text(),
@@ -213,6 +425,7 @@ mod tests {
         assert_eq!(
             slot(
                 &it(Some("https://fig.io/x.png"), SuggestionKind::Arg),
+                None,
                 GraphicsSupport::Off
             )
             .text(),
@@ -230,12 +443,12 @@ mod tests {
             SuggestionKind::AutoExecute,
         ] {
             assert_eq!(
-                width(slot(&it(None, k), GraphicsSupport::Direct).text()),
+                width(slot(&it(None, k), None, GraphicsSupport::Direct).text()),
                 2,
                 "{k:?}"
             );
-            assert_eq!(width(slot(&it(None, k), GraphicsSupport::Off).text()), 2, "{k:?}");
-            assert_eq!(width(slot(&it(None, k), GraphicsSupport::Tmux).text()), 2, "{k:?}");
+            assert_eq!(width(slot(&it(None, k), None, GraphicsSupport::Off).text()), 2, "{k:?}");
+            assert_eq!(width(slot(&it(None, k), None, GraphicsSupport::Tmux).text()), 2, "{k:?}");
         }
     }
 
@@ -243,7 +456,7 @@ mod tests {
     fn tmux_uses_placeholders() {
         let it = |icon: Option<&str>, kind| item("x", kind, "").with_icon(icon.map(String::from));
         // A PNG: two placeholder cells, its id in a 256-colour foreground.
-        let s = slot(&it(None, SuggestionKind::Option), GraphicsSupport::Tmux);
+        let s = slot(&it(None, SuggestionKind::Option), None, GraphicsSupport::Tmux);
         let id = s.image().map(IconId::value).unwrap();
         assert!(id < 256);
         assert_eq!(s.text().matches('\u{10eeee}').count(), 2);
@@ -252,6 +465,7 @@ mod tests {
         // A tinted template: 24-bit colour plus the top-byte diacritic.
         let s = slot(
             &it(Some("fig://template?color=2ecc71"), SuggestionKind::Arg),
+            None,
             GraphicsSupport::Tmux,
         );
         assert_eq!(
@@ -260,7 +474,7 @@ mod tests {
         );
         assert_eq!(color(0x0100_0000 | 0x2ecc71), ";38;2;46;204;113");
         // A badge cannot sit on a placeholder: text alone.
-        let s = slot(&it(None, SuggestionKind::Shortcut), GraphicsSupport::Tmux);
+        let s = slot(&it(None, SuggestionKind::Shortcut), None, GraphicsSupport::Tmux);
         assert!(s.image().is_none() && s.text() == "💡");
     }
 }

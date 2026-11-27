@@ -277,6 +277,16 @@ impl Menu {
         self.last.as_ref()
     }
 
+    /// The command whose brand `row` shows: the root of the spec in use (`aws` for `aws/s3`), or the row itself while
+    /// the first word is typed, when each row names a command.
+    pub(crate) fn command_of<'a>(&'a self, row: &'a Suggestion) -> Option<&'a str> {
+        let spec = self.last.as_ref()?.spec_name();
+        if spec.is_empty() {
+            return Some(row.first_name());
+        }
+        spec.split('/').next()
+    }
+
     pub(crate) fn items(&self) -> &[Suggestion] {
         &self.items
     }

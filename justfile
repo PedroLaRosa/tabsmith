@@ -27,3 +27,7 @@ update-specs version='':
 
 # Re-bundle the specs, check they load, then install the rebuilt binary
 refresh-specs version='': (update-specs version) specs-test install
+
+# Draw the brand icons in assets/icons/simple-icons.txt from simple-icons (version pinned in the script)
+brand-icons:
+    scripts/brand-icons.sh

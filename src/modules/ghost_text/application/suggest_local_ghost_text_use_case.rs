@@ -93,6 +93,7 @@ mod tests {
             tokens: Vec::new(),
             command_text: String::new(),
             command_index: 0,
+            spec_name: String::new(),
             arg_key: 0,
             current_arg: None,
             search_term: String::new(),

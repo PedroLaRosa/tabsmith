@@ -346,7 +346,7 @@ fn row_contents() {
     let r = OverlayRenderer::new(Theme::dark(), true);
     let mut it = item("checkout-a-very-long-name", SuggestionKind::Subcommand, "ch");
     it = it.with_args_hint("<branch>".into());
-    let (row, _, _) = r.list_row(&it, false, 20);
+    let (row, _, _) = r.list_row(&it, None, false, 20);
     let text: String = strip(&row);
     assert_eq!(
         text, "  > checkout-a-ver… ",
@@ -356,13 +356,103 @@ fn row_contents() {
         row.contains(&format!("{}ch", r.pen((180, 180, 180), (95, 89, 56), ""))),
         "highlighted query"
     );
-    let (row, _, _) = r.list_row(&item("co", SuggestionKind::Option, "c"), true, 20);
+    let (row, _, _) = r.list_row(&item("co", SuggestionKind::Option, "c"), None, true, 20);
     assert_eq!(strip(&row), "  - co              ");
     assert_eq!(width(&strip(&row)), 20);
     let m = menu(subs(), &s);
     let (row, _) = r.desc_row(&m, 20, Some('⠋'));
     assert_eq!(strip(&row), " about checkout   ⠋ ");
     assert_eq!(width(&strip(&row)), 20);
+}
+
+#[test]
+fn should_draw_the_brand_tile_in_bold_ink_without_images() {
+    let r = OverlayRenderer::new(Theme::dark(), true);
+    let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+    let (row, _, _) = r.list_row(&checkout, Some("git"), false, 20);
+
+    let white_on_git_red = r.pen((0xff, 0xff, 0xff), (0xff, 0x40, 0x1e), ";1");
+    assert!(row.contains(&format!("{white_on_git_red} >")), "{row:?}");
+}
+
+#[test]
+fn should_draw_black_ink_on_a_light_tile_without_images() {
+    let r = OverlayRenderer::new(Theme::dark(), true);
+    let warning = item("warn", SuggestionKind::Subcommand, "").with_icon(Some("fig://icon?type=alert".into()));
+
+    let (row, _, _) = r.list_row(&warning, None, false, 20);
+
+    let black_on_alert_yellow = r.pen((0, 0, 0), (0xff, 0xc5, 0x28), ";1");
+    assert!(row.contains(&format!("{black_on_alert_yellow} >")), "{row:?}");
+}
+
+#[test]
+fn should_keep_the_tile_colours_on_the_selected_row_without_images() {
+    let r = OverlayRenderer::new(Theme::dark(), true);
+    let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+    let (row, _, _) = r.list_row(&checkout, Some("git"), true, 20);
+
+    let theme = Theme::dark();
+    let selected = r.pen(theme.selected_text(), theme.selected_bg(), "");
+    let tile = r.pen((0xff, 0xff, 0xff), (0xff, 0x40, 0x1e), ";1");
+    assert!(row.starts_with(&format!("{selected} {tile} >{selected} ")), "{row:?}");
+}
+
+#[test]
+fn should_convert_the_tile_colour_like_the_theme_without_24_bit_colour() {
+    let r = OverlayRenderer::new(Theme::dark(), false);
+    let checkout = item("checkout", SuggestionKind::Subcommand, "ch");
+
+    let (row, _, _) = r.list_row(&checkout, Some("git"), false, 20);
+
+    let git_red_256 = format!("48;5;{};1m >", xterm256((0xff, 0x40, 0x1e)));
+    assert!(row.contains(&git_red_256) && !row.contains("48;2;"), "{row:?}");
+}
+
+/// The kitty image id of the PNG named `name`.
+fn png_id(name: &str) -> u32 {
+    let index = icon_id::ICON_NAMES.iter().position(|n| *n == name).unwrap();
+    IconId::Png(index).value()
+}
+
+#[test]
+fn should_place_each_command_name_its_own_brand_while_the_first_word_is_typed() {
+    let s = settings(r#"{"autocomplete.width": 20}"#);
+    let rows = vec![
+        item("pnpm", SuggestionKind::Subcommand, "p"),
+        item("podman", SuggestionKind::Subcommand, "p"),
+        item("pwd", SuggestionKind::Subcommand, "p"),
+        item("pd", SuggestionKind::Shortcut, "p"),
+    ];
+    let mut m = Menu::new();
+    m.on_completion(comp("p", 1, rows).with_spec_name(""), &s, Instant::now());
+    let a = model(40, 12, &[b"$ p"]);
+    let mut r = OverlayRenderer::new(Theme::dark(), true).with_images(GraphicsSupport::Direct);
+
+    let frame = String::from_utf8_lossy(&r.frame(&a, &m, &input(&s, None))).into_owned();
+
+    let placed: Vec<u32> = frame
+        .split("\x1b_Ga=p,i=")
+        .skip(1)
+        .map(|rest| rest[..rest.find(',').unwrap()].parse().unwrap())
+        .collect();
+    let shortcut_badge = IconId::Tinted(0x34, 0x98, 0xdb).value();
+    assert_eq!(placed, [png_id("pnpm"), png_id("podman"), png_id("command"), shortcut_badge]);
+}
+
+#[test]
+fn should_place_the_command_brand_on_its_subcommand_rows() {
+    let s = settings(r#"{"autocomplete.width": 20}"#);
+    let mut m = Menu::new();
+    m.on_completion(comp("c", 1, subs()).with_spec_name("git"), &s, Instant::now());
+    let a = model(40, 12, &[b"$ git c"]);
+    let mut r = OverlayRenderer::new(Theme::dark(), true).with_images(GraphicsSupport::Direct);
+
+    let frame = String::from_utf8_lossy(&r.frame(&a, &m, &input(&s, None))).into_owned();
+
+    assert_eq!(frame.matches(&format!("\x1b_Ga=p,i={},", png_id("git"))).count(), 4, "{frame:?}");
 }
 
 #[test]
@@ -450,17 +540,18 @@ fn overlay_hashes(r: &mut OverlayRenderer, a: &Model, m: &Menu, frames: &[FrameI
 fn should_draw_the_overlay_bytes_it_drew_at_the_phase_8_start() {
     // (scenario, hash of every frame, hash of every clear), generated once at the phase8-start tag. A refactor
     // may change how a scenario is built, never a value. No scenario depends on time (nothing is loading).
+    // The frames without images were re-recorded when coloured tiles replaced the ASCII icons.
     const EXPECTED: &[(&str, u64, u64)] = &[
-        ("below", 0xef119818acef5714, 0x3fd0e0c7d118ca9c),
-        ("light_256", 0xbe62837ba0bae9f2, 0x3fd0e0c7d118ca9c),
-        ("scrolled", 0x5b2dbcd97d614206, 0xb5974c8ab0e1a615),
-        ("above_ghost_popout", 0xf2039310de2aeed9, 0x79cfb3d71e636be6),
+        ("below", 0x1cf9c7521024cbfe, 0x3fd0e0c7d118ca9c),
+        ("light_256", 0x23d0c022c96478d5, 0x3fd0e0c7d118ca9c),
+        ("scrolled", 0xcd594e4d6b28381c, 0xb5974c8ab0e1a615),
+        ("above_ghost_popout", 0xd922812eefb996cb, 0x79cfb3d71e636be6),
         ("arg_hint_wide_ghost", 0x19087c0c1de42343, 0xc4bf1afcc5ae6c08),
-        ("custom_base16", 0x3c68886e2010eab3, 0x3fd0e0c7d118ca9c),
+        ("custom_base16", 0xbabfd0c27aea36a2, 0x3fd0e0c7d118ca9c),
         ("icons_direct", 0x63e8d0517291ef1c, 0x49c6d5dfc1ea8156),
         ("icons_tmux", 0x66355913b17a2222, 0x22e0c44f71632e9e),
-        ("long_description_bar", 0x09e5bda8de7ac765, 0xe0ae15a704c54ab1),
-        ("long_description_popout", 0xe79fca34ee4c38df, 0x55f9d31a52e19d65),
+        ("long_description_bar", 0xb17c49568c5fd73c, 0xe0ae15a704c54ab1),
+        ("long_description_popout", 0x9dd3ff5cd11ef9c4, 0x55f9d31a52e19d65),
     ];
     let s = settings(r#"{"autocomplete.width": 20}"#);
     let below = screen("\x1b[3;9H\x1b[32m");

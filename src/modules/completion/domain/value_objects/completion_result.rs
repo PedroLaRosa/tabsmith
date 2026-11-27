@@ -16,6 +16,9 @@ pub(crate) struct CompletionResult {
     tokens: Vec<String>,
     command_text: String,
     command_index: usize,
+    /// Name of the innermost spec in use (`git` for `sudo git ch`, `aws/s3` for `aws s3 ls`); empty while the first
+    /// word is still being typed (a first-token list).
+    spec_name: String,
     /// Identity of (current arg, current subcommand) — changes when a new argument starts.
     arg_key: u64,
     current_arg: Option<ArgumentHint>,
@@ -38,6 +41,7 @@ pub(crate) struct CompletionResultParts {
     pub(crate) tokens: Vec<String>,
     pub(crate) command_text: String,
     pub(crate) command_index: usize,
+    pub(crate) spec_name: String,
     pub(crate) arg_key: u64,
     pub(crate) current_arg: Option<ArgumentHint>,
     pub(crate) search_term: String,
@@ -58,6 +62,7 @@ impl CompletionResult {
             tokens,
             command_text,
             command_index,
+            spec_name,
             arg_key,
             current_arg,
             search_term,
@@ -75,6 +80,7 @@ impl CompletionResult {
             tokens,
             command_text,
             command_index,
+            spec_name,
             arg_key,
             current_arg,
             search_term,
@@ -96,6 +102,7 @@ impl CompletionResult {
             tokens: Vec::new(),
             command_text: String::new(),
             command_index: 0,
+            spec_name: String::new(),
             arg_key: 0,
             current_arg: None,
             search_term: String::new(),
@@ -136,6 +143,10 @@ impl CompletionResult {
 
     pub(crate) fn command_index(&self) -> usize {
         self.command_index
+    }
+
+    pub(crate) fn spec_name(&self) -> &str {
+        &self.spec_name
     }
 
     pub(crate) fn arg_key(&self) -> u64 {
@@ -197,6 +208,12 @@ impl CompletionResult {
     #[cfg(test)]
     pub(crate) fn with_triggered_generators(mut self, triggered_generators: Vec<GeneratorKey>) -> Self {
         self.triggered_generators = triggered_generators;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_spec_name(mut self, spec_name: &str) -> Self {
+        self.spec_name = spec_name.to_string();
         self
     }
 

@@ -626,3 +626,45 @@ fn should_not_insert_an_auto_execute_row_in_full_on_a_shared_prefix() {
         [MenuEffect::Insert { full: true, .. }]
     ));
 }
+
+#[test]
+fn should_name_the_spec_in_use_as_the_command_of_every_row() {
+    let mut m = Menu::new();
+    m.on_completion(comp("git c", 2, subs("c")).with_spec_name("git"), &Settings::default(), Instant::now());
+
+    let commands: Vec<_> = m.items().iter().map(|row| m.command_of(row)).collect();
+
+    assert_eq!(commands, [Some("git"); 4]);
+}
+
+#[test]
+fn should_name_the_root_command_of_a_spec_a_subcommand_loaded() {
+    let mut m = Menu::new();
+    let ls = item("ls", SuggestionKind::Subcommand, "l");
+    m.on_completion(comp("aws s3 l", 2, vec![ls]).with_spec_name("aws/s3"), &Settings::default(), Instant::now());
+
+    let command = m.command_of(&m.items()[0]);
+
+    assert_eq!(command, Some("aws"));
+}
+
+#[test]
+fn should_name_each_row_its_own_command_while_the_first_word_is_typed() {
+    let mut m = Menu::new();
+    let names = ["node", "npm", "nproc"].map(|name| item(name, SuggestionKind::Subcommand, "n"));
+    m.on_completion(comp("n", 1, names.to_vec()).with_spec_name(""), &Settings::default(), Instant::now());
+
+    let commands: Vec<_> = m.items().iter().map(|row| m.command_of(row)).collect();
+
+    assert_eq!(commands, [Some("node"), Some("npm"), Some("nproc")]);
+}
+
+#[test]
+fn should_name_no_command_before_any_reply() {
+    let m = Menu::new();
+    let checkout = item("checkout", SuggestionKind::Subcommand, "");
+
+    let command = m.command_of(&checkout);
+
+    assert_eq!(command, None);
+}
