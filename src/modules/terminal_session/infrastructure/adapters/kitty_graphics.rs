@@ -58,7 +58,7 @@ fn direct_graphics(var: impl Fn(&str) -> Option<String>) -> GraphicsSupport {
 }
 
 /// iTerm2 takes the kitty protocol from 3.6. Its version is compared as numbers on major and minor, since patches reach
-/// two digits (`3.6.11`).
+/// two digits (`3.6.11`); the patch and any suffix are ignored (`3.6.0beta1`, `3.7.20261127-nightly`).
 fn iterm2_has_kitty_graphics(version: &str) -> bool {
     let mut parts = version.split('.').map(leading_number);
     match (parts.next().flatten(), parts.next().flatten()) {
