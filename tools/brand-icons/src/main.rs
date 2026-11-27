@@ -1,0 +1,3 @@
+mod colour;
+
+fn main() {}

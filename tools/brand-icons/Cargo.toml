@@ -1,0 +1,11 @@
+# Draws the brand icons in assets/icons from simple-icons (see scripts/brand-icons.sh). A crate of its own, so that
+# building tabsmith never needs the rasteriser.
+[package]
+name = "brand-icons"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
