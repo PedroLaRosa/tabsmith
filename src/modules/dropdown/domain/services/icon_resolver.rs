@@ -267,6 +267,90 @@ mod tests {
     }
 
     #[test]
+    fn should_give_each_kind_its_character_on_its_own_tile_without_images() {
+        let kinds = [
+            SuggestionKind::Subcommand,
+            SuggestionKind::Option,
+            SuggestionKind::Arg,
+            SuggestionKind::Special,
+            SuggestionKind::File,
+            SuggestionKind::Folder,
+            SuggestionKind::History,
+            SuggestionKind::Shortcut,
+            SuggestionKind::AutoExecute,
+        ];
+
+        let tiles = kinds.map(|kind| {
+            let shown = slot(&item("x", kind, ""), None, GraphicsSupport::Off);
+            (shown.text().to_string(), shown.tile_color())
+        });
+
+        let tile = |mark: &str, colour| (mark.to_string(), Some(colour));
+        assert_eq!(
+            tiles,
+            [
+                tile(" >", (0x88, 0x39, 0xd1)),
+                tile(" -", (0x5a, 0xcc, 0x5b)),
+                tile(" *", (0x64, 0x9b, 0xc9)),
+                tile(" *", (0x62, 0x8d, 0xad)),
+                tile(" f", (0x64, 0x74, 0x8b)),
+                tile(" d", (0x3b, 0x82, 0xf6)),
+                tile(" h", (0x8e, 0x8e, 0x93)),
+                tile(" @", (0x34, 0x98, 0xdb)),
+                tile(" ↪", (0xd1, 0x39, 0x56)),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_keep_the_command_tile_for_a_command_without_a_brand_without_images() {
+        let sub = item("sub", SuggestionKind::Subcommand, "su");
+
+        let shown = slot(&sub, Some("mytool"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" >", Some((0x88, 0x39, 0xd1))));
+    }
+
+    #[test]
+    fn should_fill_the_slot_with_the_colour_of_a_named_spec_icon_without_images() {
+        let deploy = item("deploy", SuggestionKind::Arg, "").with_icon(Some("fig://icon?type=aws".into()));
+
+        let shown = slot(&deploy, Some("git"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" *", Some((0xff, 0x9c, 0x07))));
+    }
+
+    #[test]
+    fn should_fill_the_slot_with_the_template_colour_and_drop_the_badge_without_images() {
+        let hot = item("hot", SuggestionKind::Arg, "").with_icon(Some("fig://template?color=2ecc71&badge=\u{1f525}".into()));
+
+        let shown = slot(&hot, None, GraphicsSupport::Off);
+
+        assert_eq!(
+            (shown.text(), shown.tile_color(), shown.is_badge()),
+            (" *", Some((0x2e, 0xcc, 0x71)), false)
+        );
+    }
+
+    #[test]
+    fn should_keep_a_wide_spec_emoji_as_text_without_a_tile_without_images() {
+        let branch = item("main", SuggestionKind::Arg, "").with_icon(Some("\u{2b50}\u{fe0f}".into()));
+
+        let shown = slot(&branch, Some("git"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), ("⭐", None));
+    }
+
+    #[test]
+    fn should_show_the_brand_tile_when_the_spec_icon_cannot_be_drawn_without_images() {
+        let gear = item("x", SuggestionKind::Subcommand, "").with_icon(Some("\u{2699}\u{fe0f}".into()));
+
+        let shown = slot(&gear, Some("git"), GraphicsSupport::Off);
+
+        assert_eq!((shown.text(), shown.tile_color()), (" >", Some((0xff, 0x40, 0x1e))));
+    }
+
+    #[test]
     fn resolves_like_q() {
         let it = |icon: Option<&str>, kind| item("x", kind, "").with_icon(icon.map(String::from));
         // The current-branch star is an emoji: text in both modes.
