@@ -198,7 +198,8 @@ are for naming tests.
   - **When** graphics support is detected
   - **Then** it is `Off`, and rows show tiles
 - **B4.3 WezTerm**
-  - **Given** WezTerm, outside tmux
+  - **Given** WezTerm, outside tmux, on macOS or Linux (on Windows ConPTY sits in between, and nobody can check it
+    here, so WezTerm keeps the tiles there)
   - **When** graphics support is detected
   - **Then** it is `Direct`
 - **B4.4 iTerm2 or WezTerm behind tmux**

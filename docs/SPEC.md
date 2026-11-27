@@ -2349,9 +2349,10 @@ List row for item `s` (selected row uses selected colours):
 `' '` + icon (2 cols) + `' '` + title + (`' '` + args hint in dim when room) + pad to `w`.
 - Icon slot: always two columns. A spec `icon` that is a single wide emoji
   is text (`⭐` for the current git branch). With the kitty graphics protocol (kitty, Ghostty, WezTerm by
-  `TERM_PROGRAM=WezTerm`, iTerm2 whose `TERM_PROGRAM_VERSION` is 3.6 or later by major and minor; inside tmux only
-  when `tmux display` reports `allow-passthrough` on and a kitty or Ghostty client, since tmux overwrites
-  `TERM_PROGRAM`), `fig://icon?type=<t>` is that PNG and `fig://template?color=&badge=` the template
+  `TERM_PROGRAM=WezTerm` except on Windows, where ConPTY sits in between and is unchecked, and iTerm2 whose
+  `TERM_PROGRAM_VERSION` is 3.6 or later by major and minor; inside tmux only when `tmux display` reports
+  `allow-passthrough` on and a kitty or Ghostty client, since tmux overwrites `TERM_PROGRAM`),
+  `fig://icon?type=<t>` is that PNG and `fig://template?color=&badge=` the template
   tinted by `scale_u8` (`a·b/256` per channel, alpha kept) with the badge in white. Otherwise the row type's
   image: subcommand `command`, option `option`, arg `box`, auto-execute `carrot`, file `file`, folder `folder`,
   shortcut `💡` and mixin `➡` on tinted templates, history `📚`.
