@@ -191,11 +191,14 @@ mod tests {
         format!("{:?}|{}|{:?}|{}", s.text(), s.is_badge(), id, sent)
     }
 
-    /// (label, row) of every icon input: the 42 PNG names, then four templates (two tinted type defaults with a
-    /// badge, a tinted one without, an untinted one with a badge).
+    /// The PNGs there were at the phase 8 start, the first ones in `ICON_NAMES`.
+    const PHASE_8_PNGS: usize = 42;
+
+    /// (label, row) of every icon input: the 42 PNG names of the phase 8 start, then four templates (two tinted type
+    /// defaults with a badge, a tinted one without, an untinted one with a badge).
     fn icon_inputs() -> Vec<(String, Suggestion)> {
         let row = |kind, icon: Option<&str>| item("x", kind, "").with_icon(icon.map(String::from));
-        let mut inputs: Vec<(String, Suggestion)> = PNGS
+        let mut inputs: Vec<(String, Suggestion)> = PNGS[..PHASE_8_PNGS]
             .iter()
             .map(|(name, _)| {
                 let icon = format!("fig://icon?type={name}");
