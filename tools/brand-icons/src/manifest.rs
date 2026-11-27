@@ -1,5 +1,6 @@
-//! `assets/icons/simple-icons.txt`: one drawn icon per line, `<slug> <HEX>`. The icon is named after its simple-icons
-//! slug, and the colour must equal the one in the pinned simple-icons data file.
+//! `assets/icons/simple-icons.txt`: one drawn icon per line, `<slug> <HEX>`, then `guidelines-ok` when the brand has
+//! guidelines of its own and they were read and allow this use. The icon is named after its simple-icons slug, and the
+//! colour must equal the one in the pinned simple-icons data file.
 
 use crate::colour::Rgb;
 
@@ -7,6 +8,8 @@ use crate::colour::Rgb;
 pub struct Entry {
     pub slug: String,
     pub colour: Rgb,
+    /// The brand's guidelines were read and allow a row icon.
+    pub guidelines_ok: bool,
 }
 
 pub fn parse(text: &str) -> Result<Vec<Entry>, String> {
@@ -28,11 +31,14 @@ const AMAZON_Q_ICONS: &[&str] = &[
 
 fn entry(line: &str) -> Result<Entry, String> {
     match line.split_whitespace().collect::<Vec<_>>()[..] {
-        [slug, _] if AMAZON_Q_ICONS.contains(&slug) => {
+        [slug, ..] if AMAZON_Q_ICONS.contains(&slug) => {
             Err(format!("{slug} is an Amazon Q icon in assets/icons, never redrawn"))
         }
-        [slug, hex] => Ok(Entry { slug: slug.to_string(), colour: Rgb::from_hex(hex)? }),
-        _ => Err(format!("expected \"<slug> <HEX>\", got {line:?}")),
+        [slug, hex] => Ok(Entry { slug: slug.to_string(), colour: Rgb::from_hex(hex)?, guidelines_ok: false }),
+        [slug, hex, "guidelines-ok"] => {
+            Ok(Entry { slug: slug.to_string(), colour: Rgb::from_hex(hex)?, guidelines_ok: true })
+        }
+        _ => Err(format!("expected \"<slug> <HEX> [guidelines-ok]\", got {line:?}")),
     }
 }
 
@@ -50,10 +56,19 @@ mod tests {
         assert_eq!(
             entries,
             Ok(vec![
-                Entry { slug: "pnpm".into(), colour: Rgb(0xF6, 0x92, 0x20) },
-                Entry { slug: "turborepo".into(), colour: Rgb(0xFF, 0x1E, 0x56) },
+                Entry { slug: "pnpm".into(), colour: Rgb(0xF6, 0x92, 0x20), guidelines_ok: false },
+                Entry { slug: "turborepo".into(), colour: Rgb(0xFF, 0x1E, 0x56), guidelines_ok: false },
             ])
         );
+    }
+
+    #[test]
+    fn should_read_that_a_brands_guidelines_were_reviewed() {
+        let text = "python 3776AB guidelines-ok\npnpm F69220\n";
+
+        let reviewed = parse(text).map(|entries| entries.iter().map(|e| e.guidelines_ok).collect::<Vec<_>>());
+
+        assert_eq!(reviewed, Ok(vec![true, false]));
     }
 
     #[test]

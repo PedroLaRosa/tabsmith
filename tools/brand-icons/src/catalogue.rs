@@ -54,7 +54,7 @@ mod tests {
     ]"#;
 
     fn entry(slug: &str, colour: Rgb) -> Entry {
-        Entry { slug: slug.into(), colour }
+        Entry { slug: slug.into(), colour, guidelines_ok: false }
     }
 
     #[test]
