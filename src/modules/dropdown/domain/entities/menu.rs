@@ -277,9 +277,9 @@ impl Menu {
         self.last.as_ref()
     }
 
-    /// The command whose brand `row` shows.
+    /// The command whose brand `row` shows: the root of the spec in use (`aws` for `aws/s3`).
     pub(crate) fn command_of(&self, _row: &Suggestion) -> Option<&str> {
-        self.last.as_ref().map(|c| c.spec_name())
+        self.last.as_ref().and_then(|c| c.spec_name().split('/').next())
     }
 
     pub(crate) fn items(&self) -> &[Suggestion] {

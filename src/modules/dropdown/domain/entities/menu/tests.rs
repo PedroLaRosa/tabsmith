@@ -636,3 +636,14 @@ fn should_name_the_spec_in_use_as_the_command_of_every_row() {
 
     assert_eq!(commands, [Some("git"); 4]);
 }
+
+#[test]
+fn should_name_the_root_command_of_a_spec_a_subcommand_loaded() {
+    let mut m = Menu::new();
+    let ls = item("ls", SuggestionKind::Subcommand, "l");
+    m.on_completion(comp("aws s3 l", 2, vec![ls]).with_spec_name("aws/s3"), &Settings::default(), Instant::now());
+
+    let command = m.command_of(&m.items()[0]);
+
+    assert_eq!(command, Some("aws"));
+}
