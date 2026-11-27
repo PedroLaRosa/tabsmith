@@ -62,4 +62,13 @@ mod tests {
 
         assert_eq!(ink, Rgb(255, 255, 255));
     }
+
+    #[test]
+    fn should_switch_to_black_ink_only_above_a_luma_of_160() {
+        let greys = [Rgb(160, 160, 160), Rgb(161, 161, 161)];
+
+        let inks = greys.map(Rgb::ink);
+
+        assert_eq!(inks, [Rgb(255, 255, 255), Rgb(0, 0, 0)]);
+    }
 }
