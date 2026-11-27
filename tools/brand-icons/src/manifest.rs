@@ -18,8 +18,19 @@ pub fn parse(text: &str) -> Result<Vec<Entry>, String> {
         .collect()
 }
 
+/// The 42 PNGs taken from Amazon Q (B3.4): the tool writes `<slug>.png`, so a slug among these would overwrite one.
+const AMAZON_Q_ICONS: &[&str] = &[
+    "alert", "android", "apple", "asterisk", "aws", "azure", "box", "carrot", "characters", "command", "commandkey",
+    "commit", "cpu", "database", "discord", "docker", "file", "firebase", "flag", "folder", "gcloud", "gear", "git",
+    "github", "gitlab", "gradle", "heroku", "invite", "kubernetes", "netlify", "node", "npm", "okteto", "option",
+    "package", "slack", "string", "symlink", "template", "twitter", "vercel", "yarn",
+];
+
 fn entry(line: &str) -> Result<Entry, String> {
     match line.split_whitespace().collect::<Vec<_>>()[..] {
+        [slug, _] if AMAZON_Q_ICONS.contains(&slug) => {
+            Err(format!("{slug} is an Amazon Q icon in assets/icons, never redrawn"))
+        }
         [slug, hex] => Ok(Entry { slug: slug.to_string(), colour: Rgb::from_hex(hex)? }),
         _ => Err(format!("expected \"<slug> <HEX>\", got {line:?}")),
     }
@@ -55,5 +66,14 @@ mod tests {
             .collect();
 
         assert_eq!(errors, [true, true, true]);
+    }
+
+    #[test]
+    fn should_refuse_an_icon_named_like_one_of_the_amazon_q_icons() {
+        let text = "# header\npnpm F69220\ndocker 2496ED\n";
+
+        let entries = parse(text);
+
+        assert_eq!(entries, Err("line 3: docker is an Amazon Q icon in assets/icons, never redrawn".to_string()));
     }
 }
