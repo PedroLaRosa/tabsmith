@@ -73,7 +73,8 @@ fn leading_number(part: &str) -> Option<u32> {
 }
 
 /// `allow-passthrough client_termname client_termtype` → Tmux when passthrough is on and the client is kitty or
-/// Ghostty (by `TERM` or by its XTVERSION reply, e.g. `kitty(0.47.1)`).
+/// Ghostty (by `TERM` or by its XTVERSION reply, e.g. `kitty(0.47.1)`). iTerm2 and WezTerm clients stay Off: this path
+/// needs kitty Unicode placeholders, which neither is known to support.
 fn tmux_graphics(out: &str) -> GraphicsSupport {
     match out.trim().split_once(' ') {
         Some((pass, client))
@@ -334,5 +335,17 @@ mod tests {
         let support = outs.map(tmux_graphics);
 
         assert_eq!(support, [GraphicsSupport::Tmux; 2]);
+    }
+
+    #[test]
+    fn should_send_no_images_through_tmux_to_an_iterm2_or_wezterm_client_even_with_passthrough_on() {
+        let outs = [
+            "on xterm-256color iTerm2 3.7.9\n",
+            "all xterm-256color WezTerm 20240203-110809-5046fc22\n",
+        ];
+
+        let support = outs.map(tmux_graphics);
+
+        assert_eq!(support, [GraphicsSupport::Off; 2]);
     }
 }
