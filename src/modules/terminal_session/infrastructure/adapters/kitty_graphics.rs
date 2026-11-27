@@ -74,7 +74,7 @@ fn leading_number(part: &str) -> Option<u32> {
 
 /// `allow-passthrough client_termname client_termtype` → Tmux when passthrough is on and the client is kitty or
 /// Ghostty (by `TERM` or by its XTVERSION reply, e.g. `kitty(0.47.1)`). iTerm2 and WezTerm clients stay Off: this path
-/// needs kitty Unicode placeholders, which neither is known to support.
+/// needs kitty Unicode placeholders, which WezTerm does not parse and which nobody has checked in iTerm2.
 fn tmux_graphics(out: &str) -> GraphicsSupport {
     match out.trim().split_once(' ') {
         Some((pass, client))

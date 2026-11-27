@@ -91,7 +91,8 @@ impl OverlayRenderer {
         }
     }
 
-    /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); coloured tiles when `Off`.
+    /// Row icons drawn as kitty graphics images (kitty, Ghostty, WezTerm, iTerm2 3.6 or later; behind tmux, kitty and
+    /// Ghostty only); coloured tiles when `Off`.
     pub(crate) fn with_images(mut self, g: GraphicsSupport) -> OverlayRenderer {
         self.images = g;
         self
