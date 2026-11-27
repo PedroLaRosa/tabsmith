@@ -34,7 +34,7 @@ Facts the plan rests on (checked 2026-11-27):
   `first_token` and an unused `spec_name`.
 - **The renderer does not.** `OverlayRenderer::frame(model, menu, input)` calls `list_row(it, selected, w)`, which
   calls `icon_resolver::slot(it, self.images)`. Neither `Menu` nor `FrameInput` carries the command.
-- **simple-icons** is CC0-1.0, 3,476 icons at release 16.38.1. It no longer carries aws, azure, slack, heroku,
+- **simple-icons** is CC0-1.0, 3,472 icons at release 16.38.1. It no longer carries aws, azure, slack, heroku,
   twitter or okteto; the current PNGs cover all six.
 - **Name matching is not safe.** 148 of the 732 bundled root spec names equal a simple-icons name, and some are the
   wrong brand: `less` is Less CSS, `man` the truck maker, `make` Make.com, `nano` the cryptocurrency. Exact matching
@@ -99,8 +99,9 @@ are for naming tests.
   - **Then** all three show the kubernetes icon
 - **B1.9 Command-name rows show their own brand**
   - **Given** `autocomplete.firstTokenCompletion` is on and the command line `p`
-  - **When** the menu draws the rows `python3`, `pnpm` and `pwd` with images
-  - **Then** `python3` shows the python icon and `pnpm` the pnpm icon
+  - **When** the menu draws the rows `pnpm`, `podman` and `pwd` with images
+  - **Then** `pnpm` shows the pnpm icon and `podman` the podman icon (this example said `python3` until PR 3 found
+    that the PSF's policy needs permission for a recoloured Python logo)
   - **And** `pwd`, which has no brand, shows the `command` icon
   - **And** an alias row (kind shortcut) keeps the shortcut icon
 - **B1.10 The command is the innermost one** (Q10)
@@ -197,13 +198,15 @@ are for naming tests.
   - **When** graphics support is detected
   - **Then** it is `Off`, and rows show tiles
 - **B4.3 WezTerm**
-  - **Given** WezTerm, outside tmux
+  - **Given** WezTerm, outside tmux, on macOS or Linux (on Windows ConPTY sits in between, and nobody can check it
+    here, so WezTerm keeps the tiles there)
   - **When** graphics support is detected
   - **Then** it is `Direct`
 - **B4.4 iTerm2 or WezTerm behind tmux**
   - **Given** tmux whose client is iTerm2 or WezTerm, with `allow-passthrough` on
   - **When** graphics support is detected
-  - **Then** it is `Off`: the tmux path needs kitty Unicode placeholders, which neither is known to support
+  - **Then** it is `Off`: the tmux path needs kitty Unicode placeholders, which WezTerm does not parse and which
+    nobody has checked in iTerm2 (its source has implemented them since 3.5.6)
 - **B4.5 kitty and Ghostty are unchanged**
   - **Given** kitty or Ghostty, outside tmux or behind tmux with passthrough
   - **When** graphics support is detected
@@ -259,6 +262,8 @@ Scenarios B3.1 to B3.6.
   v vapor vault vercel vim vite vtex webpack webstorm wezterm yarn zapier zig`
 
   - Confirmed wrong: `less`, `man`, `make`, `nano`.
+  - Also wrong, found in PR 3: `turbo` (Hotwire Turbo: use `turborepo`), `hermes` (a parcel company), `mix` (Mix.com:
+    use `elixir`); `task` is left out, its spec serving both go-task and Taskwarrior.
   - Check by opening the icon: `bat`, `bit`, `black`, `coda`, `hermes`, `hyper`, `mix`, `pi`, `r`, `rich`, `spring`,
     `task`, `v`.
 - **Aliases to consider** (confirm each simple-icons name exists in the pinned version): `cargo`, `rustc`, `rustup` →
@@ -270,8 +275,12 @@ Scenarios B3.1 to B3.6.
   runtime dependency and no build-time step: `cargo build` must not need the rasteriser.
 - **Licences.** Extend `assets/icons/README.md`: simple-icons is CC0-1.0, and the logos remain trademarks of their
   owners. Some simple-icons entries carry their own licence or brand guidelines in the project's data file: skip any
-  entry that is not plain CC0 unless its terms allow this use.
-- **Size.** A current PNG is 3–4 KB. About 150 more adds roughly 0.5 MB to a 12.8 MB release binary.
+  entry that is not plain CC0 unless its terms allow this use. (Built: the tool draws plain CC0 entries only, since
+  tabsmith ships no notices for attribution licences, and refuses an entry with brand guidelines until its line is
+  marked `guidelines-ok`. Of the 39 guideline pages read, 11 allow a row icon; the other 28, python and go among them,
+  ask for permission or forbid the recoloured mark on a tile.)
+- **Size.** A current PNG is 3–4 KB. About 150 more adds roughly 0.5 MB to a 12.8 MB release binary. (Built: 98
+  PNGs, 114 KB in all.)
 - Image ids are positions in `ICON_NAMES`. Above 255 icons an id no longer fits a 256-colour index; `icon_id::color`
   already switches to 24-bit there, so check the tmux placeholder test still covers both cases.
 
@@ -303,8 +312,8 @@ Not decided in the interview. Defaults are suggestions; ask the user before buil
 |---|---|---|---|
 | P2 | Brand colours close to the menu background: bun, rust and apple are black in simple-icons. | Draw them as they are. The chosen preview showed a black `bun` tile on a dark menu. | Looking at PR 3's icons on a dark and a light theme. |
 | P3 | A setting to turn row images off. None exists today. | Not added. | A terminal version that passes the manual check and still misdraws for someone. |
-| P4 | Tile colours for file, folder and history, which have no square PNG. | file `64748B`, folder `3B82F6`, history `8E8E93`. | Looking at PR 2 in Alacritty or Terminal.app. |
-| P5 | What rasterises the SVGs in PR 3's script. | The implementer's choice, within "no runtime dependency, no build-time step". | Nothing: an implementation detail. |
+| P4 | Tile colours for file, folder and history, which have no square PNG. | file `64748B`, folder `3B82F6`, history `8E8E93` (built so in PR 2). | Looking at PR 2 in Alacritty or Terminal.app. |
+| P5 | What rasterises the SVGs in PR 3's script. | The implementer's choice, within "no runtime dependency, no build-time step". Built with resvg 0.48.1 in its own crate, `tools/brand-icons`. | Nothing: an implementation detail. |
 | P6 | Whether `autocomplete.firstTokenCompletion` should default to on, so that command-name rows (B1.9) are seen. | Stays off. | A separate decision about that feature. |
 
 ## Out of scope

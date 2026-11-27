@@ -1,6 +1,7 @@
 //! Frame bytes for the in-terminal overlay: menu, description bar, pop-out, ghost text, and
 //! exact restoration of the covered cells from the model (SPEC §7.4–7.7, §8.2).
 use crate::modules::dropdown::domain::services::color_parser::xterm256;
+use crate::modules::dropdown::domain::services::icon_palette::ink_on;
 use crate::modules::dropdown::domain::services::icon_resolver;
 use crate::modules::dropdown::domain::services::menu_describer::describe;
 use crate::modules::dropdown::domain::services::menu_layout_calculator::layout;
@@ -90,7 +91,8 @@ impl OverlayRenderer {
         }
     }
 
-    /// Row icons drawn as kitty graphics images (Ghostty, kitty, also behind tmux); ASCII when `Off`.
+    /// Row icons drawn as kitty graphics images (kitty, Ghostty, WezTerm, iTerm2 3.6 or later; behind tmux, kitty and
+    /// Ghostty only); coloured tiles when `Off`.
     pub(crate) fn with_images(mut self, g: GraphicsSupport) -> OverlayRenderer {
         self.images = g;
         self
@@ -337,7 +339,9 @@ impl OverlayRenderer {
         let mut r = Run::default();
         let slot = icon_resolver::slot(it, command, self.images);
         r.put(&base, " ");
-        if slot.is_badge() {
+        if let Some(tile) = slot.tile_color() {
+            r.put(&self.pen(ink_on(tile), tile, ";1"), slot.text());
+        } else if slot.is_badge() {
             r.put(&self.pen((255, 255, 255), bg, ""), slot.text());
         } else if let (GraphicsSupport::Tmux, Some(img)) = (self.images, slot.image()) {
             r.put(&self.pen(fg, bg, &icon_id::color(img.value())), slot.text());
