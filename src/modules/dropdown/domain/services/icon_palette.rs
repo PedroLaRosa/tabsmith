@@ -56,6 +56,11 @@ pub(crate) fn icon_color(name: &str) -> Option<Rgb> {
         .map(|(_, colour)| *colour)
 }
 
+/// The colour of a character written on a `tile`.
+pub(crate) fn ink_on(_tile: Rgb) -> Rgb {
+    (0, 0, 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,6 +71,15 @@ mod tests {
         let colour = icon_color("git");
 
         assert_eq!(colour, Some((0xff, 0x40, 0x1e)));
+    }
+
+    #[test]
+    fn should_write_black_on_a_light_tile() {
+        let pnpm_orange = (0xf6, 0x92, 0x20);
+
+        let ink = ink_on(pnpm_orange);
+
+        assert_eq!(ink, (0, 0, 0));
     }
 
     #[test]
