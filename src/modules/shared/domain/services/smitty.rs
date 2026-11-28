@@ -1,12 +1,12 @@
-/// Smitty, the tabsmith mascot: an orange tabby blacksmith, drawn in plain ASCII so every terminal can show him.
-/// Setup ends with him saying hi, hammer up.
+/// Smitty, the tabsmith mascot: an orange tabby jazz cat in a bow tie, named for the alto saxophonist Tab Smith, drawn
+/// in plain ASCII so every terminal can show him. Setup ends with him playing his sax and saying hi.
 pub(crate) fn welcome() -> &'static str {
-    r"   /\_M_/\   .----.
-  ( o   o )  '----'    Hi, I'm Smitty!
- =(   w   )=   ||      I'll forge your completions as you type.
-  /[ ->| ]\o___||
- (_________)
-   (_)   (_)
+    r"   /\_M_/\         ~ ~
+  ( o   o )       ~        Hi, I'm Smitty!
+ =(   w   )=o_     __      I'll improvise completions as you type.
+  /  >o<  \  \\   //
+ (_________)  \\_//
+   (_)   (_)   \_/
 "
 }
 
@@ -25,16 +25,16 @@ pub(crate) fn farewell() -> &'static str {
 mod tests {
     use super::*;
 
-    /// After setup Smitty holds up his hammer, with the Tab key on his apron, and says hi.
+    /// After setup Smitty, in his bow tie, plays a few notes on his alto sax and says hi.
     #[test]
-    fn should_introduce_smitty_holding_his_hammer() {
+    fn should_introduce_smitty_playing_his_sax() {
         let expected = [
-            r"   /\_M_/\   .----.",
-            r"  ( o   o )  '----'    Hi, I'm Smitty!",
-            r" =(   w   )=   ||      I'll forge your completions as you type.",
-            r"  /[ ->| ]\o___||",
-            r" (_________)",
-            r"   (_)   (_)",
+            r"   /\_M_/\         ~ ~",
+            r"  ( o   o )       ~        Hi, I'm Smitty!",
+            r" =(   w   )=o_     __      I'll improvise completions as you type.",
+            r"  /  >o<  \  \\   //",
+            r" (_________)  \\_//",
+            r"   (_)   (_)   \_/",
             "",
         ]
         .join("\n");
