@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="smitty-title smitty-desc">
   <title id="smitty-title">Smitty</title>
-  <desc id="smitty-desc">Smitty, the tabsmith mascot: a cute orange tabby cat in a blacksmith's apron with a Tab key on it, holding a little hammer.</desc>
+  <desc id="smitty-desc">Smitty, the tabsmith mascot, named for the alto saxophonist Tab Smith: a cute orange tabby cat in a bow tie, playing an alto saxophone.</desc>
   <defs>
     <style>
       .line { stroke: #3b2618; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; }
@@ -8,30 +8,25 @@
       .stripe { fill: none; stroke: #c96a1f; stroke-width: 10; stroke-linecap: round; }
       .cream { fill: #fff3df; }
       .pink { fill: #f59a9a; }
+      .brass { fill: #f2c14e; }
+      .tube-outline { fill: none; stroke: #3b2618; stroke-linecap: round; }
+      .tube { fill: none; stroke: #f2c14e; stroke-linecap: round; }
+      .note { fill: #ffd34d; stroke: #3b2618; stroke-width: 4; stroke-linejoin: round; }
     </style>
   </defs>
 
   <!-- tail -->
-  <path class="fur line" d="M330 430 C410 440 440 390 420 340 C412 318 432 300 448 312 C470 330 470 400 430 440 C400 470 350 468 320 455 Z"/>
-  <path class="stripe" d="M436 330 L456 326 M440 372 L462 372 M426 412 L446 424"/>
+  <path class="fur line" d="M182 430 C102 440 72 390 92 340 C100 318 80 300 64 312 C42 330 42 400 82 440 C112 470 162 468 192 455 Z"/>
+  <path class="stripe" d="M76 330 L56 326 M72 372 L50 372 M86 412 L66 424"/>
 
-  <!-- body -->
+  <!-- body and belly -->
   <ellipse class="fur line" cx="256" cy="388" rx="108" ry="88"/>
-
-  <!-- apron -->
-  <path class="line" fill="#8a5434" d="M188 336 Q256 322 324 336 L332 440 Q256 462 180 440 Z"/>
-  <path class="line" fill="none" d="M196 338 Q216 300 232 296 M316 338 Q296 300 280 296"/>
-  <!-- Tab key on the apron -->
-  <rect class="line" fill="#fff3df" x="222" y="362" width="68" height="50" rx="10"/>
-  <path fill="none" stroke="#3b2618" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" d="M238 387 L270 387 M260 377 L270 387 L260 397 M276 374 L276 400"/>
+  <ellipse class="cream" cx="252" cy="402" rx="62" ry="56"/>
 
   <!-- feet -->
   <ellipse class="cream line" cx="206" cy="466" rx="34" ry="20"/>
   <ellipse class="cream line" cx="306" cy="466" rx="34" ry="20"/>
   <path fill="none" stroke="#3b2618" stroke-width="5" stroke-linecap="round" d="M196 462 L196 474 M216 462 L216 474 M296 462 L296 474 M316 462 L316 474"/>
-
-  <!-- left paw resting on the apron -->
-  <ellipse class="fur line" cx="176" cy="372" rx="26" ry="30" transform="rotate(-18 176 372)"/>
 
   <!-- ears -->
   <path class="fur line" d="M118 168 Q112 70 140 52 Q168 62 226 112 Z"/>
@@ -68,19 +63,39 @@
 
   <!-- whiskers -->
   <path fill="none" stroke="#3b2618" stroke-width="4" stroke-linecap="round" d="M196 266 L128 258 M198 280 L132 288 M316 266 L384 258 M314 280 L380 288"/>
-  <!-- hammer, held up by the right paw -->
-  <g transform="translate(352 362) rotate(35)">
-    <rect class="line" fill="#a8743f" x="-10" y="-132" width="20" height="140" rx="8"/>
-    <rect class="line" fill="#8e9aa8" x="-48" y="-170" width="96" height="46" rx="10"/>
-    <path fill="none" stroke="#c7d0da" stroke-width="6" stroke-linecap="round" d="M-36 -158 L36 -158"/>
-  </g>
-  <ellipse class="fur line" cx="352" cy="358" rx="28" ry="30"/>
-  <path fill="none" stroke="#3b2618" stroke-width="5" stroke-linecap="round" d="M338 346 Q348 352 342 364 M354 342 Q364 350 358 364"/>
 
-  <!-- sparks from the forge -->
-  <g fill="#ffd34d" stroke="#3b2618" stroke-width="4" stroke-linejoin="round">
-    <path d="M470 120 L478 142 L500 150 L478 158 L470 180 L462 158 L440 150 L462 142 Z"/>
-    <path d="M490 300 L494 312 L506 316 L494 320 L490 332 L486 320 L474 316 L486 312 Z"/>
-    <path d="M418 112 L422 122 L432 126 L422 130 L418 140 L414 130 L404 126 L414 122 Z"/>
+  <!-- bow tie -->
+  <path class="line" fill="#d6455d" d="M256 340 L214 320 Q206 340 214 360 Z M256 340 L298 320 Q306 340 298 360 Z"/>
+  <rect class="line" fill="#b8344b" x="244" y="328" width="24" height="24" rx="7"/>
+
+  <!-- alto saxophone: mouthpiece under the smile, neck, body, bend and upturned bell -->
+  <path class="tube-outline" stroke-width="20" d="M266 292 Q284 302 300 318"/>
+  <path class="tube" stroke-width="10" d="M266 292 Q284 302 300 318"/>
+  <path class="tube-outline" stroke-width="40" d="M300 318 L372 430 Q392 466 426 444"/>
+  <path class="tube" stroke-width="26" d="M300 318 L372 430 Q392 466 426 444"/>
+  <path fill="none" stroke="#3b2618" stroke-width="12" stroke-linecap="round" d="M258 287 L268 293"/>
+  <path class="brass line" d="M410 434 L415 358 L489 390 L438 446 Z"/>
+  <ellipse fill="#8a5a12" stroke="#3b2618" stroke-width="6" cx="452" cy="374" rx="40" ry="11" transform="rotate(23 452 374)"/>
+  <g fill="#fff3df" stroke="#3b2618" stroke-width="4">
+    <circle cx="307" cy="330" r="7"/>
+    <circle cx="341" cy="383" r="7"/>
+  </g>
+
+  <!-- paws on the keys -->
+  <ellipse class="fur line" cx="322" cy="354" rx="26" ry="24"/>
+  <path fill="none" stroke="#3b2618" stroke-width="5" stroke-linecap="round" d="M314 342 Q322 348 318 360 M328 340 Q336 346 332 358"/>
+  <ellipse class="fur line" cx="362" cy="412" rx="26" ry="24"/>
+  <path fill="none" stroke="#3b2618" stroke-width="5" stroke-linecap="round" d="M354 400 Q362 406 358 418 M368 398 Q376 404 372 416"/>
+
+  <!-- music notes from the bell: gold stems over dark edges, so they show on light and dark backgrounds -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke="#3b2618" stroke-width="10" d="M446 300 L446 256 L470 248 L470 290 M446 266 L470 258 M440 148 L440 110 Q452 118 460 132 M489 208 L489 176 Q499 182 505 194"/>
+    <path stroke="#ffd34d" stroke-width="4" d="M446 300 L446 256 L470 248 L470 290 M446 266 L470 258 M440 148 L440 110 Q452 118 460 132 M489 208 L489 176 Q499 182 505 194"/>
+  </g>
+  <g class="note">
+    <ellipse cx="438" cy="302" rx="11" ry="8" transform="rotate(-20 438 302)"/>
+    <ellipse cx="462" cy="292" rx="11" ry="8" transform="rotate(-20 462 292)"/>
+    <ellipse cx="432" cy="150" rx="10" ry="7" transform="rotate(-20 432 150)"/>
+    <ellipse cx="482" cy="210" rx="9" ry="6" transform="rotate(-20 482 210)"/>
   </g>
 </svg>
