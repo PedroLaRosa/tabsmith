@@ -332,6 +332,8 @@ Flow:
    `pwsh ($PROFILE):` (D45); then write only the script files under `~/.tabsmith/shell/` (dotfiles untouched).
 5. Extract the specs (§9.1; error → exit 1). After an automatic install only:
    `Restart your terminal (or open a new tab) to start using tabsmith.`
+6. Stdout a terminal → a blank line, then Smitty (the mascot, plain ASCII painted in SGR `38;5;208`) holding up
+   his hammer: `Hi, I'm Smitty!` / `I'll forge your completions as you type.` Piped → nothing.
 
 `uninstall [-y] [--purge]`: without `-y` ask `Are you sure want to continue uninstalling tabsmith? [Y/n] `
 (No → `Cancelled`, exit 1). Then uninstall every integration of bash, zsh, fish (+ pwsh on PATH), continuing past
@@ -340,7 +342,8 @@ then removes `~/.tabsmith` (missing is fine; a running session no longer recreat
 `Uninstalled tabsmith with errors (see above).`, exit 1. Else print `Uninstalled tabsmith.`, with `--purge`
 `Restart open terminals to stop tabsmith in them.`, then
 `Remove the binary with your package manager, or delete <BIN>.` (§5.5) (a running exe cannot delete itself on
-Windows), exit 0.
+Windows), then, stdout a terminal, Smitty waving goodbye as setup's step 6 draws him: `Bye for now!` /
+`I'll keep the forge warm for you.`, exit 0.
 
 ### 2.10 Other commands
 
