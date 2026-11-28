@@ -8,6 +8,7 @@ pub(crate) mod logger;
 pub(crate) mod os;
 pub(crate) mod output_format;
 pub(crate) mod shared_dependencies;
+pub(crate) mod smitty_on_screen;
 pub(crate) mod system_clock;
 pub(crate) mod terminal_style;
 #[cfg(test)]
