@@ -12,6 +12,19 @@ pub(crate) fn welcome() -> String {
     )
 }
 
+/// Uninstall ends with Smitty waving goodbye, hammer down.
+pub(crate) fn farewell() -> String {
+    String::from(
+        r#"   /\_M_/\   \ | /
+  ( ^   ^ )   (")      Bye for now!
+ =(   w   )=  //       I'll keep the forge warm for you.
+  /[ ->| ]\__//
+ (_________)
+   (_)   (_)
+"#,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -31,6 +44,25 @@ mod tests {
         .join("\n");
 
         let drawing = welcome();
+
+        assert_eq!(drawing, expected);
+    }
+
+    /// After uninstall Smitty puts the hammer down and waves goodbye with his paw up.
+    #[test]
+    fn should_wave_goodbye_with_his_paw_up() {
+        let expected = [
+            r"   /\_M_/\   \ | /",
+            r#"  ( ^   ^ )   (")      Bye for now!"#,
+            r" =(   w   )=  //       I'll keep the forge warm for you.",
+            r"  /[ ->| ]\__//",
+            r" (_________)",
+            r"   (_)   (_)",
+            "",
+        ]
+        .join("\n");
+
+        let drawing = farewell();
 
         assert_eq!(drawing, expected);
     }
