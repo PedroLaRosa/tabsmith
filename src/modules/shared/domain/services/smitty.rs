@@ -10,12 +10,12 @@ pub(crate) fn welcome() -> &'static str {
 "
 }
 
-/// Uninstall ends with Smitty waving goodbye, hammer down.
+/// Uninstall ends with Smitty waving goodbye, sax down.
 pub(crate) fn farewell() -> &'static str {
     r#"   /\_M_/\   \ | /
   ( ^   ^ )   (")      Bye for now!
- =(   w   )=  //       I'll keep the forge warm for you.
-  /[ ->| ]\__//
+ =(   w   )=  //       Catch you at the next set.
+  /  >o<  \__//
  (_________)
    (_)   (_)
 "#
@@ -44,14 +44,14 @@ mod tests {
         assert_eq!(drawing, expected);
     }
 
-    /// After uninstall Smitty puts the hammer down and waves goodbye with his paw up.
+    /// After uninstall Smitty puts the sax down and waves goodbye with his paw up, as a set ends.
     #[test]
     fn should_wave_goodbye_with_his_paw_up() {
         let expected = [
             r"   /\_M_/\   \ | /",
             r#"  ( ^   ^ )   (")      Bye for now!"#,
-            r" =(   w   )=  //       I'll keep the forge warm for you.",
-            r"  /[ ->| ]\__//",
+            r" =(   w   )=  //       Catch you at the next set.",
+            r"  /  >o<  \__//",
             r" (_________)",
             r"   (_)   (_)",
             "",
