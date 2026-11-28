@@ -75,3 +75,13 @@ fn should_end_setup_with_smitty_saying_hi() {
 
     assert!(printed.contains("Hi, I'm Smitty!"), "{printed}");
 }
+
+#[test]
+fn should_end_uninstall_with_smitty_waving_goodbye() {
+    let home = ThrowawayHome::new("uninstall");
+    home.run_on_terminal(&["setup", "--no-confirm", "--force"]);
+
+    let printed = home.run_on_terminal(&["uninstall", "--no-confirm"]);
+
+    assert!(printed.contains("Bye for now!"), "{printed}");
+}

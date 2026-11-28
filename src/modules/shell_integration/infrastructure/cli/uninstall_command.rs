@@ -1,5 +1,8 @@
+use crate::modules::shared::domain::services::smitty;
 use crate::modules::shared::domain::value_objects::shell::Shell;
 use crate::modules::shared::infrastructure::os::executable_lookup::which;
+use crate::modules::shared::infrastructure::smitty_on_screen::smitty_on_screen;
+use crate::modules::shared::infrastructure::terminal_style::stdout_tty;
 use crate::modules::shell_integration::application::uninstall_progress::UninstallProgress;
 use crate::modules::shell_integration::application::uninstall_tabsmith_use_case::UninstallTabsmithUseCase;
 use crate::modules::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
@@ -35,6 +38,7 @@ pub(crate) fn run_uninstall_command(args: UninstallArgs, module: &ShellIntegrati
 }
 
 /// Remove every integration of `shells` (and the data root on `purge`), carrying on past errors (SPEC §2.9): 1 if any.
+/// Smitty waves goodbye last, on a terminal, only when nothing failed.
 pub(crate) fn uninstall_and_report(
     uninstall_tabsmith: &UninstallTabsmithUseCase,
     paths: &IntegrationPaths,
@@ -61,6 +65,9 @@ pub(crate) fn uninstall_and_report(
         "Remove the binary with your package manager, or delete {}.",
         paths.binary()
     );
+    if let Some(farewell) = smitty_on_screen(smitty::farewell(), stdout_tty()) {
+        print!("{farewell}");
+    }
     0
 }
 
