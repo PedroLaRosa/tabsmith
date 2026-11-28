@@ -11,7 +11,7 @@ domain entity and value object, grouped by module. Code, tests, commit messages 
 | `DataDirectory` | VO | tabsmith's home (`~/.tabsmith` or `TABSMITH_HOME`) and every path under it: settings, state, history, the update-check marker, run, logs, themes, shell, backups, specs (`shell_dir` and `backups_dir` are `#[cfg(test)]`: only their tests call them). | `settings::{home, settings_path, state_path}` + ad-hoc joins |
 | `ShellQuoting` | Domain service | Quote a string for a shell (POSIX single quotes, pwsh smart quotes). | `integrations::{quote, pwsh_sq}` |
 | `Clock` | Port | Wall-clock ms/secs and monotonic `Instant`. | `types::{now_ms, now_secs}`, `Instant::now()` |
-| `Smitty` | Domain service | The mascot, an orange tabby blacksmith in plain ASCII: `welcome` (hammer up, says hi) ends setup, `farewell` (paw up, waves) ends a clean uninstall. Shown only when stdout is a terminal. | — |
+| `Smitty` | Domain service | The mascot, an orange tabby jazz cat in a bow tie, named for the alto saxophonist Tab Smith, in plain ASCII: `welcome` (plays his sax, says hi) ends setup, `farewell` (paw up, waves) ends a clean uninstall. Shown only when stdout is a terminal. | — |
 
 ## settings
 | Term | Kind | Meaning | Replaces |
