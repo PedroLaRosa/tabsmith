@@ -1,8 +1,7 @@
 use crate::modules::shared::domain::services::smitty;
 use crate::modules::shared::domain::value_objects::shell::Shell;
 use crate::modules::shared::infrastructure::os::executable_lookup::which;
-use crate::modules::shared::infrastructure::smitty_on_screen::smitty_on_screen;
-use crate::modules::shared::infrastructure::terminal_style::stdout_tty;
+use crate::modules::shared::infrastructure::smitty_on_screen::show_smitty;
 use crate::modules::shell_integration::application::uninstall_progress::UninstallProgress;
 use crate::modules::shell_integration::application::uninstall_tabsmith_use_case::UninstallTabsmithUseCase;
 use crate::modules::shell_integration::domain::value_objects::integration_paths::IntegrationPaths;
@@ -65,9 +64,7 @@ pub(crate) fn uninstall_and_report(
         "Remove the binary with your package manager, or delete {}.",
         paths.binary()
     );
-    if let Some(farewell) = smitty_on_screen(smitty::farewell(), stdout_tty()) {
-        print!("{farewell}");
-    }
+    show_smitty(smitty::farewell());
     0
 }
 

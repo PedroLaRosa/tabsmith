@@ -1,4 +1,4 @@
-use crate::modules::shared::infrastructure::terminal_style::sgr;
+use crate::modules::shared::infrastructure::terminal_style::{sgr, stdout_tty};
 
 /// Smitty's orange fur, from the xterm 256-colour palette.
 const FUR: &str = "38;5;208";
@@ -10,6 +10,13 @@ pub(crate) fn smitty_on_screen(drawing: &str, stdout_is_terminal: bool) -> Optio
         return None;
     }
     Some(format!("\n{}\n", sgr(drawing.trim_end_matches('\n'), FUR, true)))
+}
+
+/// Prints Smitty's `drawing` on stdout when it is a terminal.
+pub(crate) fn show_smitty(drawing: &str) {
+    if let Some(shown) = smitty_on_screen(drawing, stdout_tty()) {
+        print!("{shown}");
+    }
 }
 
 #[cfg(test)]

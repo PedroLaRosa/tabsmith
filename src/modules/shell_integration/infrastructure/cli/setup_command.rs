@@ -2,8 +2,8 @@ use crate::modules::shared::domain::services::smitty;
 use crate::modules::shared::domain::value_objects::shell::Shell;
 use crate::modules::shared::infrastructure::os::executable_lookup::which;
 use crate::modules::shared::infrastructure::os::process_info::is_root;
-use crate::modules::shared::infrastructure::smitty_on_screen::smitty_on_screen;
-use crate::modules::shared::infrastructure::terminal_style::{epaint, paint, stdout_tty};
+use crate::modules::shared::infrastructure::smitty_on_screen::show_smitty;
+use crate::modules::shared::infrastructure::terminal_style::{epaint, paint};
 use crate::modules::shell_integration::application::setup_progress::SetupProgress;
 use crate::modules::shell_integration::infrastructure::cli::integrations_command::integration_failures_error;
 use crate::modules::shell_integration::infrastructure::cli::user_confirmation::confirm;
@@ -48,9 +48,7 @@ pub(crate) fn run_setup_command(args: SetupArgs, module: &ShellIntegrationModule
     if !manual {
         println!("Restart your terminal (or open a new tab) to start using tabsmith.");
     }
-    if let Some(welcome) = smitty_on_screen(smitty::welcome(), stdout_tty()) {
-        print!("{welcome}");
-    }
+    show_smitty(smitty::welcome());
     Ok(0)
 }
 
