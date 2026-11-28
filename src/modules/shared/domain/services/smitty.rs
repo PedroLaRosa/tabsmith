@@ -1,28 +1,24 @@
 /// Smitty, the tabsmith mascot: an orange tabby blacksmith, drawn in plain ASCII so every terminal can show him.
 /// Setup ends with him saying hi, hammer up.
-pub(crate) fn welcome() -> String {
-    String::from(
-        r"   /\_M_/\   .----.
+pub(crate) fn welcome() -> &'static str {
+    r"   /\_M_/\   .----.
   ( o   o )  '----'    Hi, I'm Smitty!
  =(   w   )=   ||      I'll forge your completions as you type.
   /[ ->| ]\o___||
  (_________)
    (_)   (_)
-",
-    )
+"
 }
 
 /// Uninstall ends with Smitty waving goodbye, hammer down.
-pub(crate) fn farewell() -> String {
-    String::from(
-        r#"   /\_M_/\   \ | /
+pub(crate) fn farewell() -> &'static str {
+    r#"   /\_M_/\   \ | /
   ( ^   ^ )   (")      Bye for now!
  =(   w   )=  //       I'll keep the forge warm for you.
   /[ ->| ]\__//
  (_________)
    (_)   (_)
-"#,
-    )
+"#
 }
 
 #[cfg(test)]
